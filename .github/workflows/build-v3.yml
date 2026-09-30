@@ -1,0 +1,70 @@
+name: Build Car Assistant v3
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build-v3:
+    runs-on: ubuntu-24.04
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Patch CarMediaService for v3 playback
+        working-directory: v3-source
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          p = Path("app/src/main/java/com/carassistant/service/CarMediaService.kt")
+          s = p.read_text()
+
+          marker = '''        private fun testItem(): MediaItem = MediaItem.Builder()'''
+
+          patch = '''        override fun onAddMediaItems(
+              mediaSession: MediaSession,
+              controller: MediaSession.ControllerInfo,
+              mediaItems: List<MediaItem>
+          ) = Futures.immediateFuture(
+              mediaItems.map { requested ->
+                  if (requested.mediaId == "test-audio") testItem() else requested
+              }
+          )
+
+          private fun testItem(): MediaItem = MediaItem.Builder()'''
+
+          if "override fun onAddMediaItems(" not in s:
+              if marker not in s:
+                  raise SystemExit("Could not find testItem() insertion point")
+              s = s.replace(marker, patch, 1)
+              p.write_text(s)
+              print("v3 patch applied")
+          else:
+              print("v3 patch already present")
+          PY
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: "8.7"
+
+      - name: Build APK
+        working-directory: v3-source
+        run: |
+          gradle assembleDebug --stacktrace
+
+      - name: Upload v3 APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: car-assistant-phase-a-v3-debug-apk
+          path: v3-source/app/build/outputs/apk/debug/app-debug.apk
