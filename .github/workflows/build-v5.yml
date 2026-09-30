@@ -1,4 +1,4 @@
-name: Build Car Assistant V5 Search
+name: Build Car Assistant V5.1 Internet Search
 
 on:
   workflow_dispatch:
@@ -11,20 +11,20 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Prepare V5 source
+      - name: Prepare V5.1 source
         run: |
-          rm -rf v5-source
-          cp -R v3-source v5-source
+          rm -rf v5-1-source
+          cp -R v3-source v5-1-source
 
-          sed -i 's/versionCode = 1/versionCode = 50/' \
-            v5-source/app/build.gradle.kts
+          sed -i 's/versionCode = 1/versionCode = 51/' \
+            v5-1-source/app/build.gradle.kts
 
-          sed -i 's/versionName = "1.0"/versionName = "5.0"/' \
-            v5-source/app/build.gradle.kts
+          sed -i 's/versionName = "1.0"/versionName = "5.1"/' \
+            v5-1-source/app/build.gradle.kts
 
-      - name: Create V5 Search CarMediaService
+      - name: Create V5.1 Internet Search CarMediaService
         run: |
-          cat > v5-source/app/src/main/java/com/carassistant/service/CarMediaService.kt <<'EOF'
+          cat > v5-1-source/app/src/main/java/com/carassistant/service/CarMediaService.kt <<'EOF'
           package com.carassistant.service
 
           import android.net.Uri
@@ -36,6 +36,13 @@ jobs:
           import androidx.media3.session.MediaSession
           import com.google.common.collect.ImmutableList
           import com.google.common.util.concurrent.Futures
+          import com.google.common.util.concurrent.ListenableFuture
+          import org.json.JSONObject
+          import java.net.HttpURLConnection
+          import java.net.URLEncoder
+          import java.net.URL
+          import java.util.concurrent.ConcurrentHashMap
+          import kotlin.concurrent.thread
 
           class CarMediaService : MediaLibraryService() {
 
@@ -73,27 +80,8 @@ jobs:
               private class LibraryCallback :
                   MediaLibraryService.MediaLibrarySession.Callback {
 
-                  private fun allItems(): List<MediaItem> =
-                      listOf(
-                          audioItem(
-                              "internet-audio-1",
-                              "Internet Audio 1",
-                              "SoundHelix Song 1",
-                              "https://www.soundhelix.com/examples/mp3/SoundHelix-Song-1.mp3"
-                          ),
-                          audioItem(
-                              "internet-audio-2",
-                              "Internet Audio 2",
-                              "SoundHelix Song 2",
-                              "https://www.soundhelix.com/examples/mp3/SoundHelix-Song-2.mp3"
-                          ),
-                          audioItem(
-                              "internet-audio-3",
-                              "Internet Audio 3",
-                              "SoundHelix Song 3",
-                              "https://www.soundhelix.com/examples/mp3/SoundHelix-Song-3.mp3"
-                          )
-                      )
+                  private val searchCache =
+                      ConcurrentHashMap<String, List<MediaItem>>()
 
                   override fun onGetLibraryRoot(
                       session: MediaLibraryService.MediaLibrarySession,
@@ -126,11 +114,7 @@ jobs:
                   ) =
                       Futures.immediateFuture(
                           LibraryResult.ofItemList(
-                              if (parentId == "root") {
-                                  ImmutableList.copyOf(allItems())
-                              } else {
-                                  ImmutableList.of()
-                              },
+                              ImmutableList.of(),
                               params
                           )
                       )
@@ -140,19 +124,51 @@ jobs:
                       browser: MediaSession.ControllerInfo,
                       query: String,
                       params: MediaLibraryService.LibraryParams?
-                  ) =
-                      Futures.immediateFuture(
-                          LibraryResult.ofVoid()
-                      ).also {
-                          val count = searchItems(query).size
+                  ): ListenableFuture<LibraryResult<Void>> {
 
+                      val cleanQuery = query.trim()
+
+                      if (cleanQuery.isEmpty()) {
                           session.notifySearchResultChanged(
                               browser,
                               query,
-                              count,
+                              0,
                               params
                           )
+
+                          return Futures.immediateFuture(
+                              LibraryResult.ofVoid()
+                          )
                       }
+
+                      thread(name = "CarAssistantSearch") {
+                          try {
+                              val results = searchInternet(cleanQuery)
+
+                              searchCache[cleanQuery] = results
+
+                              session.notifySearchResultChanged(
+                                  browser,
+                                  query,
+                                  results.size,
+                                  params
+                              )
+                          } catch (_: Exception) {
+                              searchCache[cleanQuery] = emptyList()
+
+                              session.notifySearchResultChanged(
+                                  browser,
+                                  query,
+                                  0,
+                                  params
+                              )
+                          }
+                      }
+
+                      return Futures.immediateFuture(
+                          LibraryResult.ofVoid()
+                      )
+                  }
 
                   override fun onGetSearchResult(
                       session: MediaLibraryService.MediaLibrarySession,
@@ -161,15 +177,33 @@ jobs:
                       page: Int,
                       pageSize: Int,
                       params: MediaLibraryService.LibraryParams?
-                  ) =
-                      Futures.immediateFuture(
+                  ): ListenableFuture<
+                      LibraryResult<ImmutableList<MediaItem>>
+                  > {
+
+                      val results = searchCache[query.trim()]
+                          ?: emptyList()
+
+                      val start = (page * pageSize)
+                          .coerceAtMost(results.size)
+
+                      val end = (start + pageSize)
+                          .coerceAtMost(results.size)
+
+                      val pageItems =
+                          if (start < end) {
+                              results.subList(start, end)
+                          } else {
+                              emptyList()
+                          }
+
+                      return Futures.immediateFuture(
                           LibraryResult.ofItemList(
-                              ImmutableList.copyOf(
-                                  searchItems(query)
-                              ),
+                              ImmutableList.copyOf(pageItems),
                               params
                           )
                       )
+                  }
 
                   override fun onAddMediaItems(
                       mediaSession: MediaSession,
@@ -177,68 +211,213 @@ jobs:
                       mediaItems: List<MediaItem>
                   ) =
                       Futures.immediateFuture(
-                          mediaItems.map { requested ->
-                              allItems().find {
-                                  it.mediaId == requested.mediaId
-                              } ?: requested
-                          }
+                          mediaItems
                       )
 
-                  private fun searchItems(query: String): List<MediaItem> {
-                      val q = query.trim()
+                  private fun searchInternet(
+                      query: String
+                  ): List<MediaItem> {
 
-                      if (q.isEmpty()) {
-                          return allItems()
-                      }
+                      val encodedQuery =
+                          URLEncoder.encode(
+                              query,
+                              Charsets.UTF_8.name()
+                          )
 
-                      return allItems().filter { item ->
+                      val searchUrl =
+                          "https://archive.org/advancedsearch.php" +
+                          "?q=mediatype%3Aaudio%20AND%20" +
+                          "title%3A%28$encodedQuery%29" +
+                          "&fl%5B%5D=identifier" +
+                          "&fl%5B%5D=title" +
+                          "&fl%5B%5D=creator" +
+                          "&rows=10" +
+                          "&page=1" +
+                          "&output=json"
+
+                      val connection =
+                          URL(searchUrl).openConnection()
+                              as HttpURLConnection
+
+                      connection.requestMethod = "GET"
+                      connection.connectTimeout = 10000
+                      connection.readTimeout = 15000
+                      connection.setRequestProperty(
+                          "User-Agent",
+                          "CarAssistant/5.1"
+                      )
+
+                      val response =
+                          connection.inputStream
+                              .bufferedReader()
+                              .use { it.readText() }
+
+                      connection.disconnect()
+
+                      val root =
+                          JSONObject(response)
+
+                      val docs =
+                          root.getJSONObject("response")
+                              .getJSONArray("docs")
+
+                      val results = mutableListOf<MediaItem>()
+
+                      for (i in 0 until docs.length()) {
+
+                          val doc = docs.getJSONObject(i)
+
+                          val identifier =
+                              doc.optString("identifier")
+
                           val title =
-                              item.mediaMetadata.title?.toString() ?: ""
+                              doc.optString(
+                                  "title",
+                                  "Internet Audio"
+                              )
 
-                          val artist =
-                              item.mediaMetadata.artist?.toString() ?: ""
+                          val creator =
+                              doc.optString(
+                                  "creator",
+                                  "Internet Archive"
+                              )
 
-                          title.contains(q, ignoreCase = true) ||
-                              artist.contains(q, ignoreCase = true) ||
-                              item.mediaId.contains(q, ignoreCase = true)
+                          if (identifier.isBlank()) {
+                              continue
+                          }
+
+                          val audioUrl =
+                              findAudioFile(identifier)
+
+                          if (audioUrl != null) {
+
+                              results.add(
+                                  MediaItem.Builder()
+                                      .setMediaId(
+                                          "ia-$identifier"
+                                      )
+                                      .setUri(
+                                          Uri.parse(audioUrl)
+                                      )
+                                      .setMediaMetadata(
+                                          MediaMetadata.Builder()
+                                              .setTitle(title)
+                                              .setArtist(creator)
+                                              .setIsBrowsable(false)
+                                              .setIsPlayable(true)
+                                              .build()
+                                      )
+                                      .build()
+                              )
+                          }
+
+                          if (results.size >= 10) {
+                              break
+                          }
                       }
+
+                      return results
                   }
 
-                  private fun audioItem(
-                      id: String,
-                      title: String,
-                      artist: String,
-                      url: String
-                  ): MediaItem =
-                      MediaItem.Builder()
-                          .setMediaId(id)
-                          .setUri(Uri.parse(url))
-                          .setMediaMetadata(
-                              MediaMetadata.Builder()
-                                  .setTitle(title)
-                                  .setArtist(artist)
-                                  .setIsBrowsable(false)
-                                  .setIsPlayable(true)
-                                  .build()
+                  private fun findAudioFile(
+                      identifier: String
+                  ): String? {
+
+                      val metadataUrl =
+                          "https://archive.org/metadata/" +
+                          URLEncoder.encode(
+                              identifier,
+                              Charsets.UTF_8.name()
                           )
-                          .build()
+
+                      val connection =
+                          URL(metadataUrl).openConnection()
+                              as HttpURLConnection
+
+                      connection.requestMethod = "GET"
+                      connection.connectTimeout = 10000
+                      connection.readTimeout = 15000
+                      connection.setRequestProperty(
+                          "User-Agent",
+                          "CarAssistant/5.1"
+                      )
+
+                      val response =
+                          connection.inputStream
+                              .bufferedReader()
+                              .use { it.readText() }
+
+                      connection.disconnect()
+
+                      val root =
+                          JSONObject(response)
+
+                      val files =
+                          root.optJSONArray("files")
+                              ?: return null
+
+                      for (i in 0 until files.length()) {
+
+                          val file =
+                              files.optJSONObject(i)
+                                  ?: continue
+
+                          val name =
+                              file.optString("name")
+
+                          val format =
+                              file.optString("format")
+
+                          val lowerName =
+                              name.lowercase()
+
+                          val lowerFormat =
+                              format.lowercase()
+
+                          val isAudio =
+                              lowerName.endsWith(".mp3") ||
+                              lowerName.endsWith(".m4a") ||
+                              lowerName.endsWith(".aac") ||
+                              lowerName.endsWith(".ogg") ||
+                              lowerFormat.contains("mp3") ||
+                              lowerFormat.contains("mpeg") ||
+                              lowerFormat.contains("m4a") ||
+                              lowerFormat.contains("aac") ||
+                              lowerFormat.contains("ogg")
+
+                          if (!isAudio) {
+                              continue
+                          }
+
+                          if (name.isBlank()) {
+                              continue
+                          }
+
+                          return "https://archive.org/download/" +
+                              Uri.encode(identifier) +
+                              "/" +
+                              Uri.encode(name)
+                      }
+
+                      return null
+                  }
               }
           }
           EOF
 
-      - name: Verify V5 source
+      - name: Verify V5.1 source
         run: |
           echo "===== VERSION ====="
           grep -n "versionCode\|versionName" \
-            v5-source/app/build.gradle.kts
+            v5-1-source/app/build.gradle.kts
 
-          echo "===== SEARCH CALLBACK ====="
-          grep -n "onSearch\|onGetSearchResult" \
-            v5-source/app/src/main/java/com/carassistant/service/CarMediaService.kt
+          echo "===== SEARCH ====="
+          grep -n "onSearch\|onGetSearchResult\|searchInternet" \
+            v5-1-source/app/src/main/java/com/carassistant/service/CarMediaService.kt
 
-          echo "===== AUDIO URLS ====="
-          grep -n "SoundHelix-Song-" \
-            v5-source/app/src/main/java/com/carassistant/service/CarMediaService.kt
+          echo "===== INTERNET ARCHIVE ====="
+          grep -n "archive.org" \
+            v5-1-source/app/src/main/java/com/carassistant/service/CarMediaService.kt
 
       - name: Set up JDK 17
         uses: actions/setup-java@v5
@@ -252,12 +431,12 @@ jobs:
           gradle-version: "8.7"
 
       - name: Build APK
-        working-directory: v5-source
+        working-directory: v5-1-source
         run: |
           gradle assembleDebug --stacktrace
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: car-assistant-v5-search-apk
-          path: v5-source/app/build/outputs/apk/debug/app-debug.apk
+          name: car-assistant-v5-1-internet-search-apk
+          path: v5-1-source/app/build/outputs/apk/debug/app-debug.apk
