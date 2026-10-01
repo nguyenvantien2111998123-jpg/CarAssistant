@@ -1,0 +1,310 @@
+name: Build Car Assistant V6.0-A.1
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Prepare V6.0-A.1 source
+        run: |
+          set -e
+
+          rm -rf v6-a1-source
+          cp -R v3-source v6-a1-source
+
+          mkdir -p v6-a1-source/app/src/main/java/com/carassistant/v6
+          mkdir -p v6-a1-source/app/src/main/res/xml
+          mkdir -p v6-a1-source/app/src/main/res/values
+
+          cat > v6-a1-source/app/build.gradle.kts <<'EOF'
+          plugins {
+              id("com.android.application")
+              id("org.jetbrains.kotlin.android")
+          }
+
+          android {
+              namespace = "com.carassistant"
+              compileSdk = 35
+
+              defaultConfig {
+                  applicationId = "com.carassistant"
+                  minSdk = 28
+                  targetSdk = 35
+                  versionCode = 601
+                  versionName = "6.0-A.1"
+              }
+
+              compileOptions {
+                  sourceCompatibility = JavaVersion.VERSION_17
+                  targetCompatibility = JavaVersion.VERSION_17
+              }
+
+              kotlinOptions {
+                  jvmTarget = "17"
+              }
+          }
+
+          dependencies {
+              implementation("androidx.car.app:app:1.7.0")
+          }
+          EOF
+
+          cat > v6-a1-source/app/src/main/AndroidManifest.xml <<'EOF'
+          <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+              <uses-permission android:name="android.permission.INTERNET" />
+
+              <uses-permission
+                  android:name="androidx.car.app.ACCESS_SURFACE" />
+
+              <application
+                  android:allowBackup="true"
+                  android:label="@string/app_name"
+                  android:supportsRtl="true"
+                  android:theme="@style/Theme.CarAssistant">
+
+                  <meta-data
+                      android:name="com.google.android.gms.car.application"
+                      android:resource="@xml/automotive_app_desc" />
+
+                  <service
+                      android:name=".v6.V6CarAppService"
+                      android:exported="true"
+                      android:label="@string/app_name">
+
+                      <intent-filter>
+                          <action
+                              android:name="androidx.car.app.CarAppService" />
+                      </intent-filter>
+
+                      <meta-data
+                          android:name="androidx.car.app.theme"
+                          android:resource="@style/Theme.CarAssistant" />
+                  </service>
+
+              </application>
+          </manifest>
+          EOF
+
+          cat > v6-a1-source/app/src/main/res/xml/automotive_app_desc.xml <<'EOF'
+          <?xml version="1.0" encoding="utf-8"?>
+          <automotiveApp>
+              <uses name="template" />
+          </automotiveApp>
+          EOF
+
+          cat > v6-a1-source/app/src/main/java/com/carassistant/v6/V6CarAppService.kt <<'EOF'
+          package com.carassistant.v6
+
+          import android.content.Intent
+          import androidx.car.app.CarAppService
+          import androidx.car.app.Session
+          import androidx.car.app.validation.HostValidator
+
+          class V6CarAppService : CarAppService() {
+
+              override fun createHostValidator(): HostValidator {
+                  return HostValidator.ALLOW_ALL_HOSTS_VALIDATOR
+              }
+
+              override fun onCreateSession(): Session {
+                  return V6CarSession()
+              }
+          }
+          EOF
+
+          cat > v6-a1-source/app/src/main/java/com/carassistant/v6/V6CarSession.kt <<'EOF'
+          package com.carassistant.v6
+
+          import android.graphics.Color
+          import android.view.Surface
+          import androidx.car.app.CarContext
+          import androidx.car.app.Session
+          import androidx.car.app.SurfaceCallback
+          import androidx.car.app.SurfaceContainer
+          import androidx.car.app.AppManager
+          import androidx.car.app.CarToast
+          import androidx.car.app.model.Pane
+          import androidx.car.app.model.Row
+          import androidx.car.app.model.Template
+          import androidx.car.app.model.MessageTemplate
+          import androidx.car.app.navigation.model.NavigationTemplate
+
+          class V6CarSession : Session() {
+
+              private var surface: Surface? = null
+              private var width: Int = 0
+              private var height: Int = 0
+              private var dpi: Int = 0
+
+              override fun onCreateScreen() =
+                  V6CarScreen(carContext)
+
+              private inner class SurfaceHandler : SurfaceCallback {
+
+                  override fun onSurfaceAvailable(
+                      surfaceContainer: SurfaceContainer
+                  ) {
+                      surface = surfaceContainer.surface
+                      width = surfaceContainer.width
+                      height = surfaceContainer.height
+                      dpi = surfaceContainer.dpi
+
+                      V6VirtualDisplay.start(
+                          carContext,
+                          surface!!,
+                          width,
+                          height,
+                          dpi
+                      )
+                  }
+
+                  override fun onSurfaceDestroyed(
+                      surfaceContainer: SurfaceContainer
+                  ) {
+                      V6VirtualDisplay.stop()
+
+                      surface = null
+                      width = 0
+                      height = 0
+                      dpi = 0
+                  }
+
+                  override fun onVisibleAreaChanged(
+                      visibleArea: android.graphics.Rect
+                  ) {
+                  }
+
+                  override fun onStableAreaChanged(
+                      stableArea: android.graphics.Rect
+                  ) {
+                  }
+              }
+
+              private inner class V6CarScreen(
+                  carContext: CarContext
+              ) : androidx.car.app.Screen(carContext) {
+
+                  init {
+                      carContext
+                          .getCarService(AppManager::class.java)
+                          .setSurfaceCallback(SurfaceHandler())
+                  }
+
+                  override fun onGetTemplate(): Template {
+                      return MessageTemplate.Builder(
+                          "Car Assistant V6.0-A.1"
+                      )
+                          .setTitle("Surface PoC")
+                          .setHeaderAction(
+                              androidx.car.app.model.Action.APP_ICON
+                          )
+                          .build()
+                  }
+              }
+          }
+          EOF
+
+          cat > v6-a1-source/app/src/main/java/com/carassistant/v6/V6VirtualDisplay.kt <<'EOF'
+          package com.carassistant.v6
+
+          import android.app.ActivityOptions
+          import android.content.Context
+          import android.content.Intent
+          import android.hardware.display.DisplayManager
+          import android.hardware.display.VirtualDisplay
+          import android.view.Surface
+
+          object V6VirtualDisplay {
+
+              private var virtualDisplay: VirtualDisplay? = null
+
+              fun start(
+                  context: Context,
+                  surface: Surface,
+                  width: Int,
+                  height: Int,
+                  dpi: Int
+              ) {
+                  stop()
+
+                  val displayManager =
+                      context.getSystemService(
+                          DisplayManager::class.java
+                      )
+
+                  virtualDisplay =
+                      displayManager.createVirtualDisplay(
+                          "CarAssistant-V6-A1",
+                          width,
+                          height,
+                          dpi,
+                          surface,
+                          DisplayManager.VIRTUAL_DISPLAY_FLAG_PUBLIC or
+                              DisplayManager.VIRTUAL_DISPLAY_FLAG_PRESENTATION or
+                              DisplayManager.VIRTUAL_DISPLAY_FLAG_OWN_CONTENT_ONLY
+                      )
+
+                  val displayId =
+                      virtualDisplay?.display?.displayId ?: return
+
+                  val intent =
+                      context.packageManager
+                          .getLaunchIntentForPackage(
+                              context.packageName
+                          )
+                          ?: return
+
+                  intent.addFlags(
+                      Intent.FLAG_ACTIVITY_NEW_TASK or
+                          Intent.FLAG_ACTIVITY_CLEAR_TOP
+                  )
+
+                  val options =
+                      ActivityOptions.makeBasic()
+
+                  options.launchDisplayId = displayId
+
+                  context.startActivity(
+                      intent,
+                      options.toBundle()
+                  )
+              }
+
+              fun stop() {
+                  virtualDisplay?.release()
+                  virtualDisplay = null
+              }
+          }
+          EOF
+
+          echo "===== V6.0-A.1 SOURCE ====="
+          find v6-a1-source -type f | sort
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: "8.7"
+
+      - name: Build V6.0-A.1
+        working-directory: v6-a1-source
+        run: |
+          gradle assembleDebug --stacktrace
+
+      - name: Upload V6.0-A.1 APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: car-assistant-v6-0-a1
+          path: v6-a1-source/app/build/outputs/apk/debug/app-debug.apk
