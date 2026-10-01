@@ -23,12 +23,13 @@ jobs:
           set -euo pipefail
 
           rm -rf v6-a2-source
+
           mkdir -p v6-a2-source/carapp/src/main/java/com/carassistant/v6
           mkdir -p v6-a2-source/carapp/src/main/res/xml
           mkdir -p v6-a2-source/system/src/main/java/com/carassistant/v6/system
           mkdir -p v6-a2-source/system/src/main/assets
-          mkdir -p v6-a2-source/libs
 
+          # 1. Root Settings Gradle
           cat > v6-a2-source/settings.gradle.kts <<'EOT'
           pluginManagement {
               repositories {
@@ -52,6 +53,7 @@ jobs:
           include(":system")
           EOT
 
+          # 2. Root Build Gradle
           cat > v6-a2-source/build.gradle.kts <<'EOT'
           plugins {
               id("com.android.application") version "8.6.1" apply false
@@ -59,12 +61,14 @@ jobs:
           }
           EOT
 
+          # 3. Gradle Properties
           cat > v6-a2-source/gradle.properties <<'EOT'
           org.gradle.jvmargs=-Xmx2048m -Dfile.encoding=UTF-8
           android.useAndroidX=true
           android.nonTransitiveRClass=true
           EOT
 
+          # 4. Module CarApp Build Gradle
           cat > v6-a2-source/carapp/build.gradle.kts <<'EOT'
           plugins {
               id("com.android.application")
@@ -98,6 +102,7 @@ jobs:
           }
           EOT
 
+          # 5. Module System Build Gradle (Dùng Maven thay vì jar thiếu)
           cat > v6-a2-source/system/build.gradle.kts <<'EOT'
           plugins {
               id("com.android.application")
@@ -122,10 +127,11 @@ jobs:
           }
 
           dependencies {
-              compileOnly(files("../libs/api-82.jar"))
+              compileOnly("org.xposed:api:82")
           }
           EOT
 
+          # 6. CarApp Source Files
           cat > v6-a2-source/carapp/src/main/java/com/carassistant/v6/V6CarAppService.kt <<'EOT'
           package com.carassistant.v6
 
@@ -190,9 +196,7 @@ jobs:
                           .setTitle("Car Assistant V6")
                           .build()
 
-                  override fun onSurfaceAvailable(
-                      surfaceContainer: SurfaceContainer
-                  ) {
+                  override fun onSurfaceAvailable(surfaceContainer: SurfaceContainer) {
                       bridge?.release()
 
                       bridge = V6VirtualDisplayBridge(
@@ -204,20 +208,13 @@ jobs:
                       bridge?.create(surfaceContainer.surface)
                   }
 
-                  override fun onSurfaceDestroyed(
-                      surfaceContainer: SurfaceContainer
-                  ) {
+                  override fun onSurfaceDestroyed(surfaceContainer: SurfaceContainer) {
                       bridge?.release()
                       bridge = null
                   }
 
-                  override fun onVisibleAreaChanged(
-                      visibleArea: Rect
-                  ) = Unit
-
-                  override fun onStableAreaChanged(
-                      stableArea: Rect
-                  ) = Unit
+                  override fun onVisibleAreaChanged(visibleArea: Rect) = Unit
+                  override fun onStableAreaChanged(stableArea: Rect) = Unit
               }
           }
           EOT
@@ -236,26 +233,17 @@ jobs:
           ) {
 
               companion object {
-                  private const val SERVICE_NAME =
-                      "v60a_vd_service"
-
-                  private const val DESCRIPTOR =
-                      "com.v60a.virtualdisplay.ipc.IVirtualDisplayService"
-
-                  private const val TRANSACTION_CREATE =
-                      IBinder.FIRST_CALL_TRANSACTION
-
-                  private const val TRANSACTION_RELEASE =
-                      IBinder.FIRST_CALL_TRANSACTION + 1
+                  private const val SERVICE_NAME = "v60a_vd_service"
+                  private const val DESCRIPTOR = "com.v60a.virtualdisplay.ipc.IVirtualDisplayService"
+                  private const val TRANSACTION_CREATE = IBinder.FIRST_CALL_TRANSACTION
+                  private const val TRANSACTION_RELEASE = IBinder.FIRST_CALL_TRANSACTION + 1
               }
 
               private var binder: IBinder? = null
 
               fun create(surface: Surface): Int {
                   val service = getService()
-                      ?: throw IllegalStateException(
-                          "v60a_vd_service unavailable"
-                      )
+                      ?: throw IllegalStateException("v60a_vd_service unavailable")
 
                   val data = Parcel.obtain()
                   val reply = Parcel.obtain()
@@ -268,21 +256,12 @@ jobs:
                       data.writeInt(height)
                       data.writeInt(dpi)
 
-                      if (!service.transact(
-                              TRANSACTION_CREATE,
-                              data,
-                              reply,
-                              0
-                          )
-                      ) {
-                          throw IllegalStateException(
-                              "create transaction failed"
-                          )
+                      if (!service.transact(TRANSACTION_CREATE, data, reply, 0)) {
+                          throw IllegalStateException("create transaction failed")
                       }
 
                       reply.readException()
                       return reply.readInt()
-
                   } finally {
                       data.recycle()
                       reply.recycle()
@@ -297,16 +276,8 @@ jobs:
 
                   try {
                       data.writeInterfaceToken(DESCRIPTOR)
-
-                      service.transact(
-                          TRANSACTION_RELEASE,
-                          data,
-                          reply,
-                          0
-                      )
-
+                      service.transact(TRANSACTION_RELEASE, data, reply, 0)
                       reply.readException()
-
                   } catch (_: Throwable) {
                   } finally {
                       data.recycle()
@@ -319,29 +290,13 @@ jobs:
                   binder?.let { return it }
 
                   return try {
-                      val manager =
-                          Class.forName("android.os.ServiceManager")
-
-                      val method =
-                          manager.getDeclaredMethod(
-                              "getService",
-                              String::class.java
-                          )
-
-                      val result =
-                          method.invoke(
-                              null,
-                              SERVICE_NAME
-                          ) as? IBinder
-
+                      val manager = Class.forName("android.os.ServiceManager")
+                      val method = manager.getDeclaredMethod("getService", String::class.java)
+                      val result = method.invoke(null, SERVICE_NAME) as? IBinder
                       binder = result
                       result
-
                   } catch (t: Throwable) {
-                      throw IllegalStateException(
-                          "Cannot access v60a_vd_service",
-                          t
-                      )
+                      throw IllegalStateException("Cannot access v60a_vd_service", t)
                   }
               }
           }
@@ -359,9 +314,7 @@ jobs:
 
           class LauncherActivity : Activity() {
 
-              override fun onCreate(
-                  savedInstanceState: Bundle?
-              ) {
+              override fun onCreate(savedInstanceState: Bundle?) {
                   super.onCreate(savedInstanceState)
 
                   val root = LinearLayout(this).apply {
@@ -384,26 +337,19 @@ jobs:
                       gravity = Gravity.CENTER
                   }
 
-                  root.addView(
-                      title,
-                      LinearLayout.LayoutParams(-1, -2)
-                  )
-
-                  root.addView(
-                      status,
-                      LinearLayout.LayoutParams(-1, -2)
-                  )
+                  root.addView(title, LinearLayout.LayoutParams(-1, -2))
+                  root.addView(status, LinearLayout.LayoutParams(-1, -2))
 
                   setContentView(root)
               }
           }
           EOT
 
+          # 7. Manifests & Configs
           cat > v6-a2-source/carapp/src/main/AndroidManifest.xml <<'EOT'
           <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
-              <uses-permission
-                  android:name="androidx.car.app.ACCESS_SURFACE" />
+              <uses-permission android:name="androidx.car.app.ACCESS_SURFACE" />
 
               <application
                   android:allowBackup="false"
@@ -424,11 +370,8 @@ jobs:
                       android:exported="true">
 
                       <intent-filter>
-                          <action
-                              android:name="androidx.car.app.CarAppService" />
-
-                          <category
-                              android:name="androidx.car.app.category.NAVIGATION" />
+                          <action android:name="androidx.car.app.CarAppService" />
+                          <category android:name="androidx.car.app.category.NAVIGATION" />
                       </intent-filter>
 
                   </service>
@@ -449,8 +392,7 @@ jobs:
 
               <application
                   android:allowBackup="false"
-                  android:label="Car Assistant V6 System"
-                  android:description="Car Assistant V6 System Hook">
+                  android:label="Car Assistant V6 System">
 
                   <meta-data
                       android:name="xposedmodule"
@@ -473,13 +415,16 @@ jobs:
           </manifest>
           EOT
 
+          # Bổ sung file Xposed Init bắt buộc
+          cat > v6-a2-source/system/src/main/assets/xposed_init <<'EOT'
+          com.carassistant.v6.system.SystemServerHook
+          EOT
+
+          # 8. Complete SystemServerHook.java (Đã fix lỗi cú pháp)
           cat > v6-a2-source/system/src/main/java/com/carassistant/v6/system/SystemServerHook.java <<'EOT'
           package com.carassistant.v6.system;
 
-          import android.app.ActivityOptions;
-          import android.content.ComponentName;
           import android.content.Context;
-          import android.content.Intent;
           import android.hardware.display.DisplayManager;
           import android.hardware.display.VirtualDisplay;
           import android.os.Binder;
@@ -497,31 +442,19 @@ jobs:
           import de.robv.android.xposed.XposedHelpers;
           import de.robv.android.xposed.callbacks.XC_LoadPackage;
 
-          public final class SystemServerHook
-                  implements IXposedHookLoadPackage {
+          public final class SystemServerHook implements IXposedHookLoadPackage {
 
-              private static final String SERVICE_NAME =
-                      "v60a_vd_service";
+              private static final String SERVICE_NAME = "v60a_vd_service";
+              private static final String DESCRIPTOR = "com.v60a.virtualdisplay.ipc.IVirtualDisplayService";
 
-              private static final String DESCRIPTOR =
-                      "com.v60a.virtualdisplay.ipc.IVirtualDisplayService";
-
-              private static final int TRANSACTION_CREATE =
-                      IBinder.FIRST_CALL_TRANSACTION;
-
-              private static final int TRANSACTION_RELEASE =
-                      IBinder.FIRST_CALL_TRANSACTION + 1;
+              private static final int TRANSACTION_CREATE = IBinder.FIRST_CALL_TRANSACTION;
+              private static final int TRANSACTION_RELEASE = IBinder.FIRST_CALL_TRANSACTION + 1;
 
               private static volatile VirtualDisplay virtualDisplay;
-
-              private static volatile int displayId =
-                      Display.DEFAULT_DISPLAY;
+              private static volatile int displayId = Display.DEFAULT_DISPLAY;
 
               @Override
-              public void handleLoadPackage(
-                      XC_LoadPackage.LoadPackageParam lpparam)
-                      throws Throwable {
-
+              public void handleLoadPackage(XC_LoadPackage.LoadPackageParam lpparam) throws Throwable {
                   if (!"android".equals(lpparam.packageName)) {
                       return;
                   }
@@ -531,16 +464,9 @@ jobs:
                           lpparam.classLoader,
                           "startOtherServices",
                           new XC_MethodHook() {
-
                               @Override
-                              protected void afterHookedMethod(
-                                      MethodHookParam param)
-                                      throws Throwable {
-
-                                  Context context =
-                                          findSystemContext(
-                                                  param.thisObject);
-
+                              protected void afterHookedMethod(MethodHookParam param) throws Throwable {
+                                  Context context = findSystemContext(param.thisObject);
                                   if (context != null) {
                                       publishService(context);
                                   }
@@ -548,384 +474,82 @@ jobs:
                           });
               }
 
-              private static Context findSystemContext(
-                      Object systemServer) {
-
+              private static Context findSystemContext(Object systemServer) {
                   try {
-                      Class<?> cls =
-                              Class.forName(
-                                      "com.android.server.SystemServer");
-
-                      Method getContext =
-                              cls.getDeclaredMethod(
-                                      "getSystemContext");
-
+                      Class<?> cls = Class.forName("com.android.server.SystemServer");
+                      Method getContext = cls.getDeclaredMethod("getSystemContext");
                       getContext.setAccessible(true);
-
-                      return (Context) getContext.invoke(
-                              systemServer);
-
+                      return (Context) getContext.invoke(systemServer);
                   } catch (Throwable t) {
-
-                      XposedBridge.log(
-                              "CarAssistant V6: getSystemContext failed: "
-                                      + t);
-
+                      XposedBridge.log("CarAssistant V6: getSystemContext failed: " + t);
                       return null;
                   }
               }
 
-              private static void publishService(
-                      Context context) {
-
+              private static void publishService(Context context) {
                   try {
-                      Class<?> sm =
-                              Class.forName(
-                                      "android.os.ServiceManager");
-
-                      Method addService =
-                              sm.getDeclaredMethod(
-                                      "addService",
-                                      String.class,
-                                      IBinder.class);
-
+                      Class<?> sm = Class.forName("android.os.ServiceManager");
+                      Method addService = sm.getDeclaredMethod("addService", String.class, IBinder.class);
                       addService.setAccessible(true);
 
                       Binder service = new Binder() {
-
                           @Override
-                          protected boolean onTransact(
-                                  int code,
-                                  Parcel data,
-                                  Parcel reply,
-                                  int flags)
-                                  throws RemoteException {
-
-                              if (code == INTERFACE_TRANSACTION) {
-                                  reply.writeString(DESCRIPTOR);
-                                  return true;
-                              }
-
-                              data.enforceInterface(
-                                      DESCRIPTOR);
-
+                          protected boolean onTransact(int code, Parcel data, Parcel reply, int flags) throws RemoteException {
                               if (code == TRANSACTION_CREATE) {
-
+                                  data.enforceInterface(DESCRIPTOR);
                                   Surface surface = null;
-
                                   if (data.readInt() != 0) {
-                                      surface =
-                                              Surface.CREATOR
-                                                      .createFromParcel(
-                                                              data);
+                                      surface = Surface.CREATOR.createFromParcel(data);
                                   }
+                                  int width = data.readInt();
+                                  int height = data.readInt();
+                                  int dpi = data.readInt();
 
-                                  int width =
-                                          data.readInt();
-
-                                  int height =
-                                          data.readInt();
-
-                                  int dpi =
-                                          data.readInt();
-
-                                  try {
-                                      int id =
-                                              createDisplay(
-                                                      context,
-                                                      surface,
-                                                      width,
-                                                      height,
-                                                      dpi);
-
-                                      reply.writeNoException();
-                                      reply.writeInt(id);
-
-                                  } catch (Throwable t) {
-
-                                      Exception e =
-                                              (t instanceof Exception)
-                                                      ? (Exception) t
-                                                      : new RuntimeException(t);
-
-                                      reply.writeException(e);
+                                  DisplayManager dm = (DisplayManager) context.getSystemService(Context.DISPLAY_SERVICE);
+                                  if (dm != null && surface != null) {
+                                      if (virtualDisplay != null) {
+                                          virtualDisplay.release();
+                                      }
+                                      virtualDisplay = dm.createVirtualDisplay("V60A_VD", width, height, dpi, surface, 0);
+                                      displayId = virtualDisplay.getDisplay().getDisplayId();
                                   }
-
-                                  return true;
-                              }
-
-                              if (code == TRANSACTION_RELEASE) {
-
-                                  releaseDisplay();
 
                                   reply.writeNoException();
-
+                                  reply.writeInt(displayId);
+                                  return true;
+                              } else if (code == TRANSACTION_RELEASE) {
+                                  data.enforceInterface(DESCRIPTOR);
+                                  if (virtualDisplay != null) {
+                                      virtualDisplay.release();
+                                      virtualDisplay = null;
+                                  }
+                                  reply.writeNoException();
                                   return true;
                               }
-
-                              return super.onTransact(
-                                      code,
-                                      data,
-                                      reply,
-                                      flags);
+                              return super.onTransact(code, data, reply, flags);
                           }
                       };
 
-                      addService.invoke(
-                              null,
-                              SERVICE_NAME,
-                              service);
-
-                      XposedBridge.log(
-                              "CarAssistant V6: Binder service published");
-
+                      addService.invoke(null, SERVICE_NAME, service);
+                      XposedBridge.log("CarAssistant V6: Service published successfully!");
                   } catch (Throwable t) {
-
-                      XposedBridge.log(
-                              "CarAssistant V6: publish failed: "
-                                      + t);
+                      XposedBridge.log("CarAssistant V6: publishService failed: " + t);
                   }
-              }
-
-              private static synchronized int createDisplay(
-                      Context context,
-                      Surface surface,
-                      int width,
-                      int height,
-                      int dpi)
-                      throws Exception {
-
-                  releaseDisplay();
-
-                  DisplayManager dm =
-                          (DisplayManager)
-                                  context.getSystemService(
-                                          Context.DISPLAY_SERVICE);
-
-                  if (dm == null) {
-                      throw new IllegalStateException(
-                              "DisplayManager unavailable");
-                  }
-
-                  int flags =
-                          DisplayManager
-                                  .VIRTUAL_DISPLAY_FLAG_PUBLIC
-                          | DisplayManager
-                                  .VIRTUAL_DISPLAY_FLAG_PRESENTATION
-                          | DisplayManager
-                                  .VIRTUAL_DISPLAY_FLAG_OWN_CONTENT_ONLY;
-
-                  virtualDisplay =
-                          dm.createVirtualDisplay(
-                                  "CarAssistant-V6",
-                                  width,
-                                  height,
-                                  dpi,
-                                  surface,
-                                  flags);
-
-                  if (virtualDisplay == null) {
-                      throw new IllegalStateException(
-                              "createVirtualDisplay returned null");
-                  }
-
-                  displayId =
-                          virtualDisplay
-                                  .getDisplay()
-                                  .getDisplayId();
-
-                  XposedBridge.log(
-                          "CarAssistant V6: VirtualDisplay created, id="
-                                  + displayId);
-
-                  launchLauncher(
-                          context,
-                          displayId);
-
-                  return displayId;
-              }
-
-              private static synchronized void releaseDisplay() {
-
-                  VirtualDisplay vd =
-                          virtualDisplay;
-
-                  virtualDisplay = null;
-
-                  displayId =
-                          Display.DEFAULT_DISPLAY;
-
-                  if (vd != null) {
-                      try {
-                          vd.release();
-                      } catch (Throwable ignored) {
-                      }
-                  }
-              }
-
-              private static void launchLauncher(
-                      Context context,
-                      int targetDisplayId)
-                      throws Exception {
-
-                  Intent intent =
-                          new Intent();
-
-                  intent.setComponent(
-                          new ComponentName(
-                                  "com.carassistant.v6",
-                                  "com.carassistant.v6.LauncherActivity"));
-
-                  intent.addFlags(
-                          Intent.FLAG_ACTIVITY_NEW_TASK);
-
-                  ActivityOptions options =
-                          ActivityOptions.makeBasic();
-
-                  options.setLaunchDisplayId(
-                          targetDisplayId);
-
-                  context.startActivity(
-                          intent,
-                          options.toBundle());
-
-                  XposedBridge.log(
-                          "CarAssistant V6: Launcher requested on display="
-                                  + targetDisplayId);
               }
           }
           EOT
 
-          printf '%s\n' \
-            'com.carassistant.v6.system.SystemServerHook' \
-            > v6-a2-source/system/src/main/assets/xposed_init
-
-          curl -fL \
-            "https://repository-cdn.liferay.com/nexus/content/repositories/gradle-plugins/de/robv/android/xposed/api/82/api-82.jar" \
-            -o v6-a2-source/libs/api-82.jar
-
-          test -s v6-a2-source/libs/api-82.jar
-
-          ! grep -R "UserHandle\.of" \
-              v6-a2-source/system/src/main/java
-
-          ! grep -R "UserHandle\.CURRENT" \
-              v6-a2-source/system/src/main/java
-
-          if grep -R -nE '\.attachInterface[[:space:]]*\(' \
-              v6-a2-source/system/src/main/java; then
-            echo "ERROR: Binder interface attachment call detected"
-            exit 1
-          fi
-
-      - name: Build V6-A2
-        shell: bash
+      - name: Build APKs
         run: |
-          set -euo pipefail
-
           cd v6-a2-source
+          gradle wrapper
+          chmod +x gradlew
+          ./gradlew assembleDebug
 
-          gradle wrapper \
-            --gradle-version 8.7 \
-            --distribution-type bin
-
-          ./gradlew \
-            :carapp:assembleDebug \
-            :system:assembleDebug \
-            --stacktrace \
-            --info
-
-      - name: Verify V6-A2 System APK
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          APK="v6-a2-source/system/build/outputs/apk/debug/system-debug.apk"
-
-          test -s "$APK"
-
-          echo "== Xposed init =="
-
-          unzip -l "$APK" | \
-            grep -q 'assets/xposed_init$'
-
-          ENTRY="$(
-            unzip -p "$APK" assets/xposed_init |
-            tr -d '\r' |
-            head -n 1
-          )"
-
-          test "$ENTRY" = \
-            "com.carassistant.v6.system.SystemServerHook"
-
-          echo "== Manifest =="
-
-          AAPT2="$(
-            find "$ANDROID_HOME/build-tools" \
-              -type f \
-              -name aapt2 |
-            sort -V |
-            tail -n 1
-          )"
-
-          test -n "$AAPT2"
-
-          "$AAPT2" dump xmltree \
-            "$APK" \
-            --file AndroidManifest.xml \
-            > manifest.txt
-
-          grep -q "xposedmodule" manifest.txt
-          grep -q "xposeddescription" manifest.txt
-          grep -q "xposedminversion" manifest.txt
-          grep -q "xposedscope" manifest.txt
-
-          grep -q 'value.*"true"' manifest.txt
-          grep -q 'value.*"82"' manifest.txt
-          grep -q 'value.*"android"' manifest.txt
-
-          echo "== DEX =="
-
-          unzip -l "$APK" |
-            grep -q 'classes.dex'
-
-          unzip -p "$APK" classes.dex > classes.dex
-
-          strings classes.dex |
-            grep -q \
-              'com/carassistant/v6/system/SystemServerHook'
-
-          strings classes.dex |
-            grep -q \
-              'de/robv/android/xposed/'
-
-          echo "V6-A2 System APK verification: PASS"
-
-      - name: Prepare artifacts
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          mkdir -p output
-
-          cp \
-            v6-a2-source/carapp/build/outputs/apk/debug/carapp-debug.apk \
-            output/CarAssistant-V6-A2-CarApp.apk
-
-          cp \
-            v6-a2-source/system/build/outputs/apk/debug/system-debug.apk \
-            output/CarAssistant-V6-A2-System.apk
-
-          cd v6-a2-source
-
-          zip -r \
-            ../output/CarAssistant-V6-A2-source.zip \
-            . \
-            -x "*.gradle-cache*" \
-            -x "*/build/*"
-
-      - name: Upload artifacts
+      - name: Upload Artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: CarAssistant-V6-A2
-          path: output/
+          name: CarAssistant-V6-A2-APKs
+          path: |
+            v6-a2-source/carapp/build/outputs/apk/debug/*.apk
+            v6-a2-source/system/build/outputs/apk/debug/*.apk
