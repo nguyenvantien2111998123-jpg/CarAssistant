@@ -1,0 +1,211 @@
+name: Export Car Assistant V9 Source
+
+on:
+  workflow_dispatch:
+
+env:
+  AACAST_REPO: "https://github.com/xuanthanhtn96/AACast-Doudou.git"
+  AACAST_REF: "main"
+
+jobs:
+  export:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout CarAssistant
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Download V9 source
+        shell: bash
+        run: |
+          set -e
+
+          echo "=================================================="
+          echo "DOWNLOAD V9 SOURCE"
+          echo "=================================================="
+
+          rm -rf aacast-upstream
+          rm -rf v9-export
+
+          git clone --depth 1 --branch "$AACAST_REF" \
+            "$AACAST_REPO" \
+            aacast-upstream
+
+          cp -a aacast-upstream v9-export
+
+          rm -rf v9-export/.git
+
+      - name: Transform source into Car Assistant V9
+        shell: bash
+        run: |
+          set -e
+
+          cd v9-export
+
+          echo "=================================================="
+          echo "TRANSFORM PACKAGE"
+          echo "=================================================="
+
+          OLD_PACKAGE="com.hieptran.aacast.doudou"
+          NEW_PACKAGE="com.carassistant.v9"
+
+          find . \
+            -type f \
+            \( -name "*.java" \
+            -o -name "*.kt" \
+            -o -name "*.xml" \
+            -o -name "*.gradle" \
+            -o -name "*.properties" \
+            -o -name "*.txt" \
+            -o -name "*.json" \) \
+            -print0 |
+          while IFS= read -r -d '' file; do
+            sed -i "s/${OLD_PACKAGE}/${NEW_PACKAGE}/g" "$file"
+          done
+
+          sed -i \
+            's/com\.hieptran\.aacast\.doudou/com.carassistant.v9/g' \
+            app/build.gradle
+
+          sed -i \
+            's/namespace .*=.*/namespace "com.carassistant.v9"/' \
+            app/build.gradle || true
+
+          sed -i \
+            's/applicationId .*=.*/applicationId "com.carassistant.v9"/' \
+            app/build.gradle || true
+
+          sed -i \
+            's/versionCode .*=.*/versionCode 900/' \
+            app/build.gradle || true
+
+          sed -i \
+            's/versionName .*=.*/versionName "9.0-AACast"/' \
+            app/build.gradle || true
+
+          find app/src/main -type f -print0 |
+          while IFS= read -r -d '' file; do
+            sed -i 's/AACast Doudou/Car Assistant V9/g' "$file"
+          done
+
+          mkdir -p app/src/main/assets
+
+          printf '%s\n' \
+            'com.carassistant.v9.aabridge.AACastBridge' \
+            > app/src/main/assets/xposed_init
+
+      - name: Verify V9 source
+        shell: bash
+        run: |
+          set -e
+
+          cd v9-export
+
+          echo "=================================================="
+          echo "VERIFY V9 SOURCE"
+          echo "=================================================="
+
+          test -f app/libs/aasdk-legacy.dex
+          test -f app/libs/aasdk-legacy.jar
+          test -f app/libs/xposed-api-82.jar
+
+          test -f app/src/main/assets/xposed_init
+
+          grep -R -q \
+            'com.google.android.apps.auto.sdk.CarActivityService' \
+            app/src/main/java
+
+          grep -R -q \
+            'com.google.android.apps.auto.sdk.CarActivity' \
+            app/src/main/java
+
+          grep -R -q \
+            'createVirtualDisplay' \
+            app/src/main/java
+
+          grep -R -q \
+            'AACastBridge' \
+            app/src/main/java
+
+          grep -q \
+            'com.carassistant.v9.aabridge.AACastBridge' \
+            app/src/main/assets/xposed_init
+
+          if grep -R -q \
+            'androidx.car.app.CarAppService' \
+            app/src/main/java; then
+            echo "ERROR: Unexpected AndroidX CarAppService detected."
+            exit 1
+          fi
+
+          echo "V9 source verification PASSED."
+
+      - name: Show source tree
+        shell: bash
+        run: |
+          set -e
+
+          echo "=================================================="
+          echo "V9 SOURCE TREE"
+          echo "=================================================="
+
+          cd v9-export
+
+          find . \
+            -type f \
+            ! -path './.git/*' \
+            | sort
+
+      - name: Package V9 source
+        shell: bash
+        run: |
+          set -e
+
+          echo "=================================================="
+          echo "PACKAGE V9 SOURCE"
+          echo "=================================================="
+
+          rm -rf export-package
+          mkdir -p export-package
+
+          cp -a v9-export export-package/v9-source
+
+          rm -rf export-package/v9-source/.git
+
+          cd export-package
+
+          zip -r ../CarAssistant-V9-source.zip v9-source \
+            -x "v9-source/.gradle/*" \
+            -x "v9-source/build/*" \
+            -x "v9-source/app/build/*"
+
+          cd ..
+
+          echo "Source ZIP:"
+          ls -lh CarAssistant-V9-source.zip
+
+      - name: SHA256
+        shell: bash
+        run: |
+          set -e
+
+          sha256sum \
+            CarAssistant-V9-source.zip \
+            > CarAssistant-V9-source.zip.sha256
+
+          cat CarAssistant-V9-source.zip.sha256
+
+      - name: Upload V9 source artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: CarAssistant-V9-Source
+          path: |
+            CarAssistant-V9-source.zip
+            CarAssistant-V9-source.zip.sha256
+          retention-days: 90
