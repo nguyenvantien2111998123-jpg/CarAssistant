@@ -1,15 +1,356 @@
-          unzip -q "CarAssistant-V9-Source.zip" -d v9-source
+name: Extract Car Assistant V9 Source
 
-          INNER_ZIP="$(find v9-source -type f -name '*.zip' | head -1)"
+on:
+  workflow_dispatch:
 
-          if [ -n "$INNER_ZIP" ]; then
-            TMP_DIR="$(mktemp -d)"
-            unzip -q "$INNER_ZIP" -d "$TMP_DIR"
+jobs:
+  extract:
+    name: Extract V9 Source
+    runs-on: ubuntu-latest
 
-            rm -rf v9-source
-            mkdir -p v9-source
+    steps:
+      # ==================================================
+      # 1. CHECKOUT
+      # ==================================================
+      - name: Checkout CarAssistant
+        uses: actions/checkout@v4
 
-            shopt -s dotglob
-            mv "$TMP_DIR"/* v9-source/
-            rm -rf "$TMP_DIR"
+      # ==================================================
+      # 2. CHECK ZIP
+      # ==================================================
+      - name: Check V9 ZIP
+        shell: bash
+        run: |
+          set -e
+
+          echo "=================================================="
+          echo "CHECK V9 ZIP"
+          echo "=================================================="
+
+          if [ ! -f "CarAssistant-V9-Source.zip" ]; then
+            echo "ERROR: Không tìm thấy CarAssistant-V9-Source.zip"
+            exit 1
           fi
+
+          ls -lh "CarAssistant-V9-Source.zip"
+
+          file "CarAssistant-V9-Source.zip"
+
+      # ==================================================
+      # 3. EXTRACT OUTER ZIP
+      # ==================================================
+      - name: Extract outer ZIP
+        shell: bash
+        run: |
+          set -e
+
+          echo "=================================================="
+          echo "EXTRACT OUTER ZIP"
+          echo "=================================================="
+
+          rm -rf /tmp/v9-work
+          mkdir -p /tmp/v9-work/outer
+
+          unzip -q \
+            "CarAssistant-V9-Source.zip" \
+            -d /tmp/v9-work/outer
+
+          echo "Outer ZIP contents:"
+          find /tmp/v9-work/outer \
+            -maxdepth 5 \
+            -type f \
+            -print | sort
+
+      # ==================================================
+      # 4. FIND INNER ZIP
+      # ==================================================
+      - name: Find inner V9 ZIP
+        shell: bash
+        run: |
+          set -e
+
+          echo "=================================================="
+          echo "FIND INNER ZIP"
+          echo "=================================================="
+
+          INNER_ZIP="$(find /tmp/v9-work/outer \
+            -type f \
+            -iname '*.zip' \
+            | head -n 1)"
+
+          if [ -z "$INNER_ZIP" ]; then
+            echo "ERROR: Không tìm thấy ZIP source bên trong."
+            exit 1
+          fi
+
+          echo "INNER ZIP:"
+          echo "$INNER_ZIP"
+
+          cp "$INNER_ZIP" /tmp/v9-work/v9-source.zip
+
+          ls -lh /tmp/v9-work/v9-source.zip
+
+      # ==================================================
+      # 5. EXTRACT INNER ZIP
+      # ==================================================
+      - name: Extract inner V9 source ZIP
+        shell: bash
+        run: |
+          set -e
+
+          echo "=================================================="
+          echo "EXTRACT INNER V9 SOURCE"
+          echo "=================================================="
+
+          rm -rf /tmp/v9-work/source
+          mkdir -p /tmp/v9-work/source
+
+          unzip -q \
+            /tmp/v9-work/v9-source.zip \
+            -d /tmp/v9-work/source
+
+          echo "Inner ZIP contents:"
+          find /tmp/v9-work/source \
+            -maxdepth 5 \
+            -type f \
+            -print | sort
+
+      # ==================================================
+      # 6. LOCATE REAL SOURCE
+      # ==================================================
+      - name: Locate real V9 source
+        shell: bash
+        run: |
+          set -e
+
+          echo "=================================================="
+          echo "LOCATE REAL V9 SOURCE"
+          echo "=================================================="
+
+          SOURCE_ROOT=""
+
+          while IFS= read -r -d '' DIR; do
+
+            if [ -d "$DIR/app" ]; then
+
+              if [ -f "$DIR/app/build.gradle" ] || \
+                 [ -f "$DIR/app/build.gradle.kts" ]; then
+
+                SOURCE_ROOT="$DIR"
+                break
+
+              fi
+
+            fi
+
+          done < <(
+            find /tmp/v9-work/source \
+              -type d \
+              -print0
+          )
+
+          if [ -z "$SOURCE_ROOT" ]; then
+            echo "ERROR: Không tìm thấy source V9 thật."
+
+            echo ""
+            echo "Cấu trúc ZIP:"
+            find /tmp/v9-work/source \
+              -maxdepth 8 \
+              -print
+
+            exit 1
+          fi
+
+          echo "SOURCE ROOT:"
+          echo "$SOURCE_ROOT"
+
+          echo "$SOURCE_ROOT" > /tmp/v9-work/source-root.txt
+
+      # ==================================================
+      # 7. COPY SOURCE TO v9-source
+      # ==================================================
+      - name: Create v9-source
+        shell: bash
+        run: |
+          set -e
+
+          echo "=================================================="
+          echo "CREATE v9-source"
+          echo "=================================================="
+
+          SOURCE_ROOT="$(cat /tmp/v9-work/source-root.txt)"
+
+          rm -rf v9-source
+          mkdir -p v9-source
+
+          cp -a "$SOURCE_ROOT"/. v9-source/
+
+          echo "V9 source copied."
+
+      # ==================================================
+      # 8. REMOVE UNNECESSARY FILES
+      # ==================================================
+      - name: Clean V9 source
+        shell: bash
+        run: |
+          set -e
+
+          echo "=================================================="
+          echo "CLEAN V9 SOURCE"
+          echo "=================================================="
+
+          rm -rf v9-source/.git
+          rm -rf v9-source/build
+          rm -rf v9-source/app/build
+
+          find v9-source \
+            -type d \
+            -name ".gradle" \
+            -prune \
+            -exec rm -rf {} +
+
+          echo "Source cleaned."
+
+      # ==================================================
+      # 9. VERIFY SOURCE
+      # ==================================================
+      - name: Verify V9 source
+        shell: bash
+        run: |
+          set -e
+
+          echo "=================================================="
+          echo "VERIFY V9 SOURCE"
+          echo "=================================================="
+
+          test -d "v9-source/app"
+
+          if [ -f "v9-source/app/build.gradle" ]; then
+            echo "Found app/build.gradle"
+          elif [ -f "v9-source/app/build.gradle.kts" ]; then
+            echo "Found app/build.gradle.kts"
+          else
+            echo "ERROR: Không có app/build.gradle hoặc app/build.gradle.kts"
+            exit 1
+          fi
+
+          if [ -d "v9-source/app/src/main" ]; then
+            echo "Found app/src/main"
+          else
+            echo "ERROR: Không có app/src/main"
+            exit 1
+          fi
+
+          echo ""
+          echo "Checking AACast engine..."
+
+          if grep -R -q \
+            "CarActivityService" \
+            v9-source/app/src/main/java; then
+            echo "CarActivityService: OK"
+          else
+            echo "ERROR: Không tìm thấy CarActivityService"
+            exit 1
+          fi
+
+          if grep -R -q \
+            "CarActivity" \
+            v9-source/app/src/main/java; then
+            echo "CarActivity: OK"
+          else
+            echo "ERROR: Không tìm thấy CarActivity"
+            exit 1
+          fi
+
+          if grep -R -q \
+            "createVirtualDisplay" \
+            v9-source/app/src/main/java; then
+            echo "VirtualDisplay: OK"
+          else
+            echo "ERROR: Không tìm thấy VirtualDisplay"
+            exit 1
+          fi
+
+          if [ -f "v9-source/app/libs/aasdk-legacy.dex" ]; then
+            echo "aasdk-legacy.dex: OK"
+          else
+            echo "ERROR: Thiếu aasdk-legacy.dex"
+            exit 1
+          fi
+
+          if [ -f "v9-source/app/libs/aasdk-legacy.jar" ]; then
+            echo "aasdk-legacy.jar: OK"
+          else
+            echo "ERROR: Thiếu aasdk-legacy.jar"
+            exit 1
+          fi
+
+          echo ""
+          echo "V9 SOURCE VERIFIED."
+
+      # ==================================================
+      # 10. SHOW TREE
+      # ==================================================
+      - name: Show V9 source tree
+        shell: bash
+        run: |
+          echo "=================================================="
+          echo "V9 SOURCE TREE"
+          echo "=================================================="
+
+          find v9-source \
+            -maxdepth 5 \
+            -type f \
+            -print | sort
+
+      # ==================================================
+      # 11. PACKAGE SOURCE
+      # ==================================================
+      - name: Package extracted V9 source
+        shell: bash
+        run: |
+          set -e
+
+          echo "=================================================="
+          echo "PACKAGE V9 SOURCE"
+          echo "=================================================="
+
+          rm -f CarAssistant-V9-Source-Extracted.zip
+
+          cd v9-source
+
+          zip -qr \
+            "../CarAssistant-V9-Source-Extracted.zip" \
+            .
+
+          cd ..
+
+          ls -lh \
+            CarAssistant-V9-Source-Extracted.zip
+
+      # ==================================================
+      # 12. SHA256
+      # ==================================================
+      - name: Generate SHA256
+        shell: bash
+        run: |
+          set -e
+
+          sha256sum \
+            CarAssistant-V9-Source-Extracted.zip \
+            > CarAssistant-V9-Source-Extracted.zip.sha256
+
+          cat \
+            CarAssistant-V9-Source-Extracted.zip.sha256
+
+      # ==================================================
+      # 13. UPLOAD SOURCE ARTIFACT
+      # ==================================================
+      - name: Upload extracted V9 source
+        uses: actions/upload-artifact@v4
+        with:
+          name: CarAssistant-V9-Source-Extracted
+          path: |
+            CarAssistant-V9-Source-Extracted.zip
+            CarAssistant-V9-Source-Extracted.zip.sha256
+          retention-days: 30
