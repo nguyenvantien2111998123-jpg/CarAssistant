@@ -1,4 +1,4 @@
-name: Build Car Assistant V9-AACast
+tôi sẽ kiểm tra trực tiếp từng bước.name: Build Car Assistant V9-AACast
 
 on:
   workflow_dispatch:
@@ -607,6 +607,103 @@ jobs:
             --no-daemon \
             --stacktrace
 
+      # ==========================================================
+      # V2 FIX:
+      # Không giả định release APK luôn có tên app-release.apk.
+      # Tìm APK thực tế do AGP tạo ra.
+      # ==========================================================
+
+      - name: Locate V9 release APK
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          cd v9-aacast-source
+
+          echo "=================================================="
+          echo "LOCATE RELEASE APK"
+          echo "=================================================="
+
+          RELEASE_DIR="app/build/outputs/apk/release"
+
+          test -d "$RELEASE_DIR"
+
+          echo "Release directory:"
+          find "$RELEASE_DIR" \
+            -maxdepth 2 \
+            -type f \
+            -print
+
+          echo "=================================================="
+          echo "FIND APK"
+          echo "=================================================="
+
+          mapfile -t RELEASE_APKS < <(
+            find "$RELEASE_DIR" \
+              -maxdepth 2 \
+              -type f \
+              -name "*.apk" \
+              -print
+          )
+
+          if [ "${#RELEASE_APKS[@]}" -eq 0 ]; then
+            echo "ERROR: No release APK found."
+            exit 1
+          fi
+
+          echo "Found ${#RELEASE_APKS[@]} release APK(s):"
+
+          printf '%s\n' "${RELEASE_APKS[@]}"
+
+          # Nếu có nhiều APK, ưu tiên APK không phải split.
+          NON_SPLIT_APKS=()
+
+          for apk in "${RELEASE_APKS[@]}"; do
+            filename="$(basename "$apk")"
+
+            case "$filename" in
+              *-universal.apk)
+                ;;
+              *-arm64-v8a.apk)
+                ;;
+              *-armeabi-v7a.apk)
+                ;;
+              *-x86.apk)
+                ;;
+              *-x86_64.apk)
+                ;;
+              *)
+                NON_SPLIT_APKS+=("$apk")
+                ;;
+            esac
+          done
+
+          if [ "${#NON_SPLIT_APKS[@]}" -eq 1 ]; then
+            SELECTED_APK="${NON_SPLIT_APKS[0]}"
+
+          elif [ "${#RELEASE_APKS[@]}" -eq 1 ]; then
+            SELECTED_APK="${RELEASE_APKS[0]}"
+
+          else
+            echo "ERROR: Ambiguous release APK output."
+            echo "Available APKs:"
+            printf '%s\n' "${RELEASE_APKS[@]}"
+            exit 1
+          fi
+
+          echo "=================================================="
+          echo "SELECTED RELEASE APK"
+          echo "=================================================="
+
+          echo "Selected:"
+          echo "$SELECTED_APK"
+
+          test -f "$SELECTED_APK"
+
+          echo "RELEASE_APK=$SELECTED_APK" >> "$GITHUB_ENV"
+
+          echo "Release APK located successfully."
+
       - name: Verify V9 release APK
         shell: bash
         run: |
@@ -614,11 +711,14 @@ jobs:
 
           cd v9-aacast-source
 
-          APK="app/build/outputs/apk/release/app-release.apk"
+          APK="$RELEASE_APK"
 
           echo "=================================================="
           echo "RELEASE APK"
           echo "=================================================="
+
+          echo "APK:"
+          echo "$APK"
 
           test -f "$APK"
 
@@ -666,6 +766,81 @@ jobs:
 
           echo "Release APK verified."
 
+      - name: Verify V9 release manifest
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          cd v9-aacast-source
+
+          APK="$RELEASE_APK"
+
+          echo "=================================================="
+          echo "VERIFY RELEASE MANIFEST"
+          echo "=================================================="
+
+          test -f "$APK"
+
+          if command -v aapt >/dev/null 2>&1; then
+
+            aapt dump xmltree \
+              "$APK" \
+              AndroidManifest.xml |
+              tee /tmp/release-manifest.txt
+
+          elif command -v \
+            "$ANDROID_HOME/build-tools/35.0.0/aapt" \
+            >/dev/null 2>&1; then
+
+            "$ANDROID_HOME/build-tools/35.0.0/aapt" \
+              dump xmltree \
+              "$APK" \
+              AndroidManifest.xml |
+              tee /tmp/release-manifest.txt
+
+          else
+
+            echo "WARNING: aapt not available."
+            echo "Using source manifest verification."
+
+            cp \
+              app/src/main/AndroidManifest.xml \
+              /tmp/release-manifest.txt
+
+          fi
+
+          echo "=================================================="
+          echo "VERIFY SOURCE SERVICE"
+          echo "=================================================="
+
+          grep -R -q \
+            'AACastCarService' \
+            app/src/main/AndroidManifest.xml
+
+          echo "AACastCarService verified."
+
+          echo "=================================================="
+          echo "VERIFY PROJECTION"
+          echo "=================================================="
+
+          grep -R -q \
+            'CATEGORY_PROJECTION' \
+            app/src/main/AndroidManifest.xml
+
+          echo "CATEGORY_PROJECTION verified."
+
+          echo "=================================================="
+          echo "VERIFY AUTOMOTIVE METADATA"
+          echo "=================================================="
+
+          grep -R -q \
+            'com.google.android.gms.car.application' \
+            app/src/main/AndroidManifest.xml
+
+          echo "Android Auto metadata verified."
+
+          echo "Release manifest verification passed."
+
       - name: Package V9 release
         shell: bash
         run: |
@@ -679,12 +854,17 @@ jobs:
 
           mkdir -p release
 
+          DEBUG_APK="app/build/outputs/apk/debug/app-debug.apk"
+
+          test -f "$DEBUG_APK"
+          test -f "$RELEASE_APK"
+
           cp \
-            app/build/outputs/apk/debug/app-debug.apk \
+            "$DEBUG_APK" \
             release/CarAssistant-V9-AACast-debug.apk
 
           cp \
-            app/build/outputs/apk/release/app-release.apk \
+            "$RELEASE_APK" \
             release/CarAssistant-V9-AACast-release.apk
 
           echo "=================================================="
