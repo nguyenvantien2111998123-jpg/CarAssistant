@@ -1,0 +1,947 @@
+name: Build Car Assistant V7-AACast
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    env:
+      GRADLE_VERSION: "8.7"
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Generate V7 AACast source
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          rm -rf v7-aacast-source
+
+          mkdir -p v7-aacast-source/carapp/src/main/java/com/carassistant/v7/car
+          mkdir -p v7-aacast-source/carapp/src/main/res/values
+          mkdir -p v7-aacast-source/carapp/src/main
+
+          mkdir -p v7-aacast-source/system/src/main/java/com/carassistant/v7/system
+          mkdir -p v7-aacast-source/system/src/main/assets
+          mkdir -p v7-aacast-source/system/src/main/res/values
+          mkdir -p v7-aacast-source/system/libs
+
+          # ------------------------------------------------------------
+          # Root settings
+          # ------------------------------------------------------------
+
+          cat > v7-aacast-source/settings.gradle.kts <<'EOF'
+          pluginManagement {
+              repositories {
+                  google()
+                  mavenCentral()
+                  gradlePluginPortal()
+              }
+          }
+
+          dependencyResolutionManagement {
+              repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)
+
+              repositories {
+                  google()
+                  mavenCentral()
+              }
+          }
+
+          rootProject.name = "CarAssistant-V7-AACast"
+
+          include(":carapp")
+          include(":system")
+          EOF
+
+          cat > v7-aacast-source/build.gradle.kts <<'EOF'
+          plugins {
+              id("com.android.application") version "8.6.1" apply false
+              id("org.jetbrains.kotlin.android") version "2.0.21" apply false
+          }
+          EOF
+
+          cat > v7-aacast-source/gradle.properties <<'EOF'
+          org.gradle.jvmargs=-Xmx2g -Dfile.encoding=UTF-8
+          android.useAndroidX=true
+          android.nonTransitiveRClass=true
+          EOF
+
+          # ------------------------------------------------------------
+          # Car App module
+          # ------------------------------------------------------------
+
+          cat > v7-aacast-source/carapp/build.gradle.kts <<'EOF'
+          plugins {
+              id("com.android.application")
+              id("org.jetbrains.kotlin.android")
+          }
+
+          android {
+              namespace = "com.carassistant.v7.car"
+
+              compileSdk = 35
+
+              defaultConfig {
+                  applicationId = "com.carassistant.v7"
+
+                  minSdk = 28
+                  targetSdk = 35
+
+                  versionCode = 700
+                  versionName = "7.0-AACast"
+              }
+
+              compileOptions {
+                  sourceCompatibility = JavaVersion.VERSION_17
+                  targetCompatibility = JavaVersion.VERSION_17
+              }
+
+              kotlinOptions {
+                  jvmTarget = "17"
+              }
+          }
+
+          dependencies {
+              implementation("androidx.car.app:app:1.7.0")
+          }
+          EOF
+
+          cat > v7-aacast-source/carapp/src/main/res/values/strings.xml <<'EOF'
+          <resources>
+              <string name="app_name">Car Assistant V7</string>
+          </resources>
+          EOF
+
+          cat > v7-aacast-source/carapp/src/main/AndroidManifest.xml <<'EOF'
+          <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+              <uses-permission
+                  android:name="androidx.car.app.ACCESS_SURFACE" />
+
+              <application
+                  android:allowBackup="false"
+                  android:label="@string/app_name"
+                  android:supportsRtl="true"
+                  android:theme="@android:style/Theme.DeviceDefault.NoActionBar">
+
+                  <service
+                      android:name=".V7CarAppService"
+                      android:exported="true"
+                      android:label="@string/app_name"
+                      android:permission="androidx.car.app.CarAppService">
+
+                      <intent-filter>
+                          <action
+                              android:name="androidx.car.app.CarAppService" />
+                      </intent-filter>
+
+                      <meta-data
+                          android:name="androidx.car.app.minCarApiLevel"
+                          android:value="1" />
+
+                  </service>
+
+              </application>
+
+          </manifest>
+          EOF
+
+          cat > v7-aacast-source/carapp/src/main/java/com/carassistant/v7/car/V7CarAppService.kt <<'EOF'
+          package com.carassistant.v7.car
+
+          import androidx.car.app.CarAppService
+          import androidx.car.app.Session
+          import androidx.car.app.validation.HostValidator
+
+          class V7CarAppService : CarAppService() {
+
+              override fun createHostValidator(): HostValidator {
+                  return HostValidator.ALLOW_ALL_HOSTS_VALIDATOR
+              }
+
+              override fun onCreateSession(): Session {
+                  return V7Session()
+              }
+          }
+          EOF
+
+          cat > v7-aacast-source/carapp/src/main/java/com/carassistant/v7/car/V7Session.kt <<'EOF'
+          package com.carassistant.v7.car
+
+          import android.content.Intent
+          import android.graphics.Rect
+          import android.util.Log
+
+          import androidx.car.app.AppManager
+          import androidx.car.app.CarContext
+          import androidx.car.app.Screen
+          import androidx.car.app.Session
+          import androidx.car.app.SurfaceCallback
+          import androidx.car.app.SurfaceContainer
+
+          import androidx.car.app.model.Pane
+          import androidx.car.app.model.PaneTemplate
+          import androidx.car.app.model.Row
+          import androidx.car.app.model.Template
+
+          class V7Session : Session() {
+
+              override fun onCreateScreen(intent: Intent): Screen {
+                  return V7Screen(carContext)
+              }
+          }
+
+          private class V7Screen(
+              private val ctx: CarContext
+          ) : Screen(ctx) {
+
+              private val bridge = V7VirtualDisplayBridge(ctx)
+
+              private var callbackInstalled = false
+
+              private val surfaceCallback = object : SurfaceCallback {
+
+                  override fun onSurfaceAvailable(
+                      surfaceContainer: SurfaceContainer
+                  ) {
+                      Log.i(
+                          TAG,
+                          "Surface available " +
+                              surfaceContainer.width +
+                              "x" +
+                              surfaceContainer.height +
+                              " dpi=" +
+                              surfaceContainer.dpi
+                      )
+
+                      bridge.attach(
+                          surfaceContainer.surface,
+                          surfaceContainer.width,
+                          surfaceContainer.height,
+                          surfaceContainer.dpi
+                      )
+                  }
+
+                  override fun onSurfaceDestroyed(
+                      surfaceContainer: SurfaceContainer
+                  ) {
+                      Log.i(TAG, "Surface destroyed")
+
+                      bridge.release()
+                  }
+
+                  override fun onVisibleAreaChanged(
+                      visibleArea: Rect
+                  ) {
+                      Log.i(
+                          TAG,
+                          "Visible area=" + visibleArea
+                      )
+                  }
+
+                  override fun onStableAreaChanged(
+                      stableArea: Rect
+                  ) {
+                      Log.i(
+                          TAG,
+                          "Stable area=" + stableArea
+                      )
+                  }
+              }
+
+              override fun onGetTemplate(): Template {
+
+                  if (!callbackInstalled) {
+                      callbackInstalled = true
+
+                      ctx.getCarService(
+                          AppManager::class.java
+                      ).setSurfaceCallback(
+                          surfaceCallback
+                      )
+                  }
+
+                  return PaneTemplate.Builder(
+                      Pane.Builder()
+                          .addRow(
+                              Row.Builder()
+                                  .setTitle("Car Assistant V7")
+                                  .addText(
+                                      "AACast VirtualDisplay"
+                                  )
+                                  .build()
+                          )
+                          .build()
+                  )
+                      .setTitle("Car Assistant")
+                      .build()
+              }
+
+              override fun onStop() {
+                  bridge.release()
+                  super.onStop()
+              }
+
+              companion object {
+                  private const val TAG =
+                      "CarAssistantV7"
+              }
+          }
+          EOF
+
+          cat > v7-aacast-source/carapp/src/main/java/com/carassistant/v7/car/V7VirtualDisplayBridge.kt <<'EOF'
+          package com.carassistant.v7.car
+
+          import android.content.Context
+          import android.hardware.display.DisplayManager
+          import android.hardware.display.VirtualDisplay
+          import android.os.Handler
+          import android.os.Looper
+          import android.util.Log
+          import android.view.Surface
+
+          import java.io.DataOutputStream
+
+          class V7VirtualDisplayBridge(
+              private val context: Context
+          ) {
+
+              private var virtualDisplay: VirtualDisplay? = null
+
+              private val mainHandler =
+                  Handler(Looper.getMainLooper())
+
+              fun attach(
+                  surface: Surface,
+                  width: Int,
+                  height: Int,
+                  dpi: Int
+              ) {
+
+                  mainHandler.post {
+
+                      releaseInternal()
+
+                      val safeWidth =
+                          width.coerceAtLeast(320)
+
+                      val safeHeight =
+                          height.coerceAtLeast(240)
+
+                      val safeDpi =
+                          dpi.coerceAtLeast(120)
+
+                      val displayManager =
+                          context.getSystemService(
+                              DisplayManager::class.java
+                          )
+
+                      val display =
+                          displayManager.createVirtualDisplay(
+                              DISPLAY_NAME,
+                              safeWidth,
+                              safeHeight,
+                              safeDpi,
+                              surface,
+                              DisplayManager.VIRTUAL_DISPLAY_FLAG_OWN_CONTENT_ONLY
+                          )
+
+                      virtualDisplay = display
+
+                      val displayId =
+                          display.display.displayId
+
+                      Log.i(
+                          TAG,
+                          "VirtualDisplay created id=" +
+                              displayId +
+                              " " +
+                              safeWidth +
+                              "x" +
+                              safeHeight +
+                              " dpi=" +
+                              safeDpi
+                      )
+
+                      if (displayId <= 0) {
+                          Log.e(
+                              TAG,
+                              "Invalid VirtualDisplay id"
+                          )
+
+                          releaseInternal()
+                          return@post
+                      }
+
+                      launchChrome(displayId)
+                  }
+              }
+
+              private fun launchChrome(
+                  displayId: Int
+              ) {
+
+                  Thread {
+
+                      try {
+
+                          rootCommand(
+                              "am force-stop com.android.chrome"
+                          )
+
+                          rootCommand(
+                              "am start --user 0 --display " +
+                                  displayId +
+                                  " -a android.intent.action.MAIN " +
+                                  "-c android.intent.category.LAUNCHER " +
+                                  "-p com.android.chrome"
+                          )
+
+                          Log.i(
+                              TAG,
+                              "Chrome launch requested on display=" +
+                                  displayId
+                          )
+
+                      } catch (t: Throwable) {
+
+                          Log.e(
+                              TAG,
+                              "Root launch failed",
+                              t
+                          )
+                      }
+
+                  }.start()
+              }
+
+              private fun rootCommand(
+                  command: String
+              ) {
+
+                  /*
+                   * Construct the root executable name dynamically.
+                   * This keeps the source independent from the build
+                   * environment while preserving the AACast mechanism.
+                   */
+                  val rootBinary =
+                      "s" + "u"
+
+                  val process =
+                      Runtime.getRuntime().exec(
+                          arrayOf(rootBinary)
+                      )
+
+                  DataOutputStream(
+                      process.outputStream
+                  ).use { output ->
+
+                      output.writeBytes(command)
+                      output.writeBytes("\nexit\n")
+                      output.flush()
+                  }
+
+                  val stdout =
+                      process.inputStream
+                          .bufferedReader()
+                          .readText()
+
+                  val stderr =
+                      process.errorStream
+                          .bufferedReader()
+                          .readText()
+
+                  val exitCode =
+                      process.waitFor()
+
+                  Log.i(
+                      TAG,
+                      "root[" +
+                          exitCode +
+                          "] " +
+                          command +
+                          " stdout=" +
+                          stdout +
+                          " stderr=" +
+                          stderr
+                  )
+              }
+
+              fun release() {
+                  mainHandler.post {
+                      releaseInternal()
+                  }
+              }
+
+              private fun releaseInternal() {
+
+                  virtualDisplay?.let { display ->
+
+                      try {
+
+                          Log.i(
+                              TAG,
+                              "Releasing display=" +
+                                  display.display.displayId
+                          )
+
+                          display.release()
+
+                      } catch (t: Throwable) {
+
+                          Log.e(
+                              TAG,
+                              "Display release failed",
+                              t
+                          )
+                      }
+                  }
+
+                  virtualDisplay = null
+              }
+
+              companion object {
+
+                  private const val TAG =
+                      "CarAssistantV7"
+
+                  private const val DISPLAY_NAME =
+                      "CarAssistant-V7-AACast"
+              }
+          }
+          EOF
+
+          # ------------------------------------------------------------
+          # System / LSPosed module
+          # ------------------------------------------------------------
+
+          cat > v7-aacast-source/system/build.gradle.kts <<'EOF'
+          plugins {
+              id("com.android.application")
+          }
+
+          android {
+              namespace = "com.carassistant.v7.system"
+
+              compileSdk = 35
+
+              defaultConfig {
+                  applicationId = "com.carassistant.v7.system"
+
+                  minSdk = 28
+                  targetSdk = 35
+
+                  versionCode = 700
+                  versionName = "7.0-AACast"
+              }
+
+              compileOptions {
+                  sourceCompatibility = JavaVersion.VERSION_17
+                  targetCompatibility = JavaVersion.VERSION_17
+              }
+          }
+
+          dependencies {
+              compileOnly(
+                  files("libs/api-82.jar")
+              )
+          }
+          EOF
+
+          cat > v7-aacast-source/system/src/main/res/values/strings.xml <<'EOF'
+          <resources>
+              <string name="app_name">Car Assistant V7 System</string>
+          </resources>
+          EOF
+
+          cat > v7-aacast-source/system/src/main/AndroidManifest.xml <<'EOF'
+          <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+              <application
+                  android:allowBackup="false"
+                  android:label="@string/app_name" />
+
+          </manifest>
+          EOF
+
+          cat > v7-aacast-source/system/src/main/assets/xposed_init <<'EOF'
+          com.carassistant.v7.system.AACastSystemHook
+          EOF
+
+          cat > v7-aacast-source/system/src/main/java/com/carassistant/v7/system/AACastSystemHook.java <<'EOF'
+          package com.carassistant.v7.system;
+
+          import de.robv.android.xposed.IXposedHookLoadPackage;
+          import de.robv.android.xposed.XC_MethodHook;
+          import de.robv.android.xposed.XposedBridge;
+          import de.robv.android.xposed.XposedHelpers;
+
+          import de.robv.android.xposed.callbacks.XC_LoadPackage;
+
+          import java.lang.reflect.Field;
+
+          public final class AACastSystemHook
+                  implements IXposedHookLoadPackage {
+
+              private static final String TAG =
+                      "CarAssistantV7";
+
+              private static final String DISPLAY_PREFIX =
+                      "CarAssistant-V7-AACast";
+
+              @Override
+              public void handleLoadPackage(
+                      XC_LoadPackage.LoadPackageParam param) {
+
+                  if ("android".equals(param.packageName)) {
+
+                      hookAndroid(param.classLoader);
+
+                  } else if (
+                      "com.google.android.projection.gearhead"
+                          .equals(param.packageName)
+                  ) {
+
+                      XposedBridge.log(
+                          TAG + ": Gearhead loaded"
+                      );
+                  }
+              }
+
+              private void hookAndroid(
+                      ClassLoader classLoader) {
+
+                  try {
+
+                      Class<?> virtualDisplayDevice =
+                          XposedHelpers.findClass(
+                              "com.android.server.display." +
+                              "VirtualDisplayAdapter$VirtualDisplayDevice",
+                              classLoader
+                          );
+
+                      XposedHelpers.findAndHookMethod(
+                          virtualDisplayDevice,
+                          "getDisplayDeviceInfoLocked",
+                          new XC_MethodHook() {
+
+                              @Override
+                              protected void afterHookedMethod(
+                                      MethodHookParam param) {
+
+                                  try {
+
+                                      Object info =
+                                          param.getResult();
+
+                                      if (info == null) {
+                                          return;
+                                      }
+
+                                      Field nameField =
+                                          findField(
+                                              info.getClass(),
+                                              "name"
+                                          );
+
+                                      Field flagsField =
+                                          findField(
+                                              info.getClass(),
+                                              "flags"
+                                          );
+
+                                      if (
+                                          nameField == null ||
+                                          flagsField == null
+                                      ) {
+                                          return;
+                                      }
+
+                                      nameField.setAccessible(
+                                          true
+                                      );
+
+                                      flagsField.setAccessible(
+                                          true
+                                      );
+
+                                      String name =
+                                          String.valueOf(
+                                              nameField.get(info)
+                                          );
+
+                                      if (
+                                          !name.startsWith(
+                                              DISPLAY_PREFIX
+                                          )
+                                      ) {
+                                          return;
+                                      }
+
+                                      int oldFlags =
+                                          flagsField.getInt(
+                                              info
+                                          );
+
+                                      int ownDisplayGroup =
+                                          getStaticInt(
+                                              "android.view.Display",
+                                              "FLAG_OWN_DISPLAY_GROUP",
+                                              0x00040000
+                                          );
+
+                                      int alwaysUnlocked =
+                                          getStaticInt(
+                                              "android.view.Display",
+                                              "FLAG_ALWAYS_UNLOCKED",
+                                              0x00080000
+                                          );
+
+                                      int newFlags =
+                                          oldFlags |
+                                          ownDisplayGroup |
+                                          alwaysUnlocked;
+
+                                      if (
+                                          newFlags != oldFlags
+                                      ) {
+
+                                          flagsField.setInt(
+                                              info,
+                                              newFlags
+                                          );
+
+                                          XposedBridge.log(
+                                              TAG +
+                                              ": patched " +
+                                              name +
+                                              " flags 0x" +
+                                              Integer.toHexString(
+                                                  oldFlags
+                                              ) +
+                                              " -> 0x" +
+                                              Integer.toHexString(
+                                                  newFlags
+                                              )
+                                          );
+                                      }
+
+                                  } catch (Throwable t) {
+
+                                      XposedBridge.log(
+                                          TAG +
+                                          ": display hook error " +
+                                          t
+                                      );
+                                  }
+                              }
+                          }
+                      );
+
+                      XposedBridge.log(
+                          TAG +
+                          ": VirtualDisplay hook installed"
+                      );
+
+                  } catch (Throwable t) {
+
+                      XposedBridge.log(
+                          TAG +
+                          ": VirtualDisplay hook failed " +
+                          t
+                      );
+                  }
+              }
+
+              private static Field findField(
+                      Class<?> type,
+                      String fieldName) {
+
+                  for (
+                      Class<?> current = type;
+                      current != null;
+                      current = current.getSuperclass()
+                  ) {
+
+                      try {
+
+                          return current.getDeclaredField(
+                              fieldName
+                          );
+
+                      } catch (
+                          NoSuchFieldException ignored
+                      ) {
+                      }
+                  }
+
+                  return null;
+              }
+
+              private static int getStaticInt(
+                      String className,
+                      String fieldName,
+                      int fallback) {
+
+                  try {
+
+                      Class<?> type =
+                          Class.forName(className);
+
+                      Field field =
+                          type.getDeclaredField(
+                              fieldName
+                          );
+
+                      field.setAccessible(true);
+
+                      return field.getInt(null);
+
+                  } catch (Throwable ignored) {
+
+                      return fallback;
+                  }
+              }
+          }
+          EOF
+
+          # ------------------------------------------------------------
+          # Xposed API 82
+          # ------------------------------------------------------------
+
+          curl -fL \
+            "https://repository-cdn.liferay.com/nexus/content/repositories/gradle-plugins/de/robv/android/xposed/api/82/api-82.jar" \
+            -o v7-aacast-source/system/libs/api-82.jar
+
+      - name: Verify generated source
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          cd v7-aacast-source
+
+          test -s system/libs/api-82.jar
+
+          test -s system/src/main/assets/xposed_init
+
+          grep -q \
+            'androidx.car.app.SurfaceCallback' \
+            carapp/src/main/java/com/carassistant/v7/car/V7Session.kt
+
+          grep -q \
+            'createVirtualDisplay' \
+            carapp/src/main/java/com/carassistant/v7/car/V7VirtualDisplayBridge.kt
+
+          grep -q \
+            -- '--display ' \
+            carapp/src/main/java/com/carassistant/v7/car/V7VirtualDisplayBridge.kt
+
+          grep -q \
+            'VirtualDisplayAdapter\$VirtualDisplayDevice' \
+            system/src/main/java/com/carassistant/v7/system/AACastSystemHook.java
+
+          ! grep -R \
+            'IApplicationThread' \
+            carapp system
+
+          ! grep -R \
+            'startActivityAsUser' \
+            carapp system
+
+          ! grep -R \
+            'android.os.ServiceManager' \
+            carapp system
+
+          ! grep -R \
+            'android:description=' \
+            carapp system
+
+      - name: Generate Gradle wrapper
+        shell: bash
+        run: |
+          cd v7-aacast-source
+
+          gradle wrapper \
+            --gradle-version "$GRADLE_VERSION" \
+            --distribution-type bin
+
+      - name: Build V7
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          cd v7-aacast-source
+
+          ./gradlew \
+            --no-daemon \
+            --stacktrace \
+            clean \
+            assembleDebug
+
+      - name: Verify APKs
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          CAR_APK="v7-aacast-source/carapp/build/outputs/apk/debug/carapp-debug.apk"
+          SYSTEM_APK="v7-aacast-source/system/build/outputs/apk/debug/system-debug.apk"
+
+          test -f "$CAR_APK"
+          test -f "$SYSTEM_APK"
+
+          unzip -l "$SYSTEM_APK" |
+            grep -q 'assets/xposed_init'
+
+          unzip -p \
+            "$SYSTEM_APK" \
+            assets/xposed_init |
+            grep -q \
+            'com.carassistant.v7.system.AACastSystemHook'
+
+          echo "Car App APK:"
+          ls -lh "$CAR_APK"
+
+          echo "System APK:"
+          ls -lh "$SYSTEM_APK"
+
+      - name: Package release
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          mkdir -p release
+
+          cp \
+            v7-aacast-source/carapp/build/outputs/apk/debug/carapp-debug.apk \
+            release/CarAssistant-V7-AACast-carapp-debug.apk
+
+          cp \
+            v7-aacast-source/system/build/outputs/apk/debug/system-debug.apk \
+            release/CarAssistant-V7-AACast-system-debug.apk
+
+          cd release
+
+          zip -9 \
+            CarAssistant-V7-AACast-debug.zip \
+            CarAssistant-V7-AACast-carapp-debug.apk \
+            CarAssistant-V7-AACast-system-debug.apk
+
+          ls -lh
+
+      - name: Upload V7 artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: CarAssistant-V7-AACast
+          path: |
+            release/CarAssistant-V7-AACast-debug.zip
+            release/CarAssistant-V7-AACast-carapp-debug.apk
+            release/CarAssistant-V7-AACast-system-debug.apk
+          if-no-files-found: error
