@@ -1,0 +1,1060 @@
+name: Build Car Assistant V10 Launcher
+
+on:
+  workflow_dispatch:
+
+env:
+  GRADLE_VERSION: "8.13"
+
+jobs:
+  build:
+    name: Build V10 Launcher
+    runs-on: ubuntu-latest
+
+    steps:
+
+      # ==================================================
+      # 1. CHECKOUT
+      # ==================================================
+      - name: Checkout CarAssistant
+        uses: actions/checkout@v4
+
+      # ==================================================
+      # 2. JAVA 17
+      # ==================================================
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      # ==================================================
+      # 3. GRADLE 8.13
+      # ==================================================
+      - name: Setup Gradle 8.13
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: "8.13"
+          cache-disabled: true
+
+      - name: Verify Gradle
+        shell: bash
+        run: |
+          set -e
+          gradle --version
+
+      # ==================================================
+      # 4. CHECK V9 ZIP
+      # ==================================================
+      - name: Check V9 source ZIP
+        shell: bash
+        run: |
+          set -e
+
+          echo "=================================================="
+          echo "CHECK V9 SOURCE"
+          echo "=================================================="
+
+          test -f "CarAssistant-V9-Source.zip"
+
+          ls -lh "CarAssistant-V9-Source.zip"
+
+      # ==================================================
+      # 5. EXTRACT OUTER ZIP
+      # ==================================================
+      - name: Extract V9 source
+        shell: bash
+        run: |
+          set -e
+
+          echo "=================================================="
+          echo "EXTRACT V9 SOURCE"
+          echo "=================================================="
+
+          rm -rf /tmp/v9-work
+          mkdir -p /tmp/v9-work/outer
+          mkdir -p /tmp/v9-work/inner
+
+          unzip -q \
+            "CarAssistant-V9-Source.zip" \
+            -d /tmp/v9-work/outer
+
+          echo "Outer ZIP:"
+          find /tmp/v9-work/outer \
+            -maxdepth 5 \
+            -type f \
+            -print
+
+          INNER_ZIP="$(find /tmp/v9-work/outer \
+            -type f \
+            -iname '*.zip' \
+            | head -n 1)"
+
+          if [ -z "$INNER_ZIP" ]; then
+            echo "ERROR: Không tìm thấy ZIP V9 bên trong."
+            exit 1
+          fi
+
+          echo ""
+          echo "Inner ZIP:"
+          echo "$INNER_ZIP"
+
+          unzip -q \
+            "$INNER_ZIP" \
+            -d /tmp/v9-work/inner
+
+          SOURCE_ROOT=""
+
+          while IFS= read -r -d '' DIR; do
+            if [ -d "$DIR/app" ]; then
+              if [ -f "$DIR/app/build.gradle" ] || \
+                 [ -f "$DIR/app/build.gradle.kts" ]; then
+                SOURCE_ROOT="$DIR"
+                break
+              fi
+            fi
+          done < <(
+            find /tmp/v9-work/inner \
+              -type d \
+              -print0
+          )
+
+          if [ -z "$SOURCE_ROOT" ]; then
+            echo "ERROR: Không tìm thấy V9 source."
+            find /tmp/v9-work/inner \
+              -maxdepth 8 \
+              -print
+            exit 1
+          fi
+
+          echo ""
+          echo "SOURCE ROOT:"
+          echo "$SOURCE_ROOT"
+
+          rm -rf v10-source
+          mkdir -p v10-source
+
+          cp -a "$SOURCE_ROOT"/. v10-source/
+
+          rm -rf v10-source/.git
+          rm -rf v10-source/build
+          rm -rf v10-source/app/build
+
+          echo ""
+          echo "V9 source extracted successfully."
+
+      # ==================================================
+      # 6. VERIFY V9 ENGINE
+      # ==================================================
+      - name: Verify V9 AACast engine
+        shell: bash
+        run: |
+          set -e
+
+          echo "=================================================="
+          echo "VERIFY V9 AACAST ENGINE"
+          echo "=================================================="
+
+          test -d v10-source/app
+
+          if [ -f v10-source/app/build.gradle ]; then
+            echo "build.gradle: OK"
+          elif [ -f v10-source/app/build.gradle.kts ]; then
+            echo "build.gradle.kts: OK"
+          else
+            echo "ERROR: Gradle app config missing."
+            exit 1
+          fi
+
+          grep -R -q \
+            "CarActivityService" \
+            v10-source/app/src/main/java
+
+          grep -R -q \
+            "CarActivity" \
+            v10-source/app/src/main/java
+
+          grep -R -q \
+            "createVirtualDisplay" \
+            v10-source/app/src/main/java
+
+          test -f v10-source/app/libs/aasdk-legacy.dex
+          test -f v10-source/app/libs/aasdk-legacy.jar
+
+          echo "CarActivityService: OK"
+          echo "CarActivity: OK"
+          echo "VirtualDisplay: OK"
+          echo "aasdk-legacy.dex: OK"
+          echo "aasdk-legacy.jar: OK"
+
+      # ==================================================
+      # 7. TRANSFORM V9 -> V10
+      # ==================================================
+      - name: Transform V9 into Car Assistant V10
+        shell: bash
+        run: |
+          set -e
+
+          cd v10-source
+
+          echo "=================================================="
+          echo "TRANSFORM V9 -> V10"
+          echo "=================================================="
+
+          OLD_PACKAGE="com.hieptran.aacast.doudou"
+          NEW_PACKAGE="com.carassistant.v9"
+
+          find app/src \
+            -type f \
+            \( -name "*.java" -o \
+               -name "*.xml" -o \
+               -name "*.kt" -o \
+               -name "*.kts" -o \
+               -name "*.gradle" -o \
+               -name "*.properties" \) \
+            -print0 |
+          xargs -0 sed -i \
+            "s/${OLD_PACKAGE}/${NEW_PACKAGE}/g"
+
+          if [ -f app/build.gradle ]; then
+
+            sed -i \
+              's/namespace .*/namespace "com.carassistant.v9"/' \
+              app/build.gradle
+
+            sed -i \
+              's/applicationId .*/applicationId "com.carassistant.v9"/' \
+              app/build.gradle
+
+            sed -i \
+              's/versionCode .*/versionCode 1000/' \
+              app/build.gradle
+
+            sed -i \
+              's/versionName .*/versionName "10.0-Launcher"/' \
+              app/build.gradle
+
+          fi
+
+          if [ -f app/build.gradle.kts ]; then
+
+            sed -i \
+              's/namespace *=.*/namespace = "com.carassistant.v9"/' \
+              app/build.gradle.kts
+
+            sed -i \
+              's/applicationId *=.*/applicationId = "com.carassistant.v9"/' \
+              app/build.gradle.kts
+
+          fi
+
+          mkdir -p app/src/main/java/com/carassistant/v9
+
+          echo "V9 transformation complete."
+
+      # ==================================================
+      # 8. FIX XPOSED ENTRY
+      # ==================================================
+      - name: Fix Xposed entry
+        shell: bash
+        run: |
+          set -e
+
+          cd v10-source
+
+          if [ -f app/src/main/assets/xposed_init ]; then
+            echo "com.carassistant.v9.aabridge.AACastBridge" \
+              > app/src/main/assets/xposed_init
+          fi
+
+          echo "Xposed entry:"
+          cat app/src/main/assets/xposed_init
+
+      # ==================================================
+      # 9. REMOVE ORIGINAL AACAST ACTIVITY
+      # ==================================================
+      - name: Remove original AACast activity
+        shell: bash
+        run: |
+          set -e
+
+          cd v10-source
+
+          echo "=================================================="
+          echo "REMOVE ORIGINAL AACAST ACTIVITY"
+          echo "=================================================="
+
+          find app/src/main/java \
+            -type f \
+            -name "AACastCarActivity.java" \
+            -delete
+
+          echo "Original AACastCarActivity removed."
+
+      # ==================================================
+      # 10. ADD V10 LAUNCHER
+      # ==================================================
+      - name: Add V10 Launcher
+        shell: bash
+        run: |
+          set -e
+
+          cd v10-source
+
+          mkdir -p app/src/main/java/com/carassistant/v9
+
+          cat > app/src/main/java/com/carassistant/v9/CarAssistantLauncherView.java <<'JAVA'
+package com.carassistant.v9;
+
+import android.content.ComponentName;
+import android.content.Context;
+import android.content.Intent;
+import android.content.pm.ActivityInfo;
+import android.content.pm.PackageManager;
+import android.graphics.Color;
+import android.graphics.drawable.GradientDrawable;
+import android.view.Gravity;
+import android.view.View;
+import android.widget.Button;
+import android.widget.GridLayout;
+import android.widget.ImageView;
+import android.widget.LinearLayout;
+import android.widget.TextView;
+
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.Comparator;
+import java.util.List;
+
+public final class CarAssistantLauncherView extends LinearLayout {
+
+    public interface Listener {
+        void openV9();
+    }
+
+    private final Listener listener;
+    private final GridLayout grid;
+
+    public CarAssistantLauncherView(
+            Context context,
+            Listener listener
+    ) {
+        super(context);
+
+        this.listener = listener;
+
+        setOrientation(VERTICAL);
+        setBackgroundColor(Color.rgb(18, 18, 18));
+
+        LinearLayout header = new LinearLayout(context);
+        header.setOrientation(HORIZONTAL);
+        header.setGravity(Gravity.CENTER_VERTICAL);
+        header.setPadding(24, 18, 24, 18);
+
+        TextView title = new TextView(context);
+        title.setText("Car Assistant");
+        title.setTextColor(Color.WHITE);
+        title.setTextSize(22);
+        title.setGravity(Gravity.CENTER_VERTICAL);
+
+        LayoutParams titleParams =
+                new LayoutParams(0, 70, 1f);
+
+        header.addView(title, titleParams);
+
+        Button refresh = new Button(context);
+        refresh.setText("↻");
+        refresh.setTextSize(20);
+        refresh.setOnClickListener(v -> loadApps());
+
+        header.addView(
+                refresh,
+                new LayoutParams(70, 70)
+        );
+
+        addView(
+                header,
+                new LayoutParams(
+                        LayoutParams.MATCH_PARENT,
+                        LayoutParams.WRAP_CONTENT
+                )
+        );
+
+        grid = new GridLayout(context);
+        grid.setColumnCount(4);
+        grid.setUseDefaultMargins(true);
+        grid.setPadding(18, 12, 18, 90);
+
+        addView(
+                grid,
+                new LayoutParams(
+                        LayoutParams.MATCH_PARENT,
+                        0,
+                        1f
+                )
+        );
+
+        addFloatingButton(context);
+
+        loadApps();
+    }
+
+    private void addFloatingButton(Context context) {
+
+        Button v9 = new Button(context);
+
+        v9.setText("V9");
+        v9.setTextColor(Color.WHITE);
+        v9.setTextSize(13);
+
+        GradientDrawable bg = new GradientDrawable();
+        bg.setColor(Color.rgb(35, 35, 35));
+        bg.setShape(GradientDrawable.OVAL);
+        bg.setStroke(2, Color.WHITE);
+
+        v9.setBackground(bg);
+
+        v9.setOnClickListener(v -> {
+            if (listener != null) {
+                listener.openV9();
+            }
+        });
+
+        LayoutParams params =
+                new LayoutParams(76, 76);
+
+        params.gravity =
+                Gravity.RIGHT | Gravity.BOTTOM;
+
+        params.setMargins(0, 0, 24, 18);
+
+        addView(v9, params);
+    }
+
+    private void loadApps() {
+
+        grid.removeAllViews();
+
+        PackageManager pm =
+                getContext().getPackageManager();
+
+        Intent launcherIntent =
+                new Intent(Intent.ACTION_MAIN);
+
+        launcherIntent.addCategory(
+                Intent.CATEGORY_LAUNCHER
+        );
+
+        List<ActivityInfo> activities =
+                pm.queryIntentActivities(
+                        launcherIntent,
+                        PackageManager.MATCH_ALL
+                ).stream()
+                .map(info -> info.activityInfo)
+                .collect(
+                        ArrayList::new,
+                        ArrayList::add,
+                        ArrayList::addAll
+                );
+
+        Collections.sort(
+                activities,
+                Comparator.comparing(
+                        a -> String.valueOf(
+                                a.loadLabel(pm)
+                        ),
+                        String.CASE_INSENSITIVE_ORDER
+                )
+        );
+
+        for (ActivityInfo info : activities) {
+
+            if (info.packageName.equals(
+                    getContext().getPackageName()
+            )) {
+                continue;
+            }
+
+            addApp(info, pm);
+        }
+    }
+
+    private void addApp(
+            ActivityInfo info,
+            PackageManager pm
+    ) {
+
+        LinearLayout item =
+                new LinearLayout(getContext());
+
+        item.setOrientation(VERTICAL);
+        item.setGravity(Gravity.CENTER);
+        item.setPadding(8, 8, 8, 8);
+
+        ImageView icon =
+                new ImageView(getContext());
+
+        icon.setImageDrawable(
+                info.loadIcon(pm)
+        );
+
+        item.addView(
+                icon,
+                new LayoutParams(72, 72)
+        );
+
+        TextView name =
+                new TextView(getContext());
+
+        name.setText(
+                info.loadLabel(pm)
+        );
+
+        name.setTextColor(Color.WHITE);
+        name.setTextSize(13);
+        name.setGravity(Gravity.CENTER);
+        name.setMaxLines(2);
+
+        item.addView(
+                name,
+                new LayoutParams(
+                        LayoutParams.MATCH_PARENT,
+                        54
+                )
+        );
+
+        item.setOnClickListener(
+                v -> launchOnPhone(info)
+        );
+
+        GridLayout.LayoutParams params =
+                new GridLayout.LayoutParams();
+
+        params.width = 0;
+        params.height = 140;
+        params.columnSpec =
+                GridLayout.spec(
+                        GridLayout.UNDEFINED,
+                        1f
+                );
+
+        grid.addView(item, params);
+    }
+
+    private void launchOnPhone(ActivityInfo info) {
+
+        try {
+
+            ComponentName component =
+                    new ComponentName(
+                            info.packageName,
+                            info.name
+                    );
+
+            String command =
+                    "am start --display 0 -n "
+                    + component.flattenToShortString();
+
+            Runtime.getRuntime().exec(
+                    new String[]{
+                            "su",
+                            "-c",
+                            command
+                    }
+            );
+
+        } catch (Exception ignored) {
+        }
+    }
+}
+JAVA
+
+      # ==================================================
+      # 11. ADD V10 CAR ACTIVITY
+      # ==================================================
+      - name: Add V10 CarActivity
+        shell: bash
+        run: |
+          set -e
+
+          cd v10-source
+
+          cat > app/src/main/java/com/carassistant/v9/AACastCarActivity.java <<'JAVA'
+package com.carassistant.v9;
+
+import android.os.Bundle;
+import android.os.Handler;
+import android.os.Looper;
+
+import com.google.android.apps.auto.sdk.CarActivity;
+
+public final class AACastCarActivity extends CarActivity {
+
+    public final Handler handler =
+            new Handler(Looper.getMainLooper());
+
+    private RootView root;
+    private CarAssistantLauncherView launcher;
+
+    private boolean resumed;
+    private boolean showingV9;
+
+    private final Runnable leaseTicker =
+            new LeaseTicker(this);
+
+    private void applyChrome() {
+
+        try {
+            getCarUiController()
+                    .getStatusBarController()
+                    .hideAppHeader();
+
+            getCarUiController()
+                    .getMenuController()
+                    .hideMenuButton();
+
+        } catch (RuntimeException ignored) {
+        }
+
+        if (root != null) {
+            AppCatalog.immersive(root);
+        }
+    }
+
+    private void stopLease() {
+
+        resumed = false;
+
+        handler.removeCallbacks(
+                leaseTicker
+        );
+
+        DockStateProvider.visibleUntil = 0L;
+    }
+
+    @Override
+    public void onCreate(Bundle bundle) {
+
+        setTheme(R.style.Theme_AACast);
+
+        super.onCreate(bundle);
+
+        setIgnoreConfigChanges(-1);
+
+        applyChrome();
+    }
+
+    @Override
+    public void onResume() {
+
+        super.onResume();
+
+        resumed = true;
+
+        if (showingV9) {
+            showV9();
+        } else {
+            showLauncher();
+        }
+    }
+
+    private void showLauncher() {
+
+        showingV9 = false;
+
+        if (root != null) {
+            root.destroy();
+            root = null;
+        }
+
+        launcher =
+                new CarAssistantLauncherView(
+                        this,
+                        this::showV9
+                );
+
+        setContentView(launcher);
+
+        applyChrome();
+    }
+
+    private void showV9() {
+
+        showingV9 = true;
+
+        if (launcher != null) {
+            launcher = null;
+        }
+
+        if (root == null ||
+                root.destroyed) {
+
+            root = new RootView(this);
+
+            root.exitToAuto =
+                    this::showLauncher;
+        }
+
+        setContentView(root);
+
+        applyChrome();
+
+        handler.removeCallbacks(
+                leaseTicker
+        );
+
+        leaseTicker.run();
+    }
+
+    private void leaveCarActivity() {
+
+        stopLease();
+
+        super.onBackPressed();
+    }
+
+    @Override
+    public void onPause() {
+
+        stopLease();
+
+        super.onPause();
+    }
+
+    @Override
+    public void onStop() {
+
+        stopLease();
+
+        if (root != null) {
+            root.destroy();
+        }
+
+        super.onStop();
+    }
+
+    @Override
+    public void onDestroy() {
+
+        stopLease();
+
+        if (root != null) {
+            root.destroy();
+        }
+
+        super.onDestroy();
+    }
+
+    @Override
+    public void onBackPressed() {
+
+        if (showingV9) {
+
+            showLauncher();
+
+            return;
+        }
+
+        if (root != null &&
+                root.dismissOverlay()) {
+
+            return;
+        }
+
+        super.onBackPressed();
+    }
+
+    @Override
+    public void onWindowFocusChanged(
+            boolean hasFocus,
+            boolean touchMode
+    ) {
+
+        super.onWindowFocusChanged(
+                hasFocus,
+                touchMode
+        );
+
+        if (hasFocus && resumed) {
+            applyChrome();
+        }
+    }
+}
+JAVA
+
+      # ==================================================
+      # 12. ADD PACKAGE VISIBILITY
+      # ==================================================
+      - name: Verify package visibility
+        shell: bash
+        run: |
+          set -e
+
+          cd v10-source
+
+          MANIFEST="app/src/main/AndroidManifest.xml"
+
+          echo "=================================================="
+          echo "PACKAGE VISIBILITY"
+          echo "=================================================="
+
+          if grep -q "<queries>" "$MANIFEST"; then
+            echo "<queries>: already present"
+          else
+
+            python3 - <<'PY'
+from pathlib import Path
+
+p = Path("app/src/main/AndroidManifest.xml")
+s = p.read_text()
+
+queries = """
+    <queries>
+        <intent>
+            <action android:name="android.intent.action.MAIN" />
+            <category android:name="android.intent.category.LAUNCHER" />
+        </intent>
+    </queries>
+"""
+
+s = s.replace(
+    "<application",
+    queries + "\n    <application",
+    1
+)
+
+p.write_text(s)
+PY
+
+            echo "<queries>: added"
+          fi
+
+          grep -A8 "<queries>" "$MANIFEST"
+
+      # ==================================================
+      # 13. VERIFY V10 SOURCE
+      # ==================================================
+      - name: Verify V10 source
+        shell: bash
+        run: |
+          set -e
+
+          cd v10-source
+
+          echo "=================================================="
+          echo "VERIFY V10 SOURCE"
+          echo "=================================================="
+
+          test -f \
+            app/src/main/java/com/carassistant/v9/AACastCarActivity.java
+
+          test -f \
+            app/src/main/java/com/carassistant/v9/CarAssistantLauncherView.java
+
+          COUNT="$(grep -R -l \
+            "class AACastCarActivity" \
+            app/src/main/java \
+            --include="*.java" | wc -l)"
+
+          echo "AACastCarActivity definitions: $COUNT"
+
+          if [ "$COUNT" -ne 1 ]; then
+            echo "ERROR: Duplicate AACastCarActivity."
+            grep -R -n \
+              "class AACastCarActivity" \
+              app/src/main/java \
+              --include="*.java"
+            exit 1
+          fi
+
+          grep -q \
+            "CarAssistantLauncherView" \
+            app/src/main/java/com/carassistant/v9/AACastCarActivity.java
+
+          grep -q \
+            "showV9" \
+            app/src/main/java/com/carassistant/v9/AACastCarActivity.java
+
+          grep -q \
+            "am start --display 0" \
+            app/src/main/java/com/carassistant/v9/CarAssistantLauncherView.java
+
+          grep -q \
+            "<queries>" \
+            app/src/main/AndroidManifest.xml
+
+          echo "V10 source verification: OK"
+
+      # ==================================================
+      # 14. GENERATE WRAPPER
+      # ==================================================
+      - name: Generate Gradle wrapper
+        shell: bash
+        run: |
+          set -e
+
+          cd v10-source
+
+          gradle wrapper \
+            --gradle-version "$GRADLE_VERSION" \
+            --distribution-type bin
+
+          chmod +x gradlew
+
+          ./gradlew --version
+
+      # ==================================================
+      # 15. CLEAN
+      # ==================================================
+      - name: Clean V10 build
+        shell: bash
+        run: |
+          set -e
+
+          cd v10-source
+
+          ./gradlew clean \
+            --no-daemon
+
+      # ==================================================
+      # 16. BUILD DEBUG
+      # ==================================================
+      - name: Build V10 debug APK
+        shell: bash
+        run: |
+          set -e
+
+          cd v10-source
+
+          ./gradlew assembleDebug \
+            --no-daemon \
+            --stacktrace
+
+      # ==================================================
+      # 17. VERIFY DEBUG
+      # ==================================================
+      - name: Verify V10 debug APK
+        shell: bash
+        run: |
+          set -e
+
+          cd v10-source
+
+          APK="$(find app/build/outputs/apk/debug \
+            -type f \
+            -name "*.apk" \
+            | head -n 1)"
+
+          if [ -z "$APK" ]; then
+            echo "ERROR: Debug APK not found."
+            exit 1
+          fi
+
+          echo "DEBUG APK:"
+          echo "$APK"
+
+          ls -lh "$APK"
+
+      # ==================================================
+      # 18. BUILD RELEASE
+      # ==================================================
+      - name: Build V10 release APK
+        shell: bash
+        run: |
+          set -e
+
+          cd v10-source
+
+          ./gradlew assembleRelease \
+            --no-daemon \
+            --stacktrace
+
+      # ==================================================
+      # 19. LOCATE RELEASE APK
+      # ==================================================
+      - name: Locate V10 release APK
+        shell: bash
+        run: |
+          set -e
+
+          APK="$(find v10-source/app/build/outputs/apk/release \
+            -type f \
+            -name "*.apk" \
+            | head -n 1)"
+
+          if [ -z "$APK" ]; then
+            echo "ERROR: Release APK not found."
+            exit 1
+          fi
+
+          echo "RELEASE_APK=$APK" \
+            >> "$GITHUB_ENV"
+
+          echo "RELEASE APK:"
+          echo "$APK"
+
+          ls -lh "$APK"
+
+      # ==================================================
+      # 20. VERIFY RELEASE
+      # ==================================================
+      - name: Verify V10 release APK
+        shell: bash
+        run: |
+          set -e
+
+          echo "=================================================="
+          echo "VERIFY V10 RELEASE"
+          echo "=================================================="
+
+          test -f "$RELEASE_APK"
+
+          APK_SIZE="$(stat -c%s "$RELEASE_APK")"
+
+          echo "APK size: $APK_SIZE bytes"
+
+          if [ "$APK_SIZE" -lt 100000 ]; then
+            echo "ERROR: APK suspiciously small."
+            exit 1
+          fi
+
+          echo "Release APK: OK"
+
+      # ==================================================
+      # 21. PACKAGE RELEASE
+      # ==================================================
+      - name: Package V10 release
+        shell: bash
+        run: |
+          set -e
+
+          mkdir -p dist
+
+          cp "$RELEASE_APK" \
+            dist/CarAssistant-V10-Launcher.apk
+
+          sha256sum \
+            dist/CarAssistant-V10-Launcher.apk \
+            > dist/CarAssistant-V10-Launcher.apk.sha256
+
+          cp v10-source/app/build/outputs/apk/debug/*.apk \
+            dist/CarAssistant-V10-Launcher-debug.apk
+
+          echo "=================================================="
+          echo "FINAL ARTIFACTS"
+          echo "=================================================="
+
+          ls -lh dist
+
+      # ==================================================
+      # 22. UPLOAD APK
+      # ==================================================
+      - name: Upload V10 Launcher artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: CarAssistant-V10-Launcher
+          path: |
+            dist/CarAssistant-V10-Launcher.apk
+            dist/CarAssistant-V10-Launcher.apk.sha256
+            dist/CarAssistant-V10-Launcher-debug.apk
+          retention-days: 30
