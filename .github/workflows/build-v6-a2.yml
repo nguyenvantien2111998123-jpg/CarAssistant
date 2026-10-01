@@ -17,10 +17,10 @@ jobs:
           distribution: temurin
           java-version: '17'
 
-      - name: Create V6-A2 project
+      - name: Create V6-A2 source
         shell: bash
         run: |
-          set -e
+          set -euo pipefail
 
           rm -rf v6-a2-source
           mkdir -p v6-a2-source
@@ -40,10 +40,12 @@ jobs:
               repositories {
                   google()
                   mavenCentral()
+                  maven { url = uri("https://api.xposed.info") }
               }
           }
 
           rootProject.name = "CarAssistantV6A2"
+
           include(":carapp")
           include(":system")
           EOF
@@ -61,13 +63,15 @@ jobs:
           android.nonTransitiveRClass=true
           EOF
 
-          # ------------------------------------------------------------
-          # CAR APP MODULE
-          # ------------------------------------------------------------
+          # ============================================================
+          # CAR APP
+          # ============================================================
 
-          mkdir -p carapp/src/main/java/com/carassistant/v6/carapp
-          mkdir -p carapp/src/main/res/xml
-          mkdir -p carapp/src/main/res/values
+          mkdir -p \
+            carapp/src/main/java/com/carassistant/v6/carapp \
+            carapp/src/main/java/com/carassistant/v6 \
+            carapp/src/main/res/xml \
+            carapp/src/main/res/values
 
           cat > carapp/build.gradle.kts <<'EOF'
           plugins {
@@ -76,7 +80,7 @@ jobs:
           }
 
           android {
-              namespace = "com.carassistant.v6.carapp"
+              namespace = "com.carassistant.v6"
               compileSdk = 35
 
               defaultConfig {
@@ -103,6 +107,7 @@ jobs:
           EOF
 
           cat > carapp/src/main/res/values/strings.xml <<'EOF'
+          <?xml version="1.0" encoding="utf-8"?>
           <resources>
               <string name="app_name">Car Assistant V6</string>
           </resources>
@@ -117,38 +122,42 @@ jobs:
 
           cat > carapp/src/main/AndroidManifest.xml <<'EOF'
           <?xml version="1.0" encoding="utf-8"?>
+
           <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
               <uses-permission android:name="androidx.car.app.ACCESS_SURFACE" />
-              <uses-permission android:name="androidx.car.app.NAVIGATION_TEMPLATES" />
 
               <application
                   android:allowBackup="false"
-                  android:label="@string/app_name"
-                  android:supportsRtl="true">
+                  android:label="@string/app_name">
 
                   <meta-data
                       android:name="com.google.android.gms.car.application"
                       android:resource="@xml/automotive_app_desc" />
 
                   <service
-                      android:name=".V6CarAppService"
-                      android:exported="true"
-                      android:label="@string/app_name">
+                      android:name=".carapp.V6CarAppService"
+                      android:exported="true">
+
                       <intent-filter>
                           <action android:name="androidx.car.app.CarAppService" />
                           <category android:name="androidx.car.app.category.NAVIGATION" />
                       </intent-filter>
+
                   </service>
 
+                  <activity
+                      android:name=".LauncherActivity"
+                      android:exported="true" />
+
               </application>
+
           </manifest>
           EOF
 
           cat > carapp/src/main/java/com/carassistant/v6/carapp/V6CarAppService.kt <<'EOF'
           package com.carassistant.v6.carapp
 
-          import android.content.Intent
           import androidx.car.app.CarAppService
           import androidx.car.app.Session
           import androidx.car.app.validation.HostValidator
@@ -169,39 +178,38 @@ jobs:
           package com.carassistant.v6.carapp
 
           import android.content.Intent
+          import android.graphics.Rect
           import android.util.Log
-          import android.view.Surface
+
           import androidx.car.app.AppManager
           import androidx.car.app.CarContext
           import androidx.car.app.Session
           import androidx.car.app.SurfaceCallback
           import androidx.car.app.SurfaceContainer
+
           import androidx.car.app.model.Action
           import androidx.car.app.model.Pane
           import androidx.car.app.model.PaneTemplate
           import androidx.car.app.model.Row
           import androidx.car.app.model.Template
+
           import androidx.car.app.screen.Screen
 
           class V6CarSession : Session() {
 
-              private var screen: V6Screen? = null
-
               override fun onCreateScreen(intent: Intent): Screen {
-                  val newScreen = V6Screen(carContext)
-                  screen = newScreen
+                  val screen = V6Screen(carContext)
 
-                  carContext.getCarService(AppManager::class.java)
-                      .setSurfaceCallback(newScreen.surfaceCallback)
+                  carContext
+                      .getCarService(AppManager::class.java)
+                      .setSurfaceCallback(screen.surfaceCallback)
 
-                  Log.i(TAG, "V6-A2 SurfaceCallback registered")
-
-                  return newScreen
+                  return screen
               }
 
               private class V6Screen(
-                  carContext: CarContext
-              ) : Screen(carContext) {
+                  context: CarContext
+              ) : Screen(context) {
 
                   val surfaceCallback = object : SurfaceCallback {
 
@@ -217,7 +225,6 @@ jobs:
                           )
 
                           V6VirtualDisplayBridge.create(
-                              carContext,
                               surfaceContainer.surface,
                               surfaceContainer.width,
                               surfaceContainer.height,
@@ -229,17 +236,16 @@ jobs:
                           surfaceContainer: SurfaceContainer
                       ) {
                           Log.i(TAG, "Surface destroyed")
-
-                          V6VirtualDisplayBridge.release(carContext)
+                          V6VirtualDisplayBridge.release()
                       }
 
                       override fun onVisibleAreaChanged(
-                          visibleArea: android.graphics.Rect
+                          visibleArea: Rect
                       ) {
                       }
 
                       override fun onStableAreaChanged(
-                          stableArea: android.graphics.Rect
+                          stableArea: Rect
                       ) {
                       }
                   }
@@ -270,108 +276,173 @@ jobs:
           cat > carapp/src/main/java/com/carassistant/v6/carapp/V6VirtualDisplayBridge.kt <<'EOF'
           package com.carassistant.v6.carapp
 
-          import android.content.Context
           import android.os.IBinder
           import android.os.Parcel
-          import android.os.ServiceManager
           import android.util.Log
           import android.view.Surface
 
           object V6VirtualDisplayBridge {
 
               private const val TAG = "CarAssistant-V6"
-              private const val SERVICE_NAME = "v60a_vd_service"
 
-              fun create(
-                  context: Context,
-                  surface: Surface,
-                  width: Int,
-                  height: Int,
-                  dpi: Int
-              ) {
-                  try {
-                      val binder = ServiceManager.getService(SERVICE_NAME)
-
-                      if (binder == null) {
-                          Log.e(TAG, "System service not available: $SERVICE_NAME")
-                          return
-                      }
-
-                      val data = Parcel.obtain()
-                      val reply = Parcel.obtain()
-
-                      try {
-                          data.writeInterfaceToken(DESCRIPTOR)
-                          data.writeInt(1)
-                          surface.writeToParcel(data, 0)
-                          data.writeInt(width)
-                          data.writeInt(height)
-                          data.writeInt(dpi)
-
-                          binder.transact(
-                              TRANSACTION_CREATE,
-                              data,
-                              reply,
-                              0
-                          )
-
-                          val result = reply.readInt()
-                          Log.i(TAG, "System VirtualDisplay result=$result")
-                      } finally {
-                          reply.recycle()
-                          data.recycle()
-                      }
-
-                  } catch (t: Throwable) {
-                      Log.e(TAG, "createSystemVirtualDisplay failed", t)
-                  }
-              }
-
-              fun release(context: Context) {
-                  try {
-                      val binder = ServiceManager.getService(SERVICE_NAME)
-                          ?: return
-
-                      val data = Parcel.obtain()
-                      val reply = Parcel.obtain()
-
-                      try {
-                          data.writeInterfaceToken(DESCRIPTOR)
-
-                          binder.transact(
-                              TRANSACTION_RELEASE,
-                              data,
-                              reply,
-                              0
-                          )
-                      } finally {
-                          reply.recycle()
-                          data.recycle()
-                      }
-                  } catch (t: Throwable) {
-                      Log.e(TAG, "release failed", t)
-                  }
-              }
+              private const val SERVICE_NAME =
+                  "v60a_vd_service"
 
               private const val DESCRIPTOR =
                   "com.v60a.virtualdisplay.ipc.IVirtualDisplayService"
 
               private const val TRANSACTION_CREATE = 1
               private const val TRANSACTION_RELEASE = 2
+
+              fun create(
+                  surface: Surface,
+                  width: Int,
+                  height: Int,
+                  dpi: Int
+              ) {
+                  transact(TRANSACTION_CREATE) { data ->
+                      data.writeInt(1)
+                      surface.writeToParcel(data, 0)
+                      data.writeInt(width)
+                      data.writeInt(height)
+                      data.writeInt(dpi)
+                  }
+              }
+
+              fun release() {
+                  transact(TRANSACTION_RELEASE) {
+                  }
+              }
+
+              private fun transact(
+                  code: Int,
+                  writer: (Parcel) -> Unit
+              ) {
+                  var data: Parcel? = null
+                  var reply: Parcel? = null
+
+                  try {
+                      val binder = getServiceBinder()
+
+                      if (binder == null) {
+                          Log.e(
+                              TAG,
+                              "System service not available: $SERVICE_NAME"
+                          )
+                          return
+                      }
+
+                      data = Parcel.obtain()
+                      reply = Parcel.obtain()
+
+                      data.writeInterfaceToken(DESCRIPTOR)
+
+                      writer(data)
+
+                      binder.transact(
+                          code,
+                          data,
+                          reply,
+                          0
+                      )
+
+                      reply.readException()
+
+                      if (code == TRANSACTION_CREATE) {
+                          val displayId = reply.readInt()
+
+                          Log.i(
+                              TAG,
+                              "VirtualDisplay ID = $displayId"
+                          )
+                      }
+
+                  } catch (t: Throwable) {
+                      Log.e(
+                          TAG,
+                          "Binder transaction failed",
+                          t
+                      )
+                  } finally {
+                      reply?.recycle()
+                      data?.recycle()
+                  }
+              }
+
+              private fun getServiceBinder(): IBinder? {
+                  return try {
+                      val clazz =
+                          Class.forName("android.os.ServiceManager")
+
+                      val method =
+                          clazz.getDeclaredMethod(
+                              "getService",
+                              String::class.java
+                          )
+
+                      method.isAccessible = true
+
+                      method.invoke(
+                          null,
+                          SERVICE_NAME
+                      ) as? IBinder
+
+                  } catch (t: Throwable) {
+                      Log.e(
+                          TAG,
+                          "Cannot access ServiceManager",
+                          t
+                      )
+
+                      null
+                  }
+              }
           }
           EOF
 
-          # ------------------------------------------------------------
-          # SYSTEM / LSPOSED MODULE
-          # ------------------------------------------------------------
+          cat > carapp/src/main/java/com/carassistant/v6/LauncherActivity.kt <<'EOF'
+          package com.carassistant.v6
 
-          mkdir -p system/src/main/java/com/carassistant/v6/system
-          mkdir -p system/src/main/assets
+          import android.app.Activity
+          import android.graphics.Color
+          import android.os.Bundle
+          import android.view.Gravity
+          import android.widget.TextView
+
+          class LauncherActivity : Activity() {
+
+              override fun onCreate(
+                  state: Bundle?
+              ) {
+                  super.onCreate(state)
+
+                  val view = TextView(this)
+
+                  view.text =
+                      "CAR ASSISTANT V6-A2\n\n" +
+                      "VirtualDisplay PASS"
+
+                  view.textSize = 28f
+                  view.gravity = Gravity.CENTER
+                  view.setTextColor(Color.WHITE)
+                  view.setBackgroundColor(Color.BLACK)
+
+                  setContentView(view)
+              }
+          }
+          EOF
+
+          # ============================================================
+          # SYSTEM / LSPOSED MODULE
+          # ============================================================
+
+          mkdir -p \
+            system/src/main/java/com/carassistant/v6/system \
+            system/src/main/assets
 
           cat > system/build.gradle.kts <<'EOF'
           plugins {
               id("com.android.application")
-              id("org.jetbrains.kotlin.android")
           }
 
           android {
@@ -385,15 +456,6 @@ jobs:
                   versionCode = 602
                   versionName = "6.0-A.2"
               }
-
-              compileOptions {
-                  sourceCompatibility = JavaVersion.VERSION_17
-                  targetCompatibility = JavaVersion.VERSION_17
-              }
-
-              kotlinOptions {
-                  jvmTarget = "17"
-              }
           }
 
           dependencies {
@@ -403,7 +465,9 @@ jobs:
 
           cat > system/src/main/AndroidManifest.xml <<'EOF'
           <?xml version="1.0" encoding="utf-8"?>
-          <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+          <manifest
+              xmlns:android="http://schemas.android.com/apk/res/android">
 
               <application
                   android:allowBackup="false"
@@ -422,6 +486,7 @@ jobs:
                       android:value="93" />
 
               </application>
+
           </manifest>
           EOF
 
@@ -432,145 +497,238 @@ jobs:
           cat > system/src/main/java/com/carassistant/v6/system/SystemServerHook.java <<'EOF'
           package com.carassistant.v6.system;
 
+          import android.app.Activity;
+          import android.app.ActivityOptions;
           import android.content.Context;
           import android.content.Intent;
           import android.hardware.display.DisplayManager;
           import android.hardware.display.VirtualDisplay;
+          import android.os.Binder;
           import android.os.IBinder;
-          import android.os.ServiceManager;
+          import android.os.Parcel;
           import android.os.UserHandle;
           import android.view.Surface;
 
-          import android.app.ActivityOptions;
+          import java.lang.reflect.Method;
 
           import de.robv.android.xposed.IXposedHookLoadPackage;
           import de.robv.android.xposed.XC_MethodHook;
           import de.robv.android.xposed.XposedBridge;
           import de.robv.android.xposed.XposedHelpers;
 
-          public class SystemServerHook implements IXposedHookLoadPackage {
+          public class SystemServerHook
+                  implements IXposedHookLoadPackage {
 
-              private static final String SERVICE_NAME = "v60a_vd_service";
-              private static final String TAG = "CarAssistant-V6";
+              private static final String TAG =
+                      "CarAssistant-V6";
 
-              private static VirtualDisplay virtualDisplay;
-              private static int displayId = -1;
+              private static final String SERVICE_NAME =
+                      "v60a_vd_service";
+
+              private static final String DESCRIPTOR =
+                      "com.v60a.virtualdisplay.ipc.IVirtualDisplayService";
+
+              private static final String LAUNCHER_PACKAGE =
+                      "com.carassistant.v6";
+
+              private static final String LAUNCHER_CLASS =
+                      "com.carassistant.v6.LauncherActivity";
 
               @Override
               public void handleLoadPackage(
-                      XC_MethodHook.LoadPackageParam lpparam
-              ) throws Throwable {
+                      XC_MethodHook.LoadPackageParam lpparam)
+                      throws Throwable {
 
-                  if (!"android".equals(lpparam.packageName)) {
+                  if (!"android".equals(
+                          lpparam.packageName)) {
                       return;
                   }
 
-                  XposedBridge.log(TAG + ": system_server loaded");
-
-                  Class<?> systemServerClass =
+                  Class<?> systemServer =
                           XposedHelpers.findClass(
                                   "com.android.server.SystemServer",
                                   lpparam.classLoader
                           );
 
+                  /*
+                   * Android 12:
+                   *
+                   * startOtherServices(
+                   *     TimingsTraceAndSlog
+                   * )
+                   */
+
                   XposedHelpers.findAndHookMethod(
-                          systemServerClass,
+                          systemServer,
                           "startOtherServices",
+                          "com.android.server.utils.TimingsTraceAndSlog",
                           new XC_MethodHook() {
 
                               @Override
                               protected void afterHookedMethod(
-                                      MethodHookParam param
-                              ) throws Throwable {
+                                      MethodHookParam param) {
 
-                                  Context context =
-                                          (Context) XposedHelpers.getObjectField(
-                                                  param.thisObject,
-                                                  "mSystemContext"
-                                          );
+                                  try {
+                                      Context context =
+                                              (Context)
+                                                      XposedHelpers
+                                                          .getObjectField(
+                                                              param.thisObject,
+                                                              "mSystemContext"
+                                                          );
 
-                                  publishService(context);
+                                      publishService(context);
 
-                                  XposedBridge.log(
-                                          TAG + ": V6-A2 service published"
-                                  );
+                                  } catch (Throwable t) {
+                                      XposedBridge.log(
+                                              TAG +
+                                              ": publish failed: " +
+                                              t
+                                      );
+                                  }
                               }
                           }
                   );
+
+                  XposedBridge.log(
+                          TAG +
+                          ": SystemServer hook installed"
+                  );
               }
 
-              private static void publishService(Context context) {
-
-                  IBinder binder = new V6Binder(context);
+              private static void publishService(
+                      Context context) {
 
                   try {
-                      ServiceManager.addService(
+                      IBinder existing =
+                              getService(
+                                  SERVICE_NAME
+                              );
+
+                      if (existing != null) {
+                          XposedBridge.log(
+                                  TAG +
+                                  ": service already exists"
+                          );
+                          return;
+                      }
+
+                      V6Binder binder =
+                              new V6Binder(context);
+
+                      addService(
                               SERVICE_NAME,
-                              binder,
-                              false,
-                              8
+                              binder
                       );
+
+                      XposedBridge.log(
+                              TAG +
+                              ": service published"
+                      );
+
                   } catch (Throwable t) {
                       XposedBridge.log(
-                              TAG + ": addService failed: " + t
+                              TAG +
+                              ": addService failed: " +
+                              t
                       );
                   }
               }
 
-              private static class V6Binder extends android.os.Binder {
+              private static IBinder getService(
+                      String name)
+                      throws Throwable {
+
+                  Class<?> clazz =
+                          Class.forName(
+                              "android.os.ServiceManager"
+                          );
+
+                  Method method =
+                          clazz.getDeclaredMethod(
+                              "getService",
+                              String.class
+                          );
+
+                  method.setAccessible(true);
+
+                  return (IBinder)
+                          method.invoke(
+                              null,
+                              name
+                          );
+              }
+
+              private static void addService(
+                      String name,
+                      IBinder binder)
+                      throws Throwable {
+
+                  Class<?> clazz =
+                          Class.forName(
+                              "android.os.ServiceManager"
+                          );
+
+                  Method method =
+                          clazz.getDeclaredMethod(
+                              "addService",
+                              String.class,
+                              IBinder.class,
+                              boolean.class,
+                              int.class
+                          );
+
+                  method.setAccessible(true);
+
+                  method.invoke(
+                          null,
+                          name,
+                          binder,
+                          false,
+                          8
+                  );
+              }
+
+              private static final class V6Binder
+                      extends Binder {
 
                   private final Context context;
+
+                  private VirtualDisplay virtualDisplay;
 
                   V6Binder(Context context) {
                       this.context = context;
 
                       attachInterface(
                               null,
-                              "com.v60a.virtualdisplay.ipc.IVirtualDisplayService"
+                              DESCRIPTOR
                       );
                   }
 
                   @Override
                   protected boolean onTransact(
                           int code,
-                          android.os.Parcel data,
-                          android.os.Parcel reply,
-                          int flags
-                  ) throws android.os.RemoteException {
+                          Parcel data,
+                          Parcel reply,
+                          int flags)
+                          throws android.os.RemoteException {
 
-                      final String descriptor =
-                              "com.v60a.virtualdisplay.ipc.IVirtualDisplayService";
+                      data.enforceInterface(
+                              DESCRIPTOR
+                      );
 
                       if (code == 1) {
-                          data.enforceInterface(descriptor);
-
-                          data.readInt();
-
-                          Surface surface =
-                                  Surface.CREATOR.createFromParcel(data);
-
-                          int width = data.readInt();
-                          int height = data.readInt();
-                          int dpi = data.readInt();
-
-                          int result = createDisplay(
-                                  surface,
-                                  width,
-                                  height,
-                                  dpi
+                          return createDisplay(
+                                  data,
+                                  reply
                           );
-
-                          reply.writeNoException();
-                          reply.writeInt(result);
-                          return true;
                       }
 
                       if (code == 2) {
-                          data.enforceInterface(descriptor);
+                          releaseDisplay(
+                                  reply
+                          );
 
-                          releaseDisplay();
-
-                          reply.writeNoException();
                           return true;
                       }
 
@@ -582,164 +740,189 @@ jobs:
                       );
                   }
 
-                  private int createDisplay(
-                          Surface surface,
-                          int width,
-                          int height,
-                          int dpi
-                  ) {
-
-                      releaseDisplay();
+                  private boolean createDisplay(
+                          Parcel data,
+                          Parcel reply) {
 
                       try {
+                          data.readInt();
+
+                          Surface surface =
+                                  Surface.CREATOR
+                                      .createFromParcel(
+                                          data
+                                      );
+
+                          int width =
+                                  data.readInt();
+
+                          int height =
+                                  data.readInt();
+
+                          int dpi =
+                                  data.readInt();
+
+                          releaseExisting();
+
                           DisplayManager dm =
                                   context.getSystemService(
-                                          DisplayManager.class
+                                      DisplayManager.class
                                   );
+
+                          int displayFlags =
+                                  DisplayManager
+                                      .VIRTUAL_DISPLAY_FLAG_PUBLIC
+                                  |
+                                  DisplayManager
+                                      .VIRTUAL_DISPLAY_FLAG_PRESENTATION
+                                  |
+                                  DisplayManager
+                                      .VIRTUAL_DISPLAY_FLAG_OWN_CONTENT_ONLY;
 
                           virtualDisplay =
                                   dm.createVirtualDisplay(
-                                          "CarAssistant-V6-A2",
-                                          width,
-                                          height,
-                                          dpi,
-                                          surface,
-                                          DisplayManager.VIRTUAL_DISPLAY_FLAG_PUBLIC
-                                                  | DisplayManager.VIRTUAL_DISPLAY_FLAG_PRESENTATION
-                                                  | DisplayManager.VIRTUAL_DISPLAY_FLAG_OWN_CONTENT_ONLY
+                                      "CarAssistant-V6-A2",
+                                      width,
+                                      height,
+                                      dpi,
+                                      surface,
+                                      displayFlags
                                   );
 
-                          if (virtualDisplay == null) {
-                              XposedBridge.log(
-                                      TAG + ": createVirtualDisplay returned null"
-                              );
-                              return -1;
+                          int displayId = -1;
+
+                          if (virtualDisplay != null &&
+                              virtualDisplay.getDisplay() != null) {
+
+                              displayId =
+                                  virtualDisplay
+                                      .getDisplay()
+                                      .getDisplayId();
                           }
 
-                          displayId =
-                                  virtualDisplay.getDisplay().getDisplayId();
-
-                          XposedBridge.log(
-                                  TAG + ": VirtualDisplay created id="
-                                          + displayId
+                          reply.writeNoException();
+                          reply.writeInt(
+                              displayId
                           );
 
-                          launchLauncher(displayId);
+                          XposedBridge.log(
+                              TAG +
+                              ": VirtualDisplay created id=" +
+                              displayId
+                          );
 
-                          return displayId;
+                          if (displayId >= 0) {
+                              launchLauncher(
+                                  displayId
+                              );
+                          }
+
+                          return true;
 
                       } catch (Throwable t) {
+
                           XposedBridge.log(
-                                  TAG + ": createDisplay failed: " + t
+                              TAG +
+                              ": createDisplay failed: " +
+                              t
                           );
-                          return -1;
+
+                          reply.writeNoException();
+                          reply.writeInt(-1);
+
+                          return true;
                       }
                   }
 
-                  private void launchLauncher(int id) {
+                  private void releaseDisplay(
+                          Parcel reply) {
 
                       try {
-                          Intent intent = new Intent();
-                          intent.setClassName(
-                                  "com.carassistant.v6",
-                                  "com.carassistant.v6.LauncherActivity"
+                          releaseExisting();
+
+                          reply.writeNoException();
+
+                      } catch (Throwable t) {
+
+                          XposedBridge.log(
+                              TAG +
+                              ": release failed: " +
+                              t
                           );
+
+                          reply.writeNoException();
+                      }
+                  }
+
+                  private void releaseExisting() {
+
+                      if (virtualDisplay != null) {
+                          try {
+                              virtualDisplay.release();
+                          } catch (Throwable ignored) {
+                          }
+
+                          virtualDisplay = null;
+                      }
+                  }
+
+                  private void launchLauncher(
+                          int displayId) {
+
+                      try {
+                          Intent intent =
+                              new Intent();
+
+                          intent.setClassName(
+                              LAUNCHER_PACKAGE,
+                              LAUNCHER_CLASS
+                          );
+
                           intent.addFlags(
-                                  Intent.FLAG_ACTIVITY_NEW_TASK
+                              Intent.FLAG_ACTIVITY_NEW_TASK |
+                              Intent.FLAG_ACTIVITY_CLEAR_TOP |
+                              Intent.FLAG_ACTIVITY_SINGLE_TOP
                           );
 
                           ActivityOptions options =
-                                  ActivityOptions.makeBasic();
+                              ActivityOptions.makeBasic();
 
-                          options.setLaunchDisplayId(id);
+                          options.setLaunchDisplayId(
+                              displayId
+                          );
 
                           context.startActivityAsUser(
-                                  intent,
-                                  UserHandle.CURRENT,
-                                  options.toBundle()
+                              intent,
+                              UserHandle.SYSTEM,
+                              options.toBundle()
+                          );
+
+                          XposedBridge.log(
+                              TAG +
+                              ": Launcher started on display " +
+                              displayId
                           );
 
                       } catch (Throwable t) {
+
                           XposedBridge.log(
-                                  TAG + ": launcher start failed: " + t
+                              TAG +
+                              ": launcher start failed: " +
+                              t
                           );
                       }
                   }
-
-                  private void releaseDisplay() {
-
-                      try {
-                          if (virtualDisplay != null) {
-                              virtualDisplay.release();
-                              virtualDisplay = null;
-                          }
-                      } catch (Throwable ignored) {
-                      }
-
-                      displayId = -1;
-                  }
               }
           }
           EOF
 
-          # ------------------------------------------------------------
-          # SIMPLE LAUNCHER ACTIVITY
-          # ------------------------------------------------------------
+          # ============================================================
+          # CREATE WRAPPER - IMPORTANT: WE ARE INSIDE v6-a2-source
+          # ============================================================
 
-          mkdir -p carapp/src/main/java/com/carassistant/v6
-
-          cat > carapp/src/main/java/com/carassistant/v6/LauncherActivity.kt <<'EOF'
-          package com.carassistant.v6
-
-          import android.app.Activity
-          import android.os.Bundle
-          import android.graphics.Color
-          import android.view.Gravity
-          import android.widget.TextView
-
-          class LauncherActivity : Activity() {
-
-              override fun onCreate(savedInstanceState: Bundle?) {
-                  super.onCreate(savedInstanceState)
-
-                  val view = TextView(this)
-
-                  view.text =
-                      "CAR ASSISTANT V6-A2\n\nVirtualDisplay PASS"
-
-                  view.textSize = 28f
-                  view.gravity = Gravity.CENTER
-                  view.setTextColor(Color.WHITE)
-                  view.setBackgroundColor(Color.BLACK)
-
-                  setContentView(view)
-              }
-          }
-          EOF
-
-          # Add launcher activity to manifest
-          python3 - <<'PY'
-          p = "carapp/src/main/AndroidManifest.xml"
-          s = open(p).read()
-          s = s.replace(
-              "</application>",
-              """
-                  <activity
-                      android:name=".LauncherActivity"
-                      android:exported="false" />
-              </application>
-              """
-          )
-          open(p, "w").write(s)
-          PY
-
-          # ------------------------------------------------------------
-          # GRADLE WRAPPER
-          # ------------------------------------------------------------
-
-          cd ..
-
-          gradle wrapper --gradle-version 8.7 --distribution-type bin
+          gradle wrapper \
+              --gradle-version 8.7 \
+              --distribution-type bin
 
       - name: Build V6-A2
         shell: bash
@@ -749,22 +932,30 @@ jobs:
           cd v6-a2-source
 
           ./gradlew \
-            :carapp:assembleDebug \
-            :system:assembleDebug \
-            --stacktrace \
-            --info \
-            2>&1 | tee ../v6-a2-build.log
+              :carapp:assembleDebug \
+              :system:assembleDebug \
+              --stacktrace \
+              --info \
+              2>&1 | tee ../v6-a2-build.log
 
-      - name: Show generated APKs
+      - name: Diagnostics
         if: always()
         shell: bash
         run: |
           echo "===== APK FILES ====="
-          find v6-a2-source -type f -name "*.apk" -print || true
+
+          find v6-a2-source \
+              -type f \
+              -name "*.apk" \
+              -print || true
 
           echo
-          echo "===== KOTLIN/GRADLE ERRORS ====="
-          grep -E "^(e:|FAILURE:|.*error:)" v6-a2-build.log | head -200 || true
+          echo "===== COMPILER ERRORS ====="
+
+          grep -E \
+              "^(e:|.*error:|FAILURE:)" \
+              v6-a2-build.log \
+              | head -300 || true
 
       - name: Upload V6-A2 artifacts
         if: always()
