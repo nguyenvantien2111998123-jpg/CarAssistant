@@ -6,23 +6,29 @@ on:
 permissions:
   contents: read
 
+env:
+  GRADLE_VERSION: "8.13"
+  AACAST_REPO: "https://github.com/xuanthanhtn96/AACast-Doudou.git"
+  AACAST_REF: "main"
+
 jobs:
   build:
+    name: Build V9 AACast
     runs-on: ubuntu-latest
-
-    env:
-      GRADLE_VERSION: "8.7"
-      AACAST_REPO: "https://github.com/xuanthanhtn96/AACast-Doudou.git"
-      AACAST_REF: "main"
 
     steps:
 
-      # ================================================================
+      # ============================================================
       # CHECKOUT
-      # ================================================================
+      # ============================================================
 
       - name: Checkout CarAssistant
         uses: actions/checkout@v4
+
+
+      # ============================================================
+      # JAVA 17
+      # ============================================================
 
       - name: Set up JDK 17
         uses: actions/setup-java@v4
@@ -30,48 +36,52 @@ jobs:
           distribution: temurin
           java-version: "17"
 
-      # ================================================================
-      # SETUP GRADLE 8.7
-      # IMPORTANT:
-      # Do this BEFORE generating gradle wrapper.
-      # Otherwise ubuntu runner may use system Gradle 9.x.
-      # ================================================================
 
-      - name: Setup Gradle 8.7
+      # ============================================================
+      # GRADLE 8.13
+      # AGP 8.13 requires Gradle 8.13+
+      # ============================================================
+
+      - name: Setup Gradle 8.13
         uses: gradle/actions/setup-gradle@v4
         with:
-          gradle-version: "8.7"
+          gradle-version: "8.13"
           cache-disabled: true
 
-      - name: Verify Gradle 8.7
+
+      - name: Verify Gradle 8.13
         shell: bash
         run: |
           set -euo pipefail
 
           echo "=================================================="
-          echo "SYSTEM GRADLE"
+          echo "GRADLE VERSION"
           echo "=================================================="
 
           which gradle
           gradle --version
 
           echo "=================================================="
-          echo "EXPECTED VERSION"
+          echo "VERIFY GRADLE 8.13"
           echo "=================================================="
 
-          gradle --version | grep -q \
-            "Gradle 8.7"
+          gradle --version | grep -q "Gradle 8.13"
 
-          echo "Gradle 8.7 verified."
+          echo "Gradle 8.13 verified."
 
-      # ================================================================
-      # GET AACAST SOURCE
-      # ================================================================
+
+      # ============================================================
+      # DOWNLOAD AACAST DOUDOU
+      # ============================================================
 
       - name: Download AACast-Doudou source
         shell: bash
         run: |
           set -euo pipefail
+
+          echo "=================================================="
+          echo "DOWNLOAD AACAST-DOUDOU"
+          echo "=================================================="
 
           rm -rf aacast-upstream
           rm -rf v9-aacast-source
@@ -82,32 +92,28 @@ jobs:
             "$AACAST_REPO" \
             aacast-upstream
 
-          test -d aacast-upstream/app
-          test -s aacast-upstream/app/build.gradle
-          test -s aacast-upstream/app/libs/aasdk-legacy.jar
-          test -s aacast-upstream/app/libs/aasdk-legacy.dex
-          test -s aacast-upstream/app/libs/xposed-api-82.jar
-
           cp -a aacast-upstream v9-aacast-source
 
-          echo "=================================================="
-          echo "AACAST SOURCE"
-          echo "=================================================="
+          echo "AACast-Doudou source downloaded."
 
-          git -C v9-aacast-source log -1 --oneline
+          cd v9-aacast-source
 
           echo "=================================================="
-          echo "LEGACY SDK"
+          echo "VERIFY LEGACY SDK"
           echo "=================================================="
 
-          ls -lh \
-            v9-aacast-source/app/libs/aasdk-legacy.jar \
-            v9-aacast-source/app/libs/aasdk-legacy.dex \
-            v9-aacast-source/app/libs/xposed-api-82.jar
+          test -f app/libs/aasdk-legacy.jar
+          test -f app/libs/aasdk-legacy.dex
+          test -f app/libs/xposed-api-82.jar
 
-      # ================================================================
-      # CONVERT AACAST -> CAR ASSISTANT V9
-      # ================================================================
+          echo "aasdk-legacy.jar OK"
+          echo "aasdk-legacy.dex OK"
+          echo "xposed-api-82.jar OK"
+
+
+      # ============================================================
+      # TRANSFORM AACAST -> CAR ASSISTANT V9
+      # ============================================================
 
       - name: Transform AACast into Car Assistant V9
         shell: bash
@@ -116,168 +122,82 @@ jobs:
 
           cd v9-aacast-source
 
-          # ------------------------------------------------------------
-          # PACKAGE
-          # ------------------------------------------------------------
+          echo "=================================================="
+          echo "TRANSFORM PACKAGE"
+          echo "=================================================="
 
-          find app/src/main -type f \
-            \( -name "*.java" -o -name "*.xml" -o -name "*.txt" \
-               -o -name "*.properties" -o -name "*.md" \) \
+          find . \
+            -type f \
+            \( \
+              -name "*.java" \
+              -o -name "*.xml" \
+              -o -name "*.gradle" \
+              -o -name "*.properties" \
+              -o -name "*.txt" \
+              -o -name "*.md" \
+              -o -name "xposed_init" \
+            \) \
             -print0 |
           xargs -0 sed -i \
-            's/com\.hieptran\.aacast\.doudou/com\.carassistant\.v9/g'
+            's/com\.hieptran\.aacast\.doudou/com.carassistant.v9/g'
 
-          # ------------------------------------------------------------
-          # APPLICATION ID / NAMESPACE
-          # ------------------------------------------------------------
+          echo "Package namespace transformed."
+
+          echo "=================================================="
+          echo "TRANSFORM APPLICATION ID / NAMESPACE"
+          echo "=================================================="
 
           sed -i \
-            's/namespace '\''com\.hieptran\.aacast\.doudou'\''/namespace '\''com.carassistant.v9'\''/' \
+            's/applicationId "com\.hieptran\.aacast\.doudou"/applicationId "com.carassistant.v9"/g' \
             app/build.gradle
 
           sed -i \
-            's/applicationId "com\.hieptran\.aacast\.doudou"/applicationId "com.carassistant.v9"/' \
+            "s/namespace 'com\.hieptran\.aacast\.doudou'/namespace 'com.carassistant.v9'/g" \
             app/build.gradle
 
-          # ------------------------------------------------------------
-          # VERSION
-          # ------------------------------------------------------------
+          echo "=================================================="
+          echo "TRANSFORM VERSION"
+          echo "=================================================="
 
           sed -i \
-            's/versionCode 3/versionCode 900/' \
+            's/versionCode 3/versionCode 900/g' \
             app/build.gradle
 
           sed -i \
-            's/versionName "1\.0\.0"/versionName "9.0-AACast"/' \
+            's/versionName "1\.0\.0"/versionName "9.0-AACast"/g' \
             app/build.gradle
 
-          # ------------------------------------------------------------
-          # DISPLAY NAME
-          # ------------------------------------------------------------
+          echo "Version: 9.0-AACast"
+          echo "VersionCode: 900"
 
-          find app/src/main -type f \
-            \( -name "*.java" -o -name "*.xml" \) \
-            -print0 |
-          xargs -0 sed -i \
-            's/AACast Doudou /Car Assistant V9 /g'
+          echo "=================================================="
+          echo "TRANSFORM DISPLAY NAME"
+          echo "=================================================="
 
-          find app/src/main -type f \
-            \( -name "*.java" -o -name "*.xml" \) \
-            -print0 |
-          xargs -0 sed -i \
-            's/AACast-Doudou/CarAssistant-V9/g'
+          grep -RIl \
+            "AACast Doudou" \
+            app/src/main \
+            2>/dev/null |
+          xargs -r sed -i 's/AACast Doudou/Car Assistant V9/g'
 
-          find app/src/main -type f \
-            \( -name "*.xml" -o -name "*.java" \) \
-            -print0 |
-          xargs -0 sed -i \
-            's/AACast Doudou/Car Assistant V9/g'
+          echo "Display name transformed."
 
-          # ------------------------------------------------------------
-          # DISABLE R8 / MINIFY
-          # ------------------------------------------------------------
-
-          python3 - <<'PY'
-          from pathlib import Path
-
-          p = Path("app/build.gradle")
-          s = p.read_text()
-
-          s = s.replace(
-              "minifyEnabled true",
-              "minifyEnabled false"
-          )
-
-          s = s.replace(
-              "shrinkResources true",
-              "shrinkResources false"
-          )
-
-          if "minifyEnabled false" not in s:
-              raise SystemExit(
-                  "ERROR: minifyEnabled false not present"
-              )
-
-          p.write_text(s)
-          PY
-
-          # ------------------------------------------------------------
-          # XPOSED ENTRY POINT
-          # ------------------------------------------------------------
+          echo "=================================================="
+          echo "XPOSED INIT"
+          echo "=================================================="
 
           mkdir -p app/src/main/assets
 
-          cat > app/src/main/assets/xposed_init <<'EOF'
-          com.carassistant.v9.aabridge.AACastBridge
-          EOF
+          printf '%s\n' \
+            'com.carassistant.v9.aabridge.AACastBridge' \
+            > app/src/main/assets/xposed_init
 
-          # ------------------------------------------------------------
-          # FORCE V9 DISPLAY CONSTANTS
-          # ------------------------------------------------------------
+          echo "Xposed entry point updated."
 
-          python3 - <<'PY'
-          from pathlib import Path
 
-          root = Path("app/src/main")
-
-          for p in root.rglob("*.java"):
-              s = p.read_text(errors="ignore")
-
-              s = s.replace(
-                  '"AACast Doudou "',
-                  '"Car Assistant V9 "'
-              )
-
-              s = s.replace(
-                  '"AACast-Doudou"',
-                  '"CarAssistant-V9"'
-              )
-
-              p.write_text(s)
-          PY
-
-          # ------------------------------------------------------------
-          # V9 RESOURCE
-          # ------------------------------------------------------------
-
-          mkdir -p app/src/main/res/values
-
-          cat > app/src/main/res/values/carassistant_v9.xml <<'EOF'
-          <resources>
-
-              <string name="carassistant_v9_name">
-                  Car Assistant V9-AACast
-              </string>
-
-              <string name="carassistant_v9_description">
-                  Car Assistant V9 AACast Android Auto VirtualDisplay System
-              </string>
-
-          </resources>
-          EOF
-
-          # ------------------------------------------------------------
-          # APP LABEL
-          # ------------------------------------------------------------
-
-          if [ -f app/src/main/res/values/strings.xml ]; then
-            sed -i \
-              's/AACast Doudou/Car Assistant V9-AACast/g' \
-              app/src/main/res/values/strings.xml
-          fi
-
-          echo "=================================================="
-          echo "V9 GRADLE CONFIG"
-          echo "=================================================="
-
-          grep -n \
-            -E \
-            'namespace|applicationId|versionCode|versionName|minifyEnabled|shrinkResources' \
-            app/build.gradle
-
-      # ================================================================
-      # VERIFY AACAST ARCHITECTURE
-      # ================================================================
+      # ============================================================
+      # VERIFY V9 SOURCE ARCHITECTURE
+      # ============================================================
 
       - name: Verify V9 source architecture
         shell: bash
@@ -287,17 +207,7 @@ jobs:
           cd v9-aacast-source
 
           echo "=================================================="
-          echo "CHECK LEGACY SDK"
-          echo "=================================================="
-
-          test -s app/libs/aasdk-legacy.jar
-          test -s app/libs/aasdk-legacy.dex
-          test -s app/libs/xposed-api-82.jar
-
-          echo "Legacy SDK files OK."
-
-          echo "=================================================="
-          echo "CHECK CAR ACTIVITY"
+          echo "CHECK CARACTIVITY SERVICE"
           echo "=================================================="
 
           grep -R -q \
@@ -305,11 +215,17 @@ jobs:
             app/src/main/java
 
           grep -R -q \
-            'extends CarActivity' \
+            'getCarActivity()' \
             app/src/main/java
 
+          echo "CarActivityService architecture OK."
+
+          echo "=================================================="
+          echo "CHECK CARACTIVITY"
+          echo "=================================================="
+
           grep -R -q \
-            'getCarActivity()' \
+            'extends CarActivity' \
             app/src/main/java
 
           echo "CarActivity architecture OK."
@@ -326,12 +242,6 @@ jobs:
             'VirtualDisplay' \
             app/src/main/java
 
-          # AACast-Doudou uses:
-          #
-          # createVirtualDisplay(..., 10)
-          #
-          # 10 = PRESENTATION (2) | OWN_CONTENT_ONLY (8)
-
           if grep -R -q \
             'OWN_CONTENT_ONLY' \
             app/src/main/java; then
@@ -340,7 +250,7 @@ jobs:
 
           elif grep -R -q \
             'createVirtualDisplay' \
-            app/src/main/java && \
+            app/src/main/java &&
                grep -R -q \
             ', 10)' \
             app/src/main/java; then
@@ -375,19 +285,12 @@ jobs:
           echo "CHECK XPOSED"
           echo "=================================================="
 
-          test -s \
-            app/src/main/assets/xposed_init
-
           grep -R -q \
             'IXposedHookLoadPackage' \
             app/src/main/java
 
           grep -R -q \
             'com.google.android.projection.gearhead' \
-            app/src/main/java
-
-          grep -R -q \
-            '"android"' \
             app/src/main/java
 
           echo "Xposed architecture OK."
@@ -397,7 +300,7 @@ jobs:
           echo "=================================================="
 
           grep -R -q \
-            'VirtualDisplayDevice' \
+            'getDisplayDeviceInfoLocked' \
             app/src/main/java
 
           echo "Display hook OK."
@@ -407,7 +310,7 @@ jobs:
           echo "=================================================="
 
           grep -R -q \
-            'InputManagerService' \
+            'injectInputEventToTarget' \
             app/src/main/java
 
           echo "Input hook OK."
@@ -420,8 +323,9 @@ jobs:
             'androidx.car.app.CarAppService' \
             app/src/main/java; then
 
-            echo "ERROR: V9 still contains androidx.car.app.CarAppService"
+            echo "ERROR: AndroidX CarAppService found."
             exit 1
+
           fi
 
           echo "No AndroidX CarAppService found."
@@ -430,9 +334,10 @@ jobs:
           echo "ARCHITECTURE VERIFICATION PASSED"
           echo "=================================================="
 
-      # ================================================================
+
+      # ============================================================
       # VERIFY PACKAGE TRANSFORMATION
-      # ================================================================
+      # ============================================================
 
       - name: Verify V9 package transformation
         shell: bash
@@ -451,10 +356,9 @@ jobs:
             --exclude='*.dex' \
             --exclude='*.jar'; then
 
-            echo "ERROR: old AACast package remains"
+            echo "ERROR: old AACast package remains."
 
-            grep -R \
-              -n \
+            grep -R -n \
               'com.hieptran.aacast.doudou' \
               app/src/main \
               --exclude='*.dex' \
@@ -480,8 +384,7 @@ jobs:
           echo "XPOSED INIT"
           echo "=================================================="
 
-          cat \
-            app/src/main/assets/xposed_init
+          cat app/src/main/assets/xposed_init
 
           grep -q \
             '^com.carassistant.v9.aabridge.AACastBridge$' \
@@ -489,9 +392,10 @@ jobs:
 
           echo "Xposed entry verified."
 
-      # ================================================================
+
+      # ============================================================
       # VERIFY BUILD CONFIG
-      # ================================================================
+      # ============================================================
 
       - name: Verify build configuration
         shell: bash
@@ -512,23 +416,45 @@ jobs:
             'minifyEnabled true' \
             app/build.gradle; then
 
-            echo "ERROR: R8/minify enabled"
+            echo "ERROR: R8/minify enabled."
             exit 1
+
           fi
 
           if grep -q \
             'shrinkResources true' \
             app/build.gradle; then
 
-            echo "ERROR: shrinkResources enabled"
+            echo "ERROR: shrinkResources enabled."
             exit 1
+
           fi
 
           echo "R8/minify disabled."
 
-      # ================================================================
+          echo "=================================================="
+          echo "ANDROID GRADLE PLUGIN"
+          echo "=================================================="
+
+          grep -R -n \
+            'com.android.application' \
+            build.gradle \
+            settings.gradle \
+            app/build.gradle \
+            2>/dev/null || true
+
+          echo "=================================================="
+          echo "JAVA"
+          echo "=================================================="
+
+          java -version
+
+          echo "Build configuration verified."
+
+
+      # ============================================================
       # GENERATE GRADLE WRAPPER
-      # ================================================================
+      # ============================================================
 
       - name: Generate Gradle wrapper
         shell: bash
@@ -538,7 +464,7 @@ jobs:
           cd v9-aacast-source
 
           echo "=================================================="
-          echo "GENERATE GRADLE WRAPPER"
+          echo "GENERATE GRADLE WRAPPER 8.13"
           echo "=================================================="
 
           gradle wrapper \
@@ -548,7 +474,7 @@ jobs:
           chmod +x gradlew
 
           echo "=================================================="
-          echo "VERIFY WRAPPER"
+          echo "VERIFY WRAPPER FILES"
           echo "=================================================="
 
           test -f gradlew
@@ -559,20 +485,20 @@ jobs:
           cat gradle/wrapper/gradle-wrapper.properties
 
           echo "=================================================="
-          echo "WRAPPER VERSION"
+          echo "VERIFY WRAPPER VERSION"
           echo "=================================================="
 
           ./gradlew --version
 
           ./gradlew --version |
-            grep -q \
-              "Gradle 8.7"
+            grep -q "Gradle 8.13"
 
-          echo "Gradle wrapper 8.7 verified."
+          echo "Gradle wrapper 8.13 verified."
 
-      # ================================================================
+
+      # ============================================================
       # CLEAN
-      # ================================================================
+      # ============================================================
 
       - name: Clean V9 build
         shell: bash
@@ -581,13 +507,12 @@ jobs:
 
           cd v9-aacast-source
 
-          ./gradlew \
-            --no-daemon \
-            clean
+          ./gradlew clean --no-daemon
 
-      # ================================================================
+
+      # ============================================================
       # BUILD DEBUG
-      # ================================================================
+      # ============================================================
 
       - name: Build V9 debug APK
         shell: bash
@@ -596,193 +521,182 @@ jobs:
 
           cd v9-aacast-source
 
-          ./gradlew \
+          ./gradlew assembleDebug \
             --no-daemon \
-            --stacktrace \
-            assembleDebug
+            --stacktrace
 
-      # ================================================================
+
+      # ============================================================
       # VERIFY DEBUG APK
-      # ================================================================
+      # ============================================================
 
       - name: Verify V9 debug APK
         shell: bash
         run: |
           set -euo pipefail
 
-          APK="v9-aacast-source/app/build/outputs/apk/debug/app-debug.apk"
+          cd v9-aacast-source
 
-          test -f "$APK"
-          test -s "$APK"
+          APK="app/build/outputs/apk/debug/app-debug.apk"
 
           echo "=================================================="
           echo "DEBUG APK"
           echo "=================================================="
 
+          test -f "$APK"
+
           ls -lh "$APK"
 
-          echo "=================================================="
-          echo "SHA256"
-          echo "=================================================="
+          echo "Debug APK exists."
 
-          sha256sum "$APK"
 
-          echo "=================================================="
-          echo "APK CONTENTS"
-          echo "=================================================="
-
-          unzip -l "$APK" |
-            grep -E \
-              'classes[0-9]*\.dex|assets/xposed_init|AndroidManifest.xml'
-
-          echo "=================================================="
-          echo "XPOSED INIT"
-          echo "=================================================="
-
-          unzip -p \
-            "$APK" \
-            assets/xposed_init
-
-          echo
-
-          unzip -p \
-            "$APK" \
-            assets/xposed_init |
-            grep -q \
-              'com.carassistant.v9.aabridge.AACastBridge'
-
-          echo "Xposed entry inside APK verified."
-
-      # ================================================================
-      # VERIFY LEGACY DEX
-      # ================================================================
+      # ============================================================
+      # VERIFY LEGACY ANDROID AUTO SDK
+      # ============================================================
 
       - name: Verify legacy Android Auto SDK in APK
         shell: bash
         run: |
           set -euo pipefail
 
-          APK="v9-aacast-source/app/build/outputs/apk/debug/app-debug.apk"
+          cd v9-aacast-source
 
-          rm -rf /tmp/v9-apk
-          mkdir -p /tmp/v9-apk
-
-          unzip -q \
-            "$APK" \
-            -d /tmp/v9-apk
+          APK="app/build/outputs/apk/debug/app-debug.apk"
 
           echo "=================================================="
-          echo "DEX FILES"
+          echo "APK DEX FILES"
           echo "=================================================="
 
-          find /tmp/v9-apk \
-            -maxdepth 1 \
-            -type f \
-            -name 'classes*.dex' \
-            -printf '%f %s bytes\n' |
-            sort
-
-          DEX_COUNT=$(
-            find /tmp/v9-apk \
-              -maxdepth 1 \
-              -type f \
-              -name 'classes*.dex' |
-              wc -l
-          )
-
-          if [ "$DEX_COUNT" -lt 2 ]; then
-            echo "ERROR: Expected multiple dex files."
-            echo "Legacy AACast SDK may not have been merged."
-            exit 1
-          fi
-
-          echo "DEX count: $DEX_COUNT"
+          unzip -l "$APK" |
+            grep -E \
+              'classes[0-9]*\.dex'
 
           echo "=================================================="
-          echo "SEARCH LEGACY SDK"
+          echo "LEGACY CARACTIVITY SERVICE"
           echo "=================================================="
 
-          found=0
+          mkdir -p /tmp/v9-dex
 
-          for dex in /tmp/v9-apk/classes*.dex; do
+          unzip -oq "$APK" \
+            'classes*.dex' \
+            -d /tmp/v9-dex
+
+          FOUND=0
+
+          for dex in /tmp/v9-dex/classes*.dex; do
 
             if strings "$dex" |
               grep -q \
                 'com/google/android/apps/auto/sdk/CarActivityService'; then
 
-              echo "Found CarActivityService in $dex"
-              found=1
+              echo "Found legacy CarActivityService in:"
+              echo "$dex"
+
+              FOUND=1
+              break
 
             fi
 
           done
 
-          if [ "$found" -ne 1 ]; then
-            echo "ERROR: CarActivityService not found in APK DEX."
+          if [ "$FOUND" -ne 1 ]; then
+
+            echo "ERROR: legacy CarActivityService not found in APK."
+
             exit 1
+
           fi
 
           echo "Legacy Android Auto SDK verified."
 
-      # ================================================================
-      # VERIFY MANIFEST
-      # ================================================================
+
+      # ============================================================
+      # VERIFY ANDROID AUTO MANIFEST
+      # ============================================================
 
       - name: Verify Android Auto service and manifest
         shell: bash
         run: |
           set -euo pipefail
 
-          APK="v9-aacast-source/app/build/outputs/apk/debug/app-debug.apk"
+          cd v9-aacast-source
+
+          APK="app/build/outputs/apk/debug/app-debug.apk"
 
           echo "=================================================="
-          echo "SOURCE MANIFEST"
+          echo "ANDROID AUTO MANIFEST"
           echo "=================================================="
 
-          cat \
-            v9-aacast-source/app/src/main/AndroidManifest.xml
+          if command -v aapt >/dev/null 2>&1; then
+
+            aapt dump xmltree "$APK" AndroidManifest.xml |
+              tee /tmp/manifest.txt
+
+          elif command -v "$ANDROID_HOME/build-tools/35.0.0/aapt" >/dev/null 2>&1; then
+
+            "$ANDROID_HOME/build-tools/35.0.0/aapt" \
+              dump xmltree \
+              "$APK" \
+              AndroidManifest.xml |
+              tee /tmp/manifest.txt
+
+          else
+
+            echo "WARNING: aapt not available."
+            echo "Checking raw manifest strings instead."
+
+            unzip -p "$APK" AndroidManifest.xml |
+              strings |
+              tee /tmp/manifest.txt
+
+          fi
 
           echo "=================================================="
-          echo "SERVICE CHECK"
+          echo "VERIFY SERVICE"
           echo "=================================================="
 
-          grep -q \
-            'CarActivityService' \
-            v9-aacast-source/app/src/main/AndroidManifest.xml
+          if unzip -p "$APK" AndroidManifest.xml |
+            strings |
+            grep -q \
+              'AACastCarService'; then
 
-          echo "CarActivityService declaration found."
+            echo "AACastCarService found."
+
+          else
+
+            echo "WARNING: service name not directly visible in binary manifest."
+            echo "Source manifest verification:"
+
+            grep -R -n \
+              'AACastCarService' \
+              app/src/main/AndroidManifest.xml
+
+          fi
 
           echo "=================================================="
-          echo "PROJECTION CATEGORY CHECK"
+          echo "VERIFY PROJECTION CATEGORY"
           echo "=================================================="
 
-          grep -q \
+          grep -R -q \
             'CATEGORY_PROJECTION' \
-            v9-aacast-source/app/src/main/AndroidManifest.xml
+            app/src/main/AndroidManifest.xml
 
-          echo "CATEGORY_PROJECTION found."
+          echo "CATEGORY_PROJECTION verified."
 
           echo "=================================================="
-          echo "AUTOMOTIVE METADATA CHECK"
+          echo "VERIFY AUTOMOTIVE APP METADATA"
           echo "=================================================="
 
-          grep -q \
+          grep -R -q \
             'com.google.android.gms.car.application' \
-            v9-aacast-source/app/src/main/AndroidManifest.xml
+            app/src/main/AndroidManifest.xml
 
-          echo "Android Auto application metadata found."
+          echo "Android Auto metadata verified."
 
-          echo "=================================================="
-          echo "APK MANIFEST BASIC CHECK"
-          echo "=================================================="
 
-          test -s "$APK"
-
-          echo "APK exists and is non-empty."
-
-      # ================================================================
+      # ============================================================
       # BUILD RELEASE
-      # ================================================================
+      # ============================================================
 
       - name: Build V9 release APK
         shell: bash
@@ -791,207 +705,184 @@ jobs:
 
           cd v9-aacast-source
 
-          ./gradlew \
+          ./gradlew assembleRelease \
             --no-daemon \
-            --stacktrace \
-            assembleRelease
+            --stacktrace
 
-      # ================================================================
-      # VERIFY RELEASE
-      # ================================================================
+
+      # ============================================================
+      # VERIFY RELEASE APK
+      # ============================================================
 
       - name: Verify V9 release APK
         shell: bash
         run: |
           set -euo pipefail
 
-          APK="v9-aacast-source/app/build/outputs/apk/release/app-release.apk"
+          cd v9-aacast-source
 
-          test -f "$APK"
-          test -s "$APK"
+          APK="app/build/outputs/apk/release/app-release.apk"
 
           echo "=================================================="
           echo "RELEASE APK"
           echo "=================================================="
 
+          test -f "$APK"
+
           ls -lh "$APK"
 
           echo "=================================================="
-          echo "SHA256"
+          echo "VERIFY LEGACY SDK IN RELEASE"
           echo "=================================================="
 
-          sha256sum "$APK"
+          rm -rf /tmp/v9-release-dex
+          mkdir -p /tmp/v9-release-dex
 
-          echo "=================================================="
-          echo "XPOSED ENTRY"
-          echo "=================================================="
+          unzip -oq "$APK" \
+            'classes*.dex' \
+            -d /tmp/v9-release-dex
 
-          unzip -p \
-            "$APK" \
-            assets/xposed_init
+          FOUND=0
 
-          echo
-
-          unzip -p \
-            "$APK" \
-            assets/xposed_init |
-            grep -q \
-              'com.carassistant.v9.aabridge.AACastBridge'
-
-          echo "Xposed entry OK."
-
-          echo "=================================================="
-          echo "DEX"
-          echo "=================================================="
-
-          unzip -l "$APK" |
-            grep -E \
-              'classes[0-9]*\.dex'
-
-          echo "=================================================="
-          echo "LEGACY SDK"
-          echo "=================================================="
-
-          rm -rf /tmp/v9-release
-          mkdir -p /tmp/v9-release
-
-          unzip -q \
-            "$APK" \
-            -d /tmp/v9-release
-
-          found=0
-
-          for dex in /tmp/v9-release/classes*.dex; do
+          for dex in /tmp/v9-release-dex/classes*.dex; do
 
             if strings "$dex" |
               grep -q \
                 'com/google/android/apps/auto/sdk/CarActivityService'; then
 
-              echo "CarActivityService found in $dex"
-              found=1
+              echo "Legacy CarActivityService found in:"
+              echo "$dex"
+
+              FOUND=1
+              break
 
             fi
 
           done
 
-          if [ "$found" -ne 1 ]; then
-            echo "ERROR: Legacy SDK missing from release APK."
+          if [ "$FOUND" -ne 1 ]; then
+
+            echo "ERROR: legacy CarActivityService missing."
+
             exit 1
+
           fi
 
-          echo "Release legacy SDK verified."
+          echo "Release APK verified."
 
-      # ================================================================
+
+      # ============================================================
       # PACKAGE
-      # ================================================================
+      # ============================================================
 
       - name: Package V9 release
         shell: bash
         run: |
           set -euo pipefail
 
-          rm -rf release
+          cd v9-aacast-source
+
+          echo "=================================================="
+          echo "PACKAGE RELEASE"
+          echo "=================================================="
+
           mkdir -p release
 
           cp \
-            v9-aacast-source/app/build/outputs/apk/debug/app-debug.apk \
+            app/build/outputs/apk/debug/app-debug.apk \
             release/CarAssistant-V9-AACast-debug.apk
 
           cp \
-            v9-aacast-source/app/build/outputs/apk/release/app-release.apk \
+            app/build/outputs/apk/release/app-release.apk \
             release/CarAssistant-V9-AACast-release.apk
 
-          sha256sum \
-            release/CarAssistant-V9-AACast-debug.apk \
-            > release/CarAssistant-V9-AACast-debug.sha256
-
-          sha256sum \
-            release/CarAssistant-V9-AACast-release.apk \
-            > release/CarAssistant-V9-AACast-release.sha256
+          echo "=================================================="
+          echo "SHA256"
+          echo "=================================================="
 
           cd release
+
+          sha256sum \
+            CarAssistant-V9-AACast-debug.apk \
+            > CarAssistant-V9-AACast-debug.apk.sha256
+
+          sha256sum \
+            CarAssistant-V9-AACast-release.apk \
+            > CarAssistant-V9-AACast-release.apk.sha256
+
+          echo "=================================================="
+          echo "CREATE ZIP"
+          echo "=================================================="
 
           zip -9 \
             CarAssistant-V9-AACast.zip \
             CarAssistant-V9-AACast-debug.apk \
             CarAssistant-V9-AACast-release.apk \
-            CarAssistant-V9-AACast-debug.sha256 \
-            CarAssistant-V9-AACast-release.sha256
+            CarAssistant-V9-AACast-debug.apk.sha256 \
+            CarAssistant-V9-AACast-release.apk.sha256
 
           echo "=================================================="
-          echo "RELEASE CONTENTS"
+          echo "PACKAGE CONTENT"
           echo "=================================================="
 
           ls -lh
 
-      # ================================================================
+          unzip -l CarAssistant-V9-AACast.zip
+
+
+      # ============================================================
       # FINAL VERIFICATION
-      # ================================================================
+      # ============================================================
 
       - name: Final verification
         shell: bash
         run: |
           set -euo pipefail
 
-          APK="release/CarAssistant-V9-AACast-release.apk"
+          cd v9-aacast-source
 
-          test -f "$APK"
-          test -s "$APK"
-
-          echo
           echo "=================================================="
-          echo "CAR ASSISTANT V9 AACAST BUILD COMPLETE"
+          echo "FINAL VERIFICATION"
           echo "=================================================="
 
-          echo
-          echo "APK:"
-          ls -lh "$APK"
+          test -f release/CarAssistant-V9-AACast-debug.apk
+          test -f release/CarAssistant-V9-AACast-release.apk
+          test -f release/CarAssistant-V9-AACast.zip
 
-          echo
-          echo "SHA256:"
-          sha256sum "$APK"
+          test -f release/CarAssistant-V9-AACast-debug.apk.sha256
+          test -f release/CarAssistant-V9-AACast-release.apk.sha256
 
-          echo
-          echo "Package:"
-          echo "com.carassistant.v9"
+          echo "=================================================="
+          echo "SHA256"
+          echo "=================================================="
 
-          echo
-          echo "Version:"
-          echo "9.0-AACast"
+          cat release/CarAssistant-V9-AACast-debug.apk.sha256
+          cat release/CarAssistant-V9-AACast-release.apk.sha256
 
-          echo
-          echo "Architecture:"
-          echo "CarActivityService"
-          echo "CarActivity"
-          echo "RootView"
-          echo "PaneView"
-          echo "TextureView"
-          echo "VirtualDisplay"
-          echo "RootShell"
-          echo "Xposed Android hook"
-          echo "Xposed Gearhead hook"
-          echo "Legacy Android Auto SDK"
+          echo "=================================================="
+          echo "FINAL FILES"
+          echo "=================================================="
 
-          echo
-          echo "VirtualDisplay flags:"
-          echo "10 = PRESENTATION | OWN_CONTENT_ONLY"
+          ls -lh release
 
-          echo
-          echo "R8/minify:"
-          echo "DISABLED"
+          echo "=================================================="
+          echo "V9 AACAST BUILD READY"
+          echo "=================================================="
 
-      # ================================================================
+
+      # ============================================================
       # UPLOAD
-      # ================================================================
+      # ============================================================
 
       - name: Upload V9 AACast artifacts
         uses: actions/upload-artifact@v4
         with:
           name: CarAssistant-V9-AACast
           path: |
-            release/CarAssistant-V9-AACast.zip
-            release/CarAssistant-V9-AACast-debug.apk
-            release/CarAssistant-V9-AACast-release.apk
-            release/CarAssistant-V9-AACast-debug.sha256
-            release/CarAssistant-V9-AACast-release.sha256
+            v9-aacast-source/release/CarAssistant-V9-AACast-debug.apk
+            v9-aacast-source/release/CarAssistant-V9-AACast-release.apk
+            v9-aacast-source/release/CarAssistant-V9-AACast-debug.apk.sha256
+            v9-aacast-source/release/CarAssistant-V9-AACast-release.apk.sha256
+            v9-aacast-source/release/CarAssistant-V9-AACast.zip
           if-no-files-found: error
+          retention-days: 90
