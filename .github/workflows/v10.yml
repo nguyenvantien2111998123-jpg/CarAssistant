@@ -716,3 +716,93 @@ jobs:
           name: CarAssistant-V10
           path: output/
           if-no-files-found: error
+          
+      - name: Test V10 on Android 12 Emulator
+        uses: ReactiveCircus/android-emulator-runner@v2
+        with:
+          api-level: 31
+          target: default
+          arch: x86_64
+          profile: pixel_6
+          emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim
+          disable-animations: true
+          script: |
+            set -e
+
+            echo "========================================"
+            echo "Car Assistant V10 Android 12 Test"
+            echo "========================================"
+
+            echo "== ADB DEVICES =="
+            adb devices
+
+            echo "== INSTALL V10 =="
+            adb install -r output/CarAssistant-V10-debug.apk
+
+            echo "== PACKAGE INFO =="
+            adb shell dumpsys package com.carassistant.v9 | head -n 120
+
+            echo "== RESOLVE LAUNCH ACTIVITY =="
+            adb shell cmd package resolve-activity \
+              --brief \
+              -a android.intent.action.MAIN \
+              -c android.intent.category.LAUNCHER \
+              com.carassistant.v9 || true
+
+            echo "== LAUNCH V10 =="
+            adb shell monkey \
+              -p com.carassistant.v9 \
+              -c android.intent.category.LAUNCHER \
+              1
+
+            sleep 8
+
+            echo "== CURRENT ACTIVITY =="
+            adb shell dumpsys activity activities \
+              | grep -E "mResumedActivity|mFocusedApp" \
+              | head -n 20 || true
+
+            echo "== DISPLAY INFO =="
+            adb shell dumpsys display \
+              | head -n 250 \
+              | tee display-info.txt
+
+            echo "== PACKAGE PROCESS =="
+            adb shell pidof com.carassistant.v9 || true
+
+            echo "== LOGCAT =="
+            adb logcat -d \
+              | grep -E \
+                "CarAssistant|com.carassistant.v9|FATAL EXCEPTION|AndroidRuntime|ANR" \
+              | tail -n 300 \
+              | tee carassistant-logcat.txt || true
+
+            echo "== SCREENSHOT =="
+            adb exec-out screencap -p > v10-emulator.png
+
+            echo "== CRASH CHECK =="
+            if adb logcat -d | grep -q "FATAL EXCEPTION"; then
+              echo "ERROR: FATAL EXCEPTION detected"
+              exit 1
+            fi
+
+            if adb logcat -d | grep -q "ANR in com.carassistant.v9"; then
+              echo "ERROR: ANR detected"
+              exit 1
+            fi
+
+            echo "========================================"
+            echo "V10 Android 12 Emulator Test: PASS"
+            echo "========================================"
+
+      - name: Upload Android 12 Emulator evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: CarAssistant-V10-emulator-test
+          path: |
+            v10-source/
+            display-info.txt
+            carassistant-logcat.txt
+            v10-emulator.png
+          if-no-files-found: ignore
