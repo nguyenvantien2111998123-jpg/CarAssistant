@@ -1,4 +1,4 @@
-name: V10 Run 12 Test
+name: V10 Run 12
 
 on:
   workflow_dispatch:
@@ -6,14 +6,369 @@ on:
     branches:
       - main
 
+permissions:
+  contents: read
+
 jobs:
-  test:
+  build:
+    name: Build Car Assistant V10
     runs-on: ubuntu-latest
 
     steps:
-      - name: V10 detected
+
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.13'
+
+      # ------------------------------------------------------------
+      # Find V9 ZIP
+      # ------------------------------------------------------------
+
+      - name: Find V9 source ZIP
+        shell: bash
         run: |
-          echo "================================"
+          set -e
+
+          ZIP=$(find . -type f \
+            -name 'CarAssistant-V9-Source.zip' \
+            | head -n 1)
+
+          if [ -z "$ZIP" ]; then
+            echo "::error::CarAssistant-V9-Source.zip was not found"
+            exit 1
+          fi
+
+          echo "V9 ZIP:"
+          echo "$ZIP"
+
+          cp "$ZIP" "$RUNNER_TEMP/CarAssistant-V9-Source.zip"
+
+      # ------------------------------------------------------------
+      # Extract V9
+      # ------------------------------------------------------------
+
+      - name: Extract V9
+        shell: bash
+        run: |
+          set -e
+
+          rm -rf v9-unpack
+          mkdir -p v9-unpack
+
+          unzip -q \
+            "$RUNNER_TEMP/CarAssistant-V9-Source.zip" \
+            -d v9-unpack
+
+          echo "Extracted V9:"
+          find v9-unpack -maxdepth 4 -type f | sort | head -300
+
+      # ------------------------------------------------------------
+      # Locate real Gradle project
+      # ------------------------------------------------------------
+
+      - name: Locate Android project
+        shell: bash
+        run: |
+          set -e
+
+          PROJECT=""
+
+          while IFS= read -r DIR; do
+
+            if [ -d "$DIR/app" ] && \
+               { [ -f "$DIR/settings.gradle" ] || \
+                 [ -f "$DIR/settings.gradle.kts" ] || \
+                 [ -f "$DIR/build.gradle" ] || \
+                 [ -f "$DIR/build.gradle.kts" ]; }; then
+
+              PROJECT="$DIR"
+              break
+            fi
+
+          done < <(find v9-unpack -type d | sort)
+
+          if [ -z "$PROJECT" ]; then
+            echo "::error::Android Gradle project not found"
+            exit 1
+          fi
+
+          echo "PROJECT=$PROJECT" >> "$GITHUB_ENV"
+
+          echo "Android project:"
+          echo "$PROJECT"
+
+      # ------------------------------------------------------------
+      # Copy V9 -> V10
+      # ------------------------------------------------------------
+
+      - name: Prepare V10 source
+        shell: bash
+        run: |
+          set -e
+
+          rm -rf v10-source
+
+          cp -a "$PROJECT" v10-source
+
+          echo "V10 source prepared."
+
+      # ------------------------------------------------------------
+      # Inspect source BEFORE modification
+      # ------------------------------------------------------------
+
+      - name: Inspect V9 AACast structure
+        shell: bash
+        run: |
+          set -e
+
+          echo "========== AACast Java files =========="
+
+          find v10-source/app/src/main/java \
+            -type f \
+            \( -name '*.java' -o -name '*.kt' \) \
+            | sort
+
+          echo
+          echo "========== AACast classes =========="
+
+          grep -R \
+            -n \
+            -E \
+            'CarActivityService|createVirtualDisplay|VirtualDisplay|CarActivity' \
+            v10-source/app/src/main/java \
+            | head -100 || true
+
+          echo
+          echo "========== Libraries =========="
+
+          find v10-source \
+            -type f \
+            \( -name 'aasdk-legacy.jar' \
+               -o -name 'aasdk-legacy.dex' \
+               -o -name 'xposed-api-82.jar' \) \
+            -print
+
+      # ------------------------------------------------------------
+      # Verify engine
+      # ------------------------------------------------------------
+
+      - name: Verify AACast engine
+        shell: bash
+        run: |
+          set -e
+
+          JAR=$(find v10-source \
+            -name 'aasdk-legacy.jar' \
+            | head -n 1)
+
+          DEX=$(find v10-source \
+            -name 'aasdk-legacy.dex' \
+            | head -n 1)
+
+          XPOSED=$(find v10-source \
+            -name 'xposed-api-82.jar' \
+            | head -n 1)
+
+          if [ -z "$JAR" ]; then
+            echo "::error::aasdk-legacy.jar missing"
+            exit 1
+          fi
+
+          if [ -z "$DEX" ]; then
+            echo "::error::aasdk-legacy.dex missing"
+            exit 1
+          fi
+
+          if [ -z "$XPOSED" ]; then
+            echo "::error::xposed-api-82.jar missing"
+            exit 1
+          fi
+
+          if ! grep -R \
+            -q \
+            'createVirtualDisplay' \
+            v10-source/app/src/main/java; then
+
+            echo "::error::createVirtualDisplay not found"
+            exit 1
+          fi
+
+          if ! grep -R \
+            -q \
+            'CarActivityService' \
+            v10-source/app/src/main/java; then
+
+            echo "::error::CarActivityService not found"
+            exit 1
+          fi
+
+          echo "AACast engine verification PASSED."
+
+      # ------------------------------------------------------------
+      # Show manifest
+      # ------------------------------------------------------------
+
+      - name: Inspect manifest
+        shell: bash
+        run: |
+          set -e
+
+          MANIFEST=$(find v10-source/app/src/main \
+            -name AndroidManifest.xml \
+            | head -n 1)
+
+          if [ -z "$MANIFEST" ]; then
+            echo "::error::AndroidManifest.xml not found"
+            exit 1
+          fi
+
+          echo "Manifest:"
+          cat "$MANIFEST"
+
+      # ------------------------------------------------------------
+      # Generate wrapper
+      # ------------------------------------------------------------
+
+      - name: Generate Gradle wrapper
+        working-directory: v10-source
+        shell: bash
+        run: |
+          set -e
+
+          gradle wrapper \
+            --gradle-version 8.13 \
+            --distribution-type bin
+
+          chmod +x gradlew
+
+      # ------------------------------------------------------------
+      # FIRST BUILD
+      #
+      # IMPORTANT:
+      # Build the untouched V9 source first.
+      # This proves V10 starts from a working AACast baseline.
+      # ------------------------------------------------------------
+
+      - name: Build untouched V9 baseline
+        working-directory: v10-source
+        shell: bash
+        run: |
+          set -e
+
+          ./gradlew \
+            --no-daemon \
+            --stacktrace \
+            assembleDebug
+
+      # ------------------------------------------------------------
+      # Find APK
+      # ------------------------------------------------------------
+
+      - name: Verify baseline APK
+        shell: bash
+        run: |
+          set -e
+
+          APK=$(find v10-source/app/build/outputs/apk \
+            -type f \
+            -name '*.apk' \
+            | head -n 1)
+
+          if [ -z "$APK" ]; then
+            echo "::error::Baseline APK was not produced"
+            exit 1
+          fi
+
+          echo "Baseline APK:"
+          echo "$APK"
+
+          ls -lh "$APK"
+
+          sha256sum "$APK"
+
+      # ------------------------------------------------------------
+      # V10 marker
+      # ------------------------------------------------------------
+
+      - name: Create V10 build marker
+        shell: bash
+        run: |
+          set -e
+
+          mkdir -p v10-source/v10
+
+          cat > v10-source/v10/V10_INFO.txt <<'EOF'
+Car Assistant V10
+Run #12
+
+Architecture:
+
+V9 AACast engine
++
+V10 launcher layer
+
+The AACast engine is intentionally preserved.
+
+Virtual display routing will be implemented
+after the baseline build is verified.
+EOF
+
+      # ------------------------------------------------------------
+      # Package artifact
+      # ------------------------------------------------------------
+
+      - name: Package V10 artifact
+        shell: bash
+        run: |
+          set -e
+
+          mkdir -p v10-artifacts
+
+          APK=$(find v10-source/app/build/outputs/apk \
+            -type f \
+            -name '*.apk' \
+            | head -n 1)
+
+          cp "$APK" \
+            v10-artifacts/CarAssistant-V10-Run12-baseline.apk
+
+          sha256sum \
+            v10-artifacts/CarAssistant-V10-Run12-baseline.apk \
+            > v10-artifacts/SHA256SUMS.txt
+
+          cp v10-source/v10/V10_INFO.txt \
+            v10-artifacts/V10_INFO.txt
+
+          ls -lh v10-artifacts
+
+      - name: Upload V10 artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: CarAssistant-V10-Run12
+          path: v10-artifacts
+          if-no-files-found: error
+          retention-days: 14
+
+      # ------------------------------------------------------------
+      # Final
+      # ------------------------------------------------------------
+
+      - name: Final result
+        run: |
+          echo "========================================"
           echo "CAR ASSISTANT V10 RUN #12"
-          echo "WORKFLOW DETECTED"
-          echo "================================"
+          echo "========================================"
+          echo "AACast V9 baseline preserved"
+          echo "Baseline APK built successfully"
+          echo "V10 artifact uploaded"
+          echo "========================================"
