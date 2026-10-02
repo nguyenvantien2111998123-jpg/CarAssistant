@@ -5,6 +5,7 @@ import android.os.Build;
 import com.carassistant.v10.AACastDisplay;
 import com.carassistant.v10.hook.DisplayHooks;
 import com.carassistant.v10.hook.GearheadAllow;
+import com.carassistant.v10.hook.GearheadControlBar;
 import com.carassistant.v10.hook.GearheadDockPatcher;
 import com.carassistant.v10.hook.InputHooks;
 import com.carassistant.v10.hook.InstallerSpoof;
@@ -45,6 +46,7 @@ public final class AACastBridge implements IXposedHookLoadPackage {
             if (GEARHEAD.equals(packageName)) {
                 GearheadAllow.install(param.classLoader);
                 GearheadDockPatcher.install();
+                GearheadControlBar.install();
             }
 
             if (Build.VERSION.SDK_INT >= 30) {

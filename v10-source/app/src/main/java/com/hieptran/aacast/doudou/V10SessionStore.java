@@ -12,6 +12,8 @@ public final class V10SessionStore {
     private static final String TARGET =
             "target_component";
 
+    private static volatile V10CarActivity currentActivity;
+
     private V10SessionStore() {
     }
 
@@ -65,5 +67,24 @@ public final class V10SessionStore {
                 .edit()
                 .remove(TARGET)
                 .apply();
+    }
+
+    public static void setCurrentActivity(
+            V10CarActivity activity) {
+
+        currentActivity = activity;
+    }
+
+    public static V10CarActivity getCurrentActivity() {
+
+        return currentActivity;
+    }
+
+    public static void clearCurrentActivity(
+            V10CarActivity activity) {
+
+        if (currentActivity == activity) {
+            currentActivity = null;
+        }
     }
 }

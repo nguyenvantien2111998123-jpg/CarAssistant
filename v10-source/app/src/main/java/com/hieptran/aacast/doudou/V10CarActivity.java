@@ -75,6 +75,8 @@ public final class V10CarActivity
 
         super.onCreate(state);
 
+        V10SessionStore.setCurrentActivity(this);
+
         setIgnoreConfigChanges(-1);
 
         applyChrome();
@@ -189,6 +191,8 @@ public final class V10CarActivity
 
         textureView = null;
 
+        V10SessionStore.clearCurrentActivity(this);
+
         super.onDestroy();
     }
 
@@ -205,4 +209,29 @@ public final class V10CarActivity
             applyChrome();
         }
     }
+
+    public void handleControlBack() {
+
+        if (session != null
+                && session.isActive()) {
+
+            session.back();
+        }
+    }
+
+    public void handleControlHome() {
+
+        if (session != null) {
+            session.release();
+        }
+    }
+
+    public void handleControlRecents() {
+        // Reserved for the next control-session implementation.
+    }
+
+    public void handleControlApps() {
+        // Reserved for the next launcher/control implementation.
+    }
+
 }
