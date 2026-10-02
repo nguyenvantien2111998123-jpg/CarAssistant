@@ -13,238 +13,103 @@ import de.robv.android.xposed.XposedBridge;
 import de.robv.android.xposed.XposedHelpers;
 
 /**
- * System-server input bridge.
- *
- * This is the V9 implementation adapted only for the V10 display
- * identity.
+ * Hook InputManagerService.injectInputEventToTarget trên system_server:
+ * khi uid 0 (su) gửi sự kiện tới display ảo của app, clone event với displayId
+ * rồi gọi lại đường native với policyFlags tin cậy — nhờ đó `su input -d <id>`
+ * thực sự tới được app con.
  */
 public final class InputHooks {
 
-    private static final String TAG_INPUT =
-            "[CarAssistant V10 Input]";
-
-    private static final int INJECT_TIMEOUT =
-            0x1F40;
-
-    private static final int POLICY_FLAGS =
-            0x44000000;
+    private static final String TAG_INPUT = "[V10 Input]";
+    private static final int INJECT_TIMEOUT = 0x1F40;        // 8000 ms
+    private static final int POLICY_FLAGS = 0x44000000;
 
     private InputHooks() {
     }
 
-    public static void install(
-            ClassLoader classLoader) {
-
+    /** Cài hook vào InputManagerService của system_server. */
+    public static void install(ClassLoader classLoader) {
         try {
             XposedHelpers.findAndHookMethod(
-                    XposedHelpers.findClass(
-                            "com.android.server.input.InputManagerService",
-                            classLoader),
-                    "injectInputEventToTarget",
-                    InputEvent.class,
-                    int.class,
-                    int.class,
+                    XposedHelpers.findClass("com.android.server.input.InputManagerService", classLoader),
+                    "injectInputEventToTarget", InputEvent.class, int.class, int.class,
                     new XC_MethodHook() {
-
                         private boolean logged;
 
                         @Override
-                        protected void beforeHookedMethod(
-                                MethodHookParam param) {
-
-                            if (!(param.args[0]
-                                    instanceof MotionEvent)) {
+                        protected void beforeHookedMethod(MethodHookParam param) {
+                            if (!(param.args[0] instanceof MotionEvent)) {
                                 return;
                             }
-
-                            int mode =
-                                    (Integer) param.args[1];
-
-                            int targetUid =
-                                    (Integer) param.args[2];
-
-                            if (Binder.getCallingUid() != 0
-                                    || mode < 0
-                                    || mode > 2
-                                    || targetUid != -1) {
+                            int mode = (Integer) param.args[1];
+                            int targetUid = (Integer) param.args[2];
+                            if (Binder.getCallingUid() != 0 || mode < 0 || mode > 2 || targetUid != -1) {
                                 return;
                             }
-
-                            MotionEvent event =
-                                    (MotionEvent) param.args[0];
-
-                            int displayId =
-                                    (Integer) XposedHelpers.callMethod(
-                                            event,
-                                            "getDisplayId");
-
+                            MotionEvent event = (MotionEvent) param.args[0];
+                            int displayId = (Integer) XposedHelpers.callMethod(event, "getDisplayId");
                             if (displayId <= 0) {
                                 return;
                             }
-
                             try {
-                                android.content.Context context =
-                                        (android.content.Context)
-                                                XposedHelpers.getObjectField(
-                                                        param.thisObject,
-                                                        "mContext");
-
-                                DisplayManager displayManager =
-                                        (DisplayManager)
-                                                context.getSystemService(
-                                                        android.content.Context.DISPLAY_SERVICE);
-
-                                Display display =
-                                        displayManager == null
-                                                ? null
-                                                : displayManager.getDisplay(
-                                                        displayId);
-
-                                if (display == null
-                                        || display.getState()
-                                                != Display.STATE_ON
-                                        || !V10Display.matches(
-                                                DisplayReflect.ownerPackage(
-                                                        display),
-                                                display.getName(),
-                                                DisplayReflect.type(
-                                                        display),
-                                                DisplayReflect.ownerUid(
-                                                        display))) {
+                                android.content.Context context = (android.content.Context)
+                                        XposedHelpers.getObjectField(param.thisObject, "mContext");
+                                DisplayManager displayManager = (DisplayManager)
+                                        context.getSystemService(android.content.Context.DISPLAY_SERVICE);
+                                Display display = displayManager == null ? null : displayManager.getDisplay(displayId);
+                                if (display == null || display.getState() != Display.STATE_ON
+                                        || !V10Display.matches(DisplayReflect.ownerPackage(display),
+                                        display.getName(), DisplayReflect.type(display),
+                                        DisplayReflect.ownerUid(display))) {
                                     return;
                                 }
-
-                                Object nativeInputManager =
-                                        XposedHelpers.getObjectField(
-                                                param.thisObject,
-                                                "mNative");
-
-                                MotionEvent copy =
-                                        cloneWithDisplay(
-                                                event,
-                                                displayId);
-
-                                long token =
-                                        Binder.clearCallingIdentity();
-
+                                Object nativeInputManager = XposedHelpers.getObjectField(param.thisObject, "mNative");
+                                MotionEvent copy = cloneWithDisplay(event, displayId);
+                                long token = Binder.clearCallingIdentity();
                                 try {
-                                    int result =
-                                            (Integer)
-                                                    XposedHelpers.callMethod(
-                                                            nativeInputManager,
-                                                            "injectInputEvent",
-                                                            copy,
-                                                            Boolean.FALSE,
-                                                            -1,
-                                                            mode,
-                                                            INJECT_TIMEOUT,
-                                                            POLICY_FLAGS);
-
-                                    param.setResult(
-                                            result == 0);
-
-                                    if (!logged
-                                            || result != 0) {
+                                    int result = (Integer) XposedHelpers.callMethod(nativeInputManager,
+                                            "injectInputEvent",
+                                            copy, Boolean.FALSE, -1, mode, INJECT_TIMEOUT, POLICY_FLAGS);
+                                    param.setResult(result == 0);
+                                    if (!logged || result != 0) {
                                         logged = true;
-
-                                        XposedBridge.log(
-                                                TAG_INPUT
-                                                        + " display="
-                                                        + displayId
-                                                        + " nativeResult="
-                                                        + result);
+                                        XposedBridge.log(TAG_INPUT + " display=" + displayId
+                                                + " nativeResult=" + result);
                                     }
-
                                 } finally {
-                                    Binder.restoreCallingIdentity(
-                                            token);
-
+                                    Binder.restoreCallingIdentity(token);
                                     copy.recycle();
                                 }
-
                             } catch (Throwable t) {
-
                                 if (!logged) {
                                     logged = true;
-
-                                    XposedBridge.log(
-                                            TAG_INPUT
-                                                    + " Original path retained: "
-                                                    + t);
+                                    XposedBridge.log(TAG_INPUT + " Original path retained: " + t);
                                 }
                             }
                         }
                     });
-
-            XposedBridge.log(
-                    TAG_INPUT
-                            + " Root injection hook installed");
-
+            XposedBridge.log(TAG_INPUT + " Root pane injection hook installed");
         } catch (Throwable t) {
-
-            XposedBridge.log(
-                    TAG_INPUT
-                            + " Hook unavailable: "
-                            + t);
+            XposedBridge.log(TAG_INPUT + " Hook unavailable: " + t);
         }
     }
 
-    private static MotionEvent cloneWithDisplay(
-            MotionEvent source,
-            int displayId) {
-
-        int pointerCount =
-                source.getPointerCount();
-
-        MotionEvent.PointerProperties[] properties =
-                new MotionEvent.PointerProperties[
-                        pointerCount];
-
-        MotionEvent.PointerCoords[] coords =
-                new MotionEvent.PointerCoords[
-                        pointerCount];
-
-        for (int i = 0;
-             i < pointerCount;
-             i++) {
-
-            properties[i] =
-                    new MotionEvent.PointerProperties();
-
-            coords[i] =
-                    new MotionEvent.PointerCoords();
-
-            source.getPointerProperties(
-                    i,
-                    properties[i]);
-
-            source.getPointerCoords(
-                    i,
-                    coords[i]);
+    /** Clone event và gán displayId. */
+    private static MotionEvent cloneWithDisplay(MotionEvent source, int displayId) {
+        int pointerCount = source.getPointerCount();
+        MotionEvent.PointerProperties[] properties = new MotionEvent.PointerProperties[pointerCount];
+        MotionEvent.PointerCoords[] coords = new MotionEvent.PointerCoords[pointerCount];
+        for (int i = 0; i < pointerCount; i++) {
+            properties[i] = new MotionEvent.PointerProperties();
+            coords[i] = new MotionEvent.PointerCoords();
+            source.getPointerProperties(i, properties[i]);
+            source.getPointerCoords(i, coords[i]);
         }
-
-        MotionEvent copy =
-                MotionEvent.obtain(
-                        source.getDownTime(),
-                        source.getEventTime(),
-                        source.getAction(),
-                        pointerCount,
-                        properties,
-                        coords,
-                        source.getMetaState(),
-                        source.getButtonState(),
-                        source.getXPrecision(),
-                        source.getYPrecision(),
-                        -1,
-                        source.getEdgeFlags(),
-                        source.getSource(),
-                        source.getFlags());
-
-        XposedHelpers.callMethod(
-                copy,
-                "setDisplayId",
-                displayId);
-
+        MotionEvent copy = MotionEvent.obtain(source.getDownTime(), source.getEventTime(),
+                source.getAction(), pointerCount, properties, coords, source.getMetaState(),
+                source.getButtonState(), source.getXPrecision(), source.getYPrecision(), -1,
+                source.getEdgeFlags(), source.getSource(), source.getFlags());
+        XposedHelpers.callMethod(copy, "setDisplayId", displayId);
         return copy;
     }
 }

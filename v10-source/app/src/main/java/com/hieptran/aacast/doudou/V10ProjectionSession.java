@@ -2,226 +2,215 @@ package com.carassistant.v10;
 
 import android.content.ComponentName;
 import android.content.Context;
-import android.content.pm.ActivityInfo;
-import android.content.pm.PackageManager;
 import android.graphics.SurfaceTexture;
 import android.hardware.display.DisplayManager;
-import android.hardware.display.VirtualDisplay;
 import android.os.Process;
 import android.util.Log;
-import android.view.MotionEvent;
+import android.view.Display;
 import android.view.Surface;
 import android.view.TextureView;
 
-/**
- * One V10 projection session.
- *
- * This deliberately follows the proven V9 projection sequence:
- *
- * TextureView Surface available
- * -> setDefaultBufferSize
- * -> Surface
- * -> createVirtualDisplay(flags=10)
- * -> am start --display
- */
 public final class V10ProjectionSession
         implements TextureView.SurfaceTextureListener {
 
-    private static final String TAG = "CarAssistant-V10";
+    private static final String TAG =
+            "CarAssistantV10Projection";
 
     private final Context context;
-    private final RootShellSession shell;
-    private final V10InputController input;
+
+    private final RootShellSession rootShell =
+            new RootShellSession();
 
     private TextureView textureView;
-
-    private VirtualDisplay display;
-    private Surface surface;
-
     private ComponentName target;
 
-    private int bufferW = 1280;
-    private int bufferH = 720;
+    private Display display;
 
-    private int generation;
+    private android.hardware.display.VirtualDisplay
+            virtualDisplay;
+
+    private Surface surface;
+
     private boolean destroyed;
 
     public V10ProjectionSession(Context context) {
-        this.context = context;
-        this.shell = new RootShellSession();
-        this.input = new V10InputController(shell);
+        this.context =
+                context.getApplicationContext();
     }
 
-    public void attachTextureView(TextureView view) {
-        if (textureView == view) {
-            return;
-        }
-
-        if (textureView != null) {
-            textureView.setSurfaceTextureListener(null);
-        }
+    public void attachTextureView(
+            TextureView view) {
 
         textureView = view;
 
-        if (textureView != null) {
-            textureView.setSurfaceTextureListener(this);
+        view.setSurfaceTextureListener(
+                this);
 
-            if (textureView.isAvailable()) {
-                onSurfaceTextureAvailable(
-                        textureView.getSurfaceTexture(),
-                        textureView.getWidth(),
-                        textureView.getHeight());
-            }
+        if (view.isAvailable()) {
+            ensureDisplay();
         }
     }
 
-    public void setTarget(ComponentName component) {
+    public void setTarget(
+            ComponentName component) {
+
+        if (component == null) {
+            target = null;
+            release();
+            return;
+        }
+
+        boolean changed =
+                !component.equals(target);
+
         target = component;
+
+        if (changed
+                && virtualDisplay != null) {
+
+            releaseDisplayOnly();
+        }
+
         ensureDisplay();
     }
 
-    public ComponentName getTarget() {
-        return target;
-    }
-
-    public int getDisplayId() {
-        return display == null ? -1 : display.getDisplay().getDisplayId();
-    }
-
     public boolean isActive() {
-        return !destroyed && display != null;
+        return !destroyed
+                && target != null
+                && virtualDisplay != null
+                && display != null;
     }
 
     private void ensureDisplay() {
+
         if (destroyed
                 || target == null
                 || textureView == null
                 || !textureView.isAvailable()
-                || textureView.getWidth() < 1
-                || textureView.getHeight() < 1
-                || display != null) {
+                || virtualDisplay != null) {
             return;
         }
 
-        int localGeneration = ++generation;
+        SurfaceTexture st =
+                textureView.getSurfaceTexture();
+
+        if (st == null) {
+            return;
+        }
+
+        int width =
+                textureView.getWidth();
+
+        int height =
+                textureView.getHeight();
+
+        if (width < 1 || height < 1) {
+            return;
+        }
 
         try {
-            computeBuffer(
-                    textureView.getWidth(),
-                    textureView.getHeight());
 
-            SurfaceTexture texture = textureView.getSurfaceTexture();
+            // Proven V9 sequence.
+            st.setDefaultBufferSize(
+                    width,
+                    height);
 
-            if (texture == null) {
-                return;
-            }
+            Surface newSurface =
+                    new Surface(st);
 
-            texture.setDefaultBufferSize(bufferW, bufferH);
+            DisplayManager manager =
+                    (DisplayManager)
+                            context.getSystemService(
+                                    Context.DISPLAY_SERVICE);
 
-            Surface newSurface = new Surface(texture);
-
-            VirtualDisplay newDisplay = null;
-
-            try {
-                DisplayManager dm =
-                        (DisplayManager) context.getSystemService(
-                                Context.DISPLAY_SERVICE);
-
-                if (dm == null) {
-                    throw new IllegalStateException(
-                            "DisplayManager unavailable");
-                }
-
-                newDisplay = dm.createVirtualDisplay(
-                        V10Display.nameFor(0),
-                        bufferW,
-                        bufferH,
-                        160,
-                        newSurface,
-                        10);
-
-                if (newDisplay == null) {
-                    throw new IllegalStateException(
-                            "Cannot create virtual display");
-                }
-
-                display = newDisplay;
-                surface = newSurface;
-
-            } catch (RuntimeException e) {
+            if (manager == null) {
                 newSurface.release();
-                throw e;
+
+                throw new IllegalStateException(
+                        "DisplayManager unavailable");
             }
 
-            if (localGeneration != generation || destroyed) {
-                release();
-                return;
+            android.hardware.display.VirtualDisplay
+                    newVirtualDisplay =
+                    manager.createVirtualDisplay(
+                            V10Display.nameFor(0),
+                            width,
+                            height,
+                            160,
+                            newSurface,
+                            10);
+
+            if (newVirtualDisplay == null) {
+                newSurface.release();
+
+                throw new IllegalStateException(
+                        "Cannot create virtual display");
             }
 
-            launch(localGeneration);
+            Display newDisplay =
+                    newVirtualDisplay.getDisplay();
+
+            if (newDisplay == null) {
+                newVirtualDisplay.release();
+                newSurface.release();
+
+                throw new IllegalStateException(
+                        "Virtual display has no Display");
+            }
+
+            surface =
+                    newSurface;
+
+            virtualDisplay =
+                    newVirtualDisplay;
+
+            display =
+                    newDisplay;
+
+            launchTarget();
 
         } catch (RuntimeException e) {
+
             release();
-            Log.e(TAG,
-                    "Virtual display creation failed",
+
+            Log.w(
+                    TAG,
+                    "Display creation failed",
                     e);
         }
     }
 
-    private void computeBuffer(int viewW, int viewH) {
-        float aspect =
-                viewW > 0 && viewH > 0
-                        ? (float) viewW / (float) viewH
-                        : (16f / 9f);
+    private void launchTarget() {
 
-        if (aspect >= 1f) {
-            bufferW = 1280;
-            bufferH = Math.max(
-                    480,
-                    Math.round(bufferW / aspect));
-        } else {
-            bufferH = 1280;
-            bufferW = Math.max(
-                    480,
-                    Math.round(bufferH * aspect));
-        }
-    }
-
-    private void launch(int localGeneration) {
-        if (destroyed
-                || display == null
-                || target == null
-                || localGeneration != generation) {
+        if (display == null
+                || target == null) {
             return;
         }
 
-        int displayId =
-                display.getDisplay().getDisplayId();
+        final int displayId =
+                display.getDisplayId();
 
-        if (displayId <= 0) {
-            throw new IllegalStateException(
-                    "Invalid virtual display id: "
-                            + displayId);
-        }
+        final int userId =
+                Process.myUid() / 100000;
 
-        ActivityInfo info = resolveTarget(target);
+        final String packageName =
+                target.getPackageName()
+                        .replace(
+                                "'",
+                                "'\"'\"'");
 
-        if (info == null) {
-            throw new IllegalStateException(
-                    "Target activity unavailable: "
-                            + target.flattenToShortString());
-        }
-
-        int userId = Process.myUid() / 100000;
-
-        String flat =
+        final String flat =
                 target.flattenToString()
                         .replace(
                                 "'",
                                 "'\"'\"'");
 
-        String cmd =
-                "/system/bin/am start --user "
+        final String command =
+                "/system/bin/am force-stop '"
+                        + packageName
+                        + "'; "
+                        + "/system/bin/am start"
+                        + " --user "
                         + userId
                         + " --display "
                         + displayId
@@ -233,173 +222,131 @@ public final class V10ProjectionSession
                         + flat
                         + "'";
 
-        final int expectedDisplay = displayId;
-
-        RootShellSession.EXEC.execute(() -> {
-            try {
-                shell.run(15, cmd);
-
-                if (destroyed
-                        || generation != localGeneration
-                        || display == null
-                        || getDisplayId() != expectedDisplay) {
-                    return;
-                }
-
-                Log.i(
-                        TAG,
-                        "Launched "
-                                + target.flattenToShortString()
-                                + " on display "
-                                + expectedDisplay);
-
-            } catch (RuntimeException e) {
-                if (!destroyed
-                        && generation == localGeneration) {
-                    Log.e(
-                            TAG,
-                            "Launch failed: "
-                                    + target.flattenToShortString(),
-                            e);
-                }
-            }
-        });
+        RootShellSession.EXEC.execute(
+                () -> {
+                    try {
+                        rootShell.run(
+                                10,
+                                command);
+                    } catch (Throwable t) {
+                        Log.w(
+                                TAG,
+                                "Launch failed",
+                                t);
+                    }
+                });
     }
 
-    private ActivityInfo resolveTarget(ComponentName component) {
-        try {
-            PackageManager pm =
-                    context.getPackageManager();
+    public void tap(
+            float x,
+            float y) {
 
-            ActivityInfo ai =
-                    pm.getActivityInfo(
-                            component,
-                            PackageManager.GET_META_DATA);
-
-            if (!ai.enabled
-                    || !ai.exported
-                    || !ai.applicationInfo.enabled) {
-                return null;
-            }
-
-            if (ai.permission != null
-                    && context.checkSelfPermission(ai.permission)
-                            != PackageManager.PERMISSION_GRANTED) {
-                return null;
-            }
-
-            if (context.getPackageName().equals(
-                    component.getPackageName())) {
-                return null;
-            }
-
-            return ai;
-
-        } catch (PackageManager.NameNotFoundException e) {
-            return null;
-        }
-    }
-
-    public void sendTap(float viewX, float viewY) {
-        if (display == null || textureView == null) {
+        if (!isActive()) {
             return;
         }
 
-        int id = getDisplayId();
+        final int displayId =
+                display.getDisplayId();
 
-        float sx =
-                bufferW
-                        / (float) Math.max(
-                                1,
-                                textureView.getWidth());
+        final int ix =
+                Math.max(
+                        0,
+                        Math.round(x));
 
-        float sy =
-                bufferH
-                        / (float) Math.max(
-                                1,
-                                textureView.getHeight());
+        final int iy =
+                Math.max(
+                        0,
+                        Math.round(y));
 
-        input.tap(
-                id,
-                viewX * sx,
-                viewY * sy);
+        final String command =
+                "/system/bin/input -d "
+                        + displayId
+                        + " tap "
+                        + ix
+                        + " "
+                        + iy;
+
+        RootShellSession.EXEC.execute(
+                () -> {
+                    try {
+                        rootShell.run(
+                                5,
+                                command);
+                    } catch (Throwable t) {
+                        Log.w(
+                                TAG,
+                                "Tap failed",
+                                t);
+                    }
+                });
     }
 
-    public void sendSwipe(
-            float x1,
-            float y1,
-            float x2,
-            float y2,
-            long durationMs) {
+    public void back() {
 
-        if (display == null || textureView == null) {
+        if (!isActive()) {
             return;
         }
 
-        int id = getDisplayId();
+        final int displayId =
+                display.getDisplayId();
 
-        float sx =
-                bufferW
-                        / (float) Math.max(
-                                1,
-                                textureView.getWidth());
+        final String command =
+                "/system/bin/input -d "
+                        + displayId
+                        + " keyevent 4";
 
-        float sy =
-                bufferH
-                        / (float) Math.max(
-                                1,
-                                textureView.getHeight());
-
-        input.swipe(
-                id,
-                x1 * sx,
-                y1 * sy,
-                x2 * sx,
-                y2 * sy,
-                durationMs);
+        RootShellSession.EXEC.execute(
+                () -> {
+                    try {
+                        rootShell.run(
+                                5,
+                                command);
+                    } catch (Throwable t) {
+                        Log.w(
+                                TAG,
+                                "Back failed",
+                                t);
+                    }
+                });
     }
 
-    public void sendBack() {
-        if (display != null) {
-            input.back(getDisplayId());
-        }
-    }
+    private void releaseDisplayOnly() {
 
-    public void release() {
-        generation++;
-
-        if (display != null) {
+        if (virtualDisplay != null) {
             try {
-                display.release();
-            } catch (RuntimeException ignored) {
+                virtualDisplay.release();
+            } catch (Throwable ignored) {
             }
         }
 
+        virtualDisplay = null;
         display = null;
 
         if (surface != null) {
             try {
                 surface.release();
-            } catch (RuntimeException ignored) {
+            } catch (Throwable ignored) {
             }
         }
 
         surface = null;
     }
 
+    public void release() {
+        releaseDisplayOnly();
+    }
+
     public void destroy() {
+
         if (destroyed) {
             return;
         }
 
         destroyed = true;
 
-        if (textureView != null) {
-            textureView.setSurfaceTextureListener(null);
-        }
-
         release();
-        shell.destroy();
+
+        rootShell.destroy();
     }
 
     @Override
@@ -407,12 +354,6 @@ public final class V10ProjectionSession
             SurfaceTexture surface,
             int width,
             int height) {
-
-        if (surface != null) {
-            surface.setDefaultBufferSize(
-                    Math.max(1, bufferW),
-                    Math.max(1, bufferH));
-        }
 
         ensureDisplay();
     }
@@ -422,34 +363,14 @@ public final class V10ProjectionSession
             SurfaceTexture surface,
             int width,
             int height) {
-
-        if (surface != null) {
-            computeBuffer(width, height);
-            surface.setDefaultBufferSize(
-                    bufferW,
-                    bufferH);
-        }
-
-        if (display != null) {
-            try {
-                display.resize(
-                        bufferW,
-                        bufferH,
-                        160);
-            } catch (RuntimeException e) {
-                Log.w(
-                        TAG,
-                        "Display resize failed",
-                        e);
-            }
-        }
     }
 
     @Override
     public boolean onSurfaceTextureDestroyed(
             SurfaceTexture surface) {
 
-        release();
+        releaseDisplayOnly();
+
         return true;
     }
 

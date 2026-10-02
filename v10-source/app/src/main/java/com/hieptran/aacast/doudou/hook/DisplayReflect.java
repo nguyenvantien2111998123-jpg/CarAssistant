@@ -5,7 +5,8 @@ import android.view.Display;
 import de.robv.android.xposed.XposedHelpers;
 
 /**
- * Access hidden Display APIs through reflection.
+ * Truy cập các API @hide của android.view.Display qua reflection.
+ * (getOwnerPackageName / getType / getOwnerUid không có trong SDK public.)
  */
 final class DisplayReflect {
 
@@ -14,9 +15,7 @@ final class DisplayReflect {
 
     static String ownerPackage(Display display) {
         try {
-            return (String) XposedHelpers.callMethod(
-                    display,
-                    "getOwnerPackageName");
+            return (String) XposedHelpers.callMethod(display, "getOwnerPackageName");
         } catch (Throwable t) {
             return null;
         }
@@ -24,9 +23,7 @@ final class DisplayReflect {
 
     static int type(Display display) {
         try {
-            return (Integer) XposedHelpers.callMethod(
-                    display,
-                    "getType");
+            return (Integer) XposedHelpers.callMethod(display, "getType");
         } catch (Throwable t) {
             return -1;
         }
@@ -34,9 +31,7 @@ final class DisplayReflect {
 
     static int ownerUid(Display display) {
         try {
-            return (Integer) XposedHelpers.callMethod(
-                    display,
-                    "getOwnerUid");
+            return (Integer) XposedHelpers.callMethod(display, "getOwnerUid");
         } catch (Throwable t) {
             return -1;
         }
