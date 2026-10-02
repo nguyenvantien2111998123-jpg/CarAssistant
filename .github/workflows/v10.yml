@@ -26,7 +26,7 @@ jobs:
           gradle-version: '8.13'
 
       # ============================================================
-      # EXTRACT V9 SOURCE
+      # FIND V9 SOURCE
       # ============================================================
 
       - name: Locate V9 source ZIP
@@ -49,39 +49,49 @@ jobs:
         run: |
           set -e
 
-          rm -rf v9-unpack v9-source v10-source
+          rm -rf v9-unpack
+          rm -rf v9-source
+          rm -rf v10-source
 
           mkdir -p v9-unpack
           unzip -q "$V9_ZIP" -d v9-unpack
 
-          INNER=$(find v9-unpack -type f -name 'CarAssistant-V9-source.zip' | head -n 1)
+          INNER=$(find v9-unpack -type f \
+            -name 'CarAssistant-V9-source.zip' \
+            | head -n 1)
 
           if [ -z "$INNER" ]; then
-            echo "ERROR: inner CarAssistant-V9-source.zip not found"
-            find v9-unpack -maxdepth 3 -type f | sort
+            echo "ERROR: inner V9 source ZIP not found"
+            find v9-unpack -maxdepth 4 -type f | sort
             exit 1
           fi
-
-          echo "Inner ZIP: $INNER"
 
           mkdir -p v9-source
           unzip -q "$INNER" -d v9-source
 
-          echo "Extracted:"
-          find v9-source -maxdepth 4 -type f | head -100
+          echo "V9 extracted successfully."
 
       - name: Locate Android project
         shell: bash
         run: |
           set -e
 
-          PROJECT=$(find v9-source -type f -name settings.gradle -o -name settings.gradle.kts \
-            | head -n 1 \
-            | xargs -r dirname)
+          PROJECT=""
+
+          SETTINGS=$(find v9-source -type f \
+            \( -name settings.gradle -o -name settings.gradle.kts \) \
+            | head -n 1)
+
+          if [ -n "$SETTINGS" ]; then
+            PROJECT=$(dirname "$SETTINGS")
+          fi
 
           if [ -z "$PROJECT" ]; then
-            echo "settings.gradle not found, searching for app/"
-            PROJECT=$(find v9-source -type d -name app | head -n 1 | xargs -r dirname)
+            APP_DIR=$(find v9-source -type d -name app | head -n 1)
+
+            if [ -n "$APP_DIR" ]; then
+              PROJECT=$(dirname "$APP_DIR")
+            fi
           fi
 
           if [ -z "$PROJECT" ]; then
@@ -94,7 +104,7 @@ jobs:
           echo "PROJECT=$PROJECT" >> "$GITHUB_ENV"
 
       # ============================================================
-      # CREATE V10 SOURCE
+      # COPY V9 -> V10
       # ============================================================
 
       - name: Copy V9 to V10
@@ -104,10 +114,13 @@ jobs:
 
           cp -a "$PROJECT" v10-source
 
-          echo "V10 source created:"
-          find v10-source -maxdepth 3 -type f | head -100
+          echo "V10 source created."
 
-      - name: Transform package to V10
+      # ============================================================
+      # TRANSFORM PACKAGE
+      # ============================================================
+
+      - name: Transform package
         shell: bash
         run: |
           set -e
@@ -133,10 +146,18 @@ jobs:
           xargs -0 sed -i \
             's/applicationId[[:space:]]*"com\.hieptran\.aacast\.doudou"/applicationId "com.carassistant.v9"/g'
 
-          find v10-source -type f -name "xposed_init" -print0 |
+          find v10-source -type f \
+            -name "xposed_init" \
+            -print0 |
           while IFS= read -r -d '' FILE; do
-            echo "com.carassistant.v9.aabridge.AACastBridge" > "$FILE"
+            printf '%s\n' \
+              'com.carassistant.v9.aabridge.AACastBridge' \
+              > "$FILE"
           done
+
+      # ============================================================
+      # VERSION
+      # ============================================================
 
       - name: Set V10 version
         shell: bash
@@ -156,18 +177,25 @@ jobs:
             -E 's/versionName[[:space:]]+"[^"]+"/versionName "10.0-Launcher"/g'
 
       # ============================================================
-      # LOCATE AACAST JAVA FILES
+      # FIND AACAST FILES
       # ============================================================
 
-      - name: Locate AACast architecture
+      - name: Locate AACast files
         shell: bash
         run: |
           set -e
 
-          ACTIVITY=$(find v10-source -type f -name 'AACastCarActivity.java' | head -n 1)
-          SERVICE=$(find v10-source -type f -name 'AACastCarService.java' | head -n 1)
-          ROOTVIEW=$(find v10-source -type f -name 'RootView.java' | head -n 1)
-          DISPLAY=$(find v10-source -type f -name 'AACastDisplay.java' | head -n 1)
+          ACTIVITY=$(find v10-source -type f \
+            -name 'AACastCarActivity.java' | head -n 1)
+
+          SERVICE=$(find v10-source -type f \
+            -name 'AACastCarService.java' | head -n 1)
+
+          ROOTVIEW=$(find v10-source -type f \
+            -name 'RootView.java' | head -n 1)
+
+          DISPLAY=$(find v10-source -type f \
+            -name 'AACastDisplay.java' | head -n 1)
 
           if [ -z "$ACTIVITY" ]; then
             echo "ERROR: AACastCarActivity.java not found"
@@ -204,54 +232,25 @@ jobs:
           echo "JAVA_DIR=$JAVA_DIR" >> "$GITHUB_ENV"
 
       # ============================================================
-      # VERIFY V9 AACAST ENGINE
+      # VERIFY AACAST
       # ============================================================
 
-      - name: Verify transformed V9 architecture
+      - name: Verify AACast architecture
         shell: bash
         run: |
           set -e
-
-          echo "=== JAVA FILES ==="
-          find v10-source -type f -name "*.java" | sort
-
-          echo ""
-          echo "=== PACKAGE CHECK ==="
-
-          grep -R \
-            "package com.carassistant.v9" \
-            "$ACTIVITY" "$SERVICE" "$ROOTVIEW" "$DISPLAY"
-
-          echo ""
-          echo "=== AACAST ACTIVITY ==="
 
           grep -q "extends CarActivity" "$ACTIVITY"
           grep -q "getCarActivity" "$SERVICE"
           grep -q "createVirtualDisplay" "$DISPLAY"
           grep -q "VirtualDisplay" "$DISPLAY"
 
-          echo "AACast VirtualDisplay architecture: OK"
-
-          echo ""
-          echo "=== SYSTEM HOOKS ==="
-
           grep -R -q "IXposedHookLoadPackage" v10-source
           grep -R -q "com.google.android.projection.gearhead" v10-source
           grep -R -q "getDisplayDeviceInfoLocked" v10-source
           grep -R -q "injectInputEventToTarget" v10-source
 
-          echo "Xposed/Gearhead hooks: OK"
-
-          echo ""
-          echo "=== LEGACY SDK ==="
-
-          find v10-source -type f \
-            \( \
-              -name "aasdk-legacy.jar" \
-              -o -name "aasdk-legacy.dex" \
-              -o -name "xposed-api-82.jar" \
-            \) \
-            -print
+          echo "AACast architecture: OK"
 
       # ============================================================
       # VERIFY MANIFEST
@@ -262,19 +261,23 @@ jobs:
         run: |
           set -e
 
-          MANIFEST=$(find v10-source -type f -name AndroidManifest.xml | head -n 1)
+          MANIFEST=$(find v10-source -type f \
+            -name AndroidManifest.xml | head -n 1)
 
           if [ -z "$MANIFEST" ]; then
             echo "ERROR: AndroidManifest.xml not found"
             exit 1
           fi
 
-          echo "Manifest: $MANIFEST"
+          grep -q \
+            "com.carassistant.v9.AACastCarActivity" \
+            "$MANIFEST"
 
-          grep -q "com.carassistant.v9.AACastCarActivity" "$MANIFEST"
-          grep -q "com.carassistant.v9.AACastCarService" "$MANIFEST"
+          grep -q \
+            "com.carassistant.v9.AACastCarService" \
+            "$MANIFEST"
 
-          echo "Manifest package references: OK"
+          echo "Manifest: OK"
 
       # ============================================================
       # CREATE V10 LAUNCHER
@@ -289,8 +292,13 @@ jobs:
 
           mkdir -p "$TARGET_DIR"
 
-          cat > "$TARGET_DIR/CarAssistantLauncherView.java" <<'EOF'
-package com.carassistant.v9;
+          python3 - "$TARGET_DIR/CarAssistantLauncherView.java" <<'PY'
+import sys
+from pathlib import Path
+
+output = Path(sys.argv[1])
+
+source = r'''package com.carassistant.v9;
 
 import android.content.Context;
 import android.content.Intent;
@@ -306,7 +314,6 @@ import android.widget.LinearLayout;
 import android.widget.ScrollView;
 import android.widget.TextView;
 
-import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Comparator;
 import java.util.List;
@@ -423,9 +430,6 @@ public class CarAssistantLauncherView extends LinearLayout {
     public void refresh() {
         grid.removeAllViews();
 
-        Intent query = new Intent(Intent.ACTION_MAIN);
-        query.addCategory(Intent.CATEGORY_LAUNCHER);
-
         List<ApplicationInfo> apps =
             pm.getInstalledApplications(
                 PackageManager.GET_META_DATA
@@ -451,7 +455,9 @@ public class CarAssistantLauncherView extends LinearLayout {
 
         for (ApplicationInfo app : apps) {
             Intent launch =
-                pm.getLaunchIntentForPackage(app.packageName);
+                pm.getLaunchIntentForPackage(
+                    app.packageName
+                );
 
             if (launch == null) {
                 continue;
@@ -475,10 +481,7 @@ public class CarAssistantLauncherView extends LinearLayout {
         card.setPadding(10, 10, 10, 10);
 
         ImageView icon = new ImageView(context);
-
-        Drawable drawable =
-            app.loadIcon(pm);
-
+        Drawable drawable = app.loadIcon(pm);
         icon.setImageDrawable(drawable);
 
         card.addView(
@@ -530,6 +533,7 @@ public class CarAssistantLauncherView extends LinearLayout {
 
         params.width = 0;
         params.height = 145;
+
         params.columnSpec =
             GridLayout.spec(
                 GridLayout.UNDEFINED,
@@ -548,13 +552,19 @@ public class CarAssistantLauncherView extends LinearLayout {
         }
     }
 }
-EOF
+'''
 
-          echo "Launcher created:"
-          ls -l "$TARGET_DIR/CarAssistantLauncherView.java"
+output.write_text(source, encoding="utf-8")
+print(f"Created: {output}")
+PY
+
+          test -f \
+            "$TARGET_DIR/CarAssistantLauncherView.java"
+
+          echo "Launcher created."
 
       # ============================================================
-      # REPLACE AACAST ACTIVITY WITH V10 SHELL
+      # CREATE V10 AACAST ACTIVITY
       # ============================================================
 
       - name: Create V10 AACast Activity
@@ -564,8 +574,13 @@ EOF
 
           TARGET_DIR="v10-source/$JAVA_DIR"
 
-          cat > "$TARGET_DIR/AACastCarActivity.java" <<'EOF'
-package com.carassistant.v9;
+          python3 - "$TARGET_DIR/AACastCarActivity.java" <<'PY'
+import sys
+from pathlib import Path
+
+output = Path(sys.argv[1])
+
+source = r'''package com.carassistant.v9;
 
 import android.os.Bundle;
 import android.view.View;
@@ -615,13 +630,19 @@ public class AACastCarActivity extends CarActivity {
         }
     }
 }
-EOF
+'''
 
-          echo "V10 AACast Activity created:"
-          ls -l "$TARGET_DIR/AACastCarActivity.java"
+output.write_text(source, encoding="utf-8")
+print(f"Created: {output}")
+PY
+
+          test -f \
+            "$TARGET_DIR/AACastCarActivity.java"
+
+          echo "V10 AACast Activity created."
 
       # ============================================================
-      # VERIFY V10 SOURCE
+      # VERIFY V10
       # ============================================================
 
       - name: Verify V10 source
@@ -631,25 +652,32 @@ EOF
 
           TARGET_DIR="v10-source/$JAVA_DIR"
 
-          test -f "$TARGET_DIR/CarAssistantLauncherView.java"
-          test -f "$TARGET_DIR/AACastCarActivity.java"
-
-          grep -q "CAR ASSISTANT" \
+          test -f \
             "$TARGET_DIR/CarAssistantLauncherView.java"
 
-          grep -q "Android Auto Desktop" \
-            "$TARGET_DIR/CarAssistantLauncherView.java"
-
-          grep -q "class AACastCarActivity" \
+          test -f \
             "$TARGET_DIR/AACastCarActivity.java"
 
-          grep -q "showCastRoot" \
+          grep -q \
+            "CAR ASSISTANT" \
+            "$TARGET_DIR/CarAssistantLauncherView.java"
+
+          grep -q \
+            "Android Auto Desktop" \
+            "$TARGET_DIR/CarAssistantLauncherView.java"
+
+          grep -q \
+            "class AACastCarActivity" \
+            "$TARGET_DIR/AACastCarActivity.java"
+
+          grep -q \
+            "showCastRoot" \
             "$TARGET_DIR/AACastCarActivity.java"
 
           echo "V10 source verification: OK"
 
       # ============================================================
-      # GRADLE
+      # GRADLE BUILD
       # ============================================================
 
       - name: Generate Gradle wrapper
@@ -657,7 +685,6 @@ EOF
         shell: bash
         run: |
           set -e
-
           gradle wrapper --gradle-version 8.13
 
       - name: Clean
@@ -666,28 +693,16 @@ EOF
         run: |
           ./gradlew clean
 
-      # ============================================================
-      # BUILD DEBUG
-      # ============================================================
-
       - name: Build Debug APK
         working-directory: v10-source
         shell: bash
         run: |
-          set -e
-
           ./gradlew assembleDebug --stacktrace
-
-      # ============================================================
-      # BUILD RELEASE
-      # ============================================================
 
       - name: Build Release APK
         working-directory: v10-source
         shell: bash
         run: |
-          set -e
-
           ./gradlew assembleRelease --stacktrace
 
       # ============================================================
@@ -710,15 +725,8 @@ EOF
             -path "*/build/outputs/apk/release/*.apk" \
             | head -n 1)
 
-          if [ -z "$DEBUG_APK" ]; then
-            echo "ERROR: Debug APK not found"
-            exit 1
-          fi
-
-          if [ -z "$RELEASE_APK" ]; then
-            echo "ERROR: Release APK not found"
-            exit 1
-          fi
+          test -n "$DEBUG_APK"
+          test -n "$RELEASE_APK"
 
           cp "$DEBUG_APK" \
             output/CarAssistant-V10-debug.apk
@@ -738,10 +746,6 @@ EOF
           ls -lh output
           cat output/SHA256SUMS.txt
 
-      # ============================================================
-      # BUILD ARTIFACT
-      # ============================================================
-
       - name: Upload V10 APK
         uses: actions/upload-artifact@v4
         with:
@@ -749,7 +753,7 @@ EOF
           path: output/
 
       # ============================================================
-      # ANDROID 12 / API 31 EMULATOR TEST
+      # ANDROID 12 / API 31 EMULATOR
       # ============================================================
 
       - name: Test V10 Android 12 + Secondary Display
@@ -772,43 +776,42 @@ EOF
             echo "=== ADB DEVICES ==="
             adb devices | tee devices.txt
 
-            echo ""
             echo "=== ANDROID VERSION ==="
-            adb shell getprop ro.build.version.release | tee android-version.txt
-            adb shell getprop ro.build.version.sdk | tee api-level.txt
+            adb shell getprop ro.build.version.release \
+              | tee android-version.txt
 
-            echo ""
+            adb shell getprop ro.build.version.sdk \
+              | tee api-level.txt
+
             echo "=== SCREEN ==="
             adb shell wm size | tee wm-size.txt
             adb shell wm density | tee wm-density.txt
 
-            echo ""
             echo "=== DISPLAY BEFORE ==="
-            adb shell dumpsys display > display-before.txt
-            cat display-before.txt
+            adb shell dumpsys display \
+              > display-before.txt
 
             # --------------------------------------------------------
-            # INSTALL
-            # IMPORTANT: KEEP THIS ON ONE LINE.
+            # INSTALL V10
             # --------------------------------------------------------
+            #
+            # IMPORTANT:
+            # This is deliberately ONE command with the full APK path.
+            #
 
-            echo ""
             echo "=== INSTALL V10 ==="
 
-            adb install -r \
-              "$GITHUB_WORKSPACE/output/CarAssistant-V10-debug.apk"
+            adb install -r "$GITHUB_WORKSPACE/output/CarAssistant-V10-debug.apk"
 
-            echo ""
             echo "=== PACKAGE ==="
 
             adb shell dumpsys package com.carassistant.v9 \
               > package.txt
 
             # --------------------------------------------------------
-            # CREATE SECONDARY DISPLAY
+            # SECONDARY DISPLAY
             # --------------------------------------------------------
 
-            echo ""
             echo "=== CREATE SECONDARY DISPLAY ==="
 
             adb shell settings put global overlay_display_devices \
@@ -819,15 +822,10 @@ EOF
             adb shell dumpsys display \
               > display-secondary.txt
 
-            echo ""
-            echo "=== DISPLAY AFTER SECONDARY ==="
-            cat display-secondary.txt
-
             # --------------------------------------------------------
             # LAUNCH V10
             # --------------------------------------------------------
 
-            echo ""
             echo "=== LAUNCH V10 ==="
 
             adb shell monkey \
@@ -842,7 +840,6 @@ EOF
             # ACTIVITY
             # --------------------------------------------------------
 
-            echo ""
             echo "=== RESOLVED ACTIVITY ==="
 
             adb shell cmd package resolve-activity \
@@ -851,7 +848,6 @@ EOF
               com.carassistant.v9 \
               > resolved-activity.txt || true
 
-            echo ""
             echo "=== ACTIVITY ==="
 
             adb shell dumpsys activity activities \
@@ -866,7 +862,6 @@ EOF
             # DISPLAY AFTER LAUNCH
             # --------------------------------------------------------
 
-            echo ""
             echo "=== DISPLAY AFTER LAUNCH ==="
 
             adb shell dumpsys display \
@@ -876,19 +871,15 @@ EOF
             # PROCESS
             # --------------------------------------------------------
 
-            echo ""
             echo "=== PROCESS ==="
 
             adb shell pidof com.carassistant.v9 \
               > process.txt || true
 
-            cat process.txt || true
-
             # --------------------------------------------------------
             # LOGCAT
             # --------------------------------------------------------
 
-            echo ""
             echo "=== LOGCAT ==="
 
             adb logcat -d \
@@ -904,7 +895,6 @@ EOF
             # CRASH / ANR
             # --------------------------------------------------------
 
-            echo ""
             echo "=== CRASH / ANR ==="
 
             adb shell dumpsys dropbox \
@@ -921,17 +911,15 @@ EOF
             # SCREENSHOT
             # --------------------------------------------------------
 
-            echo ""
             echo "=== SCREENSHOT ==="
 
             adb exec-out screencap -p \
               > v10-default-display.png || true
 
             # --------------------------------------------------------
-            # CLEAN SECONDARY DISPLAY
+            # CLEANUP
             # --------------------------------------------------------
 
-            echo ""
             echo "=== REMOVE SECONDARY DISPLAY ==="
 
             adb shell settings put global overlay_display_devices ""
@@ -941,11 +929,10 @@ EOF
             adb shell dumpsys display \
               > display-after-cleanup.txt
 
-            echo ""
             echo "=== TEST COMPLETE ==="
 
       # ============================================================
-      # UPLOAD EMULATOR EVIDENCE
+      # UPLOAD TEST EVIDENCE
       # ============================================================
 
       - name: Upload V10 display test evidence
