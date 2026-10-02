@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   extract-v9:
@@ -13,33 +13,47 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Extract V9 source
         shell: bash
         run: |
           set -e
 
+          echo "=== CLEAN OLD V9 SOURCE ==="
           rm -rf v9-source
           mkdir -p v9-source
 
-          echo "=== Extract outer ZIP ==="
-          unzip -q CarAssistant-V9-Source.zip -d v9-source
+          echo "=== CHECK OUTER ZIP ==="
+          if [ ! -f "CarAssistant-V9-Source.zip" ]; then
+            echo "ERROR: CarAssistant-V9-Source.zip not found"
+            exit 1
+          fi
 
-          INNER="v9-source/CarAssistant-V9-source.zip"
+          echo "=== EXTRACT OUTER ZIP ==="
+          unzip -q "CarAssistant-V9-Source.zip" -d v9-source
 
-          echo "=== Check inner ZIP ==="
-          if [ ! -f "$INNER" ]; then
-            echo "ERROR: Inner ZIP not found:"
+          echo "=== FIND INNER ZIP ==="
+          INNER=$(find v9-source -maxdepth 2 -type f \
+            -name "CarAssistant-V9-source.zip" | head -n 1)
+
+          if [ -z "$INNER" ]; then
+            echo "ERROR: CarAssistant-V9-source.zip not found"
+            echo "=== CURRENT FILES ==="
             find v9-source -maxdepth 3 -type f | sort
             exit 1
           fi
 
-          echo "=== Extract inner ZIP ==="
+          echo "Inner ZIP:"
+          echo "$INNER"
+
+          echo "=== EXTRACT INNER ZIP ==="
           mkdir -p v9-source/android-project
           unzip -q "$INNER" -d v9-source/android-project
 
           echo "=== ANDROID PROJECT STRUCTURE ==="
-          find v9-source/android-project -maxdepth 4 -type f | sort
+          find v9-source/android-project -maxdepth 5 -type f | sort
 
           echo "=== PROJECT FILES ==="
           find v9-source/android-project -type f \( \
@@ -53,4 +67,47 @@ jobs:
           echo "=== APP DIRECTORIES ==="
           find v9-source/android-project -type d -name "app" | sort
 
-          echo "=== DONE ==="
+          echo "=== V9 SOURCE SIZE ==="
+          du -sh v9-source
+
+          echo "=== EXTRACTION COMPLETE ==="
+
+      - name: Remove nested ZIP files
+        shell: bash
+        run: |
+          set -e
+
+          echo "=== REMOVE ARCHIVE FILES FROM V9 SOURCE ==="
+
+          find v9-source -type f \( \
+            -name "*.zip" -o \
+            -name "*.zip.sha256" \
+          \) -print -delete
+
+          echo "=== REMAINING V9 SOURCE ==="
+          find v9-source -maxdepth 5 -type f | sort
+
+      - name: Commit V9 source
+        shell: bash
+        run: |
+          set -e
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          echo "=== GIT STATUS ==="
+          git status --short
+
+          git add v9-source
+
+          if git diff --cached --quiet; then
+            echo "No changes to commit."
+            exit 0
+          fi
+
+          git commit -m "Extract V9 source"
+
+          echo "=== PUSH TO REPOSITORY ==="
+          git push origin HEAD:${GITHUB_REF_NAME}
+
+          echo "=== PUSH COMPLETE ==="
