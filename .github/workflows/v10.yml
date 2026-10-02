@@ -717,7 +717,7 @@ jobs:
           path: output/
           if-no-files-found: error
           
-      - name: Test V10 on Android 12 Emulator
+            - name: Test V10 Android 12 + Secondary Display
         uses: ReactiveCircus/android-emulator-runner@v2
         with:
           api-level: 31
@@ -726,30 +726,77 @@ jobs:
           profile: pixel_6
           emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim
           disable-animations: true
+
           script: |
             set -e
 
-            echo "========================================"
-            echo "Car Assistant V10 Android 12 Test"
-            echo "========================================"
+            echo "=============================================="
+            echo " CAR ASSISTANT V10 DISPLAY TEST"
+            echo " Android 12 / API 31"
+            echo "=============================================="
 
-            echo "== ADB DEVICES =="
+            echo ""
+            echo "=== 1. DEVICE ==="
             adb devices
+            adb shell getprop ro.build.version.release
+            adb shell getprop ro.build.version.sdk
+            adb shell wm size
+            adb shell wm density
 
-            echo "== INSTALL V10 =="
+            echo ""
+            echo "=== 2. INSTALL V10 ==="
             adb install -r output/CarAssistant-V10-debug.apk
 
-            echo "== PACKAGE INFO =="
-            adb shell dumpsys package com.carassistant.v9 | head -n 120
+            echo ""
+            echo "=== 3. PACKAGE ==="
+            adb shell dumpsys package com.carassistant.v9 \
+              | head -n 160
 
-            echo "== RESOLVE LAUNCH ACTIVITY =="
+            echo ""
+            echo "=== 4. DISPLAY BEFORE TEST ==="
+            adb shell dumpsys display \
+              > display-before.txt
+
+            cat display-before.txt
+
+            echo ""
+            echo "=== 5. CREATE EMULATOR SECONDARY DISPLAY ==="
+            echo "1920x1080 / 240dpi"
+
+            adb shell settings put global \
+              overlay_display_devices 1920x1080/240
+
+            sleep 5
+
+            echo ""
+            echo "=== 6. DISPLAY AFTER SECONDARY DISPLAY ==="
+            adb shell dumpsys display \
+              > display-secondary.txt
+
+            cat display-secondary.txt
+
+            echo ""
+            echo "=== 7. DETECT SECONDARY DISPLAY IDs ==="
+
+            grep -E \
+              "mDisplayId=|DisplayDeviceInfo|1920x1080" \
+              display-secondary.txt \
+              || true
+
+            echo ""
+            echo "=== 8. RESOLVE V10 ACTIVITY ==="
+
             adb shell cmd package resolve-activity \
               --brief \
               -a android.intent.action.MAIN \
               -c android.intent.category.LAUNCHER \
-              com.carassistant.v9 || true
+              com.carassistant.v9 \
+              | tee resolved-activity.txt \
+              || true
 
-            echo "== LAUNCH V10 =="
+            echo ""
+            echo "=== 9. LAUNCH V10 ==="
+
             adb shell monkey \
               -p com.carassistant.v9 \
               -c android.intent.category.LAUNCHER \
@@ -757,52 +804,89 @@ jobs:
 
             sleep 8
 
-            echo "== CURRENT ACTIVITY =="
+            echo ""
+            echo "=== 10. CURRENT ACTIVITY ==="
+
             adb shell dumpsys activity activities \
-              | grep -E "mResumedActivity|mFocusedApp" \
-              | head -n 20 || true
-
-            echo "== DISPLAY INFO =="
-            adb shell dumpsys display \
-              | head -n 250 \
-              | tee display-info.txt
-
-            echo "== PACKAGE PROCESS =="
-            adb shell pidof com.carassistant.v9 || true
-
-            echo "== LOGCAT =="
-            adb logcat -d \
               | grep -E \
-                "CarAssistant|com.carassistant.v9|FATAL EXCEPTION|AndroidRuntime|ANR" \
-              | tail -n 300 \
-              | tee carassistant-logcat.txt || true
+                "mResumedActivity|mFocusedApp|com.carassistant.v9" \
+              | head -n 50 \
+              | tee activity.txt \
+              || true
 
-            echo "== SCREENSHOT =="
-            adb exec-out screencap -p > v10-emulator.png
+            echo ""
+            echo "=== 11. DISPLAY STATE ==="
 
-            echo "== CRASH CHECK =="
-            if adb logcat -d | grep -q "FATAL EXCEPTION"; then
-              echo "ERROR: FATAL EXCEPTION detected"
+            adb shell dumpsys display \
+              | tee display-after-launch.txt
+
+            echo ""
+            echo "=== 12. V10 PROCESS ==="
+
+            adb shell pidof com.carassistant.v9 \
+              | tee process.txt \
+              || true
+
+            echo ""
+            echo "=== 13. AACAST / VIRTUAL DISPLAY LOG ==="
+
+            adb logcat -d \
+              | grep -Ei \
+                "AACast|VirtualDisplay|createVirtualDisplay|DisplayManager|CarActivity|CarAssistant|com.carassistant.v9|Gearhead" \
+              | tail -n 500 \
+              | tee aacast-display-log.txt \
+              || true
+
+            echo ""
+            echo "=== 14. CRASH / ANR CHECK ==="
+
+            adb logcat -d \
+              | grep -Ei \
+                "FATAL EXCEPTION|ANR in com.carassistant.v9" \
+              | tee crash-anr.txt \
+              || true
+
+            if grep -q "FATAL EXCEPTION" crash-anr.txt; then
+              echo "ERROR: V10 crashed"
               exit 1
             fi
 
-            if adb logcat -d | grep -q "ANR in com.carassistant.v9"; then
-              echo "ERROR: ANR detected"
+            if grep -q "ANR in com.carassistant.v9" crash-anr.txt; then
+              echo "ERROR: V10 ANR"
               exit 1
             fi
 
-            echo "========================================"
-            echo "V10 Android 12 Emulator Test: PASS"
-            echo "========================================"
+            echo ""
+            echo "=== 15. SCREENSHOT DEFAULT DISPLAY ==="
 
-      - name: Upload Android 12 Emulator evidence
+            adb exec-out screencap -p \
+              > v10-default-display.png
+
+            echo ""
+            echo "=== 16. CLEAN SECONDARY DISPLAY ==="
+
+            adb shell settings delete global \
+              overlay_display_devices \
+              || true
+
+            echo ""
+            echo "=============================================="
+            echo " V10 DISPLAY TEST FINISHED"
+            echo "=============================================="
+
+      - name: Upload V10 display test evidence
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: CarAssistant-V10-emulator-test
+          name: CarAssistant-V10-display-test
           path: |
-            v10-source/
-            display-info.txt
-            carassistant-logcat.txt
-            v10-emulator.png
+            display-before.txt
+            display-secondary.txt
+            display-after-launch.txt
+            resolved-activity.txt
+            activity.txt
+            process.txt
+            aacast-display-log.txt
+            crash-anr.txt
+            v10-default-display.png
           if-no-files-found: ignore
