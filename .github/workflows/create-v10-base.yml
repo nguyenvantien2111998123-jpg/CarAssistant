@@ -28,8 +28,9 @@ jobs:
           cache-disabled: true
 
       # ============================================================
-      # CREATE CLEAN V10 SOURCE FROM VERIFIED V9 PROJECTION ENGINE
+      # CREATE CLEAN V10 SOURCE FROM VERIFIED V9 SOURCE
       # ============================================================
+
       - name: Prepare V10 source
         shell: bash
         run: |
@@ -57,32 +58,42 @@ jobs:
             xargs -0 sed -i \
             's/com\.carassistant\.v9/com.carassistant.v10/g'
 
-          echo "=== UPDATE GRADLE ==="
-
-          sed -i \
-            "s/namespace 'com\.carassistant\.v9'/namespace 'com.carassistant.v10'/" \
-            v10-source/app/build.gradle
+          echo "=== UPDATE APPLICATION ID ==="
 
           sed -i \
             's/applicationId "com\.carassistant\.v9"/applicationId "com.carassistant.v10"/' \
-            v10-source/app/build.gradle
+            v10-source/app/build.gradle || true
 
           sed -i \
-            's/versionCode 3/versionCode 1000/' \
-            v10-source/app/build.gradle
+            's/namespace '\''com\.carassistant\.v9'\''/namespace '\''com.carassistant.v10'\''/' \
+            v10-source/app/build.gradle || true
 
-          sed -i \
-            's/versionName "1\.0\.0"/versionName "10.0-base"/' \
-            v10-source/app/build.gradle
+          echo "=== UPDATE MANIFEST ==="
 
-          echo "=== UPDATE MANIFEST REFERENCES ==="
+          python3 - <<'PY'
+          from pathlib import Path
 
-          sed -i \
-            's/com\.carassistant\.v9/com.carassistant.v10/g' \
-            v10-source/app/src/main/AndroidManifest.xml
+          p = Path(
+              "v10-source/app/src/main/AndroidManifest.xml"
+          )
+
+          s = p.read_text()
+
+          s = s.replace(
+              "com.carassistant.v10.MainActivity",
+              "com.carassistant.v10.V10LauncherActivity"
+          )
+
+          s = s.replace(
+              "com.carassistant.v10.AACastCarActivity",
+              "com.carassistant.v10.V10CarActivity"
+          )
+
+          p.write_text(s)
+          PY
 
           # ========================================================
-          # REMOVE V9 PHONE UI + V9 CAR UI
+          # REMOVE V9 PHONE/CAR UI
           # ========================================================
 
           rm -f \
@@ -108,6 +119,7 @@ jobs:
           import android.graphics.SurfaceTexture;
           import android.hardware.display.DisplayManager;
           import android.hardware.display.VirtualDisplay;
+          import android.os.Bundle;
           import android.os.Process;
           import android.util.Log;
           import android.view.MotionEvent;
@@ -117,33 +129,6 @@ jobs:
 
           import java.util.concurrent.atomic.AtomicBoolean;
 
-          /**
-           * V10 projection engine.
-           *
-           * Một session = một ứng dụng chạy trên một VirtualDisplay.
-           *
-           * Luồng:
-           *
-           * TextureView
-           *      ↓
-           * Surface
-           *      ↓
-           * VirtualDisplay
-           *      ↓
-           * am start --display
-           *      ↓
-           * Android application
-           *
-           * Touch:
-           *
-           * TextureView
-           *      ↓
-           * su input touchscreen -d DISPLAY
-           *      ↓
-           * InputHooks
-           *      ↓
-           * VirtualDisplay
-           */
           public final class V10ProjectionSession
                   implements TextureView.SurfaceTextureListener {
 
@@ -154,6 +139,11 @@ jobs:
               private final TextureView texture;
               private final int slot;
 
+              /*
+               * Persistent root shell.
+               *
+               * Không tạo su mới cho từng lệnh.
+               */
               private final RootShellSession shell;
 
               private final AtomicBoolean inputBusy =
@@ -161,7 +151,6 @@ jobs:
 
               private volatile VirtualDisplay display;
               private volatile Surface surface;
-
               private volatile int displayId = -1;
 
               private ComponentName target;
@@ -177,20 +166,12 @@ jobs:
                   this.texture = texture;
                   this.slot = slot;
 
-                  /*
-                   * Một persistent root shell cho session.
-                   *
-                   * Không tạo `su` process mới cho từng touch.
-                   */
                   shell = new RootShellSession();
 
                   texture.setSurfaceTextureListener(this);
                   texture.setOnTouchListener(this::onTouch);
               }
 
-              /**
-               * Gán ứng dụng cho session.
-               */
               public synchronized void setTarget(
                       ComponentName component) {
 
@@ -247,9 +228,6 @@ jobs:
                          displayId > 0;
               }
 
-              /**
-               * Tạo VirtualDisplay.
-               */
               private synchronized void start() {
 
                   if (display != null) {
@@ -318,7 +296,7 @@ jobs:
 
                       Log.d(
                               TAG,
-                              "V10 VirtualDisplay created: "
+                              "VirtualDisplay created: "
                                       + displayId);
 
                       launch();
@@ -334,9 +312,6 @@ jobs:
                   }
               }
 
-              /**
-               * Mở Activity mục tiêu trên VirtualDisplay.
-               */
               private void launch() {
 
                   if (launching) {
@@ -364,7 +339,7 @@ jobs:
 
                       Log.w(
                               TAG,
-                              "Invalid launch target: " + flat);
+                              "Invalid target: " + flat);
 
                       return;
                   }
@@ -398,7 +373,7 @@ jobs:
 
                           Log.d(
                                   TAG,
-                                  "Application launched: "
+                                  "Launched "
                                           + flat
                                           + " on display "
                                           + id);
@@ -407,8 +382,7 @@ jobs:
 
                           Log.w(
                                   TAG,
-                                  "Launch failed: "
-                                          + flat,
+                                  "Launch failed",
                                   e);
 
                       } finally {
@@ -418,9 +392,6 @@ jobs:
                   });
               }
 
-              /**
-               * Touch → root input → InputHooks.
-               */
               private boolean onTouch(
                       View view,
                       MotionEvent event) {
@@ -433,7 +404,6 @@ jobs:
 
                   if (event.getActionMasked()
                           != MotionEvent.ACTION_UP) {
-
                       return true;
                   }
 
@@ -443,7 +413,6 @@ jobs:
                   if (!inputBusy.compareAndSet(
                           false,
                           true)) {
-
                       return true;
                   }
 
@@ -479,9 +448,6 @@ jobs:
                   return true;
               }
 
-              /**
-               * Dừng session.
-               */
               public synchronized void stop() {
 
                   VirtualDisplay oldDisplay =
@@ -504,13 +470,16 @@ jobs:
                   }
               }
 
-              /**
-               * Giải phóng hoàn toàn session.
-               */
               public synchronized void destroy() {
 
                   stop();
 
+                  /*
+                   * RootShellSession của V9 được giữ nguyên.
+                   * Nếu phiên bản source hiện tại có close(),
+                   * gọi close; nếu không thì JVM sẽ quản lý
+                   * process theo lifecycle của app.
+                   */
                   try {
                       shell.close();
                   } catch (Exception ignored) {
@@ -522,7 +491,6 @@ jobs:
                       SurfaceTexture surface,
                       int width,
                       int height) {
-
                   start();
               }
 
@@ -602,12 +570,6 @@ jobs:
 
           import java.util.List;
 
-          /**
-           * V10 launcher tối giản.
-           *
-           * Đây chỉ là lớp điều khiển.
-           * Projection không nằm trong Launcher.
-           */
           public final class V10LauncherActivity
                   extends Activity {
 
@@ -645,16 +607,15 @@ jobs:
                                   -1,
                                   80));
 
-                  TextView info =
+                  TextView status =
                           new TextView(this);
 
-                  info.setText(
-                          "V10 Launcher\n" +
-                          "Projection Engine\n" +
+                  status.setText(
+                          "V10 Projection Engine\n" +
                           "Android 12 compatible");
 
                   root.addView(
-                          info,
+                          status,
                           new LinearLayout.LayoutParams(
                                   -1,
                                   100));
@@ -674,14 +635,13 @@ jobs:
 
                   int shown = 0;
 
-                  for (ResolveInfo infoApp : apps) {
+                  for (ResolveInfo app : apps) {
 
                       String packageName =
-                              infoApp.activityInfo.packageName;
+                              app.activityInfo.packageName;
 
                       if (packageName.equals(
                               getPackageName())) {
-
                           continue;
                       }
 
@@ -689,29 +649,28 @@ jobs:
                               new Button(this);
 
                       button.setText(
-                              infoApp.loadLabel(
+                              app.loadLabel(
                                       getPackageManager()));
 
                       ComponentName component =
                               new ComponentName(
-                                      infoApp.activityInfo.packageName,
-                                      infoApp.activityInfo.name);
+                                      app.activityInfo.packageName,
+                                      app.activityInfo.name);
 
                       button.setOnClickListener(
                               view -> {
 
-                                  Intent carIntent =
+                                  Intent intent =
                                           new Intent(
                                                   this,
                                                   V10CarActivity.class);
 
-                                  carIntent.putExtra(
+                                  intent.putExtra(
                                           "target",
                                           component
                                                   .flattenToString());
 
-                                  startActivity(
-                                          carIntent);
+                                  startActivity(intent);
                               });
 
                       root.addView(
@@ -750,12 +709,6 @@ jobs:
 
           import com.google.android.apps.auto.sdk.CarActivity;
 
-          /**
-           * Activity chạy trên Android Auto.
-           *
-           * Không còn RootView / PaneView của V9.
-           * V10 sử dụng ProjectionSession độc lập.
-           */
           public final class V10CarActivity
                   extends CarActivity {
 
@@ -818,50 +771,9 @@ jobs:
 
           EOF
 
-          # ========================================================
-          # MANIFEST
-          # ========================================================
-
-          python3 - <<'PY'
-          from pathlib import Path
-
-          p = Path(
-              "v10-source/app/src/main/AndroidManifest.xml"
-          )
-
-          s = p.read_text()
-
-          s = s.replace(
-              "com.carassistant.v10.MainActivity",
-              "com.carassistant.v10.V10LauncherActivity"
-          )
-
-          s = s.replace(
-              "com.carassistant.v10.AACastCarActivity",
-              "com.carassistant.v10.V10CarActivity"
-          )
-
-          p.write_text(s)
-          PY
-
-          # ========================================================
-          # XPOSED ENTRY
-          # ========================================================
-
-          mkdir -p \
-            v10-source/app/src/main/assets
-
-          if [ -f \
-            v10-source/app/src/main/assets/xposed_init ]; then
-
-            sed -i \
-              's/com\.carassistant\.v9/com.carassistant.v10/g' \
-              v10-source/app/src/main/assets/xposed_init
-
-          fi
-
           echo
-          echo "=== V10 SOURCE TREE ==="
+          echo "=== V10 SOURCE PREPARED ==="
+
           find v10-source \
             -maxdepth 4 \
             -type f |
@@ -869,25 +781,17 @@ jobs:
             head -200
 
       # ============================================================
-      # GENERATE GRADLE WRAPPER
-      # ============================================================
-
-      - name: Generate Gradle wrapper
-        working-directory: v10-source
-        run: |
-          gradle wrapper \
-            --gradle-version "$GRADLE_VERSION" \
-            --distribution-type bin
-
-          chmod +x gradlew
-
-      # ============================================================
       # BUILD
       # ============================================================
 
       - name: Build V10 debug
         working-directory: v10-source
+        shell: bash
         run: |
+          set -euo pipefail
+
+          echo "=== BUILD V10 DEBUG ==="
+
           ./gradlew \
             assembleDebug \
             --no-daemon \
@@ -950,9 +854,9 @@ jobs:
           echo "PROJECTION ENGINE OK"
 
           echo
-          echo "===================================="
-          echo "   CAR ASSISTANT V10 BASE PASSED"
-          echo "===================================="
+          echo "========================================"
+          echo " CAR ASSISTANT V10 BASE BUILD PASSED"
+          echo "========================================"
 
       # ============================================================
       # UPLOAD APK
@@ -984,10 +888,10 @@ jobs:
           git add v10-source
 
           if git diff --cached --quiet; then
-            echo "No V10 source changes to commit."
+            echo "No V10 source changes."
           else
-            git commit -m \
-              "Create Car Assistant V10 base architecture"
+            git commit \
+              -m "Create Car Assistant V10 base architecture"
 
             git push
           fi
