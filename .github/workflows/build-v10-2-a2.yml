@@ -1,0 +1,2444 @@
+name: Build Car Assistant V10.2-A2 Control Bar
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+
+      # ============================================================
+      # CHECKOUT
+      # ============================================================
+
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # ============================================================
+      # JAVA 17
+      # ============================================================
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      # ============================================================
+      # GRADLE 8.13
+      # ============================================================
+
+      - name: Install Gradle 8.13
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          wget -q \
+            https://services.gradle.org/distributions/gradle-8.13-bin.zip
+
+          unzip -q \
+            gradle-8.13-bin.zip \
+            -d "$RUNNER_TEMP"
+
+          echo "$RUNNER_TEMP/gradle-8.13/bin" \
+            >> "$GITHUB_PATH"
+
+      # ============================================================
+      # CREATE CLEAN V10 FROM PROVEN V9
+      # ============================================================
+
+      - name: Create clean V10 source
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          test -d \
+            "v9-source/android-project/v9-source"
+
+          rm -rf v10-source
+
+          cp -R \
+            v9-source/android-project/v9-source \
+            v10-source
+
+          find v10-source \
+            -type f \
+            -name '*.java' \
+            -print0 |
+            xargs -0 sed -i \
+              -e 's/com\.carassistant\.v9/com.carassistant.v10/g' \
+              -e 's/Car Assistant V9/Car Assistant V10/g' \
+              -e 's/AACast V9/AACast V10/g'
+
+          find v10-source \
+            -type f \
+            -name '*.xml' \
+            -print0 |
+            xargs -0 sed -i \
+              -e 's/com\.carassistant\.v9/com.carassistant.v10/g' \
+              -e 's/Car Assistant V9/Car Assistant V10/g' \
+              -e 's/AACast V9/AACast V10/g'
+
+          find v10-source \
+            -type f \
+            -name '*.gradle' \
+            -print0 |
+            xargs -0 sed -i \
+              -e 's/com\.carassistant\.v9/com.carassistant.v10/g'
+
+      # ============================================================
+      # REMOVE OLD V9 / V10 ACTIVITIES
+      # ============================================================
+
+      - name: Remove old V9 and previous V10 files
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          JAVA="v10-source/app/src/main/java"
+
+          test -d "$JAVA"
+
+          find "$JAVA" \
+            -type f \
+            \( \
+              -name 'MainActivity.java' \
+              -o -name 'AACastCarActivity.java' \
+              -o -name 'LeaseTicker.java' \
+              -o -name 'V10LauncherActivity.java' \
+              -o -name 'V10CarActivity.java' \
+              -o -name 'V10ProjectionSession.java' \
+              -o -name 'V10InputController.java' \
+              -o -name 'V10Display.java' \
+              -o -name 'V10SessionStore.java' \
+              -o -name 'GearheadControlBar.java' \
+              -o -name 'V10ControlReceiver.java' \
+            \) \
+            -print \
+            -delete
+
+          OLD_FILES="$(
+            find "$JAVA" \
+              -type f \
+              \( \
+                -name 'MainActivity.java' \
+                -o -name 'AACastCarActivity.java' \
+              \)
+          )"
+
+          if [ -n "$OLD_FILES" ]; then
+            echo "ERROR: Old V9 files remain:"
+            echo "$OLD_FILES"
+            exit 1
+          fi
+
+          echo "Old V9 activities removed."
+
+      # ============================================================
+      # SESSION STORE
+      # ============================================================
+
+      - name: Write V10SessionStore
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          cat > \
+          v10-source/app/src/main/java/com/hieptran/aacast/doudou/V10SessionStore.java \
+          <<'EOF'
+          package com.carassistant.v10;
+
+          import android.content.ComponentName;
+          import android.content.Context;
+          import android.content.SharedPreferences;
+
+          public final class V10SessionStore {
+
+              private static final String PREFS =
+                      "v10_session";
+
+              private static final String TARGET =
+                      "target_component";
+
+              private V10SessionStore() {
+              }
+
+              private static SharedPreferences prefs(
+                      Context context) {
+
+                  return context.getSharedPreferences(
+                          PREFS,
+                          Context.MODE_PRIVATE);
+              }
+
+              public static void setTarget(
+                      Context context,
+                      ComponentName component) {
+
+                  SharedPreferences.Editor editor =
+                          prefs(context).edit();
+
+                  if (component == null) {
+                      editor.remove(TARGET);
+                  } else {
+                      editor.putString(
+                              TARGET,
+                              component.flattenToString());
+                  }
+
+                  editor.apply();
+              }
+
+              public static ComponentName getTarget(
+                      Context context) {
+
+                  String value =
+                          prefs(context).getString(
+                                  TARGET,
+                                  null);
+
+                  if (value == null || value.isEmpty()) {
+                      return null;
+                  }
+
+                  return ComponentName.unflattenFromString(
+                          value);
+              }
+
+              public static void clearTarget(
+                      Context context) {
+
+                  prefs(context)
+                          .edit()
+                          .remove(TARGET)
+                          .apply();
+              }
+          }
+          EOF
+
+      # ============================================================
+      # PHONE LAUNCHER
+      # ============================================================
+
+      - name: Write V10LauncherActivity
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          cat > \
+          v10-source/app/src/main/java/com/hieptran/aacast/doudou/V10LauncherActivity.java \
+          <<'EOF'
+          package com.carassistant.v10;
+
+          import android.app.Activity;
+          import android.content.ComponentName;
+          import android.content.Intent;
+          import android.content.pm.ResolveInfo;
+          import android.graphics.Color;
+          import android.os.Bundle;
+          import android.view.Gravity;
+          import android.view.ViewGroup;
+          import android.widget.Button;
+          import android.widget.LinearLayout;
+          import android.widget.ScrollView;
+          import android.widget.TextView;
+
+          import java.util.ArrayList;
+          import java.util.Collections;
+          import java.util.Comparator;
+          import java.util.List;
+
+          public final class V10LauncherActivity
+                  extends Activity {
+
+              private LinearLayout list;
+              private TextView status;
+
+              @Override
+              protected void onCreate(Bundle state) {
+                  super.onCreate(state);
+
+                  buildUi();
+                  loadApps();
+              }
+
+              private void buildUi() {
+
+                  LinearLayout root =
+                          new LinearLayout(this);
+
+                  root.setOrientation(
+                          LinearLayout.VERTICAL);
+
+                  root.setPadding(
+                          32, 32, 32, 32);
+
+                  root.setBackgroundColor(
+                          Color.BLACK);
+
+                  TextView title =
+                          new TextView(this);
+
+                  title.setText(
+                          "Car Assistant V10");
+
+                  title.setTextColor(
+                          Color.WHITE);
+
+                  title.setTextSize(26);
+
+                  title.setGravity(
+                          Gravity.CENTER);
+
+                  root.addView(
+                          title,
+                          new LinearLayout.LayoutParams(
+                                  ViewGroup.LayoutParams.MATCH_PARENT,
+                                  ViewGroup.LayoutParams.WRAP_CONTENT));
+
+                  status =
+                          new TextView(this);
+
+                  status.setText(
+                          "Choose an app for Android Auto");
+
+                  status.setTextColor(
+                          Color.LTGRAY);
+
+                  status.setTextSize(16);
+
+                  root.addView(
+                          status,
+                          new LinearLayout.LayoutParams(
+                                  ViewGroup.LayoutParams.MATCH_PARENT,
+                                  ViewGroup.LayoutParams.WRAP_CONTENT));
+
+                  Button refresh =
+                          new Button(this);
+
+                  refresh.setText("Refresh");
+
+                  refresh.setOnClickListener(
+                          v -> loadApps());
+
+                  root.addView(
+                          refresh,
+                          new LinearLayout.LayoutParams(
+                                  ViewGroup.LayoutParams.MATCH_PARENT,
+                                  ViewGroup.LayoutParams.WRAP_CONTENT));
+
+                  ScrollView scroll =
+                          new ScrollView(this);
+
+                  list =
+                          new LinearLayout(this);
+
+                  list.setOrientation(
+                          LinearLayout.VERTICAL);
+
+                  scroll.addView(list);
+
+                  root.addView(
+                          scroll,
+                          new LinearLayout.LayoutParams(
+                                  ViewGroup.LayoutParams.MATCH_PARENT,
+                                  0,
+                                  1f));
+
+                  setContentView(root);
+              }
+
+              private void loadApps() {
+
+                  list.removeAllViews();
+
+                  Intent intent =
+                          new Intent(
+                                  Intent.ACTION_MAIN);
+
+                  intent.addCategory(
+                          Intent.CATEGORY_LAUNCHER);
+
+                  List<ResolveInfo> apps =
+                          getPackageManager()
+                                  .queryIntentActivities(
+                                          intent,
+                                          0);
+
+                  List<ResolveInfo> filtered =
+                          new ArrayList<>();
+
+                  for (ResolveInfo info : apps) {
+
+                      if (info.activityInfo == null) {
+                          continue;
+                      }
+
+                      if (getPackageName().equals(
+                              info.activityInfo.packageName)) {
+                          continue;
+                      }
+
+                      filtered.add(info);
+                  }
+
+                  Collections.sort(
+                          filtered,
+                          new Comparator<ResolveInfo>() {
+
+                              @Override
+                              public int compare(
+                                      ResolveInfo a,
+                                      ResolveInfo b) {
+
+                                  String la =
+                                          String.valueOf(
+                                                  a.loadLabel(
+                                                          getPackageManager()));
+
+                                  String lb =
+                                          String.valueOf(
+                                                  b.loadLabel(
+                                                          getPackageManager()));
+
+                                  return la.compareToIgnoreCase(lb);
+                              }
+                          });
+
+                  for (ResolveInfo info : filtered) {
+
+                      ComponentName component =
+                              new ComponentName(
+                                      info.activityInfo.packageName,
+                                      info.activityInfo.name);
+
+                      Button button =
+                              new Button(this);
+
+                      button.setText(
+                              String.valueOf(
+                                      info.loadLabel(
+                                              getPackageManager())));
+
+                      button.setOnClickListener(
+                              v -> {
+
+                                  V10SessionStore.setTarget(
+                                          V10LauncherActivity.this,
+                                          component);
+
+                                  status.setText(
+                                          "Selected: "
+                                                  + component
+                                                  .flattenToShortString());
+                              });
+
+                      list.addView(
+                              button,
+                              new LinearLayout.LayoutParams(
+                                      ViewGroup.LayoutParams.MATCH_PARENT,
+                                      ViewGroup.LayoutParams.WRAP_CONTENT));
+                  }
+              }
+          }
+          EOF
+
+      # ============================================================
+      # V10 DISPLAY
+      # ============================================================
+
+      - name: Write V10Display
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          cat > \
+          v10-source/app/src/main/java/com/hieptran/aacast/doudou/V10Display.java \
+          <<'EOF'
+          package com.carassistant.v10;
+
+          public final class V10Display {
+
+              public static final String PACKAGE =
+                      "com.carassistant.v10";
+
+              public static final String PREFIX =
+                      "Car Assistant V10 ";
+
+              private V10Display() {
+              }
+
+              public static String nameFor(int index) {
+                  return PREFIX + (index + 1);
+              }
+
+              public static boolean matches(
+                      String ownerPackage,
+                      String name,
+                      int type,
+                      int ownerUid) {
+
+                  if (!PACKAGE.equals(ownerPackage)
+                          || type != 5
+                          || ownerUid < 10000) {
+                      return false;
+                  }
+
+                  return (PREFIX + "1").equals(name);
+              }
+          }
+          EOF
+
+      # ============================================================
+      # PROJECTION SESSION
+      # ============================================================
+
+      - name: Write V10ProjectionSession
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          cat > \
+          v10-source/app/src/main/java/com/hieptran/aacast/doudou/V10ProjectionSession.java \
+          <<'EOF'
+          package com.carassistant.v10;
+
+          import android.content.ComponentName;
+          import android.content.Context;
+          import android.graphics.SurfaceTexture;
+          import android.hardware.display.DisplayManager;
+          import android.os.Process;
+          import android.util.Log;
+          import android.view.Display;
+          import android.view.Surface;
+          import android.view.TextureView;
+
+          public final class V10ProjectionSession
+                  implements TextureView.SurfaceTextureListener {
+
+              private static final String TAG =
+                      "CarAssistantV10Projection";
+
+              private final Context context;
+
+              private final RootShellSession rootShell =
+                      new RootShellSession();
+
+              private TextureView textureView;
+
+              private ComponentName target;
+
+              private Display display;
+
+              private android.hardware.display.VirtualDisplay
+                      virtualDisplay;
+
+              private Surface surface;
+
+              private boolean destroyed;
+
+              public V10ProjectionSession(
+                      Context context) {
+
+                  this.context =
+                          context.getApplicationContext();
+              }
+
+              public void attachTextureView(
+                      TextureView view) {
+
+                  textureView = view;
+
+                  view.setSurfaceTextureListener(
+                          this);
+
+                  if (view.isAvailable()) {
+                      ensureDisplay();
+                  }
+              }
+
+              public void setTarget(
+                      ComponentName component) {
+
+                  if (component == null) {
+                      target = null;
+                      release();
+                      return;
+                  }
+
+                  boolean changed =
+                          !component.equals(target);
+
+                  target = component;
+
+                  if (changed
+                          && virtualDisplay != null) {
+                      releaseDisplayOnly();
+                  }
+
+                  ensureDisplay();
+              }
+
+              public boolean isActive() {
+                  return !destroyed
+                          && target != null
+                          && virtualDisplay != null
+                          && display != null;
+              }
+
+              public void home() {
+                  releaseDisplayOnly();
+              }
+
+              private void ensureDisplay() {
+
+                  if (destroyed
+                          || target == null
+                          || textureView == null
+                          || !textureView.isAvailable()
+                          || virtualDisplay != null) {
+                      return;
+                  }
+
+                  SurfaceTexture st =
+                          textureView.getSurfaceTexture();
+
+                  if (st == null) {
+                      return;
+                  }
+
+                  int width =
+                          textureView.getWidth();
+
+                  int height =
+                          textureView.getHeight();
+
+                  if (width < 1 || height < 1) {
+                      return;
+                  }
+
+                  try {
+
+                      st.setDefaultBufferSize(
+                              width,
+                              height);
+
+                      Surface newSurface =
+                              new Surface(st);
+
+                      DisplayManager manager =
+                              (DisplayManager)
+                                      context.getSystemService(
+                                              Context.DISPLAY_SERVICE);
+
+                      if (manager == null) {
+                          newSurface.release();
+                          throw new IllegalStateException(
+                                  "DisplayManager unavailable");
+                      }
+
+                      android.hardware.display.VirtualDisplay
+                              newVirtualDisplay =
+                              manager.createVirtualDisplay(
+                                      V10Display.nameFor(0),
+                                      width,
+                                      height,
+                                      160,
+                                      newSurface,
+                                      10);
+
+                      if (newVirtualDisplay == null) {
+                          newSurface.release();
+                          throw new IllegalStateException(
+                                  "Cannot create virtual display");
+                      }
+
+                      Display newDisplay =
+                              newVirtualDisplay.getDisplay();
+
+                      if (newDisplay == null) {
+                          newVirtualDisplay.release();
+                          newSurface.release();
+                          throw new IllegalStateException(
+                                  "Virtual display has no Display");
+                      }
+
+                      surface =
+                              newSurface;
+
+                      virtualDisplay =
+                              newVirtualDisplay;
+
+                      display =
+                              newDisplay;
+
+                      launchTarget();
+
+                  } catch (RuntimeException e) {
+
+                      release();
+
+                      Log.w(
+                              TAG,
+                              "Display creation failed",
+                              e);
+                  }
+              }
+
+              private void launchTarget() {
+
+                  if (display == null
+                          || target == null) {
+                      return;
+                  }
+
+                  final int displayId =
+                          display.getDisplayId();
+
+                  final int userId =
+                          Process.myUid() / 100000;
+
+                  final String packageName =
+                          target.getPackageName()
+                                  .replace(
+                                          "'",
+                                          "'\"'\"'");
+
+                  final String flat =
+                          target.flattenToString()
+                                  .replace(
+                                          "'",
+                                          "'\"'\"'");
+
+                  final String command =
+                          "/system/bin/am force-stop '"
+                                  + packageName
+                                  + "'; "
+                                  + "/system/bin/am start"
+                                  + " --user "
+                                  + userId
+                                  + " --display "
+                                  + displayId
+                                  + " --windowingMode 1"
+                                  + " -a android.intent.action.MAIN"
+                                  + " -c android.intent.category.LAUNCHER"
+                                  + " -f 0x18000000"
+                                  + " -n '"
+                                  + flat
+                                  + "'";
+
+                  RootShellSession.EXEC.execute(
+                          () -> {
+
+                              try {
+
+                                  rootShell.run(
+                                          10,
+                                          command);
+
+                              } catch (Throwable t) {
+
+                                  Log.w(
+                                          TAG,
+                                          "Launch failed",
+                                          t);
+                              }
+                          });
+              }
+
+              public void tap(
+                      float x,
+                      float y) {
+
+                  if (!isActive()) {
+                      return;
+                  }
+
+                  final int displayId =
+                          display.getDisplayId();
+
+                  final int ix =
+                          Math.max(
+                                  0,
+                                  Math.round(x));
+
+                  final int iy =
+                          Math.max(
+                                  0,
+                                  Math.round(y));
+
+                  final String command =
+                          "/system/bin/input -d "
+                                  + displayId
+                                  + " tap "
+                                  + ix
+                                  + " "
+                                  + iy;
+
+                  RootShellSession.EXEC.execute(
+                          () -> {
+
+                              try {
+                                  rootShell.run(
+                                          5,
+                                          command);
+                              } catch (Throwable t) {
+                                  Log.w(
+                                          TAG,
+                                          "Tap failed",
+                                          t);
+                              }
+                          });
+              }
+
+              public void swipe(
+                      float startX,
+                      float startY,
+                      float endX,
+                      float endY,
+                      long duration) {
+
+                  if (!isActive()) {
+                      return;
+                  }
+
+                  final int displayId =
+                          display.getDisplayId();
+
+                  final String command =
+                          "/system/bin/input -d "
+                                  + displayId
+                                  + " swipe "
+                                  + Math.round(startX)
+                                  + " "
+                                  + Math.round(startY)
+                                  + " "
+                                  + Math.round(endX)
+                                  + " "
+                                  + Math.round(endY)
+                                  + " "
+                                  + duration;
+
+                  RootShellSession.EXEC.execute(
+                          () -> {
+
+                              try {
+                                  rootShell.run(
+                                          5,
+                                          command);
+                              } catch (Throwable t) {
+                                  Log.w(
+                                          TAG,
+                                          "Swipe failed",
+                                          t);
+                              }
+                          });
+              }
+
+              public void back() {
+
+                  if (!isActive()) {
+                      return;
+                  }
+
+                  final int displayId =
+                          display.getDisplayId();
+
+                  final String command =
+                          "/system/bin/input -d "
+                                  + displayId
+                                  + " keyevent 4";
+
+                  RootShellSession.EXEC.execute(
+                          () -> {
+
+                              try {
+                                  rootShell.run(
+                                          5,
+                                          command);
+                              } catch (Throwable t) {
+                                  Log.w(
+                                          TAG,
+                                          "Back failed",
+                                          t);
+                              }
+                          });
+              }
+
+              private void releaseDisplayOnly() {
+
+                  if (virtualDisplay != null) {
+                      try {
+                          virtualDisplay.release();
+                      } catch (Throwable ignored) {
+                      }
+                  }
+
+                  virtualDisplay = null;
+                  display = null;
+
+                  if (surface != null) {
+                      try {
+                          surface.release();
+                      } catch (Throwable ignored) {
+                      }
+                  }
+
+                  surface = null;
+              }
+
+              public void release() {
+                  releaseDisplayOnly();
+              }
+
+              public void destroy() {
+
+                  if (destroyed) {
+                      return;
+                  }
+
+                  destroyed = true;
+
+                  release();
+
+                  rootShell.destroy();
+              }
+
+              @Override
+              public void onSurfaceTextureAvailable(
+                      SurfaceTexture surface,
+                      int width,
+                      int height) {
+
+                  ensureDisplay();
+              }
+
+              @Override
+              public void onSurfaceTextureSizeChanged(
+                      SurfaceTexture surface,
+                      int width,
+                      int height) {
+              }
+
+              @Override
+              public boolean onSurfaceTextureDestroyed(
+                      SurfaceTexture surface) {
+
+                  releaseDisplayOnly();
+
+                  return true;
+              }
+
+              @Override
+              public void onSurfaceTextureUpdated(
+                      SurfaceTexture surface) {
+              }
+          }
+          EOF
+
+      # ============================================================
+      # INPUT CONTROLLER
+      # ============================================================
+
+      - name: Write V10InputController
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          cat > \
+          v10-source/app/src/main/java/com/hieptran/aacast/doudou/V10InputController.java \
+          <<'EOF'
+          package com.carassistant.v10;
+
+          import android.view.MotionEvent;
+          import android.view.View;
+
+          public final class V10InputController {
+
+              private final V10ProjectionSession session;
+
+              private float downX;
+              private float downY;
+              private long downTime;
+              private boolean moved;
+
+              private static final float MOVE_SLOP = 12f;
+
+              private static final long
+                      SWIPE_MIN_DURATION = 80L;
+
+              private static final long
+                      SWIPE_MAX_DURATION = 800L;
+
+              public V10InputController(
+                      V10ProjectionSession session) {
+
+                  this.session = session;
+              }
+
+              public View.OnTouchListener
+                      createListener() {
+
+                  return (view, event) -> {
+
+                      switch (
+                              event.getActionMasked()) {
+
+                          case MotionEvent.ACTION_DOWN:
+
+                              downX = event.getX();
+                              downY = event.getY();
+                              downTime =
+                                      event.getEventTime();
+                              moved = false;
+
+                              return true;
+
+                          case MotionEvent.ACTION_MOVE:
+
+                              if (event.getPointerCount()
+                                      == 1) {
+
+                                  float dx =
+                                          event.getX()
+                                                  - downX;
+
+                                  float dy =
+                                          event.getY()
+                                                  - downY;
+
+                                  if (Math.abs(dx)
+                                          > MOVE_SLOP
+                                          || Math.abs(dy)
+                                          > MOVE_SLOP) {
+
+                                      moved = true;
+                                  }
+                              }
+
+                              return true;
+
+                          case MotionEvent.ACTION_UP:
+
+                              float upX =
+                                      event.getX();
+
+                              float upY =
+                                      event.getY();
+
+                              long duration =
+                                      event.getEventTime()
+                                              - downTime;
+
+                              if (!moved) {
+
+                                  session.tap(
+                                          upX,
+                                          upY);
+
+                              } else {
+
+                                  duration =
+                                          Math.max(
+                                                  SWIPE_MIN_DURATION,
+                                                  Math.min(
+                                                          SWIPE_MAX_DURATION,
+                                                          duration));
+
+                                  session.swipe(
+                                          downX,
+                                          downY,
+                                          upX,
+                                          upY,
+                                          duration);
+                              }
+
+                              return true;
+
+                          case MotionEvent.ACTION_CANCEL:
+
+                              moved = false;
+
+                              return true;
+
+                          default:
+                              return true;
+                      }
+                  };
+              }
+          }
+          EOF
+
+      # ============================================================
+      # CONTROL COMMAND RECEIVER
+      # ============================================================
+
+      - name: Write V10ControlReceiver
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          cat > \
+          v10-source/app/src/main/java/com/hieptran/aacast/doudou/V10ControlReceiver.java \
+          <<'EOF'
+          package com.carassistant.v10;
+
+          import android.content.BroadcastReceiver;
+          import android.content.Context;
+          import android.content.Intent;
+
+          public final class V10ControlReceiver
+                  extends BroadcastReceiver {
+
+              public static final String ACTION =
+                      "com.carassistant.v10.CONTROL";
+
+              public static final String COMMAND =
+                      "command";
+
+              public static final String BACK =
+                      "back";
+
+              public static final String HOME =
+                      "home";
+
+              public static final String RECENTS =
+                      "recents";
+
+              public static final String APPS =
+                      "apps";
+
+              public interface Callback {
+                  void onCommand(String command);
+              }
+
+              private static Callback callback;
+
+              public static void setCallback(
+                      Callback value) {
+                  callback = value;
+              }
+
+              public static void clearCallback(
+                      Callback value) {
+                  if (callback == value) {
+                      callback = null;
+                  }
+              }
+
+              @Override
+              public void onReceive(
+                      Context context,
+                      Intent intent) {
+
+                  if (intent == null
+                          || !ACTION.equals(
+                                  intent.getAction())) {
+                      return;
+                  }
+
+                  String command =
+                          intent.getStringExtra(
+                                  COMMAND);
+
+                  Callback current =
+                          callback;
+
+                  if (current != null
+                          && command != null) {
+                      current.onCommand(command);
+                  }
+              }
+          }
+          EOF
+
+      # ============================================================
+      # CAR ACTIVITY
+      # ============================================================
+
+      - name: Write V10CarActivity
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          cat > \
+          v10-source/app/src/main/java/com/hieptran/aacast/doudou/V10CarActivity.java \
+          <<'EOF'
+          package com.carassistant.v10;
+
+          import android.content.ComponentName;
+          import android.graphics.Color;
+          import android.os.Bundle;
+          import android.os.Handler;
+          import android.os.Looper;
+          import android.view.FrameLayout;
+          import android.view.MotionEvent;
+          import android.view.TextureView;
+
+          import com.google.android.apps.auto.sdk.CarActivity;
+
+          public final class V10CarActivity
+                  extends CarActivity {
+
+              private final Handler handler =
+                      new Handler(
+                              Looper.getMainLooper());
+
+              private TextureView textureView;
+
+              private V10ProjectionSession session;
+
+              private V10InputController inputController;
+
+              private boolean resumed;
+
+              private final V10ControlReceiver.Callback
+                      controlCallback =
+                      command -> {
+
+                          if (V10ControlReceiver.BACK
+                                  .equals(command)) {
+
+                              if (session != null) {
+                                  session.back();
+                              }
+
+                              return;
+                          }
+
+                          if (V10ControlReceiver.HOME
+                                  .equals(command)) {
+
+                              if (session != null) {
+                                  session.home();
+                              }
+
+                              V10SessionStore.clearTarget(
+                                      V10CarActivity.this);
+
+                              return;
+                          }
+
+                          if (V10ControlReceiver.APPS
+                                  .equals(command)) {
+
+                              V10SessionStore.clearTarget(
+                                      V10CarActivity.this);
+
+                              return;
+                          }
+
+                          if (V10ControlReceiver.RECENTS
+                                  .equals(command)) {
+
+                              return;
+                          }
+                      };
+
+              private final Runnable targetPoller =
+                      new Runnable() {
+
+                          @Override
+                          public void run() {
+
+                              if (!resumed
+                                      || session == null) {
+                                  return;
+                              }
+
+                              ComponentName target =
+                                      V10SessionStore
+                                              .getTarget(
+                                                      V10CarActivity.this);
+
+                              if (target != null) {
+
+                                  session.setTarget(
+                                          target);
+                              }
+
+                              handler.postDelayed(
+                                      this,
+                                      500);
+                          }
+                      };
+
+              private void applyChrome() {
+
+                  try {
+
+                      getCarUiController()
+                              .getStatusBarController()
+                              .hideAppHeader();
+
+                      getCarUiController()
+                              .getMenuController()
+                              .hideMenuButton();
+
+                  } catch (RuntimeException ignored) {
+                  }
+              }
+
+              @Override
+              public void onCreate(
+                      Bundle state) {
+
+                  setTheme(
+                          R.style.Theme_AACast);
+
+                  super.onCreate(state);
+
+                  setIgnoreConfigChanges(-1);
+
+                  applyChrome();
+              }
+
+              @Override
+              public void onResume() {
+
+                  super.onResume();
+
+                  resumed = true;
+
+                  applyChrome();
+
+                  V10ControlReceiver
+                          .setCallback(
+                                  controlCallback);
+
+                  if (textureView == null) {
+
+                      android.widget.FrameLayout root =
+                              new android.widget.FrameLayout(
+                                      this);
+
+                      root.setBackgroundColor(
+                              Color.BLACK);
+
+                      textureView =
+                              new TextureView(this);
+
+                      root.addView(
+                              textureView,
+                              new android.widget.FrameLayout
+                                      .LayoutParams(
+                                      android.widget.FrameLayout
+                                              .LayoutParams.MATCH_PARENT,
+                                      android.widget.FrameLayout
+                                              .LayoutParams.MATCH_PARENT));
+
+                      session =
+                              new V10ProjectionSession(
+                                      this);
+
+                      session.attachTextureView(
+                              textureView);
+
+                      inputController =
+                              new V10InputController(
+                                      session);
+
+                      textureView.setOnTouchListener(
+                              inputController
+                                      .createListener());
+
+                      setContentView(root);
+                  }
+
+                  handler.removeCallbacks(
+                          targetPoller);
+
+                  handler.post(
+                          targetPoller);
+              }
+
+              @Override
+              public void onPause() {
+
+                  resumed = false;
+
+                  handler.removeCallbacks(
+                          targetPoller);
+
+                  V10ControlReceiver
+                          .clearCallback(
+                                  controlCallback);
+
+                  super.onPause();
+              }
+
+              @Override
+              public void onBackPressed() {
+
+                  if (session != null
+                          && session.isActive()) {
+
+                      session.back();
+
+                      return;
+                  }
+
+                  super.onBackPressed();
+              }
+
+              @Override
+              public void onStop() {
+
+                  resumed = false;
+
+                  handler.removeCallbacks(
+                          targetPoller);
+
+                  if (session != null) {
+                      session.release();
+                  }
+
+                  super.onStop();
+              }
+
+              @Override
+              public void onDestroy() {
+
+                  resumed = false;
+
+                  handler.removeCallbacks(
+                          targetPoller);
+
+                  V10ControlReceiver
+                          .clearCallback(
+                                  controlCallback);
+
+                  if (session != null) {
+
+                      session.destroy();
+
+                      session = null;
+                  }
+
+                  textureView = null;
+
+                  super.onDestroy();
+              }
+
+              @Override
+              public void onWindowFocusChanged(
+                      boolean hasFocus,
+                      boolean touchMode) {
+
+                  super.onWindowFocusChanged(
+                          hasFocus,
+                          touchMode);
+
+                  if (hasFocus) {
+                      applyChrome();
+                  }
+              }
+          }
+          EOF
+
+      # ============================================================
+      # FIX IMPORT IF NECESSARY
+      # ============================================================
+
+      - name: Fix V10CarActivity imports
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          FILE="v10-source/app/src/main/java/com/hieptran/aacast/doudou/V10CarActivity.java"
+
+          sed -i \
+            '/import android.view.FrameLayout;/d' \
+            "$FILE"
+
+      # ============================================================
+      # GEARHEAD CONTROL BAR
+      # ============================================================
+
+      - name: Write GearheadControlBar
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          cat > \
+          v10-source/app/src/main/java/com/hieptran/aacast/doudou/hook/GearheadControlBar.java \
+          <<'EOF'
+          package com.carassistant.v10.hook;
+
+          import android.content.Context;
+          import android.content.Intent;
+          import android.graphics.Color;
+          import android.view.Gravity;
+          import android.view.View;
+          import android.view.ViewGroup;
+          import android.widget.LinearLayout;
+          import android.widget.TextView;
+
+          import java.util.Collections;
+          import java.util.IdentityHashMap;
+          import java.util.Set;
+
+          import de.robv.android.xposed.XC_MethodHook;
+          import de.robv.android.xposed.XposedBridge;
+          import de.robv.android.xposed.XposedHelpers;
+
+          public final class GearheadControlBar {
+
+              private static final String TAG =
+                      "[V10 ControlBar]";
+
+              private static final String GEARHEAD =
+                      "com.google.android.projection.gearhead";
+
+              private static final String ACTION =
+                      "com.carassistant.v10.CONTROL";
+
+              private static final String COMMAND =
+                      "command";
+
+              private static final String[] ROOT_NAMES = {
+                      "GhFacetBar",
+                      "TemplateNavigationService"
+              };
+
+              private static final Set<View>
+                      INSTALLED =
+                      Collections.newSetFromMap(
+                              new IdentityHashMap<>());
+
+              private GearheadControlBar() {
+              }
+
+              public static void install() {
+
+                  try {
+
+                      XposedBridge.hookAllMethods(
+                              XposedHelpers.findClass(
+                                      "android.view.WindowManagerGlobal",
+                                      null),
+                              "addView",
+                              new XC_MethodHook() {
+
+                                  @Override
+                                  protected void afterHookedMethod(
+                                          MethodHookParam param) {
+
+                                      if (param.args.length < 1
+                                              || !(param.args[0]
+                                                      instanceof View)) {
+                                          return;
+                                      }
+
+                                      View root =
+                                              (View) param.args[0];
+
+                                      root.post(
+                                              () -> installIntoRoot(
+                                                      root));
+                                  }
+                              });
+
+                      XposedBridge.log(
+                              TAG
+                                      + " addView hook installed");
+
+                  } catch (Throwable t) {
+
+                      XposedBridge.log(
+                              TAG
+                                      + " hook failed: "
+                                      + t);
+                  }
+              }
+
+              private static void installIntoRoot(
+                      View root) {
+
+                  try {
+
+                      if (INSTALLED.contains(root)) {
+                          return;
+                      }
+
+                      if (!root.isAttachedToWindow()) {
+                          return;
+                      }
+
+                      if (root.getDisplay() == null) {
+                          return;
+                      }
+
+                      int displayId =
+                              root.getDisplay()
+                                      .getDisplayId();
+
+                      if (displayId <= 0) {
+                          return;
+                      }
+
+                      if (!(root instanceof ViewGroup)) {
+                          return;
+                      }
+
+                      if (!looksLikeGearheadRoot(
+                              root)) {
+                          return;
+                      }
+
+                      ViewGroup group =
+                              (ViewGroup) root;
+
+                      LinearLayout bar =
+                              new LinearLayout(
+                                      root.getContext());
+
+                      bar.setOrientation(
+                              LinearLayout.HORIZONTAL);
+
+                      bar.setGravity(
+                              Gravity.CENTER_VERTICAL);
+
+                      bar.setPadding(
+                              6,
+                              2,
+                              6,
+                              2);
+
+                      bar.setBackgroundColor(
+                              0xDD202124);
+
+                      addButton(
+                              bar,
+                              "←",
+                              "back");
+
+                      addButton(
+                              bar,
+                              "⌂",
+                              "home");
+
+                      addButton(
+                              bar,
+                              "▣",
+                              "recents");
+
+                      addButton(
+                              bar,
+                              "Apps",
+                              "apps");
+
+                      ViewGroup.LayoutParams params =
+                              new ViewGroup.LayoutParams(
+                                      ViewGroup.LayoutParams.WRAP_CONTENT,
+                                      56);
+
+                      group.addView(
+                              bar,
+                              params);
+
+                      bar.bringToFront();
+
+                      INSTALLED.add(root);
+
+                      XposedBridge.log(
+                              TAG
+                                      + " installed on display="
+                                      + displayId);
+
+                  } catch (Throwable t) {
+
+                      XposedBridge.log(
+                              TAG
+                                      + " install failed: "
+                                      + t);
+                  }
+              }
+
+              private static boolean
+                      looksLikeGearheadRoot(
+                              View root) {
+
+                  String displayName =
+                          root.getDisplay()
+                                  .getName();
+
+                  if (displayName == null) {
+                      return false;
+                  }
+
+                  for (String name :
+                          ROOT_NAMES) {
+
+                      if (displayName
+                              .contains(name)) {
+                          return true;
+                      }
+                  }
+
+                  return true;
+              }
+
+              private static void addButton(
+                      LinearLayout parent,
+                      String text,
+                      String command) {
+
+                  TextView button =
+                          new TextView(
+                                  parent.getContext());
+
+                  button.setText(text);
+
+                  button.setTextColor(
+                          Color.WHITE);
+
+                  button.setTextSize(
+                          18);
+
+                  button.setGravity(
+                          Gravity.CENTER);
+
+                  button.setPadding(
+                          22,
+                          0,
+                          22,
+                          0);
+
+                  button.setClickable(true);
+
+                  button.setFocusable(true);
+
+                  button.setOnClickListener(
+                          v -> sendCommand(
+                                  parent.getContext(),
+                                  command));
+
+                  parent.addView(
+                          button,
+                          new LinearLayout.LayoutParams(
+                                  ViewGroup.LayoutParams.WRAP_CONTENT,
+                                  ViewGroup.LayoutParams.MATCH_PARENT));
+              }
+
+              private static void sendCommand(
+                      Context context,
+                      String command) {
+
+                  try {
+
+                      Intent intent =
+                              new Intent(ACTION);
+
+                      intent.setPackage(
+                              "com.carassistant.v10");
+
+                      intent.putExtra(
+                              COMMAND,
+                              command);
+
+                      context.sendBroadcast(
+                              intent);
+
+                      XposedBridge.log(
+                              TAG
+                                      + " command="
+                                      + command);
+
+                  } catch (Throwable t) {
+
+                      XposedBridge.log(
+                              TAG
+                                      + " broadcast failed: "
+                                      + t);
+                  }
+              }
+          }
+          EOF
+
+      # ============================================================
+      # XPOSED BRIDGE
+      # ============================================================
+
+      - name: Write V10 AACastBridge
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          cat > \
+          v10-source/app/src/main/java/com/hieptran/aacast/doudou/aabridge/AACastBridge.java \
+          <<'EOF'
+          package com.carassistant.v10.aabridge;
+
+          import android.os.Build;
+
+          import com.carassistant.v10.V10Display;
+          import com.carassistant.v10.hook.DisplayHooks;
+          import com.carassistant.v10.hook.GearheadAllow;
+          import com.carassistant.v10.hook.GearheadControlBar;
+          import com.carassistant.v10.hook.InputHooks;
+          import com.carassistant.v10.hook.InstallerSpoof;
+
+          import de.robv.android.xposed.IXposedHookLoadPackage;
+          import de.robv.android.xposed.XposedBridge;
+          import de.robv.android.xposed.callbacks.XC_LoadPackage;
+
+          public final class AACastBridge
+                  implements IXposedHookLoadPackage {
+
+              private static final String SELF =
+                      V10Display.PACKAGE;
+
+              private static final String GEARHEAD =
+                      "com.google.android.projection.gearhead";
+
+              private static final String PLAY =
+                      "com.android.vending";
+
+              @Override
+              public void handleLoadPackage(
+                      XC_LoadPackage.LoadPackageParam param) {
+
+                  String packageName =
+                          param.packageName;
+
+                  if ("android".equals(
+                          packageName)) {
+
+                      DisplayHooks
+                              .installDisplayFlags(
+                                      param.classLoader);
+
+                      DisplayHooks
+                              .installInputPolicy(
+                                      param.classLoader);
+
+                      InputHooks.install(
+                              param.classLoader);
+
+                      return;
+                  }
+
+                  if (GEARHEAD.equals(
+                          packageName)
+                          || SELF.equals(
+                                  packageName)) {
+
+                      InstallerSpoof.hookLegacy(
+                              param.classLoader,
+                              PLAY);
+
+                      if (GEARHEAD.equals(
+                              packageName)) {
+
+                          GearheadAllow.install(
+                                  param.classLoader);
+
+                          GearheadControlBar.install();
+                      }
+
+                      if (Build.VERSION.SDK_INT
+                              >= 30) {
+
+                          InstallerSpoof
+                                  .hookInstallSource(
+                                          "getInitiatingPackageName",
+                                          PLAY);
+
+                          InstallerSpoof
+                                  .hookInstallSource(
+                                          "getInstallingPackageName",
+                                          PLAY);
+
+                          if (Build.VERSION.SDK_INT
+                                  >= 33) {
+
+                              InstallerSpoof
+                                      .hookInstallSource(
+                                              "getPackageSource",
+                                              2);
+                          }
+
+                          if (Build.VERSION.SDK_INT
+                                  >= 34) {
+
+                              InstallerSpoof
+                                      .hookInstallSource(
+                                              "getUpdateOwnerPackageName",
+                                              PLAY);
+                          }
+                      }
+
+                      XposedBridge.log(
+                              "[V10] Module loaded in "
+                                      + packageName);
+                  }
+              }
+          }
+          EOF
+
+      # ============================================================
+      # INPUT HOOK ADAPTATION
+      # ============================================================
+
+      - name: Adapt V9 InputHooks
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          HOOK="v10-source/app/src/main/java/com/hieptran/aacast/doudou/hook/InputHooks.java"
+
+          test -f "$HOOK"
+
+          sed -i \
+            -e 's/AACastDisplay/V10Display/g' \
+            -e 's/\[AACast Input\]/[V10 Input]/g' \
+            "$HOOK"
+
+          grep -q \
+            'V10Display.matches' \
+            "$HOOK"
+
+      # ============================================================
+      # CAR SERVICE
+      # ============================================================
+
+      - name: Write AACastCarService
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          cat > \
+          v10-source/app/src/main/java/com/hieptran/aacast/doudou/AACastCarService.java \
+          <<'EOF'
+          package com.carassistant.v10;
+
+          import com.google.android.apps.auto.sdk.CarActivity;
+          import com.google.android.apps.auto.sdk.CarActivityService;
+
+          public final class AACastCarService
+                  extends CarActivityService {
+
+              @Override
+              public Class<? extends CarActivity>
+                      getCarActivity() {
+
+                  return V10CarActivity.class;
+              }
+          }
+          EOF
+
+      # ============================================================
+      # MANIFEST
+      # ============================================================
+
+      - name: Rebuild Manifest
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          MANIFEST="v10-source/app/src/main/AndroidManifest.xml"
+
+          test -f "$MANIFEST"
+
+          sed -i \
+            -e 's/com\.carassistant\.v9/com.carassistant.v10/g' \
+            -e 's/Car Assistant V9/Car Assistant V10/g' \
+            -e 's/AACast V9/AACast V10/g' \
+            "$MANIFEST"
+
+          python3 - "$MANIFEST" <<'PY'
+          import re
+          import sys
+
+          path = sys.argv[1]
+
+          with open(path, "r", encoding="utf-8") as f:
+              text = f.read()
+
+          names = [
+              "MainActivity",
+              "AACastCarActivity",
+              "V10LauncherActivity",
+              "V10CarActivity",
+          ]
+
+          for name in names:
+              pattern = (
+                  r'\s*<activity\b'
+                  r'[^>]*android:name="[^"]*'
+                  + re.escape(name)
+                  + r'"[^>]*'
+                  r'(?:/>|>.*?</activity>)'
+              )
+
+              text = re.sub(
+                  pattern,
+                  '',
+                  text,
+                  flags=re.S,
+              )
+
+          match = re.search(
+              r'(<application\b[^>]*>)',
+              text,
+              flags=re.S,
+          )
+
+          if not match:
+              raise SystemExit(
+                  "ERROR: application not found"
+              )
+
+          activities = r'''
+                  <activity
+                      android:name="com.carassistant.v10.V10LauncherActivity"
+                      android:exported="true">
+                      <intent-filter>
+                          <action android:name="android.intent.action.MAIN" />
+                          <category android:name="android.intent.category.LAUNCHER" />
+                      </intent-filter>
+                  </activity>
+
+                  <activity
+                      android:name="com.carassistant.v10.V10CarActivity"
+                      android:exported="true" />
+
+                  <receiver
+                      android:name="com.carassistant.v10.V10ControlReceiver"
+                      android:exported="false">
+                      <intent-filter>
+                          <action android:name="com.carassistant.v10.CONTROL" />
+                      </intent-filter>
+                  </receiver>
+          '''
+
+          pos = match.end()
+
+          text = (
+              text[:pos]
+              + activities
+              + text[pos:]
+          )
+
+          with open(path, "w", encoding="utf-8") as f:
+              f.write(text)
+          PY
+
+      # ============================================================
+      # VERIFY MANIFEST
+      # ============================================================
+
+      - name: Verify Manifest
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          MANIFEST="v10-source/app/src/main/AndroidManifest.xml"
+
+          grep -q \
+            'com.carassistant.v10.V10LauncherActivity' \
+            "$MANIFEST"
+
+          grep -q \
+            'com.carassistant.v10.V10CarActivity' \
+            "$MANIFEST"
+
+          grep -q \
+            'com.carassistant.v10.V10ControlReceiver' \
+            "$MANIFEST"
+
+          if grep -q \
+              'android:name="[^\"]*MainActivity' \
+              "$MANIFEST"; then
+            echo "ERROR: MainActivity remains"
+            exit 1
+          fi
+
+          if grep -q \
+              'android:name="[^\"]*AACastCarActivity' \
+              "$MANIFEST"; then
+            echo "ERROR: AACastCarActivity remains"
+            exit 1
+          fi
+
+          test "$(grep -c \
+            'com.carassistant.v10.V10LauncherActivity' \
+            "$MANIFEST")" -eq 1
+
+          test "$(grep -c \
+            'com.carassistant.v10.V10CarActivity' \
+            "$MANIFEST")" -eq 1
+
+      # ============================================================
+      # VERIFY SOURCE
+      # ============================================================
+
+      - name: Verify source
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          JAVA="v10-source/app/src/main/java"
+          MANIFEST="v10-source/app/src/main/AndroidManifest.xml"
+
+          test -d "$JAVA"
+          test -f "$MANIFEST"
+
+          test "$(find "$JAVA" \
+            -name 'V10LauncherActivity.java' \
+            | wc -l)" -eq 1
+
+          test "$(find "$JAVA" \
+            -name 'V10CarActivity.java' \
+            | wc -l)" -eq 1
+
+          test "$(find "$JAVA" \
+            -name 'V10ProjectionSession.java' \
+            | wc -l)" -eq 1
+
+          test "$(find "$JAVA" \
+            -name 'V10InputController.java' \
+            | wc -l)" -eq 1
+
+          test "$(find "$JAVA" \
+            -name 'V10Display.java' \
+            | wc -l)" -eq 1
+
+          test "$(find "$JAVA" \
+            -name 'V10SessionStore.java' \
+            | wc -l)" -eq 1
+
+          test "$(find "$JAVA" \
+            -name 'V10ControlReceiver.java' \
+            | wc -l)" -eq 1
+
+          test "$(find "$JAVA" \
+            -name 'GearheadControlBar.java' \
+            | wc -l)" -eq 1
+
+          if grep -R \
+              'com.carassistant.v9' \
+              "$JAVA" \
+              "$MANIFEST" \
+              2>/dev/null; then
+            echo "ERROR: V9 package remains"
+            exit 1
+          fi
+
+          OLD_FILES="$(
+            find "$JAVA" \
+              -type f \
+              \( \
+                -name 'MainActivity.java' \
+                -o -name 'AACastCarActivity.java' \
+                -o -name 'LeaseTicker.java' \
+              \)
+          )"
+
+          if [ -n "$OLD_FILES" ]; then
+            echo "ERROR: Old V9 files remain:"
+            echo "$OLD_FILES"
+            exit 1
+          fi
+
+          echo "Source verification passed."
+
+      # ============================================================
+      # VERIFY CONTROL BAR
+      # ============================================================
+
+      - name: Verify Control Bar
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          BAR="v10-source/app/src/main/java/com/hieptran/aacast/doudou/hook/GearheadControlBar.java"
+          RECEIVER="v10-source/app/src/main/java/com/hieptran/aacast/doudou/V10ControlReceiver.java"
+          ACTIVITY="v10-source/app/src/main/java/com/hieptran/aacast/doudou/V10CarActivity.java"
+
+          grep -q \
+            'WindowManagerGlobal' \
+            "$BAR"
+
+          grep -q \
+            'addView' \
+            "$BAR"
+
+          grep -q \
+            '"back"' \
+            "$BAR"
+
+          grep -q \
+            '"home"' \
+            "$BAR"
+
+          grep -q \
+            '"recents"' \
+            "$BAR"
+
+          grep -q \
+            '"apps"' \
+            "$BAR"
+
+          grep -q \
+            'sendBroadcast' \
+            "$BAR"
+
+          grep -q \
+            'V10ControlReceiver.BACK' \
+            "$ACTIVITY"
+
+          grep -q \
+            'V10ControlReceiver.HOME' \
+            "$ACTIVITY"
+
+          grep -q \
+            'V10ControlReceiver.RECENTS' \
+            "$ACTIVITY"
+
+          grep -q \
+            'V10ControlReceiver.APPS' \
+            "$ACTIVITY"
+
+          grep -q \
+            'session.back()' \
+            "$ACTIVITY"
+
+          grep -q \
+            'session.home()' \
+            "$ACTIVITY"
+
+          echo "Control Bar command path verified."
+
+      # ============================================================
+      # VERIFY PROJECTION INVARIANTS
+      # ============================================================
+
+      - name: Verify V9 projection invariants
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          SESSION="v10-source/app/src/main/java/com/hieptran/aacast/doudou/V10ProjectionSession.java"
+          HOOK="v10-source/app/src/main/java/com/hieptran/aacast/doudou/hook/InputHooks.java"
+
+          grep -q \
+            '^import android.graphics.SurfaceTexture;' \
+            "$SESSION"
+
+          grep -q \
+            'setDefaultBufferSize' \
+            "$SESSION"
+
+          grep -q \
+            'new Surface(st)' \
+            "$SESSION"
+
+          grep -q \
+            'createVirtualDisplay' \
+            "$SESSION"
+
+          grep -q \
+            'V10Display.nameFor(0)' \
+            "$SESSION"
+
+          grep -q \
+            '160' \
+            "$SESSION"
+
+          grep -q \
+            '10);' \
+            "$SESSION"
+
+          grep -q \
+            'Process.myUid() / 100000' \
+            "$SESSION"
+
+          grep -q \
+            -- '--display' \
+            "$SESSION"
+
+          grep -q \
+            -- '--windowingMode 1' \
+            "$SESSION"
+
+          grep -q \
+            'input -d' \
+            "$SESSION"
+
+          grep -q \
+            'keyevent 4' \
+            "$SESSION"
+
+          grep -q \
+            'V10Display.matches' \
+            "$HOOK"
+
+          echo "Projection invariants passed."
+
+      # ============================================================
+      # VERIFY SWIPE
+      # ============================================================
+
+      - name: Verify swipe input
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          INPUT="v10-source/app/src/main/java/com/hieptran/aacast/doudou/V10InputController.java"
+          SESSION="v10-source/app/src/main/java/com/hieptran/aacast/doudou/V10ProjectionSession.java"
+
+          grep -q \
+            'MotionEvent.ACTION_DOWN' \
+            "$INPUT"
+
+          grep -q \
+            'MotionEvent.ACTION_MOVE' \
+            "$INPUT"
+
+          grep -q \
+            'MotionEvent.ACTION_UP' \
+            "$INPUT"
+
+          grep -q \
+            'session.swipe' \
+            "$INPUT"
+
+          grep -q \
+            ' swipe ' \
+            "$SESSION"
+
+          if grep -q \
+              'ACTION_POINTER_DOWN' \
+              "$INPUT"; then
+            echo "ERROR: fake multitouch detected"
+            exit 1
+          fi
+
+          if grep -q \
+              'ACTION_POINTER_UP' \
+              "$INPUT"; then
+            echo "ERROR: fake multitouch detected"
+            exit 1
+          fi
+
+          echo "Single-pointer swipe preserved."
+
+      # ============================================================
+      # VERIFY XPOSED SCOPES
+      # ============================================================
+
+      - name: Verify Xposed bridge
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          BRIDGE="v10-source/app/src/main/java/com/hieptran/aacast/doudou/aabridge/AACastBridge.java"
+
+          grep -q \
+            'com.google.android.projection.gearhead' \
+            "$BRIDGE"
+
+          grep -q \
+            'GearheadControlBar.install' \
+            "$BRIDGE"
+
+          grep -q \
+            'InputHooks.install' \
+            "$BRIDGE"
+
+          grep -q \
+            'DisplayHooks.installDisplayFlags' \
+            "$BRIDGE"
+
+          echo "Xposed bridge verified."
+
+      # ============================================================
+      # GRADLE
+      # ============================================================
+
+      - name: Gradle version
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          gradle --version
+
+      # ============================================================
+      # BUILD
+      # ============================================================
+
+      - name: Build Debug APK
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          cd v10-source
+
+          gradle \
+            assembleDebug \
+            --no-daemon \
+            --stacktrace
+
+      # ============================================================
+      # VERIFY APK
+      # ============================================================
+
+      - name: Verify APK
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          APK="v10-source/app/build/outputs/apk/debug/app-debug.apk"
+
+          test -f "$APK"
+
+          ls -lh "$APK"
+
+          sha256sum "$APK"
+
+      # ============================================================
+      # UPLOAD
+      # ============================================================
+
+      - name: Upload V10.2-A2 APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: CarAssistant-V10.2-A2-debug
+          path: v10-source/app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error
+
+      # ============================================================
+      # COMMIT
+      # ============================================================
+
+      - name: Commit V10.2-A2
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          git config \
+            user.name \
+            "github-actions[bot]"
+
+          git config \
+            user.email \
+            "41898282+github-actions[bot]@users.noreply.github.com"
+
+          git add v10-source
+
+          if git diff --cached --quiet; then
+            echo "No changes to commit"
+            exit 0
+          fi
+
+          git commit \
+            -m "Build Car Assistant V10.2-A2 control bar"
+
+          git push
