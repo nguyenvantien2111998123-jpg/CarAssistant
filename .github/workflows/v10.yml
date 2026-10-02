@@ -1,0 +1,352 @@
+name: Car Assistant V10
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Gradle 8.13
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.13'
+
+      - name: Locate V9 source ZIP
+        shell: bash
+        run: |
+          set -e
+          ZIP=$(find . -type f -name 'CarAssistant-V9-Source.zip' | head -n 1)
+          if [ -z "$ZIP" ]; then
+            echo "ERROR: CarAssistant-V9-Source.zip not found"
+            exit 1
+          fi
+          echo "V9 ZIP: $ZIP"
+          echo "V9_ZIP=$ZIP" >> "$GITHUB_ENV"
+
+      - name: Extract V9 source
+        shell: bash
+        run: |
+          set -e
+          rm -rf v9-unpack v9-source v10-source
+          mkdir -p v9-unpack
+          unzip -q "$V9_ZIP" -d v9-unpack
+
+          INNER=$(find v9-unpack -type f -name 'CarAssistant-V9-source.zip' | head -n 1)
+          if [ -z "$INNER" ]; then
+            echo "ERROR: inner V9 source ZIP not found"
+            find v9-unpack -maxdepth 5 -type f | sort
+            exit 1
+          fi
+
+          mkdir -p v9-source
+          unzip -q "$INNER" -d v9-source
+          echo "V9 source extracted."
+
+      - name: Locate Android project
+        shell: bash
+        run: |
+          set -e
+          PROJECT=""
+
+          SETTINGS=$(find v9-source -type f             \( -name settings.gradle -o -name settings.gradle.kts \) | head -n 1)
+
+          if [ -n "$SETTINGS" ]; then
+            PROJECT=$(dirname "$SETTINGS")
+          fi
+
+          if [ -z "$PROJECT" ]; then
+            APP_DIR=$(find v9-source -type d -name app | head -n 1)
+            if [ -n "$APP_DIR" ]; then
+              PROJECT=$(dirname "$APP_DIR")
+            fi
+          fi
+
+          if [ -z "$PROJECT" ]; then
+            echo "ERROR: Android project not found"
+            exit 1
+          fi
+
+          echo "PROJECT=$PROJECT"
+          echo "PROJECT=$PROJECT" >> "$GITHUB_ENV"
+
+      - name: Copy V9 to V10
+        shell: bash
+        run: |
+          set -e
+          cp -a "$PROJECT" v10-source
+          echo "V10 source created."
+
+      - name: Transform package
+        shell: bash
+        run: |
+          set -e
+
+          find v10-source -type f             \( -name "*.java" -o -name "*.xml" -o -name "*.gradle"             -o -name "*.gradle.kts" -o -name "*.properties"             -o -name "*.txt" -o -name "*.md" -o -name "xposed_init" \)             -print0 |
+          xargs -0 sed -i             's/com\.hieptran\.aacast\.doudou/com.carassistant.v9/g'
+
+          find v10-source -type f             \( -name "*.gradle" -o -name "*.gradle.kts" \)             -print0 |
+          xargs -0 sed -i             's/applicationId[[:space:]]*"com\.hieptran\.aacast\.doudou"/applicationId "com.carassistant.v9"/g'
+
+          find v10-source -type f -name "xposed_init" -print0 |
+          while IFS= read -r -d '' FILE; do
+            printf '%s\n' 'com.carassistant.v9.aabridge.AACastBridge' > "$FILE"
+          done
+
+      - name: Set V10 version
+        shell: bash
+        run: |
+          set -e
+          find v10-source -type f             \( -name "*.gradle" -o -name "*.gradle.kts" \) -print0 |
+          xargs -0 sed -i -E 's/versionCode[[:space:]]+[0-9]+/versionCode 1000/g'
+
+          find v10-source -type f             \( -name "*.gradle" -o -name "*.gradle.kts" \) -print0 |
+          xargs -0 sed -i -E 's/versionName[[:space:]]+"[^"]+"/versionName "10.0-Launcher"/g'
+
+      - name: Locate AACast files
+        shell: bash
+        run: |
+          set -e
+
+          ACTIVITY=$(find v10-source -type f -name 'AACastCarActivity.java' | head -n 1)
+          SERVICE=$(find v10-source -type f -name 'AACastCarService.java' | head -n 1)
+          ROOTVIEW=$(find v10-source -type f -name 'RootView.java' | head -n 1)
+          DISPLAY=$(find v10-source -type f -name 'AACastDisplay.java' | head -n 1)
+
+          test -n "$ACTIVITY"
+          test -n "$SERVICE"
+          test -n "$ROOTVIEW"
+          test -n "$DISPLAY"
+
+          JAVA_DIR=$(dirname "$ACTIVITY")
+
+          echo "ACTIVITY=$ACTIVITY"
+          echo "SERVICE=$SERVICE"
+          echo "ROOTVIEW=$ROOTVIEW"
+          echo "DISPLAY=$DISPLAY"
+          echo "JAVA_DIR=$JAVA_DIR"
+
+          echo "ACTIVITY=$ACTIVITY" >> "$GITHUB_ENV"
+          echo "SERVICE=$SERVICE" >> "$GITHUB_ENV"
+          echo "ROOTVIEW=$ROOTVIEW" >> "$GITHUB_ENV"
+          echo "DISPLAY=$DISPLAY" >> "$GITHUB_ENV"
+          echo "JAVA_DIR=$JAVA_DIR" >> "$GITHUB_ENV"
+
+      - name: Verify AACast architecture
+        shell: bash
+        run: |
+          set -e
+          grep -q "extends CarActivity" "$ACTIVITY"
+          grep -q "getCarActivity" "$SERVICE"
+          grep -q "createVirtualDisplay" "$DISPLAY"
+          grep -q "VirtualDisplay" "$DISPLAY"
+          grep -R -q "IXposedHookLoadPackage" v10-source
+          grep -R -q "com.google.android.projection.gearhead" v10-source
+          grep -R -q "getDisplayDeviceInfoLocked" v10-source
+          grep -R -q "injectInputEventToTarget" v10-source
+          echo "AACast architecture: OK"
+
+      - name: Verify manifest
+        shell: bash
+        run: |
+          set -e
+          MANIFEST=$(find v10-source -type f -name AndroidManifest.xml | head -n 1)
+          test -n "$MANIFEST"
+          grep -q "com.carassistant.v9.AACastCarActivity" "$MANIFEST"
+          grep -q "com.carassistant.v9.AACastCarService" "$MANIFEST"
+          echo "Manifest: OK"
+
+      - name: Create V10 launcher
+        shell: bash
+        run: |
+          set -e
+          TARGET_DIR="v10-source/$JAVA_DIR"
+          mkdir -p "$TARGET_DIR"
+
+          printf '%s' 'cGFja2FnZSBjb20uY2FyYXNzaXN0YW50LnY5OwoKaW1wb3J0IGFuZHJvaWQuY29udGVudC5Db250ZXh0OwppbXBvcnQgYW5kcm9pZC5jb250ZW50LkludGVudDsKaW1wb3J0IGFuZHJvaWQuY29udGVudC5wbS5BcHBsaWNhdGlvbkluZm87CmltcG9ydCBhbmRyb2lkLmNvbnRlbnQucG0uUGFja2FnZU1hbmFnZXI7CmltcG9ydCBhbmRyb2lkLmdyYXBoaWNzLkNvbG9yOwppbXBvcnQgYW5kcm9pZC5ncmFwaGljcy5kcmF3YWJsZS5EcmF3YWJsZTsKaW1wb3J0IGFuZHJvaWQudmlldy5HcmF2aXR5OwppbXBvcnQgYW5kcm9pZC52aWV3LlZpZXc7CmltcG9ydCBhbmRyb2lkLndpZGdldC5HcmlkTGF5b3V0OwppbXBvcnQgYW5kcm9pZC53aWRnZXQuSW1hZ2VWaWV3OwppbXBvcnQgYW5kcm9pZC53aWRnZXQuTGluZWFyTGF5b3V0OwppbXBvcnQgYW5kcm9pZC53aWRnZXQuU2Nyb2xsVmlldzsKaW1wb3J0IGFuZHJvaWQud2lkZ2V0LlRleHRWaWV3OwoKaW1wb3J0IGphdmEudXRpbC5Db2xsZWN0aW9uczsKaW1wb3J0IGphdmEudXRpbC5Db21wYXJhdG9yOwppbXBvcnQgamF2YS51dGlsLkxpc3Q7CgpwdWJsaWMgY2xhc3MgQ2FyQXNzaXN0YW50TGF1bmNoZXJWaWV3IGV4dGVuZHMgTGluZWFyTGF5b3V0IHsKICAgIHByaXZhdGUgZmluYWwgQ29udGV4dCBjb250ZXh0OwogICAgcHJpdmF0ZSBmaW5hbCBHcmlkTGF5b3V0IGdyaWQ7CiAgICBwcml2YXRlIGZpbmFsIFBhY2thZ2VNYW5hZ2VyIHBtOwoKICAgIHB1YmxpYyBDYXJBc3Npc3RhbnRMYXVuY2hlclZpZXcoQ29udGV4dCBjb250ZXh0KSB7CiAgICAgICAgc3VwZXIoY29udGV4dCk7CiAgICAgICAgdGhpcy5jb250ZXh0ID0gY29udGV4dDsKICAgICAgICB0aGlzLnBtID0gY29udGV4dC5nZXRQYWNrYWdlTWFuYWdlcigpOwoKICAgICAgICBzZXRPcmllbnRhdGlvbihWRVJUSUNBTCk7CiAgICAgICAgc2V0QmFja2dyb3VuZENvbG9yKENvbG9yLnJnYigxOCwgMTgsIDE4KSk7CiAgICAgICAgc2V0UGFkZGluZygyOCwgMjQsIDI4LCAyMCk7CgogICAgICAgIFRleHRWaWV3IHRpdGxlID0gbmV3IFRleHRWaWV3KGNvbnRleHQpOwogICAgICAgIHRpdGxlLnNldFRleHQoIkNBUiBBU1NJU1RBTlQiKTsKICAgICAgICB0aXRsZS5zZXRUZXh0Q29sb3IoQ29sb3IuV0hJVEUpOwogICAgICAgIHRpdGxlLnNldFRleHRTaXplKDI2KTsKICAgICAgICB0aXRsZS5zZXRHcmF2aXR5KEdyYXZpdHkuQ0VOVEVSX1ZFUlRJQ0FMKTsKICAgICAgICBhZGRWaWV3KHRpdGxlLCBuZXcgTGF5b3V0UGFyYW1zKExheW91dFBhcmFtcy5NQVRDSF9QQVJFTlQsIDYwKSk7CgogICAgICAgIFRleHRWaWV3IHN1YnRpdGxlID0gbmV3IFRleHRWaWV3KGNvbnRleHQpOwogICAgICAgIHN1YnRpdGxlLnNldFRleHQoIkFuZHJvaWQgQXV0byBEZXNrdG9wIik7CiAgICAgICAgc3VidGl0bGUuc2V0VGV4dENvbG9yKENvbG9yLkxUR1JBWSk7CiAgICAgICAgc3VidGl0bGUuc2V0VGV4dFNpemUoMTQpOwogICAgICAgIGFkZFZpZXcoc3VidGl0bGUsIG5ldyBMYXlvdXRQYXJhbXMoTGF5b3V0UGFyYW1zLk1BVENIX1BBUkVOVCwgNDIpKTsKCiAgICAgICAgU2Nyb2xsVmlldyBzY3JvbGwgPSBuZXcgU2Nyb2xsVmlldyhjb250ZXh0KTsKICAgICAgICBncmlkID0gbmV3IEdyaWRMYXlvdXQoY29udGV4dCk7CiAgICAgICAgZ3JpZC5zZXRDb2x1bW5Db3VudCg1KTsKICAgICAgICBzY3JvbGwuYWRkVmlldyhncmlkLCBuZXcgU2Nyb2xsVmlldy5MYXlvdXRQYXJhbXMoCiAgICAgICAgICAgICAgICBMYXlvdXRQYXJhbXMuTUFUQ0hfUEFSRU5ULCBMYXlvdXRQYXJhbXMuV1JBUF9DT05URU5UKSk7CiAgICAgICAgYWRkVmlldyhzY3JvbGwsIG5ldyBMYXlvdXRQYXJhbXMoCiAgICAgICAgICAgICAgICBMYXlvdXRQYXJhbXMuTUFUQ0hfUEFSRU5ULCAwLCAxZikpOwoKICAgICAgICBMaW5lYXJMYXlvdXQgZG9jayA9IG5ldyBMaW5lYXJMYXlvdXQoY29udGV4dCk7CiAgICAgICAgZG9jay5zZXRPcmllbnRhdGlvbihIT1JJWk9OVEFMKTsKICAgICAgICBkb2NrLnNldEdyYXZpdHkoR3Jhdml0eS5DRU5URVIpOwogICAgICAgIGFkZERvY2tCdXR0b24oZG9jaywgIkFMTCBBUFBTIiwgdiAtPiByZWZyZXNoKCkpOwogICAgICAgIGFkZERvY2tCdXR0b24oZG9jaywgIkNBU1QiLCB2IC0+IHNob3dDYXN0Um9vdCgpKTsKICAgICAgICBhZGREb2NrQnV0dG9uKGRvY2ssICJSRUZSRVNIIiwgdiAtPiByZWZyZXNoKCkpOwogICAgICAgIGFkZFZpZXcoZG9jaywgbmV3IExheW91dFBhcmFtcyhMYXlvdXRQYXJhbXMuTUFUQ0hfUEFSRU5ULCA2NCkpOwoKICAgICAgICByZWZyZXNoKCk7CiAgICB9CgogICAgcHJpdmF0ZSB2b2lkIGFkZERvY2tCdXR0b24oCiAgICAgICAgICAgIExpbmVhckxheW91dCBwYXJlbnQsIFN0cmluZyB0ZXh0LCBPbkNsaWNrTGlzdGVuZXIgbGlzdGVuZXIpIHsKICAgICAgICBUZXh0VmlldyBidXR0b24gPSBuZXcgVGV4dFZpZXcoY29udGV4dCk7CiAgICAgICAgYnV0dG9uLnNldFRleHQodGV4dCk7CiAgICAgICAgYnV0dG9uLnNldFRleHRDb2xvcihDb2xvci5XSElURSk7CiAgICAgICAgYnV0dG9uLnNldFRleHRTaXplKDEzKTsKICAgICAgICBidXR0b24uc2V0R3Jhdml0eShHcmF2aXR5LkNFTlRFUik7CiAgICAgICAgYnV0dG9uLnNldFBhZGRpbmcoMTgsIDAsIDE4LCAwKTsKICAgICAgICBidXR0b24uc2V0T25DbGlja0xpc3RlbmVyKGxpc3RlbmVyKTsKICAgICAgICBwYXJlbnQuYWRkVmlldyhidXR0b24sIG5ldyBMaW5lYXJMYXlvdXQuTGF5b3V0UGFyYW1zKAogICAgICAgICAgICAgICAgMCwgTGF5b3V0UGFyYW1zLk1BVENIX1BBUkVOVCwgMWYpKTsKICAgIH0KCiAgICBwdWJsaWMgdm9pZCByZWZyZXNoKCkgewogICAgICAgIGdyaWQucmVtb3ZlQWxsVmlld3MoKTsKCiAgICAgICAgSW50ZW50IHF1ZXJ5ID0gbmV3IEludGVudChJbnRlbnQuQUNUSU9OX01BSU4pOwogICAgICAgIHF1ZXJ5LmFkZENhdGVnb3J5KEludGVudC5DQVRFR09SWV9MQVVOQ0hFUik7CgogICAgICAgIExpc3Q8QXBwbGljYXRpb25JbmZvPiBhcHBzID0gcG0ucXVlcnlJbnRlbnRBY3Rpdml0aWVzKHF1ZXJ5LCAwKSA9PSBudWxsCiAgICAgICAgICAgICAgICA/IENvbGxlY3Rpb25zLmVtcHR5TGlzdCgpCiAgICAgICAgICAgICAgICA6IHBtLmdldEluc3RhbGxlZEFwcGxpY2F0aW9ucyhQYWNrYWdlTWFuYWdlci5HRVRfTUVUQV9EQVRBKTsKCiAgICAgICAgQ29sbGVjdGlvbnMuc29ydChhcHBzLCBuZXcgQ29tcGFyYXRvcjxBcHBsaWNhdGlvbkluZm8+KCkgewogICAgICAgICAgICBAT3ZlcnJpZGUKICAgICAgICAgICAgcHVibGljIGludCBjb21wYXJlKEFwcGxpY2F0aW9uSW5mbyBhLCBBcHBsaWNhdGlvbkluZm8gYikgewogICAgICAgICAgICAgICAgcmV0dXJuIGEubG9hZExhYmVsKHBtKS50b1N0cmluZygpCiAgICAgICAgICAgICAgICAgICAgICAgIC5jb21wYXJlVG9JZ25vcmVDYXNlKGIubG9hZExhYmVsKHBtKS50b1N0cmluZygpKTsKICAgICAgICAgICAgfQogICAgICAgIH0pOwoKICAgICAgICBpbnQgY291bnQgPSAwOwogICAgICAgIGZvciAoQXBwbGljYXRpb25JbmZvIGFwcCA6IGFwcHMpIHsKICAgICAgICAgICAgSW50ZW50IGxhdW5jaCA9IHBtLmdldExhdW5jaEludGVudEZvclBhY2thZ2UoYXBwLnBhY2thZ2VOYW1lKTsKICAgICAgICAgICAgaWYgKGxhdW5jaCA9PSBudWxsKSB7CiAgICAgICAgICAgICAgICBjb250aW51ZTsKICAgICAgICAgICAgfQogICAgICAgICAgICBhZGRBcHAoYXBwKTsKICAgICAgICAgICAgY291bnQrKzsKICAgICAgICAgICAgaWYgKGNvdW50ID49IDE1KSB7CiAgICAgICAgICAgICAgICBicmVhazsKICAgICAgICAgICAgfQogICAgICAgIH0KICAgIH0KCiAgICBwcml2YXRlIHZvaWQgYWRkQXBwKGZpbmFsIEFwcGxpY2F0aW9uSW5mbyBhcHApIHsKICAgICAgICBMaW5lYXJMYXlvdXQgY2FyZCA9IG5ldyBMaW5lYXJMYXlvdXQoY29udGV4dCk7CiAgICAgICAgY2FyZC5zZXRPcmllbnRhdGlvbihWRVJUSUNBTCk7CiAgICAgICAgY2FyZC5zZXRHcmF2aXR5KEdyYXZpdHkuQ0VOVEVSKTsKICAgICAgICBjYXJkLnNldFBhZGRpbmcoMTAsIDEwLCAxMCwgMTApOwoKICAgICAgICBJbWFnZVZpZXcgaWNvbiA9IG5ldyBJbWFnZVZpZXcoY29udGV4dCk7CiAgICAgICAgRHJhd2FibGUgZHJhd2FibGUgPSBhcHAubG9hZEljb24ocG0pOwogICAgICAgIGljb24uc2V0SW1hZ2VEcmF3YWJsZShkcmF3YWJsZSk7CiAgICAgICAgY2FyZC5hZGRWaWV3KGljb24sIG5ldyBMYXlvdXRQYXJhbXMoNzIsIDcyKSk7CgogICAgICAgIFRleHRWaWV3IGxhYmVsID0gbmV3IFRleHRWaWV3KGNvbnRleHQpOwogICAgICAgIGxhYmVsLnNldFRleHQoYXBwLmxvYWRMYWJlbChwbSkpOwogICAgICAgIGxhYmVsLnNldFRleHRDb2xvcihDb2xvci5XSElURSk7CiAgICAgICAgbGFiZWwuc2V0VGV4dFNpemUoMTIpOwogICAgICAgIGxhYmVsLnNldEdyYXZpdHkoR3Jhdml0eS5DRU5URVIpOwogICAgICAgIGxhYmVsLnNldE1heExpbmVzKDIpOwogICAgICAgIGNhcmQuYWRkVmlldyhsYWJlbCwgbmV3IExheW91dFBhcmFtcygKICAgICAgICAgICAgICAgIExheW91dFBhcmFtcy5NQVRDSF9QQVJFTlQsIDQyKSk7CgogICAgICAgIGNhcmQuc2V0T25DbGlja0xpc3RlbmVyKHYgLT4gewogICAgICAgICAgICBJbnRlbnQgbGF1bmNoID0gcG0uZ2V0TGF1bmNoSW50ZW50Rm9yUGFja2FnZShhcHAucGFja2FnZU5hbWUpOwogICAgICAgICAgICBpZiAobGF1bmNoICE9IG51bGwpIHsKICAgICAgICAgICAgICAgIGxhdW5jaC5hZGRGbGFncyhJbnRlbnQuRkxBR19BQ1RJVklUWV9ORVdfVEFTSyk7CiAgICAgICAgICAgICAgICBjb250ZXh0LnN0YXJ0QWN0aXZpdHkobGF1bmNoKTsKICAgICAgICAgICAgfQogICAgICAgIH0pOwoKICAgICAgICBHcmlkTGF5b3V0LkxheW91dFBhcmFtcyBwYXJhbXMgPSBuZXcgR3JpZExheW91dC5MYXlvdXRQYXJhbXMoKTsKICAgICAgICBwYXJhbXMud2lkdGggPSAwOwogICAgICAgIHBhcmFtcy5oZWlnaHQgPSAxNDU7CiAgICAgICAgcGFyYW1zLmNvbHVtblNwZWMgPSBHcmlkTGF5b3V0LnNwZWMoCiAgICAgICAgICAgICAgICBHcmlkTGF5b3V0LlVOREVGSU5FRCwgMWYpOwogICAgICAgIGdyaWQuYWRkVmlldyhjYXJkLCBwYXJhbXMpOwogICAgfQoKICAgIHByaXZhdGUgdm9pZCBzaG93Q2FzdFJvb3QoKSB7CiAgICAgICAgdHJ5IHsKICAgICAgICAgICAgaWYgKGNvbnRleHQgaW5zdGFuY2VvZiBBQUNhc3RDYXJBY3Rpdml0eSkgewogICAgICAgICAgICAgICAgKChBQUNhc3RDYXJBY3Rpdml0eSkgY29udGV4dCkuc2hvd0Nhc3RSb290KCk7CiAgICAgICAgICAgIH0KICAgICAgICB9IGNhdGNoIChUaHJvd2FibGUgaWdub3JlZCkgewogICAgICAgIH0KICAgIH0KfQo=' | base64 -d > "$TARGET_DIR/CarAssistantLauncherView.java"
+          test -s "$TARGET_DIR/CarAssistantLauncherView.java"
+          echo "Launcher created."
+
+      - name: Create V10 AACast Activity
+        shell: bash
+        run: |
+          set -e
+          TARGET_DIR="v10-source/$JAVA_DIR"
+
+          printf '%s' 'cGFja2FnZSBjb20uY2FyYXNzaXN0YW50LnY5OwoKaW1wb3J0IGFuZHJvaWQub3MuQnVuZGxlOwppbXBvcnQgYW5kcm9pZC52aWV3LlZpZXc7CmltcG9ydCBhbmRyb2lkLndpZGdldC5GcmFtZUxheW91dDsKCnB1YmxpYyBjbGFzcyBBQUNhc3RDYXJBY3Rpdml0eSBleHRlbmRzIENhckFjdGl2aXR5IHsKICAgIHByaXZhdGUgRnJhbWVMYXlvdXQgcm9vdDsKICAgIHByaXZhdGUgQ2FyQXNzaXN0YW50TGF1bmNoZXJWaWV3IGxhdW5jaGVyOwoKICAgIEBPdmVycmlkZQogICAgcHJvdGVjdGVkIHZvaWQgb25DcmVhdGUoQnVuZGxlIHNhdmVkSW5zdGFuY2VTdGF0ZSkgewogICAgICAgIHN1cGVyLm9uQ3JlYXRlKHNhdmVkSW5zdGFuY2VTdGF0ZSk7CgogICAgICAgIHJvb3QgPSBuZXcgRnJhbWVMYXlvdXQodGhpcyk7CiAgICAgICAgbGF1bmNoZXIgPSBuZXcgQ2FyQXNzaXN0YW50TGF1bmNoZXJWaWV3KHRoaXMpOwoKICAgICAgICByb290LmFkZFZpZXcoCiAgICAgICAgICAgIGxhdW5jaGVyLAogICAgICAgICAgICBuZXcgRnJhbWVMYXlvdXQuTGF5b3V0UGFyYW1zKAogICAgICAgICAgICAgICAgRnJhbWVMYXlvdXQuTGF5b3V0UGFyYW1zLk1BVENIX1BBUkVOVCwKICAgICAgICAgICAgICAgIEZyYW1lTGF5b3V0LkxheW91dFBhcmFtcy5NQVRDSF9QQVJFTlQKICAgICAgICAgICAgKQogICAgICAgICk7CgogICAgICAgIHNldENvbnRlbnRWaWV3KHJvb3QpOwogICAgfQoKICAgIHB1YmxpYyB2b2lkIHNob3dDYXN0Um9vdCgpIHsKICAgICAgICB0cnkgewogICAgICAgICAgICBWaWV3IGNhc3RSb290ID0gbmV3IFJvb3RWaWV3KHRoaXMpOwogICAgICAgICAgICByb290LnJlbW92ZUFsbFZpZXdzKCk7CiAgICAgICAgICAgIHJvb3QuYWRkVmlldygKICAgICAgICAgICAgICAgIGNhc3RSb290LAogICAgICAgICAgICAgICAgbmV3IEZyYW1lTGF5b3V0LkxheW91dFBhcmFtcygKICAgICAgICAgICAgICAgICAgICBGcmFtZUxheW91dC5MYXlvdXRQYXJhbXMuTUFUQ0hfUEFSRU5ULAogICAgICAgICAgICAgICAgICAgIEZyYW1lTGF5b3V0LkxheW91dFBhcmFtcy5NQVRDSF9QQVJFTlQKICAgICAgICAgICAgICAgICkKICAgICAgICAgICAgKTsKICAgICAgICB9IGNhdGNoIChUaHJvd2FibGUgaWdub3JlZCkgewogICAgICAgIH0KICAgIH0KfQo=' | base64 -d > "$TARGET_DIR/AACastCarActivity.java"
+          test -s "$TARGET_DIR/AACastCarActivity.java"
+          echo "AACast Activity created."
+
+      - name: Verify V10 source
+        shell: bash
+        run: |
+          set -e
+          TARGET_DIR="v10-source/$JAVA_DIR"
+
+          test -f "$TARGET_DIR/CarAssistantLauncherView.java"
+          test -f "$TARGET_DIR/AACastCarActivity.java"
+
+          grep -q "CAR ASSISTANT" "$TARGET_DIR/CarAssistantLauncherView.java"
+          grep -q "Android Auto Desktop" "$TARGET_DIR/CarAssistantLauncherView.java"
+          grep -q "class AACastCarActivity" "$TARGET_DIR/AACastCarActivity.java"
+          grep -q "showCastRoot" "$TARGET_DIR/AACastCarActivity.java"
+
+          if grep -q "androidx.annotation.Nullable" "$TARGET_DIR/AACastCarActivity.java"; then
+            echo "ERROR: AndroidX Nullable must not be present"
+            exit 1
+          fi
+
+          echo "V10 source verification: OK"
+
+      - name: Generate Gradle wrapper
+        working-directory: v10-source
+        shell: bash
+        run: |
+          set -e
+          gradle wrapper --gradle-version 8.13
+
+      - name: Clean
+        working-directory: v10-source
+        shell: bash
+        run: |
+          ./gradlew clean
+
+      - name: Build Debug APK
+        working-directory: v10-source
+        shell: bash
+        run: |
+          ./gradlew assembleDebug --stacktrace
+
+      - name: Build Release APK
+        working-directory: v10-source
+        shell: bash
+        run: |
+          ./gradlew assembleRelease --stacktrace
+
+      - name: Collect V10 APKs
+        shell: bash
+        run: |
+          set -e
+
+          rm -rf output
+          mkdir -p output
+
+          DEBUG_APK=$(find v10-source -type f             -path "*/build/outputs/apk/debug/*.apk" | head -n 1)
+
+          RELEASE_APK=$(find v10-source -type f             -path "*/build/outputs/apk/release/*.apk" | head -n 1)
+
+          test -n "$DEBUG_APK"
+          test -n "$RELEASE_APK"
+
+          cp "$DEBUG_APK" output/CarAssistant-V10-debug.apk
+          cp "$RELEASE_APK" output/CarAssistant-V10-release.apk
+
+          cd output
+          sha256sum CarAssistant-V10-debug.apk CarAssistant-V10-release.apk > SHA256SUMS.txt
+          cd ..
+
+          ls -lh output
+          cat output/SHA256SUMS.txt
+
+      - name: Upload V10 APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: CarAssistant-V10
+          path: output/
+
+      - name: Test V10 Android 12 + Secondary Display
+        uses: ReactiveCircus/android-emulator-runner@v2
+        with:
+          api-level: 31
+          target: default
+          arch: x86_64
+          profile: pixel_6
+          emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim
+          disable-animations: true
+
+          script: |
+            set -eu
+
+            mkdir -p "$GITHUB_WORKSPACE/emulator-evidence"
+            cd "$GITHUB_WORKSPACE/emulator-evidence"
+
+            echo "=== ADB DEVICES ==="
+            adb devices | tee devices.txt
+
+            echo "=== ANDROID VERSION ==="
+            adb shell getprop ro.build.version.release | tee android-version.txt
+            adb shell getprop ro.build.version.sdk | tee api-level.txt
+
+            echo "=== SCREEN ==="
+            adb shell wm size | tee wm-size.txt
+            adb shell wm density | tee wm-density.txt
+
+            echo "=== DISPLAY BEFORE ==="
+            adb shell dumpsys display > display-before.txt
+
+            echo "=== INSTALL V10 ==="
+            adb install -r "$GITHUB_WORKSPACE/output/CarAssistant-V10-debug.apk"
+
+            echo "=== PACKAGE ==="
+            adb shell dumpsys package com.carassistant.v9 > package.txt
+
+            echo "=== CREATE SECONDARY DISPLAY ==="
+            adb shell settings put global overlay_display_devices "1920x1080/240"
+            sleep 3
+            adb shell dumpsys display > display-secondary.txt
+
+            echo "=== LAUNCH V10 ==="
+            adb shell monkey               -p com.carassistant.v9               -c android.intent.category.LAUNCHER               1 > launcher.txt 2>&1 || true
+
+            sleep 5
+
+            echo "=== ACTIVITY ==="
+            adb shell cmd package resolve-activity               --brief               -c android.intent.category.LAUNCHER               com.carassistant.v9 > resolved-activity.txt || true
+
+            adb shell dumpsys activity activities > activity.txt
+            grep -E "mResumedActivity|mFocusedApp|com.carassistant.v9" activity.txt || true
+
+            echo "=== DISPLAY AFTER LAUNCH ==="
+            adb shell dumpsys display > display-after-launch.txt
+
+            echo "=== PROCESS ==="
+            adb shell pidof com.carassistant.v9 > process.txt || true
+
+            echo "=== LOGCAT ==="
+            adb logcat -d -v threadtime > full-logcat.txt || true
+
+            grep -Ei               "AACast|VirtualDisplay|DisplayManager|CarActivity|CarAssistant|Gearhead|FATAL EXCEPTION|AndroidRuntime|ANR"               full-logcat.txt > aacast-display-log.txt || true
+
+            echo "=== CRASH / ANR ==="
+            adb shell dumpsys dropbox --print data_app_crash > crash-anr.txt 2>&1 || true
+            adb shell dumpsys dropbox --print system_app_anr >> crash-anr.txt 2>&1 || true
+
+            echo "=== SCREENSHOT ==="
+            adb exec-out screencap -p > v10-default-display.png || true
+
+            adb shell settings put global overlay_display_devices ""
+            sleep 2
+            adb shell dumpsys display > display-after-cleanup.txt
+
+            echo "=== V10 TEST COMPLETE ==="
+
+      - name: Upload V10 display test evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: CarAssistant-V10-display-test
+          path: ${ github.workspace }/emulator-evidence/
+          if-no-files-found: ignore
