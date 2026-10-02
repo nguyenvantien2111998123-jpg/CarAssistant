@@ -1,4 +1,3 @@
-
 package com.carassistant.v10;
 
 import android.content.ComponentName;
@@ -8,363 +7,399 @@ import android.content.pm.PackageManager;
 import android.graphics.SurfaceTexture;
 import android.hardware.display.DisplayManager;
 import android.hardware.display.VirtualDisplay;
+import android.os.Process;
 import android.util.Log;
 import android.view.MotionEvent;
 import android.view.Surface;
 import android.view.TextureView;
-import android.view.View;
 
-import java.util.concurrent.atomic.AtomicBoolean;
-
+/**
+ * One V10 projection session.
+ *
+ * This deliberately follows the proven V9 projection sequence:
+ *
+ * TextureView Surface available
+ * -> setDefaultBufferSize
+ * -> Surface
+ * -> createVirtualDisplay(flags=10)
+ * -> am start --display
+ */
 public final class V10ProjectionSession
         implements TextureView.SurfaceTextureListener {
 
-    private static final String TAG =
-            "CarAssistantV10";
+    private static final String TAG = "CarAssistant-V10";
 
     private final Context context;
-    private final TextureView texture;
-    private final int slot;
-
-    /*
-     * Persistent root shell.
-     * Dùng chung cho launch/input.
-     */
     private final RootShellSession shell;
+    private final V10InputController input;
 
-    private final AtomicBoolean inputBusy =
-            new AtomicBoolean(false);
+    private TextureView textureView;
 
-    private volatile VirtualDisplay display;
-    private volatile Surface surface;
-    private volatile int displayId = -1;
+    private VirtualDisplay display;
+    private Surface surface;
 
     private ComponentName target;
 
-    private boolean launching;
+    private int bufferW = 1280;
+    private int bufferH = 720;
 
-    public V10ProjectionSession(
-            Context context,
-            TextureView texture,
-            int slot) {
+    private int generation;
+    private boolean destroyed;
 
+    public V10ProjectionSession(Context context) {
         this.context = context;
-        this.texture = texture;
-        this.slot = slot;
-
-        shell = new RootShellSession();
-
-        texture.setSurfaceTextureListener(this);
-
-        texture.setOnTouchListener(
-                this::onTouch);
+        this.shell = new RootShellSession();
+        this.input = new V10InputController(shell);
     }
 
-    public synchronized void setTarget(
-            ComponentName component) {
-
-        stop();
-
-        target = null;
-
-        if (component == null) {
+    public void attachTextureView(TextureView view) {
+        if (textureView == view) {
             return;
         }
 
-        try {
-
-            ActivityInfo ai =
-                    context.getPackageManager()
-                            .getActivityInfo(
-                                    component,
-                                    0);
-
-            if (!ai.enabled) {
-                return;
-            }
-
-            if (!ai.exported) {
-                return;
-            }
-
-            if (!ai.applicationInfo.enabled) {
-                return;
-            }
-
-            if (context.getPackageName()
-                    .equals(ai.packageName)) {
-                return;
-            }
-
-            target = component;
-
-        } catch (
-                PackageManager.NameNotFoundException ignored) {
-
-            return;
+        if (textureView != null) {
+            textureView.setSurfaceTextureListener(null);
         }
 
-        if (texture.isAvailable()) {
-            start();
+        textureView = view;
+
+        if (textureView != null) {
+            textureView.setSurfaceTextureListener(this);
+
+            if (textureView.isAvailable()) {
+                onSurfaceTextureAvailable(
+                        textureView.getSurfaceTexture(),
+                        textureView.getWidth(),
+                        textureView.getHeight());
+            }
         }
+    }
+
+    public void setTarget(ComponentName component) {
+        target = component;
+        ensureDisplay();
+    }
+
+    public ComponentName getTarget() {
+        return target;
     }
 
     public int getDisplayId() {
-        return displayId;
+        return display == null ? -1 : display.getDisplay().getDisplayId();
     }
 
-    public boolean isRunning() {
-        return display != null &&
-               displayId > 0;
+    public boolean isActive() {
+        return !destroyed && display != null;
     }
 
-    private synchronized void start() {
-
-        if (display != null) {
+    private void ensureDisplay() {
+        if (destroyed
+                || target == null
+                || textureView == null
+                || !textureView.isAvailable()
+                || textureView.getWidth() < 1
+                || textureView.getHeight() < 1
+                || display != null) {
             return;
         }
 
-        if (target == null) {
-            return;
-        }
-
-        if (!texture.isAvailable()) {
-            return;
-        }
-
-        int width = texture.getWidth();
-        int height = texture.getHeight();
-
-        if (width < 1 || height < 1) {
-            return;
-        }
-
-        SurfaceTexture surfaceTexture =
-                texture.getSurfaceTexture();
-
-        if (surfaceTexture == null) {
-            return;
-        }
+        int localGeneration = ++generation;
 
         try {
+            computeBuffer(
+                    textureView.getWidth(),
+                    textureView.getHeight());
 
-            surfaceTexture.setDefaultBufferSize(
-                    width,
-                    height);
+            SurfaceTexture texture = textureView.getSurfaceTexture();
 
-            Surface newSurface =
-                    new Surface(surfaceTexture);
-
-            VirtualDisplay newDisplay =
-                    ((DisplayManager)
-                            context.getSystemService(
-                                    Context.DISPLAY_SERVICE))
-                            .createVirtualDisplay(
-                                    "Car Assistant V10 Slot "
-                                            + (slot + 1),
-                                    width,
-                                    height,
-                                    160,
-                                    newSurface,
-                                    10);
-
-            if (newDisplay == null) {
-
-                newSurface.release();
-
-                throw new IllegalStateException(
-                        "VirtualDisplay == null");
+            if (texture == null) {
+                return;
             }
 
-            surface = newSurface;
-            display = newDisplay;
+            texture.setDefaultBufferSize(bufferW, bufferH);
 
-            displayId =
-                    newDisplay
-                            .getDisplay()
-                            .getDisplayId();
+            Surface newSurface = new Surface(texture);
 
-            Log.d(
-                    TAG,
-                    "VirtualDisplay created: "
-                            + displayId);
+            VirtualDisplay newDisplay = null;
 
-            launch();
+            try {
+                DisplayManager dm =
+                        (DisplayManager) context.getSystemService(
+                                Context.DISPLAY_SERVICE);
+
+                if (dm == null) {
+                    throw new IllegalStateException(
+                            "DisplayManager unavailable");
+                }
+
+                newDisplay = dm.createVirtualDisplay(
+                        V10Display.nameFor(0),
+                        bufferW,
+                        bufferH,
+                        160,
+                        newSurface,
+                        10);
+
+                if (newDisplay == null) {
+                    throw new IllegalStateException(
+                            "Cannot create virtual display");
+                }
+
+                display = newDisplay;
+                surface = newSurface;
+
+            } catch (RuntimeException e) {
+                newSurface.release();
+                throw e;
+            }
+
+            if (localGeneration != generation || destroyed) {
+                release();
+                return;
+            }
+
+            launch(localGeneration);
 
         } catch (RuntimeException e) {
-
-            Log.w(
-                    TAG,
-                    "Projection start failed",
+            release();
+            Log.e(TAG,
+                    "Virtual display creation failed",
                     e);
-
-            stop();
         }
     }
 
-    private void launch() {
+    private void computeBuffer(int viewW, int viewH) {
+        float aspect =
+                viewW > 0 && viewH > 0
+                        ? (float) viewW / (float) viewH
+                        : (16f / 9f);
 
-        if (launching) {
+        if (aspect >= 1f) {
+            bufferW = 1280;
+            bufferH = Math.max(
+                    480,
+                    Math.round(bufferW / aspect));
+        } else {
+            bufferH = 1280;
+            bufferW = Math.max(
+                    480,
+                    Math.round(bufferH * aspect));
+        }
+    }
+
+    private void launch(int localGeneration) {
+        if (destroyed
+                || display == null
+                || target == null
+                || localGeneration != generation) {
             return;
         }
 
-        if (target == null) {
-            return;
+        int displayId =
+                display.getDisplay().getDisplayId();
+
+        if (displayId <= 0) {
+            throw new IllegalStateException(
+                    "Invalid virtual display id: "
+                            + displayId);
         }
 
-        int id = displayId;
+        ActivityInfo info = resolveTarget(target);
 
-        if (id <= 0) {
-            return;
+        if (info == null) {
+            throw new IllegalStateException(
+                    "Target activity unavailable: "
+                            + target.flattenToShortString());
         }
 
-        final String flat =
-                target.flattenToString();
+        int userId = Process.myUid() / 100000;
 
-        if (!flat.matches(
-                "[A-Za-z_][A-Za-z0-9_]*" +
-                "(?:\\.[A-Za-z_][A-Za-z0-9_]*)*" +
-                "/\\.?[A-Za-z_][A-Za-z0-9_]*" +
-                "(?:\\.[A-Za-z_][A-Za-z0-9_]*)*")) {
+        String flat =
+                target.flattenToString()
+                        .replace(
+                                "'",
+                                "'\"'\"'");
 
-            Log.w(
-                    TAG,
-                    "Invalid target: " + flat);
+        String cmd =
+                "/system/bin/am start --user "
+                        + userId
+                        + " --display "
+                        + displayId
+                        + " --windowingMode 1"
+                        + " -a android.intent.action.MAIN"
+                        + " -c android.intent.category.LAUNCHER"
+                        + " -f 0x18000000"
+                        + " -n '"
+                        + flat
+                        + "'";
 
-            return;
-        }
-
-        /*
-         * V9 launch logic được giữ nguyên hướng:
-         * chạy am start qua root shell.
-         */
-        final int userId = 0;
-
-        final String command =
-                "/system/bin/am start" +
-                " --user " + userId +
-                " --display " + id +
-                " --windowingMode 1" +
-                " -a android.intent.action.MAIN" +
-                " -c android.intent.category.LAUNCHER" +
-                " -f 0x18000000" +
-                " -n '" +
-                flat.replace(
-                        "'",
-                        "'\"'\"'") +
-                "'";
-
-        launching = true;
+        final int expectedDisplay = displayId;
 
         RootShellSession.EXEC.execute(() -> {
-
             try {
+                shell.run(15, cmd);
 
-                shell.run(
-                        15,
-                        command);
+                if (destroyed
+                        || generation != localGeneration
+                        || display == null
+                        || getDisplayId() != expectedDisplay) {
+                    return;
+                }
 
-                Log.d(
+                Log.i(
                         TAG,
                         "Launched "
-                                + flat
+                                + target.flattenToShortString()
                                 + " on display "
-                                + id);
+                                + expectedDisplay);
 
-            } catch (Exception e) {
-
-                Log.w(
-                        TAG,
-                        "Launch failed",
-                        e);
-
-            } finally {
-
-                launching = false;
+            } catch (RuntimeException e) {
+                if (!destroyed
+                        && generation == localGeneration) {
+                    Log.e(
+                            TAG,
+                            "Launch failed: "
+                                    + target.flattenToShortString(),
+                            e);
+                }
             }
         });
     }
 
-    private boolean onTouch(
-            View view,
-            MotionEvent event) {
+    private ActivityInfo resolveTarget(ComponentName component) {
+        try {
+            PackageManager pm =
+                    context.getPackageManager();
 
-        final int id = displayId;
+            ActivityInfo ai =
+                    pm.getActivityInfo(
+                            component,
+                            PackageManager.GET_META_DATA);
 
-        if (id <= 0) {
-            return true;
+            if (!ai.enabled
+                    || !ai.exported
+                    || !ai.applicationInfo.enabled) {
+                return null;
+            }
+
+            if (ai.permission != null
+                    && context.checkSelfPermission(ai.permission)
+                            != PackageManager.PERMISSION_GRANTED) {
+                return null;
+            }
+
+            if (context.getPackageName().equals(
+                    component.getPackageName())) {
+                return null;
+            }
+
+            return ai;
+
+        } catch (PackageManager.NameNotFoundException e) {
+            return null;
+        }
+    }
+
+    public void sendTap(float viewX, float viewY) {
+        if (display == null || textureView == null) {
+            return;
         }
 
-        if (event.getActionMasked()
-                != MotionEvent.ACTION_UP) {
-            return true;
+        int id = getDisplayId();
+
+        float sx =
+                bufferW
+                        / (float) Math.max(
+                                1,
+                                textureView.getWidth());
+
+        float sy =
+                bufferH
+                        / (float) Math.max(
+                                1,
+                                textureView.getHeight());
+
+        input.tap(
+                id,
+                viewX * sx,
+                viewY * sy);
+    }
+
+    public void sendSwipe(
+            float x1,
+            float y1,
+            float x2,
+            float y2,
+            long durationMs) {
+
+        if (display == null || textureView == null) {
+            return;
         }
 
-        final float x = event.getX();
-        final float y = event.getY();
+        int id = getDisplayId();
 
-        if (!inputBusy.compareAndSet(
-                false,
-                true)) {
-            return true;
+        float sx =
+                bufferW
+                        / (float) Math.max(
+                                1,
+                                textureView.getWidth());
+
+        float sy =
+                bufferH
+                        / (float) Math.max(
+                                1,
+                                textureView.getHeight());
+
+        input.swipe(
+                id,
+                x1 * sx,
+                y1 * sy,
+                x2 * sx,
+                y2 * sy,
+                durationMs);
+    }
+
+    public void sendBack() {
+        if (display != null) {
+            input.back(getDisplayId());
         }
+    }
 
-        final String command =
-                "input touchscreen -d "
-                + id
-                + " tap "
-                + Math.round(x)
-                + " "
-                + Math.round(y);
+    public void release() {
+        generation++;
 
-        RootShellSession.EXEC.execute(() -> {
-
+        if (display != null) {
             try {
-
-                shell.run(
-                        8,
-                        command);
-
-            } catch (Exception e) {
-
-                Log.w(
-                        TAG,
-                        "Input failed",
-                        e);
-
-            } finally {
-
-                inputBusy.set(false);
+                display.release();
+            } catch (RuntimeException ignored) {
             }
-        });
-
-        return true;
-    }
-
-    public synchronized void stop() {
-
-        VirtualDisplay oldDisplay =
-                display;
-
-        Surface oldSurface =
-                surface;
+        }
 
         display = null;
+
+        if (surface != null) {
+            try {
+                surface.release();
+            } catch (RuntimeException ignored) {
+            }
+        }
+
         surface = null;
-        displayId = -1;
-        launching = false;
-
-        if (oldDisplay != null) {
-            oldDisplay.release();
-        }
-
-        if (oldSurface != null) {
-            oldSurface.release();
-        }
     }
 
-    public synchronized void destroy() {
-        stop();
+    public void destroy() {
+        if (destroyed) {
+            return;
+        }
+
+        destroyed = true;
+
+        if (textureView != null) {
+            textureView.setSurfaceTextureListener(null);
+        }
+
+        release();
+        shell.destroy();
     }
 
     @Override
@@ -373,7 +408,13 @@ public final class V10ProjectionSession
             int width,
             int height) {
 
-        start();
+        if (surface != null) {
+            surface.setDefaultBufferSize(
+                    Math.max(1, bufferW),
+                    Math.max(1, bufferH));
+        }
+
+        ensureDisplay();
     }
 
     @Override
@@ -382,34 +423,25 @@ public final class V10ProjectionSession
             int width,
             int height) {
 
-        if (display == null) {
-            return;
-        }
-
-        if (width < 1 || height < 1) {
-            return;
-        }
-
-        try {
-
+        if (surface != null) {
+            computeBuffer(width, height);
             surface.setDefaultBufferSize(
-                    width,
-                    height);
+                    bufferW,
+                    bufferH);
+        }
 
-            display.resize(
-                    width,
-                    height,
-                    160);
-
-        } catch (RuntimeException e) {
-
-            Log.w(
-                    TAG,
-                    "Resize failed",
-                    e);
-
-            stop();
-            start();
+        if (display != null) {
+            try {
+                display.resize(
+                        bufferW,
+                        bufferH,
+                        160);
+            } catch (RuntimeException e) {
+                Log.w(
+                        TAG,
+                        "Display resize failed",
+                        e);
+            }
         }
     }
 
@@ -417,8 +449,7 @@ public final class V10ProjectionSession
     public boolean onSurfaceTextureDestroyed(
             SurfaceTexture surface) {
 
-        stop();
-
+        release();
         return true;
     }
 
@@ -427,4 +458,3 @@ public final class V10ProjectionSession
             SurfaceTexture surface) {
     }
 }
-

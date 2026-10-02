@@ -1,7 +1,7 @@
 package com.carassistant.v10;
 
 /**
- * Nhận diện display ảo do Car Assistant V9 tạo — dùng chung cho app và các hook Xposed.
+ * Nhận diện display ảo do Car Assistant V10 tạo — dùng chung cho app và các hook Xposed.
  *
  * QUAN TRỌNG: 3 nơi phải khớp nhau:
  *   1. PaneView.ensureDisplay()  — tên display khi createVirtualDisplay
@@ -11,7 +11,7 @@ package com.carassistant.v10;
 public final class AACastDisplay {
 
     public static final String PACKAGE = "com.carassistant.v10";
-    public static final String PREFIX = "Car Assistant V9 ";
+    public static final String PREFIX = "Car Assistant V10 ";
 
     private AACastDisplay() {
     }
@@ -20,7 +20,7 @@ public final class AACastDisplay {
         return PREFIX + (paneIndex + 1);
     }
 
-    /** Display ảo này có phải của Car Assistant V9? */
+    /** Display ảo này có phải của Car Assistant V10? */
     public static boolean matches(String ownerPackage, String name, int type, int ownerUid) {
         if (!PACKAGE.equals(ownerPackage) || type != 5 /* Display.TYPE_VIRTUAL (@hide) */
                 || ownerUid < 10000) {

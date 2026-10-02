@@ -4,9 +4,10 @@ import com.google.android.apps.auto.sdk.CarActivity;
 import com.google.android.apps.auto.sdk.CarActivityService;
 
 /**
- * Đăng ký Car Assistant V9 là một Car App với Android Auto.
+ * Registers Car Assistant V10 with Android Auto.
  */
-public final class AACastCarService extends CarActivityService {
+public final class AACastCarService
+        extends CarActivityService {
 
     @Override
     public Class<? extends CarActivity> getCarActivity() {
