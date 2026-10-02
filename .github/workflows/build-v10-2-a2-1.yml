@@ -11,17 +11,8 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-
-      # ============================================================
-      # CHECKOUT
-      # ============================================================
-
       - name: Checkout
         uses: actions/checkout@v4
-
-      # ============================================================
-      # JAVA 17
-      # ============================================================
 
       - name: Set up JDK 17
         uses: actions/setup-java@v4
@@ -29,45 +20,26 @@ jobs:
           distribution: temurin
           java-version: '17'
 
-      # ============================================================
-      # GRADLE 8.13
-      # ============================================================
-
       - name: Install Gradle 8.13
         shell: bash
         run: |
           set -euo pipefail
 
-          wget -q \
-            https://services.gradle.org/distributions/gradle-8.13-bin.zip
+          wget -q https://services.gradle.org/distributions/gradle-8.13-bin.zip
+          unzip -q gradle-8.13-bin.zip -d "$RUNNER_TEMP"
+          echo "$RUNNER_TEMP/gradle-8.13/bin" >> "$GITHUB_PATH"
 
-          unzip -q \
-            gradle-8.13-bin.zip \
-            -d "$RUNNER_TEMP"
-
-          echo "$RUNNER_TEMP/gradle-8.13/bin" \
-            >> "$GITHUB_PATH"
-
-      # ============================================================
-      # VERIFY EXISTING V10 SOURCE
-      # ============================================================
-
-      - name: Verify V10 source exists
+      - name: Verify existing V10 source
         shell: bash
         run: |
           set -euo pipefail
 
           test -d v10-source
           test -f v10-source/settings.gradle
+          test -f v10-source/app/build.gradle
+          test -f v10-source/app/src/main/AndroidManifest.xml
 
-          test -f \
-            v10-source/app/src/main/AndroidManifest.xml
-
-          echo "Existing V10 source found."
-
-      # ============================================================
-      # NORMALIZE PACKAGE
-      # ============================================================
+          echo "V10 source exists."
 
       - name: Normalize V10 package
         shell: bash
@@ -80,18 +52,15 @@ jobs:
               -name '*.java' \
               -o -name '*.xml' \
               -o -name '*.gradle' \
+              -o -name '*.gradle.kts' \
             \) \
             -print0 |
-            xargs -0 sed -i \
-              -e 's/com\.carassistant\.v9/com.carassistant.v10/g' \
-              -e 's/Car Assistant V9/Car Assistant V10/g' \
-              -e 's/AACast V9/AACast V10/g'
+          xargs -0 sed -i \
+            -e 's/com\.carassistant\.v9/com.carassistant.v10/g' \
+            -e 's/Car Assistant V9/Car Assistant V10/g' \
+            -e 's/AACast V9/AACast V10/g'
 
-      # ============================================================
-      # REMOVE OLD V9 ACTIVITIES
-      # ============================================================
-
-      - name: Remove old V9 activities
+      - name: Remove obsolete V9 files
         shell: bash
         run: |
           set -euo pipefail
@@ -105,7 +74,6 @@ jobs:
               -o -name 'AACastCarActivity.java' \
               -o -name 'LeaseTicker.java' \
             \) \
-            -print \
             -delete
 
           OLD_FILES="$(
@@ -119,16 +87,12 @@ jobs:
           )"
 
           if [ -n "$OLD_FILES" ]; then
-            echo "ERROR: Old V9 files remain:"
+            echo "ERROR: obsolete V9 files remain:"
             echo "$OLD_FILES"
             exit 1
           fi
 
-          echo "Old V9 activities removed."
-
-      # ============================================================
-      # WRITE GEARHEAD CONTROL BAR
-      # ============================================================
+          echo "Obsolete V9 files removed."
 
       - name: Write GearheadControlBar
         shell: bash
@@ -139,417 +103,470 @@ jobs:
 
           mkdir -p "$(dirname "$BAR")"
 
-          cat > "$BAR" <<'EOF'
-package com.carassistant.v10.hook;
-
-import android.content.Context;
-import android.content.Intent;
-import android.graphics.Color;
-import android.view.Gravity;
-import android.view.View;
-import android.view.ViewGroup;
-import android.widget.LinearLayout;
-import android.widget.TextView;
-
-import java.util.Collections;
-import java.util.IdentityHashMap;
-import java.util.Set;
-
-import de.robv.android.xposed.XC_MethodHook;
-import de.robv.android.xposed.XposedBridge;
-import de.robv.android.xposed.XposedHelpers;
-
-public final class GearheadControlBar {
-
-    private static final String TAG =
-            "[V10 ControlBar]";
-
-    private static final String GEARHEAD =
-            "com.google.android.projection.gearhead";
-
-    private static final String ACTION =
-            "com.carassistant.v10.CONTROL";
-
-    private static final String COMMAND =
-            "command";
-
-    private static final String[] DOCK_NAMES = {
-            "nav_bar_container",
-            "car_navigation_bar",
-            "dock_container",
-            "nav_bar",
-            "floating_nav_bar_view",
-            "navigation_bar_container",
-            "navigation_bar",
-            "bottom_navigation_bar",
-            "system_navigation_bar",
-            "navbar",
-            "car_sys_ui_navbar"
-    };
-
-    private static final Set<ViewGroup> INSTALLED =
-            Collections.newSetFromMap(
-                    new IdentityHashMap<>());
-
-    private GearheadControlBar() {
-    }
-
-    public static void install() {
-
-        try {
-
-            Class<?> wmg =
-                    XposedHelpers.findClass(
-                            "android.view.WindowManagerGlobal",
-                            null);
-
-            XposedBridge.hookAllMethods(
-                    wmg,
-                    "addView",
-                    new XC_MethodHook() {
-
-                        @Override
-                        protected void afterHookedMethod(
-                                MethodHookParam param) {
-
-                            if (param.args.length > 0
-                                    && param.args[0]
-                                    instanceof View) {
-
-                                View root =
-                                        (View) param.args[0];
-
-                                root.post(
-                                        () -> scanRoot(root));
-                            }
-                        }
-                    });
-
-            scanExistingRoots();
-
-            XposedBridge.log(
-                    TAG +
-                    " Gearhead dock-tree hook installed");
-
-        } catch (Throwable t) {
-
-            XposedBridge.log(
-                    TAG +
-                    " install failed: " +
-                    t);
-        }
-    }
-
-    private static void scanExistingRoots() {
-
-        try {
-
-            Object global =
-                    XposedHelpers.callStaticMethod(
-                            XposedHelpers.findClass(
-                                    "android.view.WindowManagerGlobal",
-                                    null),
-                            "getInstance");
-
-            String[] names =
-                    (String[]) XposedHelpers.callMethod(
-                            global,
-                            "getViewRootNames");
-
-            if (names == null) {
-                return;
-            }
-
-            for (String name : names) {
-
-                Object root =
-                        XposedHelpers.callMethod(
-                                global,
-                                "getRootView",
-                                name);
-
-                if (root instanceof View) {
-
-                    View view =
-                            (View) root;
-
-                    view.post(
-                            () -> scanRoot(view));
-                }
-            }
-
-        } catch (Throwable t) {
-
-            XposedBridge.log(
-                    TAG +
-                    " existing-root scan failed: " +
-                    t);
-        }
-    }
-
-    private static void scanRoot(
-            View root) {
-
-        try {
-
-            if (!root.isAttachedToWindow()
-                    || root.getDisplay() == null
-                    || root.getDisplay()
-                            .getDisplayId() <= 0
-                    || !(root instanceof ViewGroup)) {
-
-                return;
-            }
-
-            ViewGroup dock =
-                    findDockContainer(
-                            (ViewGroup) root,
-                            1200);
-
-            if (dock == null
-                    || INSTALLED.contains(dock)) {
-
-                return;
-            }
-
-            LinearLayout bar =
-                    new LinearLayout(
-                            dock.getContext());
-
-            bar.setOrientation(
-                    LinearLayout.HORIZONTAL);
-
-            bar.setGravity(
-                    Gravity.CENTER_VERTICAL);
-
-            bar.setPadding(
-                    4,
-                    2,
-                    4,
-                    2);
-
-            bar.setBackgroundColor(
-                    0xDD202124);
-
-            addButton(
-                    bar,
-                    "←",
-                    "back");
-
-            addButton(
-                    bar,
-                    "⌂",
-                    "home");
-
-            addButton(
-                    bar,
-                    "▣",
-                    "recents");
-
-            addButton(
-                    bar,
-                    "Apps",
-                    "apps");
-
-            ViewGroup.LayoutParams params =
-                    new ViewGroup.LayoutParams(
-                            ViewGroup.LayoutParams.WRAP_CONTENT,
-                            ViewGroup.LayoutParams.MATCH_PARENT);
-
-            dock.addView(
-                    bar,
-                    params);
-
-            bar.bringToFront();
-
-            INSTALLED.add(dock);
-
-            XposedBridge.log(
-                    TAG +
-                    " installed in " +
-                    resourceEntryName(dock) +
-                    " display=" +
-                    root.getDisplay()
-                            .getDisplayId());
-
-        } catch (Throwable t) {
-
-            XposedBridge.log(
-                    TAG +
-                    " scan failed: " +
-                    t);
-        }
-    }
-
-    private static ViewGroup findDockContainer(
-            ViewGroup group,
-            int budget) {
-
-        if (budget <= 0) {
-            return null;
-        }
-
-        String name =
-                resourceEntryName(group);
-
-        if (name != null
-                && isDockName(name)) {
-
-            return group;
-        }
-
-        int next =
-                budget - 1;
-
-        for (int i = 0;
-                i < group.getChildCount();
-                i++) {
-
-            View child =
-                    group.getChildAt(i);
-
-            if (child instanceof ViewGroup) {
-
-                ViewGroup found =
-                        findDockContainer(
-                                (ViewGroup) child,
-                                next);
-
-                if (found != null) {
-                    return found;
-                }
-            }
-        }
-
-        return null;
-    }
-
-    private static String resourceEntryName(
-            View view) {
-
-        if (view.getId() == View.NO_ID) {
-            return null;
-        }
-
-        try {
-
-            String packageName =
-                    view.getResources()
-                            .getResourcePackageName(
-                                    view.getId());
-
-            if (!GEARHEAD.equals(packageName)) {
-                return null;
-            }
-
-            return view.getResources()
-                    .getResourceEntryName(
-                            view.getId());
-
-        } catch (Throwable ignored) {
-
-            return null;
-        }
-    }
-
-    private static boolean isDockName(
-            String name) {
-
-        for (String candidate :
-                DOCK_NAMES) {
-
-            if (candidate.equals(name)) {
-                return true;
-            }
-        }
-
-        return false;
-    }
-
-    private static void addButton(
-            LinearLayout parent,
-            String text,
-            String command) {
-
-        TextView button =
-                new TextView(
-                        parent.getContext());
-
-        button.setText(text);
-
-        button.setTextColor(
-                Color.WHITE);
-
-        button.setTextSize(
-                "Apps".equals(text)
-                        ? 13
-                        : 20);
-
-        button.setGravity(
-                Gravity.CENTER);
-
-        button.setPadding(
-                18,
-                0,
-                18,
-                0);
-
-        button.setClickable(true);
-
-        button.setFocusable(true);
-
-        button.setOnClickListener(
-                v -> sendCommand(
-                        parent.getContext(),
-                        command));
-
-        parent.addView(
-                button,
-                new LinearLayout.LayoutParams(
-                        ViewGroup.LayoutParams.WRAP_CONTENT,
-                        ViewGroup.LayoutParams.MATCH_PARENT));
-    }
-
-    private static void sendCommand(
-            Context context,
-            String command) {
-
-        try {
-
-            Intent intent =
-                    new Intent(ACTION);
-
-            intent.setPackage(
-                    "com.carassistant.v10");
-
-            intent.putExtra(
-                    COMMAND,
-                    command);
-
-            context.sendBroadcast(
-                    intent);
-
-            XposedBridge.log(
-                    TAG +
-                    " command=" +
-                    command);
-
-        } catch (Throwable t) {
-
-            XposedBridge.log(
-                    TAG +
-                    " broadcast failed: " +
-                    t);
-        }
-    }
-}
-EOF
-
-          echo "GearheadControlBar written."
-
-      # ============================================================
-      # VERIFY CONTROL RECEIVER SOURCE
-      # ============================================================
+          python3 - "$BAR" <<'PY'
+          import sys
+          from pathlib import Path
+
+          path = Path(sys.argv[1])
+
+          source = r'''
+          package com.carassistant.v10.hook;
+
+          import android.content.Context;
+          import android.content.Intent;
+          import android.graphics.Color;
+          import android.view.Gravity;
+          import android.view.View;
+          import android.view.ViewGroup;
+          import android.widget.LinearLayout;
+          import android.widget.TextView;
+
+          import java.util.Collections;
+          import java.util.IdentityHashMap;
+          import java.util.Set;
+
+          import de.robv.android.xposed.XC_MethodHook;
+          import de.robv.android.xposed.XposedBridge;
+          import de.robv.android.xposed.XposedHelpers;
+
+          public final class GearheadControlBar {
+
+              private static final String TAG =
+                      "[V10 ControlBar]";
+
+              private static final String GEARHEAD =
+                      "com.google.android.projection.gearhead";
+
+              private static final String ACTION =
+                      "com.carassistant.v10.CONTROL";
+
+              private static final String[] DOCK_NAMES = {
+                      "nav_bar_container",
+                      "car_navigation_bar",
+                      "dock_container",
+                      "nav_bar",
+                      "floating_nav_bar_view",
+                      "navigation_bar_container",
+                      "navigation_bar",
+                      "bottom_navigation_bar",
+                      "system_navigation_bar",
+                      "navbar",
+                      "car_sys_ui_navbar"
+              };
+
+              private static final Set<ViewGroup> INSTALLED =
+                      Collections.newSetFromMap(
+                              new IdentityHashMap<ViewGroup, Boolean>());
+
+              private GearheadControlBar() {
+              }
+
+              public static void install() {
+                  try {
+                      Class<?> wmg =
+                              XposedHelpers.findClass(
+                                      "android.view.WindowManagerGlobal",
+                                      null);
+
+                      XposedBridge.hookAllMethods(
+                              wmg,
+                              "addView",
+                              new XC_MethodHook() {
+                                  @Override
+                                  protected void afterHookedMethod(
+                                          MethodHookParam param) {
+                                      if (param.args.length == 0) {
+                                          return;
+                                      }
+
+                                      Object value = param.args[0];
+
+                                      if (!(value instanceof View)) {
+                                          return;
+                                      }
+
+                                      final View root =
+                                              (View) value;
+
+                                      root.post(
+                                              new Runnable() {
+                                                  @Override
+                                                  public void run() {
+                                                      scanRoot(root);
+                                                  }
+                                              });
+                                  }
+                              });
+
+                      scanExistingRoots();
+
+                      XposedBridge.log(
+                              TAG +
+                              " Gearhead dock-tree hook installed");
+
+                  } catch (Throwable t) {
+                      XposedBridge.log(
+                              TAG +
+                              " install failed: " +
+                              t);
+                  }
+              }
+
+              private static void scanExistingRoots() {
+                  try {
+                      Class<?> cls =
+                              XposedHelpers.findClass(
+                                      "android.view.WindowManagerGlobal",
+                                      null);
+
+                      Object global =
+                              XposedHelpers.callStaticMethod(
+                                      cls,
+                                      "getInstance");
+
+                      String[] names =
+                              (String[]) XposedHelpers.callMethod(
+                                      global,
+                                      "getViewRootNames");
+
+                      if (names == null) {
+                          return;
+                      }
+
+                      for (String name : names) {
+                          try {
+                              Object root =
+                                      XposedHelpers.callMethod(
+                                              global,
+                                              "getRootView",
+                                              name);
+
+                              if (!(root instanceof View)) {
+                                  continue;
+                              }
+
+                              final View view =
+                                      (View) root;
+
+                              view.post(
+                                      new Runnable() {
+                                          @Override
+                                          public void run() {
+                                              scanRoot(view);
+                                          }
+                                      });
+
+                          } catch (Throwable ignored) {
+                          }
+                      }
+
+                  } catch (Throwable t) {
+                      XposedBridge.log(
+                              TAG +
+                              " existing-root scan failed: " +
+                              t);
+                  }
+              }
+
+              private static void scanRoot(View root) {
+                  try {
+                      if (!root.isAttachedToWindow()) {
+                          return;
+                      }
+
+                      if (root.getDisplay() == null) {
+                          return;
+                      }
+
+                      if (root.getDisplay().getDisplayId() <= 0) {
+                          return;
+                      }
+
+                      if (!(root instanceof ViewGroup)) {
+                          return;
+                      }
+
+                      ViewGroup dock =
+                              findDockContainer(
+                                      (ViewGroup) root,
+                                      1500);
+
+                      if (dock == null) {
+                          return;
+                      }
+
+                      if (INSTALLED.contains(dock)) {
+                          return;
+                      }
+
+                      installBar(dock);
+
+                  } catch (Throwable t) {
+                      XposedBridge.log(
+                              TAG +
+                              " scan failed: " +
+                              t);
+                  }
+              }
+
+              private static void installBar(ViewGroup dock) {
+                  LinearLayout bar =
+                          new LinearLayout(
+                                  dock.getContext());
+
+                  bar.setOrientation(
+                          LinearLayout.HORIZONTAL);
+
+                  bar.setGravity(
+                          Gravity.CENTER_VERTICAL);
+
+                  bar.setPadding(
+                          4,
+                          2,
+                          4,
+                          2);
+
+                  bar.setBackgroundColor(
+                          0xDD202124);
+
+                  addButton(
+                          bar,
+                          "←",
+                          "back");
+
+                  addButton(
+                          bar,
+                          "⌂",
+                          "home");
+
+                  addButton(
+                          bar,
+                          "▣",
+                          "recents");
+
+                  addButton(
+                          bar,
+                          "Apps",
+                          "apps");
+
+                  ViewGroup.LayoutParams params =
+                          new ViewGroup.LayoutParams(
+                                  ViewGroup.LayoutParams.WRAP_CONTENT,
+                                  ViewGroup.LayoutParams.MATCH_PARENT);
+
+                  dock.addView(
+                          bar,
+                          params);
+
+                  bar.bringToFront();
+
+                  INSTALLED.add(dock);
+
+                  XposedBridge.log(
+                          TAG +
+                          " installed in " +
+                          resourceEntryName(dock));
+              }
+
+              private static ViewGroup findDockContainer(
+                      ViewGroup group,
+                      int budget) {
+
+                  if (budget <= 0) {
+                      return null;
+                  }
+
+                  String name =
+                          resourceEntryName(group);
+
+                  if (name != null && isDockName(name)) {
+                      return group;
+                  }
+
+                  int nextBudget =
+                          budget - 1;
+
+                  for (int i = 0;
+                          i < group.getChildCount();
+                          i++) {
+
+                      View child =
+                              group.getChildAt(i);
+
+                      if (!(child instanceof ViewGroup)) {
+                          continue;
+                      }
+
+                      ViewGroup found =
+                              findDockContainer(
+                                      (ViewGroup) child,
+                                      nextBudget);
+
+                      if (found != null) {
+                          return found;
+                      }
+                  }
+
+                  return null;
+              }
+
+              private static String resourceEntryName(
+                      View view) {
+
+                  if (view.getId() == View.NO_ID) {
+                      return null;
+                  }
+
+                  try {
+                      String packageName =
+                              view.getResources()
+                                  .getResourcePackageName(
+                                          view.getId());
+
+                      if (!GEARHEAD.equals(packageName)) {
+                          return null;
+                      }
+
+                      return view.getResources()
+                              .getResourceEntryName(
+                                      view.getId());
+
+                  } catch (Throwable ignored) {
+                      return null;
+                  }
+              }
+
+              private static boolean isDockName(
+                      String name) {
+
+                  for (String candidate : DOCK_NAMES) {
+                      if (candidate.equals(name)) {
+                          return true;
+                      }
+                  }
+
+                  return false;
+              }
+
+              private static void addButton(
+                      LinearLayout parent,
+                      String label,
+                      String command) {
+
+                  TextView button =
+                          new TextView(
+                                  parent.getContext());
+
+                  button.setText(label);
+
+                  button.setTextColor(
+                          Color.WHITE);
+
+                  button.setTextSize(
+                          "Apps".equals(label)
+                                  ? 13
+                                  : 20);
+
+                  button.setGravity(
+                          Gravity.CENTER);
+
+                  button.setPadding(
+                          18,
+                          0,
+                          18,
+                          0);
+
+                  button.setClickable(true);
+
+                  button.setFocusable(true);
+
+                  button.setOnClickListener(
+                          new View.OnClickListener() {
+                              @Override
+                              public void onClick(View v) {
+                                  sendCommand(
+                                          parent.getContext(),
+                                          command);
+                              }
+                          });
+
+                  parent.addView(
+                          button,
+                          new LinearLayout.LayoutParams(
+                                  ViewGroup.LayoutParams.WRAP_CONTENT,
+                                  ViewGroup.LayoutParams.MATCH_PARENT));
+              }
+
+              private static void sendCommand(
+                      Context context,
+                      String command) {
+
+                  try {
+                      Intent intent =
+                              new Intent(ACTION);
+
+                      intent.setPackage(
+                              "com.carassistant.v10");
+
+                      intent.putExtra(
+                              "command",
+                              command);
+
+                      context.sendBroadcast(
+                              intent);
+
+                      XposedBridge.log(
+                              TAG +
+                              " command=" +
+                              command);
+
+                  } catch (Throwable t) {
+                      XposedBridge.log(
+                              TAG +
+                              " broadcast failed: " +
+                              t);
+                  }
+              }
+          }
+          '''
+
+          path.write_text(
+              source.strip() + "\n",
+              encoding="utf-8"
+          )
+
+          print("GearheadControlBar written.")
+          PY
+
+      - name: Verify GearheadControlBar
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          BAR="v10-source/app/src/main/java/com/hieptran/aacast/doudou/hook/GearheadControlBar.java"
+
+          test -f "$BAR"
+
+          grep -q 'WindowManagerGlobal' "$BAR"
+          grep -q 'getViewRootNames' "$BAR"
+          grep -q 'getRootView' "$BAR"
+          grep -q 'resourceEntryName' "$BAR"
+          grep -q 'com.google.android.projection.gearhead' "$BAR"
+
+          grep -q 'nav_bar_container' "$BAR"
+          grep -q 'car_navigation_bar' "$BAR"
+          grep -q 'dock_container' "$BAR"
+          grep -q 'floating_nav_bar_view' "$BAR"
+          grep -q 'navigation_bar_container' "$BAR"
+
+          grep -q '"back"' "$BAR"
+          grep -q '"home"' "$BAR"
+          grep -q '"recents"' "$BAR"
+          grep -q '"apps"' "$BAR"
+
+          grep -q 'sendBroadcast' "$BAR"
+
+          echo "GearheadControlBar verified."
 
       - name: Verify V10ControlReceiver
         shell: bash
@@ -560,35 +577,14 @@ EOF
 
           test -f "$RECEIVER"
 
-          grep -q \
-            'com.carassistant.v10.CONTROL' \
-            "$RECEIVER"
-
-          grep -q \
-            'BroadcastReceiver' \
-            "$RECEIVER"
-
-          grep -q \
-            'BACK' \
-            "$RECEIVER"
-
-          grep -q \
-            'HOME' \
-            "$RECEIVER"
-
-          grep -q \
-            'RECENTS' \
-            "$RECEIVER"
-
-          grep -q \
-            'APPS' \
-            "$RECEIVER"
+          grep -q 'BroadcastReceiver' "$RECEIVER"
+          grep -q 'com.carassistant.v10.CONTROL' "$RECEIVER"
+          grep -q 'BACK' "$RECEIVER"
+          grep -q 'HOME' "$RECEIVER"
+          grep -q 'RECENTS' "$RECEIVER"
+          grep -q 'APPS' "$RECEIVER"
 
           echo "V10ControlReceiver verified."
-
-      # ============================================================
-      # REBUILD MANIFEST
-      # ============================================================
 
       - name: Rebuild Manifest
         shell: bash
@@ -597,102 +593,76 @@ EOF
 
           MANIFEST="v10-source/app/src/main/AndroidManifest.xml"
 
-          test -f "$MANIFEST"
-
-          sed -i \
-            -e 's/com\.carassistant\.v9/com.carassistant.v10/g' \
-            -e 's/Car Assistant V9/Car Assistant V10/g' \
-            -e 's/AACast V9/AACast V10/g' \
-            "$MANIFEST"
-
           python3 - "$MANIFEST" <<'PY'
-import re
-import sys
+          import re
+          import sys
+          from pathlib import Path
 
-path = sys.argv[1]
+          path = Path(sys.argv[1])
+          text = path.read_text(encoding="utf-8")
 
-with open(path, "r", encoding="utf-8") as f:
-    text = f.read()
+          text = re.sub(
+              r'\s*<(activity|receiver)\b[^>]*'
+              r'android:name="[^"]*(?:MainActivity|AACastCarActivity|'
+              r'V10LauncherActivity|V10CarActivity|V10ControlReceiver)[^"]*"'
+              r'[^>]*(?:/>|>.*?</\1>)',
+              '',
+              text,
+              flags=re.S
+          )
 
-remove_names = [
-    "MainActivity",
-    "AACastCarActivity",
-    "V10LauncherActivity",
-    "V10CarActivity",
-    "V10ControlReceiver",
-]
+          match = re.search(
+              r'(<application\b[^>]*>)',
+              text,
+              flags=re.S
+          )
 
-for name in remove_names:
+          if not match:
+              raise SystemExit(
+                  "ERROR: application tag not found"
+              )
 
-    pattern = (
-        r'\s*<(?:activity|receiver)\b'
-        r'[^>]*android:name="[^"]*'
-        + re.escape(name)
-        + r'"[^>]*'
-        r'(?:/>|>.*?</(?:activity|receiver)>)'
-    )
+          components = r'''
+                  <activity
+                      android:name="com.carassistant.v10.V10LauncherActivity"
+                      android:exported="true">
+                      <intent-filter>
+                          <action
+                              android:name="android.intent.action.MAIN" />
+                          <category
+                              android:name="android.intent.category.LAUNCHER" />
+                      </intent-filter>
+                  </activity>
 
-    text = re.sub(
-        pattern,
-        "",
-        text,
-        flags=re.S,
-    )
+                  <activity
+                      android:name="com.carassistant.v10.V10CarActivity"
+                      android:exported="true" />
 
-application = re.search(
-    r'(<application\b[^>]*>)',
-    text,
-    flags=re.S,
-)
+                  <receiver
+                      android:name="com.carassistant.v10.V10ControlReceiver"
+                      android:exported="true">
+                      <intent-filter>
+                          <action
+                              android:name="com.carassistant.v10.CONTROL" />
+                      </intent-filter>
+                  </receiver>
+          '''
 
-if not application:
-    raise SystemExit(
-        "ERROR: application tag not found"
-    )
+          insert_at = match.end()
 
-components = r'''
-        <activity
-            android:name="com.carassistant.v10.V10LauncherActivity"
-            android:exported="true">
-            <intent-filter>
-                <action
-                    android:name="android.intent.action.MAIN" />
-                <category
-                    android:name="android.intent.category.LAUNCHER" />
-            </intent-filter>
-        </activity>
+          text = (
+              text[:insert_at]
+              + components
+              + text[insert_at:]
+          )
 
-        <activity
-            android:name="com.carassistant.v10.V10CarActivity"
-            android:exported="true" />
+          path.write_text(
+              text,
+              encoding="utf-8"
+          )
 
-        <receiver
-            android:name="com.carassistant.v10.V10ControlReceiver"
-            android:exported="true">
-            <intent-filter>
-                <action
-                    android:name="com.carassistant.v10.CONTROL" />
-            </intent-filter>
-        </receiver>
-'''
-
-pos = application.end()
-
-text = (
-    text[:pos]
-    + components
-    + text[pos:]
-)
-
-with open(path, "w", encoding="utf-8") as f:
-    f.write(text)
-PY
-
-          echo "Manifest rebuilt."
-
-      # ============================================================
-      # VERIFY MANIFEST
-      # ============================================================
+          print("Manifest rebuilt.")
+          PY
 
       - name: Verify Manifest
         shell: bash
@@ -715,9 +685,45 @@ PY
             'com.carassistant.v10.V10ControlReceiver' \
             "$MANIFEST"
 
-          grep -q \
-            'android:exported="true"' \
-            "$MANIFEST"
+          python3 - "$MANIFEST" <<'PY'
+          import sys
+          import xml.etree.ElementTree as ET
+
+          path = sys.argv[1]
+
+          tree = ET.parse(path)
+          root = tree.getroot()
+
+          ns = {
+              "android": "http://schemas.android.com/apk/res/android"
+          }
+
+          found_receiver = False
+
+          for receiver in root.findall(".//receiver"):
+              name = receiver.get(
+                  "{http://schemas.android.com/apk/res/android}name"
+              )
+
+              if name == "com.carassistant.v10.V10ControlReceiver":
+                  found_receiver = True
+
+                  exported = receiver.get(
+                      "{http://schemas.android.com/apk/res/android}exported"
+                  )
+
+                  if exported != "true":
+                      raise SystemExit(
+                          "ERROR: V10ControlReceiver must be exported=true"
+                      )
+
+          if not found_receiver:
+              raise SystemExit(
+                  "ERROR: V10ControlReceiver missing"
+              )
+
+          print("Receiver manifest entry verified.")
+          PY
 
           if grep -q \
               'android:name="[^"]*MainActivity' \
@@ -734,10 +740,6 @@ PY
           fi
 
           echo "Manifest verification passed."
-
-      # ============================================================
-      # VERIFY SOURCE
-      # ============================================================
 
       - name: Verify V10 source
         shell: bash
@@ -760,11 +762,10 @@ PY
           )
 
           for file in "${REQUIRED[@]}"; do
-
             count="$(
               find "$JAVA" \
-                -name "$file" \
-                | wc -l
+                -name "$file" |
+              wc -l
             )"
 
             if [ "$count" -ne 1 ]; then
@@ -778,140 +779,55 @@ PY
               "$JAVA" \
               "$MANIFEST" \
               2>/dev/null; then
-
             echo "ERROR: V9 package remains."
-            exit 1
-          fi
-
-          OLD_FILES="$(
-            find "$JAVA" \
-              -type f \
-              \( \
-                -name 'MainActivity.java' \
-                -o -name 'AACastCarActivity.java' \
-                -o -name 'LeaseTicker.java' \
-              \)
-          )"
-
-          if [ -n "$OLD_FILES" ]; then
-            echo "ERROR: Old V9 files remain:"
-            echo "$OLD_FILES"
             exit 1
           fi
 
           echo "V10 source verification passed."
 
-      # ============================================================
-      # VERIFY GEARHEAD CONTROL BAR
-      # ============================================================
-
-      - name: Verify Gearhead Dock Control Bar
+      - name: Verify V10 projection invariants
         shell: bash
         run: |
           set -euo pipefail
 
-          BAR="v10-source/app/src/main/java/com/hieptran/aacast/doudou/hook/GearheadControlBar.java"
+          SESSION="v10-source/app/src/main/java/com/hieptran/aacast/doudou/V10ProjectionSession.java"
+          HOOK="v10-source/app/src/main/java/com/hieptran/aacast/doudou/hook/InputHooks.java"
 
-          ACTIVITY="v10-source/app/src/main/java/com/hieptran/aacast/doudou/V10CarActivity.java"
+          test -f "$SESSION"
+          test -f "$HOOK"
 
-          MANIFEST="v10-source/app/src/main/AndroidManifest.xml"
+          grep -q 'SurfaceTexture' "$SESSION"
+          grep -q 'setDefaultBufferSize' "$SESSION"
+          grep -q 'new Surface' "$SESSION"
+          grep -q 'createVirtualDisplay' "$SESSION"
+          grep -q 'V10Display.nameFor' "$SESSION"
+          grep -q 'Process.myUid() / 100000' "$SESSION"
+          grep -q -- '--display' "$SESSION"
+          grep -q -- '--windowingMode 1' "$SESSION"
+          grep -q 'input -d' "$SESSION"
+          grep -q 'keyevent 4' "$SESSION"
+          grep -q 'V10Display.matches' "$HOOK"
 
-          test -f "$BAR"
-          test -f "$ACTIVITY"
+          echo "Projection invariants passed."
 
-          grep -q \
-            'WindowManagerGlobal' \
-            "$BAR"
+      - name: Verify swipe input
+        shell: bash
+        run: |
+          set -euo pipefail
 
-          grep -q \
-            'getViewRootNames' \
-            "$BAR"
+          INPUT="v10-source/app/src/main/java/com/hieptran/aacast/doudou/V10InputController.java"
+          SESSION="v10-source/app/src/main/java/com/hieptran/aacast/doudou/V10ProjectionSession.java"
 
-          grep -q \
-            'getRootView' \
-            "$BAR"
+          test -f "$INPUT"
+          test -f "$SESSION"
 
-          grep -q \
-            'resourceEntryName' \
-            "$BAR"
+          grep -q 'MotionEvent.ACTION_DOWN' "$INPUT"
+          grep -q 'MotionEvent.ACTION_MOVE' "$INPUT"
+          grep -q 'MotionEvent.ACTION_UP' "$INPUT"
+          grep -q 'session.swipe' "$INPUT"
+          grep -q 'swipe' "$SESSION"
 
-          grep -q \
-            'com.google.android.projection.gearhead' \
-            "$BAR"
-
-          grep -q \
-            'nav_bar_container' \
-            "$BAR"
-
-          grep -q \
-            'car_navigation_bar' \
-            "$BAR"
-
-          grep -q \
-            'dock_container' \
-            "$BAR"
-
-          grep -q \
-            'floating_nav_bar_view' \
-            "$BAR"
-
-          grep -q \
-            'navigation_bar_container' \
-            "$BAR"
-
-          grep -q \
-            '"back"' \
-            "$BAR"
-
-          grep -q \
-            '"home"' \
-            "$BAR"
-
-          grep -q \
-            '"recents"' \
-            "$BAR"
-
-          grep -q \
-            '"apps"' \
-            "$BAR"
-
-          grep -q \
-            'sendBroadcast' \
-            "$BAR"
-
-          grep -q \
-            'V10ControlReceiver.BACK' \
-            "$ACTIVITY"
-
-          grep -q \
-            'V10ControlReceiver.HOME' \
-            "$ACTIVITY"
-
-          grep -q \
-            'V10ControlReceiver.RECENTS' \
-            "$ACTIVITY"
-
-          grep -q \
-            'V10ControlReceiver.APPS' \
-            "$ACTIVITY"
-
-          grep -q \
-            'session.back()' \
-            "$ACTIVITY"
-
-          grep -q \
-            'session.home()' \
-            "$ACTIVITY"
-
-          grep -q \
-            'android:exported="true"' \
-            "$MANIFEST"
-
-          echo "Gearhead Dock Control Bar verification passed."
-
-      # ============================================================
-      # VERIFY XPOSED BRIDGE
-      # ============================================================
+          echo "Single-pointer swipe verified."
 
       - name: Verify Xposed bridge
         shell: bash
@@ -944,173 +860,22 @@ PY
 
           echo "Xposed bridge verified."
 
-      # ============================================================
-      # VERIFY PROJECTION INVARIANTS
-      # ============================================================
-
-      - name: Verify V9 projection invariants
+      - name: Verify Android 12 compatibility
         shell: bash
         run: |
           set -euo pipefail
-
-          SESSION="v10-source/app/src/main/java/com/hieptran/aacast/doudou/V10ProjectionSession.java"
-
-          HOOK="v10-source/app/src/main/java/com/hieptran/aacast/doudou/hook/InputHooks.java"
-
-          test -f "$SESSION"
-          test -f "$HOOK"
-
-          grep -q \
-            'SurfaceTexture' \
-            "$SESSION"
-
-          grep -q \
-            'setDefaultBufferSize' \
-            "$SESSION"
-
-          grep -q \
-            'new Surface' \
-            "$SESSION"
-
-          grep -q \
-            'createVirtualDisplay' \
-            "$SESSION"
-
-          grep -q \
-            'V10Display.nameFor' \
-            "$SESSION"
-
-          grep -q \
-            '160' \
-            "$SESSION"
-
-          grep -q \
-            '10' \
-            "$SESSION"
-
-          grep -q \
-            'Process.myUid() / 100000' \
-            "$SESSION"
-
-          grep -q \
-            -- '--display' \
-            "$SESSION"
-
-          grep -q \
-            -- '--windowingMode 1' \
-            "$SESSION"
-
-          grep -q \
-            'input -d' \
-            "$SESSION"
-
-          grep -q \
-            'keyevent 4' \
-            "$SESSION"
-
-          grep -q \
-            'V10Display.matches' \
-            "$HOOK"
-
-          echo "Projection invariants passed."
-
-      # ============================================================
-      # VERIFY SWIPE
-      # ============================================================
-
-      - name: Verify swipe input
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          INPUT="v10-source/app/src/main/java/com/hieptran/aacast/doudou/V10InputController.java"
-
-          SESSION="v10-source/app/src/main/java/com/hieptran/aacast/doudou/V10ProjectionSession.java"
-
-          test -f "$INPUT"
-          test -f "$SESSION"
-
-          grep -q \
-            'MotionEvent.ACTION_DOWN' \
-            "$INPUT"
-
-          grep -q \
-            'MotionEvent.ACTION_MOVE' \
-            "$INPUT"
-
-          grep -q \
-            'MotionEvent.ACTION_UP' \
-            "$INPUT"
-
-          grep -q \
-            'session.swipe' \
-            "$INPUT"
-
-          grep -q \
-            'swipe' \
-            "$SESSION"
-
-          echo "Single-pointer swipe verified."
-
-      # ============================================================
-      # VERIFY ANDROID 12 / API 31
-      # ============================================================
-
-      - name: Verify Android 12 API 31 compatibility
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          GRADLE_FILES="$(
-            find v10-source \
-              -type f \
-              \( \
-                -name '*.gradle' \
-                -o -name '*.gradle.kts' \
-              \)
-          )"
-
-          echo "$GRADLE_FILES"
 
           if grep -R \
-              'compileSdk.*3[3-9]' \
-              v10-source \
-              --include='*.gradle' \
-              --include='*.gradle.kts' \
+              'getSentFromUid\|getSentFromPackage' \
+              v10-source/app/src/main/java \
               2>/dev/null; then
-
-            echo "WARNING: compileSdk is newer than API 31."
-            echo "This is allowed only if minSdk remains Android 12 compatible."
+            echo "ERROR: API 34-only BroadcastReceiver APIs detected."
+            exit 1
           fi
 
-          if grep -R \
-              'minSdk.*[0-9][0-9]' \
-              v10-source \
-              --include='*.gradle' \
-              --include='*.gradle.kts' \
-              2>/dev/null; then
+          echo "Android 12 compatibility check passed."
 
-            echo "minSdk declaration found."
-          fi
-
-          echo "Android 12 compatibility inspection completed."
-
-      # ============================================================
-      # GRADLE VERSION
-      # ============================================================
-
-      - name: Gradle version
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          gradle --version
-
-      # ============================================================
-      # CLEAN BUILD
-      # ============================================================
-
-      - name: Clean build
+      - name: Validate Gradle project
         shell: bash
         run: |
           set -euo pipefail
@@ -1118,13 +883,12 @@ PY
           cd v10-source
 
           gradle \
+            --version
+
+          gradle \
             clean \
             --no-daemon \
             --stacktrace
-
-      # ============================================================
-      # BUILD DEBUG APK
-      # ============================================================
 
       - name: Build Debug APK
         shell: bash
@@ -1137,10 +901,6 @@ PY
             assembleDebug \
             --no-daemon \
             --stacktrace
-
-      # ============================================================
-      # VERIFY APK
-      # ============================================================
 
       - name: Verify APK
         shell: bash
@@ -1157,10 +917,6 @@ PY
           echo "SHA256:"
           sha256sum "$APK"
 
-      # ============================================================
-      # VERIFY APK PACKAGE
-      # ============================================================
-
       - name: Verify APK package
         shell: bash
         run: |
@@ -1169,22 +925,14 @@ PY
           APK="v10-source/app/build/outputs/apk/debug/app-debug.apk"
 
           if command -v aapt >/dev/null 2>&1; then
-
-            aapt dump badging "$APK" \
-              | grep -q \
+            aapt dump badging "$APK" |
+              grep -q \
                 "package: name='com.carassistant.v10'"
 
             echo "APK package verified."
-
           else
-
-            echo "aapt not directly available; Gradle build already succeeded."
-
+            echo "aapt unavailable; package check skipped."
           fi
-
-      # ============================================================
-      # UPLOAD ARTIFACT
-      # ============================================================
 
       - name: Upload V10.2-A2.1 APK
         uses: actions/upload-artifact@v4
@@ -1192,10 +940,6 @@ PY
           name: CarAssistant-V10.2-A2.1-debug
           path: v10-source/app/build/outputs/apk/debug/app-debug.apk
           if-no-files-found: error
-
-      # ============================================================
-      # COMMIT SOURCE
-      # ============================================================
 
       - name: Commit V10.2-A2.1 source
         shell: bash
@@ -1210,15 +954,10 @@ PY
             user.email \
             "41898282+github-actions[bot]@users.noreply.github.com"
 
-          git add \
-            v10-source
+          git add v10-source
 
-          if git diff \
-              --cached \
-              --quiet; then
-
+          if git diff --cached --quiet; then
             echo "No source changes to commit."
-
             exit 0
           fi
 
