@@ -43,7 +43,7 @@ jobs:
           gradle-version: "8.13"
 
       # ============================================================
-      # 4. FIND V9 SOURCE ZIP
+      # 4. FIND OUTER V9 ZIP
       # ============================================================
 
       - name: Find V9 source ZIP
@@ -62,13 +62,14 @@ jobs:
             exit 1
           fi
 
-          echo "Found:"
+          echo "Outer ZIP found:"
           echo "$ZIP"
 
-          cp "$ZIP" "$RUNNER_TEMP/CarAssistant-V9-Source.zip"
+          cp "$ZIP" \
+            "$RUNNER_TEMP/CarAssistant-V9-Source.zip"
 
       # ============================================================
-      # 5. EXTRACT V9
+      # 5. EXTRACT OUTER + INNER ZIP
       # ============================================================
 
       - name: Extract V9 source
@@ -77,22 +78,65 @@ jobs:
           set -e
 
           rm -rf v9-unpack
+          rm -rf v9-source
+
           mkdir -p v9-unpack
+          mkdir -p v9-source
+
+          echo "========================================"
+          echo "EXTRACTING OUTER ZIP"
+          echo "========================================"
 
           unzip -q \
             "$RUNNER_TEMP/CarAssistant-V9-Source.zip" \
             -d v9-unpack
 
-          echo "V9 source extracted."
-
+          echo
+          echo "Outer ZIP contents:"
           find v9-unpack \
             -maxdepth 4 \
             -type f \
+            | sort
+
+          # --------------------------------------------------------
+          # The repository contains a ZIP inside the ZIP.
+          # --------------------------------------------------------
+
+          INNER_ZIP=$(find v9-unpack \
+            -type f \
+            -name "CarAssistant-V9-source.zip" \
+            | head -n 1)
+
+          if [ -z "$INNER_ZIP" ]; then
+            echo "::error::Inner CarAssistant-V9-source.zip was not found."
+            exit 1
+          fi
+
+          echo
+          echo "========================================"
+          echo "INNER ZIP FOUND"
+          echo "========================================"
+          echo "$INNER_ZIP"
+
+          echo
+          echo "========================================"
+          echo "EXTRACTING INNER ZIP"
+          echo "========================================"
+
+          unzip -q \
+            "$INNER_ZIP" \
+            -d v9-source
+
+          echo
+          echo "Real V9 source:"
+          find v9-source \
+            -maxdepth 5 \
+            -type f \
             | sort \
-            | head -300
+            | head -400
 
       # ============================================================
-      # 6. FIND ANDROID PROJECT
+      # 6. LOCATE REAL ANDROID PROJECT
       # ============================================================
 
       - name: Locate Android project
@@ -101,6 +145,8 @@ jobs:
           set -e
 
           PROJECT=""
+
+          echo "Searching v9-source for Android project..."
 
           while IFS= read -r DIR; do
 
@@ -115,20 +161,28 @@ jobs:
 
             fi
 
-          done < <(find v9-unpack -type d | sort)
+          done < <(find v9-source -type d | sort)
 
           if [ -z "$PROJECT" ]; then
             echo "::error::Android Gradle project was not found."
+            echo
+            echo "Directories containing app/:"
+            find v9-source \
+              -type d \
+              -name app \
+              -print
             exit 1
           fi
 
-          echo "PROJECT=$PROJECT" >> "$GITHUB_ENV"
-
-          echo "Android project:"
+          echo "========================================"
+          echo "ANDROID PROJECT FOUND"
+          echo "========================================"
           echo "$PROJECT"
 
+          echo "PROJECT=$PROJECT" >> "$GITHUB_ENV"
+
       # ============================================================
-      # 7. COPY V9 TO V10
+      # 7. COPY V9 -> V10
       # ============================================================
 
       - name: Prepare V10 source
@@ -140,10 +194,14 @@ jobs:
 
           cp -a "$PROJECT" v10-source
 
-          echo "V10 source directory created."
+          echo "V10 source prepared."
+
+          echo
+          echo "V10 root:"
+          ls -la v10-source
 
       # ============================================================
-      # 8. INSPECT AACAST SOURCE
+      # 8. INSPECT JAVA SOURCE
       # ============================================================
 
       - name: Inspect AACast source
@@ -170,7 +228,7 @@ jobs:
             -E \
             "CarActivityService|createVirtualDisplay|VirtualDisplay|CarActivity" \
             v10-source/app/src/main/java \
-            | head -100 || true
+            | head -150 || true
 
       # ============================================================
       # 9. VERIFY AACAST LIBRARIES
@@ -213,14 +271,20 @@ jobs:
             exit 1
           fi
 
+          echo
           echo "aasdk-legacy.jar:"
           echo "$JAR"
 
+          echo
           echo "aasdk-legacy.dex:"
           echo "$DEX"
 
+          echo
           echo "xposed-api-82.jar:"
           echo "$XPOSED"
+
+          echo
+          echo "AACast libraries PASSED."
 
       # ============================================================
       # 10. VERIFY AACAST ENGINE
@@ -238,9 +302,11 @@ jobs:
             "createVirtualDisplay" \
             v10-source/app/src/main/java; then
 
-            echo "::error::createVirtualDisplay was not found."
+            echo "::error::createVirtualDisplay not found."
             exit 1
           fi
+
+          echo "createVirtualDisplay: OK"
 
           echo "Checking CarActivityService..."
 
@@ -249,9 +315,11 @@ jobs:
             "CarActivityService" \
             v10-source/app/src/main/java; then
 
-            echo "::error::CarActivityService was not found."
+            echo "::error::CarActivityService not found."
             exit 1
           fi
+
+          echo "CarActivityService: OK"
 
           echo "Checking CarActivity..."
 
@@ -260,9 +328,11 @@ jobs:
             "CarActivity" \
             v10-source/app/src/main/java; then
 
-            echo "::error::CarActivity was not found."
+            echo "::error::CarActivity not found."
             exit 1
           fi
+
+          echo "CarActivity: OK"
 
           echo "Checking VirtualDisplay..."
 
@@ -271,11 +341,16 @@ jobs:
             "VirtualDisplay" \
             v10-source/app/src/main/java; then
 
-            echo "::error::VirtualDisplay was not found."
+            echo "::error::VirtualDisplay not found."
             exit 1
           fi
 
-          echo "AACast engine verification PASSED."
+          echo "VirtualDisplay: OK"
+
+          echo
+          echo "========================================"
+          echo "AACAST ENGINE VERIFICATION PASSED"
+          echo "========================================"
 
       # ============================================================
       # 11. INSPECT MANIFEST
@@ -291,16 +366,15 @@ jobs:
             | head -n 1)
 
           if [ -z "$MANIFEST" ]; then
-            echo "::error::AndroidManifest.xml was not found."
+            echo "::error::AndroidManifest.xml not found."
             exit 1
           fi
 
-          echo "Manifest:"
-          echo "----------------------------------------"
+          echo "========================================"
+          echo "ANDROID MANIFEST"
+          echo "========================================"
 
           cat "$MANIFEST"
-
-          echo "----------------------------------------"
 
       # ============================================================
       # 12. GENERATE GRADLE WRAPPER
@@ -336,9 +410,6 @@ jobs:
 
       # ============================================================
       # 14. BUILD DEBUG
-      #
-      # V10 Run #12 deliberately builds the untouched V9 engine.
-      # We will add the V10 launcher only after this baseline passes.
       # ============================================================
 
       - name: Build debug APK
@@ -347,13 +418,17 @@ jobs:
         run: |
           set -e
 
+          echo "========================================"
+          echo "BUILDING DEBUG APK"
+          echo "========================================"
+
           ./gradlew \
             --no-daemon \
             --stacktrace \
             assembleDebug
 
       # ============================================================
-      # 15. FIND DEBUG APK
+      # 15. VERIFY DEBUG APK
       # ============================================================
 
       - name: Verify debug APK
@@ -371,11 +446,13 @@ jobs:
             exit 1
           fi
 
-          echo "Debug APK:"
+          echo "========================================"
+          echo "DEBUG APK"
+          echo "========================================"
+
           echo "$APK"
 
           echo
-          echo "File:"
           ls -lh "$APK"
 
           echo
@@ -394,13 +471,17 @@ jobs:
         run: |
           set -e
 
+          echo "========================================"
+          echo "BUILDING RELEASE APK"
+          echo "========================================"
+
           ./gradlew \
             --no-daemon \
             --stacktrace \
             assembleRelease
 
       # ============================================================
-      # 17. FIND RELEASE APK
+      # 17. VERIFY RELEASE APK
       # ============================================================
 
       - name: Verify release APK
@@ -418,11 +499,13 @@ jobs:
             exit 1
           fi
 
-          echo "Release APK:"
+          echo "========================================"
+          echo "RELEASE APK"
+          echo "========================================"
+
           echo "$APK"
 
           echo
-          echo "File:"
           ls -lh "$APK"
 
           echo
@@ -432,15 +515,16 @@ jobs:
           echo "RELEASE_APK=$APK" >> "$GITHUB_ENV"
 
       # ============================================================
-      # 18. PREPARE ARTIFACT
+      # 18. PREPARE ARTIFACTS
       # ============================================================
 
-      - name: Prepare artifacts
+      - name: Prepare V10 artifacts
         shell: bash
         run: |
           set -e
 
           rm -rf v10-artifacts
+
           mkdir -p v10-artifacts
 
           cp "$DEBUG_APK" \
@@ -453,7 +537,10 @@ jobs:
             v10-artifacts/*.apk \
             > v10-artifacts/SHA256SUMS.txt
 
-          echo "Artifacts:"
+          echo "========================================"
+          echo "ARTIFACTS"
+          echo "========================================"
+
           ls -lh v10-artifacts
 
       # ============================================================
@@ -472,14 +559,19 @@ jobs:
       # 20. FINAL
       # ============================================================
 
-      - name: Build completed
+      - name: Final result
         shell: bash
         run: |
+          echo
           echo "========================================"
           echo "CAR ASSISTANT V10 RUN #12"
           echo "========================================"
-          echo "V9 AACast baseline preserved."
-          echo "Debug APK: BUILD SUCCESS"
-          echo "Release APK: BUILD SUCCESS"
-          echo "Artifact: CarAssistant-V10-Run12"
+          echo
+          echo "V9 AACast source detected."
+          echo "V9 AACast engine verified."
+          echo "Debug APK built."
+          echo "Release APK built."
+          echo "Artifacts uploaded."
+          echo
+          echo "RUN #12 COMPLETE"
           echo "========================================"
