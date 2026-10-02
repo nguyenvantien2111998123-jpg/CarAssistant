@@ -1,0 +1,993 @@
+name: Create V10 Base
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build Car Assistant V10 Base
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: "8.13"
+          cache-disabled: true
+
+      # ============================================================
+      # CREATE CLEAN V10 SOURCE FROM VERIFIED V9 PROJECTION ENGINE
+      # ============================================================
+      - name: Prepare V10 source
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          echo "=== CLEAN OLD V10 ==="
+          rm -rf v10-source
+
+          echo "=== CREATE V10 SOURCE ==="
+          mkdir -p v10-source
+
+          cp -a \
+            v9-source/android-project/v9-source/. \
+            v10-source/
+
+          echo "=== CHANGE PACKAGE V9 -> V10 ==="
+
+          find v10-source -type f \
+            \( -name "*.java" \
+            -o -name "*.xml" \
+            -o -name "*.gradle" \
+            -o -name "*.properties" \
+            -o -name "xposed_init" \) \
+            -print0 |
+            xargs -0 sed -i \
+            's/com\.carassistant\.v9/com.carassistant.v10/g'
+
+          echo "=== UPDATE GRADLE ==="
+
+          sed -i \
+            "s/namespace 'com\.carassistant\.v9'/namespace 'com.carassistant.v10'/" \
+            v10-source/app/build.gradle
+
+          sed -i \
+            's/applicationId "com\.carassistant\.v9"/applicationId "com.carassistant.v10"/' \
+            v10-source/app/build.gradle
+
+          sed -i \
+            's/versionCode 3/versionCode 1000/' \
+            v10-source/app/build.gradle
+
+          sed -i \
+            's/versionName "1\.0\.0"/versionName "10.0-base"/' \
+            v10-source/app/build.gradle
+
+          echo "=== UPDATE MANIFEST REFERENCES ==="
+
+          sed -i \
+            's/com\.carassistant\.v9/com.carassistant.v10/g' \
+            v10-source/app/src/main/AndroidManifest.xml
+
+          # ========================================================
+          # REMOVE V9 PHONE UI + V9 CAR UI
+          # ========================================================
+
+          rm -f \
+            v10-source/app/src/main/java/com/hieptran/aacast/doudou/MainActivity.java
+
+          rm -f \
+            v10-source/app/src/main/java/com/hieptran/aacast/doudou/AACastCarActivity.java
+
+          # ========================================================
+          # V10 PROJECTION SESSION
+          # ========================================================
+
+          cat > \
+          v10-source/app/src/main/java/com/hieptran/aacast/doudou/V10ProjectionSession.java \
+          <<'EOF'
+
+          package com.carassistant.v10;
+
+          import android.content.ComponentName;
+          import android.content.Context;
+          import android.content.pm.ActivityInfo;
+          import android.content.pm.PackageManager;
+          import android.graphics.SurfaceTexture;
+          import android.hardware.display.DisplayManager;
+          import android.hardware.display.VirtualDisplay;
+          import android.os.Process;
+          import android.util.Log;
+          import android.view.MotionEvent;
+          import android.view.Surface;
+          import android.view.TextureView;
+          import android.view.View;
+
+          import java.util.concurrent.atomic.AtomicBoolean;
+
+          /**
+           * V10 projection engine.
+           *
+           * Một session = một ứng dụng chạy trên một VirtualDisplay.
+           *
+           * Luồng:
+           *
+           * TextureView
+           *      ↓
+           * Surface
+           *      ↓
+           * VirtualDisplay
+           *      ↓
+           * am start --display
+           *      ↓
+           * Android application
+           *
+           * Touch:
+           *
+           * TextureView
+           *      ↓
+           * su input touchscreen -d DISPLAY
+           *      ↓
+           * InputHooks
+           *      ↓
+           * VirtualDisplay
+           */
+          public final class V10ProjectionSession
+                  implements TextureView.SurfaceTextureListener {
+
+              private static final String TAG =
+                      "CarAssistantV10";
+
+              private final Context context;
+              private final TextureView texture;
+              private final int slot;
+
+              private final RootShellSession shell;
+
+              private final AtomicBoolean inputBusy =
+                      new AtomicBoolean(false);
+
+              private volatile VirtualDisplay display;
+              private volatile Surface surface;
+
+              private volatile int displayId = -1;
+
+              private ComponentName target;
+
+              private boolean launching;
+
+              public V10ProjectionSession(
+                      Context context,
+                      TextureView texture,
+                      int slot) {
+
+                  this.context = context;
+                  this.texture = texture;
+                  this.slot = slot;
+
+                  /*
+                   * Một persistent root shell cho session.
+                   *
+                   * Không tạo `su` process mới cho từng touch.
+                   */
+                  shell = new RootShellSession();
+
+                  texture.setSurfaceTextureListener(this);
+                  texture.setOnTouchListener(this::onTouch);
+              }
+
+              /**
+               * Gán ứng dụng cho session.
+               */
+              public synchronized void setTarget(
+                      ComponentName component) {
+
+                  stop();
+
+                  target = null;
+
+                  if (component == null) {
+                      return;
+                  }
+
+                  try {
+
+                      ActivityInfo ai =
+                              context.getPackageManager()
+                                      .getActivityInfo(
+                                              component,
+                                              0);
+
+                      if (!ai.enabled) {
+                          return;
+                      }
+
+                      if (!ai.exported) {
+                          return;
+                      }
+
+                      if (!ai.applicationInfo.enabled) {
+                          return;
+                      }
+
+                      if (context.getPackageName()
+                              .equals(ai.packageName)) {
+                          return;
+                      }
+
+                      target = component;
+
+                  } catch (
+                          PackageManager.NameNotFoundException ignored) {
+                  }
+
+                  if (texture.isAvailable()) {
+                      start();
+                  }
+              }
+
+              public int getDisplayId() {
+                  return displayId;
+              }
+
+              public boolean isRunning() {
+                  return display != null &&
+                         displayId > 0;
+              }
+
+              /**
+               * Tạo VirtualDisplay.
+               */
+              private synchronized void start() {
+
+                  if (display != null) {
+                      return;
+                  }
+
+                  if (target == null) {
+                      return;
+                  }
+
+                  if (!texture.isAvailable()) {
+                      return;
+                  }
+
+                  int width = texture.getWidth();
+                  int height = texture.getHeight();
+
+                  if (width < 1 || height < 1) {
+                      return;
+                  }
+
+                  SurfaceTexture surfaceTexture =
+                          texture.getSurfaceTexture();
+
+                  if (surfaceTexture == null) {
+                      return;
+                  }
+
+                  try {
+
+                      surfaceTexture.setDefaultBufferSize(
+                              width,
+                              height);
+
+                      Surface newSurface =
+                              new Surface(surfaceTexture);
+
+                      VirtualDisplay newDisplay =
+                              ((DisplayManager)
+                                      context.getSystemService(
+                                              Context.DISPLAY_SERVICE))
+                                      .createVirtualDisplay(
+                                              "Car Assistant V10 Slot "
+                                                      + (slot + 1),
+                                              width,
+                                              height,
+                                              160,
+                                              newSurface,
+                                              10);
+
+                      if (newDisplay == null) {
+
+                          newSurface.release();
+
+                          throw new IllegalStateException(
+                                  "VirtualDisplay == null");
+                      }
+
+                      surface = newSurface;
+                      display = newDisplay;
+
+                      displayId =
+                              newDisplay
+                                      .getDisplay()
+                                      .getDisplayId();
+
+                      Log.d(
+                              TAG,
+                              "V10 VirtualDisplay created: "
+                                      + displayId);
+
+                      launch();
+
+                  } catch (RuntimeException e) {
+
+                      Log.w(
+                              TAG,
+                              "Projection start failed",
+                              e);
+
+                      stop();
+                  }
+              }
+
+              /**
+               * Mở Activity mục tiêu trên VirtualDisplay.
+               */
+              private void launch() {
+
+                  if (launching) {
+                      return;
+                  }
+
+                  if (target == null) {
+                      return;
+                  }
+
+                  int id = displayId;
+
+                  if (id <= 0) {
+                      return;
+                  }
+
+                  final String flat =
+                          target.flattenToString();
+
+                  if (!flat.matches(
+                          "[A-Za-z_][A-Za-z0-9_]*" +
+                          "(?:\\.[A-Za-z_][A-Za-z0-9_]*)*" +
+                          "/\\.?[A-Za-z_][A-Za-z0-9_]*" +
+                          "(?:\\.[A-Za-z_][A-Za-z0-9_]*)*")) {
+
+                      Log.w(
+                              TAG,
+                              "Invalid launch target: " + flat);
+
+                      return;
+                  }
+
+                  final int userId =
+                          Process.myUid() / 100000;
+
+                  final String command =
+                          "/system/bin/am start" +
+                          " --user " + userId +
+                          " --display " + id +
+                          " --windowingMode 1" +
+                          " -a android.intent.action.MAIN" +
+                          " -c android.intent.category.LAUNCHER" +
+                          " -f 0x18000000" +
+                          " -n '" +
+                          flat.replace(
+                                  "'",
+                                  "'\"'\"'") +
+                          "'";
+
+                  launching = true;
+
+                  RootShellSession.EXEC.execute(() -> {
+
+                      try {
+
+                          shell.run(
+                                  15,
+                                  command);
+
+                          Log.d(
+                                  TAG,
+                                  "Application launched: "
+                                          + flat
+                                          + " on display "
+                                          + id);
+
+                      } catch (Exception e) {
+
+                          Log.w(
+                                  TAG,
+                                  "Launch failed: "
+                                          + flat,
+                                  e);
+
+                      } finally {
+
+                          launching = false;
+                      }
+                  });
+              }
+
+              /**
+               * Touch → root input → InputHooks.
+               */
+              private boolean onTouch(
+                      View view,
+                      MotionEvent event) {
+
+                  final int id = displayId;
+
+                  if (id <= 0) {
+                      return true;
+                  }
+
+                  if (event.getActionMasked()
+                          != MotionEvent.ACTION_UP) {
+
+                      return true;
+                  }
+
+                  final float x = event.getX();
+                  final float y = event.getY();
+
+                  if (!inputBusy.compareAndSet(
+                          false,
+                          true)) {
+
+                      return true;
+                  }
+
+                  final String command =
+                          "input touchscreen -d "
+                          + id
+                          + " tap "
+                          + Math.round(x)
+                          + " "
+                          + Math.round(y);
+
+                  RootShellSession.EXEC.execute(() -> {
+
+                      try {
+
+                          shell.run(
+                                  8,
+                                  command);
+
+                      } catch (Exception e) {
+
+                          Log.w(
+                                  TAG,
+                                  "Input failed",
+                                  e);
+
+                      } finally {
+
+                          inputBusy.set(false);
+                      }
+                  });
+
+                  return true;
+              }
+
+              /**
+               * Dừng session.
+               */
+              public synchronized void stop() {
+
+                  VirtualDisplay oldDisplay =
+                          display;
+
+                  Surface oldSurface =
+                          surface;
+
+                  display = null;
+                  surface = null;
+                  displayId = -1;
+                  launching = false;
+
+                  if (oldDisplay != null) {
+                      oldDisplay.release();
+                  }
+
+                  if (oldSurface != null) {
+                      oldSurface.release();
+                  }
+              }
+
+              /**
+               * Giải phóng hoàn toàn session.
+               */
+              public synchronized void destroy() {
+
+                  stop();
+
+                  try {
+                      shell.close();
+                  } catch (Exception ignored) {
+                  }
+              }
+
+              @Override
+              public void onSurfaceTextureAvailable(
+                      SurfaceTexture surface,
+                      int width,
+                      int height) {
+
+                  start();
+              }
+
+              @Override
+              public void onSurfaceTextureSizeChanged(
+                      SurfaceTexture surface,
+                      int width,
+                      int height) {
+
+                  if (display == null) {
+                      return;
+                  }
+
+                  if (width < 1 || height < 1) {
+                      return;
+                  }
+
+                  try {
+
+                      surface.setDefaultBufferSize(
+                              width,
+                              height);
+
+                      display.resize(
+                              width,
+                              height,
+                              160);
+
+                  } catch (RuntimeException e) {
+
+                      Log.w(
+                              TAG,
+                              "Resize failed",
+                              e);
+
+                      stop();
+                      start();
+                  }
+              }
+
+              @Override
+              public boolean onSurfaceTextureDestroyed(
+                      SurfaceTexture surface) {
+
+                  stop();
+
+                  return true;
+              }
+
+              @Override
+              public void onSurfaceTextureUpdated(
+                      SurfaceTexture surface) {
+              }
+          }
+
+          EOF
+
+          # ========================================================
+          # V10 LAUNCHER
+          # ========================================================
+
+          cat > \
+          v10-source/app/src/main/java/com/hieptran/aacast/doudou/V10LauncherActivity.java \
+          <<'EOF'
+
+          package com.carassistant.v10;
+
+          import android.app.Activity;
+          import android.content.ComponentName;
+          import android.content.Intent;
+          import android.content.pm.ResolveInfo;
+          import android.os.Bundle;
+          import android.view.Gravity;
+          import android.widget.Button;
+          import android.widget.LinearLayout;
+          import android.widget.TextView;
+
+          import java.util.List;
+
+          /**
+           * V10 launcher tối giản.
+           *
+           * Đây chỉ là lớp điều khiển.
+           * Projection không nằm trong Launcher.
+           */
+          public final class V10LauncherActivity
+                  extends Activity {
+
+              @Override
+              protected void onCreate(Bundle bundle) {
+
+                  super.onCreate(bundle);
+
+                  LinearLayout root =
+                          new LinearLayout(this);
+
+                  root.setOrientation(
+                          LinearLayout.VERTICAL);
+
+                  root.setPadding(
+                          32,
+                          32,
+                          32,
+                          32);
+
+                  TextView title =
+                          new TextView(this);
+
+                  title.setText(
+                          "CAR ASSISTANT V10");
+
+                  title.setTextSize(24);
+
+                  title.setGravity(
+                          Gravity.CENTER);
+
+                  root.addView(
+                          title,
+                          new LinearLayout.LayoutParams(
+                                  -1,
+                                  80));
+
+                  TextView info =
+                          new TextView(this);
+
+                  info.setText(
+                          "V10 Launcher\n" +
+                          "Projection Engine\n" +
+                          "Android 12 compatible");
+
+                  root.addView(
+                          info,
+                          new LinearLayout.LayoutParams(
+                                  -1,
+                                  100));
+
+                  Intent launcherIntent =
+                          new Intent(
+                                  Intent.ACTION_MAIN);
+
+                  launcherIntent.addCategory(
+                          Intent.CATEGORY_LAUNCHER);
+
+                  List<ResolveInfo> apps =
+                          getPackageManager()
+                                  .queryIntentActivities(
+                                          launcherIntent,
+                                          0);
+
+                  int shown = 0;
+
+                  for (ResolveInfo infoApp : apps) {
+
+                      String packageName =
+                              infoApp.activityInfo.packageName;
+
+                      if (packageName.equals(
+                              getPackageName())) {
+
+                          continue;
+                      }
+
+                      Button button =
+                              new Button(this);
+
+                      button.setText(
+                              infoApp.loadLabel(
+                                      getPackageManager()));
+
+                      ComponentName component =
+                              new ComponentName(
+                                      infoApp.activityInfo.packageName,
+                                      infoApp.activityInfo.name);
+
+                      button.setOnClickListener(
+                              view -> {
+
+                                  Intent carIntent =
+                                          new Intent(
+                                                  this,
+                                                  V10CarActivity.class);
+
+                                  carIntent.putExtra(
+                                          "target",
+                                          component
+                                                  .flattenToString());
+
+                                  startActivity(
+                                          carIntent);
+                              });
+
+                      root.addView(
+                              button,
+                              new LinearLayout.LayoutParams(
+                                      -1,
+                                      60));
+
+                      shown++;
+
+                      if (shown >= 12) {
+                          break;
+                      }
+                  }
+
+                  setContentView(root);
+              }
+          }
+
+          EOF
+
+          # ========================================================
+          # V10 CAR ACTIVITY
+          # ========================================================
+
+          cat > \
+          v10-source/app/src/main/java/com/hieptran/aacast/doudou/V10CarActivity.java \
+          <<'EOF'
+
+          package com.carassistant.v10;
+
+          import android.content.ComponentName;
+          import android.os.Bundle;
+          import android.view.TextureView;
+          import android.widget.FrameLayout;
+
+          import com.google.android.apps.auto.sdk.CarActivity;
+
+          /**
+           * Activity chạy trên Android Auto.
+           *
+           * Không còn RootView / PaneView của V9.
+           * V10 sử dụng ProjectionSession độc lập.
+           */
+          public final class V10CarActivity
+                  extends CarActivity {
+
+              private V10ProjectionSession session;
+
+              @Override
+              public void onCreate(Bundle bundle) {
+
+                  setTheme(
+                          R.style.Theme_AACast);
+
+                  super.onCreate(bundle);
+
+                  FrameLayout root =
+                          new FrameLayout(this);
+
+                  TextureView texture =
+                          new TextureView(this);
+
+                  root.addView(
+                          texture,
+                          new FrameLayout.LayoutParams(
+                                  -1,
+                                  -1));
+
+                  session =
+                          new V10ProjectionSession(
+                                  this,
+                                  texture,
+                                  0);
+
+                  String flat =
+                          getIntent()
+                                  .getStringExtra(
+                                          "target");
+
+                  if (flat != null) {
+
+                      ComponentName target =
+                              ComponentName
+                                      .unflattenFromString(
+                                              flat);
+
+                      session.setTarget(target);
+                  }
+
+                  setContentView(root);
+              }
+
+              @Override
+              protected void onDestroy() {
+
+                  if (session != null) {
+                      session.destroy();
+                  }
+
+                  super.onDestroy();
+              }
+          }
+
+          EOF
+
+          # ========================================================
+          # MANIFEST
+          # ========================================================
+
+          python3 - <<'PY'
+          from pathlib import Path
+
+          p = Path(
+              "v10-source/app/src/main/AndroidManifest.xml"
+          )
+
+          s = p.read_text()
+
+          s = s.replace(
+              "com.carassistant.v10.MainActivity",
+              "com.carassistant.v10.V10LauncherActivity"
+          )
+
+          s = s.replace(
+              "com.carassistant.v10.AACastCarActivity",
+              "com.carassistant.v10.V10CarActivity"
+          )
+
+          p.write_text(s)
+          PY
+
+          # ========================================================
+          # XPOSED ENTRY
+          # ========================================================
+
+          mkdir -p \
+            v10-source/app/src/main/assets
+
+          if [ -f \
+            v10-source/app/src/main/assets/xposed_init ]; then
+
+            sed -i \
+              's/com\.carassistant\.v9/com.carassistant.v10/g' \
+              v10-source/app/src/main/assets/xposed_init
+
+          fi
+
+          echo
+          echo "=== V10 SOURCE TREE ==="
+          find v10-source \
+            -maxdepth 4 \
+            -type f |
+            sort |
+            head -200
+
+      # ============================================================
+      # GENERATE GRADLE WRAPPER
+      # ============================================================
+
+      - name: Generate Gradle wrapper
+        working-directory: v10-source
+        run: |
+          gradle wrapper \
+            --gradle-version "$GRADLE_VERSION" \
+            --distribution-type bin
+
+          chmod +x gradlew
+
+      # ============================================================
+      # BUILD
+      # ============================================================
+
+      - name: Build V10 debug
+        working-directory: v10-source
+        run: |
+          ./gradlew \
+            assembleDebug \
+            --no-daemon \
+            --stacktrace
+
+      # ============================================================
+      # VERIFY
+      # ============================================================
+
+      - name: Verify V10
+        working-directory: v10-source
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          echo "=== VERIFY APK ==="
+
+          test -f \
+            app/build/outputs/apk/debug/app-debug.apk
+
+          echo "APK OK"
+
+          echo "=== VERIFY V10 PACKAGE ==="
+
+          grep -R \
+            "package com.carassistant.v10" \
+            app/src/main/java
+
+          echo "PACKAGE OK"
+
+          echo "=== VERIFY MANIFEST ==="
+
+          grep -q \
+            "com.carassistant.v10.V10LauncherActivity" \
+            app/src/main/AndroidManifest.xml
+
+          grep -q \
+            "com.carassistant.v10.V10CarActivity" \
+            app/src/main/AndroidManifest.xml
+
+          echo "MANIFEST OK"
+
+          echo "=== VERIFY PROJECTION ENGINE ==="
+
+          test -f \
+            app/src/main/java/com/hieptran/aacast/doudou/V10ProjectionSession.java
+
+          grep -q \
+            "createVirtualDisplay" \
+            app/src/main/java/com/hieptran/aacast/doudou/V10ProjectionSession.java
+
+          grep -q \
+            "am start" \
+            app/src/main/java/com/hieptran/aacast/doudou/V10ProjectionSession.java
+
+          grep -q \
+            "input touchscreen" \
+            app/src/main/java/com/hieptran/aacast/doudou/V10ProjectionSession.java
+
+          echo "PROJECTION ENGINE OK"
+
+          echo
+          echo "===================================="
+          echo "   CAR ASSISTANT V10 BASE PASSED"
+          echo "===================================="
+
+      # ============================================================
+      # UPLOAD APK
+      # ============================================================
+
+      - name: Upload V10 debug APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: CarAssistant-V10-Base-debug
+          path: v10-source/app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error
+          retention-days: 30
+
+      # ============================================================
+      # COMMIT V10 SOURCE
+      # ============================================================
+
+      - name: Commit V10 source
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          git config user.name \
+            "github-actions[bot]"
+
+          git config user.email \
+            "41898282+github-actions[bot]@users.noreply.github.com"
+
+          git add v10-source
+
+          if git diff --cached --quiet; then
+            echo "No V10 source changes to commit."
+          else
+            git commit -m \
+              "Create Car Assistant V10 base architecture"
+
+            git push
+          fi
