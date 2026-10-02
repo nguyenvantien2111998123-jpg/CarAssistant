@@ -18,7 +18,8 @@ import java.util.Collections;
 import java.util.Comparator;
 import java.util.List;
 
-public final class V10LauncherActivity extends Activity {
+public final class V10LauncherActivity
+        extends Activity {
 
     private LinearLayout list;
     private TextView status;
@@ -32,6 +33,7 @@ public final class V10LauncherActivity extends Activity {
     }
 
     private void buildUi() {
+
         LinearLayout root =
                 new LinearLayout(this);
 
@@ -138,6 +140,7 @@ public final class V10LauncherActivity extends Activity {
     }
 
     private void loadApps() {
+
         if (list == null) {
             return;
         }
@@ -161,6 +164,7 @@ public final class V10LauncherActivity extends Activity {
                 new ArrayList<>();
 
         for (ResolveInfo info : apps) {
+
             if (info.activityInfo == null) {
                 continue;
             }
@@ -176,6 +180,7 @@ public final class V10LauncherActivity extends Activity {
         Collections.sort(
                 filtered,
                 new Comparator<ResolveInfo>() {
+
                     @Override
                     public int compare(
                             ResolveInfo a,
@@ -211,17 +216,18 @@ public final class V10LauncherActivity extends Activity {
                             info.loadLabel(
                                     getPackageManager())));
 
-            button.setOnClickListener(v -> {
+            button.setOnClickListener(
+                    v -> {
 
-                V10SessionStore.setTarget(
-                        V10LauncherActivity.this,
-                        component);
+                        V10SessionStore.setTarget(
+                                V10LauncherActivity.this,
+                                component);
 
-                status.setText(
-                        "Selected: "
-                                + component
-                                .flattenToShortString());
-            });
+                        status.setText(
+                                "Selected: "
+                                        + component
+                                        .flattenToShortString());
+                    });
 
             list.addView(
                     button,

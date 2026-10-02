@@ -6,13 +6,18 @@ import android.content.SharedPreferences;
 
 public final class V10SessionStore {
 
-    private static final String PREFS = "v10_session";
-    private static final String TARGET = "target_component";
+    private static final String PREFS =
+            "v10_session";
+
+    private static final String TARGET =
+            "target_component";
 
     private V10SessionStore() {
     }
 
-    private static SharedPreferences prefs(Context context) {
+    private static SharedPreferences prefs(
+            Context context) {
+
         return context.getSharedPreferences(
                 PREFS,
                 Context.MODE_PRIVATE);
@@ -44,14 +49,18 @@ public final class V10SessionStore {
                         TARGET,
                         null);
 
-        if (value == null || value.isEmpty()) {
+        if (value == null ||
+                value.isEmpty()) {
             return null;
         }
 
-        return ComponentName.unflattenFromString(value);
+        return ComponentName.unflattenFromString(
+                value);
     }
 
-    public static void clearTarget(Context context) {
+    public static void clearTarget(
+            Context context) {
+
         prefs(context)
                 .edit()
                 .remove(TARGET)

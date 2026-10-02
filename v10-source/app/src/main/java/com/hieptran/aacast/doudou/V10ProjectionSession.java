@@ -22,6 +22,7 @@ public final class V10ProjectionSession
             new RootShellSession();
 
     private TextureView textureView;
+
     private ComponentName target;
 
     private Display display;
@@ -33,7 +34,13 @@ public final class V10ProjectionSession
 
     private boolean destroyed;
 
-    public V10ProjectionSession(Context context) {
+    private int contentWidth;
+
+    private int contentHeight;
+
+    public V10ProjectionSession(
+            Context context) {
+
         this.context =
                 context.getApplicationContext();
     }
@@ -67,7 +74,6 @@ public final class V10ProjectionSession
 
         if (changed
                 && virtualDisplay != null) {
-
             releaseDisplayOnly();
         }
 
@@ -75,6 +81,7 @@ public final class V10ProjectionSession
     }
 
     public boolean isActive() {
+
         return !destroyed
                 && target != null
                 && virtualDisplay != null
@@ -110,7 +117,11 @@ public final class V10ProjectionSession
 
         try {
 
-            // Proven V9 sequence.
+            /*
+             * IMPORTANT:
+             * This is the V9 proven sequence.
+             */
+
             st.setDefaultBufferSize(
                     width,
                     height);
@@ -124,6 +135,7 @@ public final class V10ProjectionSession
                                     Context.DISPLAY_SERVICE);
 
             if (manager == null) {
+
                 newSurface.release();
 
                 throw new IllegalStateException(
@@ -141,6 +153,7 @@ public final class V10ProjectionSession
                             10);
 
             if (newVirtualDisplay == null) {
+
                 newSurface.release();
 
                 throw new IllegalStateException(
@@ -151,6 +164,7 @@ public final class V10ProjectionSession
                     newVirtualDisplay.getDisplay();
 
             if (newDisplay == null) {
+
                 newVirtualDisplay.release();
                 newSurface.release();
 
@@ -166,6 +180,12 @@ public final class V10ProjectionSession
 
             display =
                     newDisplay;
+
+            contentWidth =
+                    width;
+
+            contentHeight =
+                    height;
 
             launchTarget();
 
@@ -224,17 +244,73 @@ public final class V10ProjectionSession
 
         RootShellSession.EXEC.execute(
                 () -> {
+
                     try {
+
                         rootShell.run(
                                 10,
                                 command);
+
                     } catch (Throwable t) {
+
                         Log.w(
                                 TAG,
                                 "Launch failed",
                                 t);
                     }
                 });
+    }
+
+    private float mapX(float x) {
+
+        if (textureView == null
+                || contentWidth < 1) {
+            return x;
+        }
+
+        float sourceWidth =
+                textureView.getWidth();
+
+        if (sourceWidth <= 0) {
+            return x;
+        }
+
+        return clamp(
+                x * contentWidth / sourceWidth,
+                0,
+                contentWidth - 1);
+    }
+
+    private float mapY(float y) {
+
+        if (textureView == null
+                || contentHeight < 1) {
+            return y;
+        }
+
+        float sourceHeight =
+                textureView.getHeight();
+
+        if (sourceHeight <= 0) {
+            return y;
+        }
+
+        return clamp(
+                y * contentHeight / sourceHeight,
+                0,
+                contentHeight - 1);
+    }
+
+    private static float clamp(
+            float value,
+            float min,
+            float max) {
+
+        return Math.max(
+                min,
+                Math.min(
+                        max,
+                        value));
     }
 
     public void tap(
@@ -249,14 +325,12 @@ public final class V10ProjectionSession
                 display.getDisplayId();
 
         final int ix =
-                Math.max(
-                        0,
-                        Math.round(x));
+                Math.round(
+                        mapX(x));
 
         final int iy =
-                Math.max(
-                        0,
-                        Math.round(y));
+                Math.round(
+                        mapY(y));
 
         final String command =
                 "/system/bin/input -d "
@@ -268,14 +342,88 @@ public final class V10ProjectionSession
 
         RootShellSession.EXEC.execute(
                 () -> {
+
                     try {
+
                         rootShell.run(
                                 5,
                                 command);
+
                     } catch (Throwable t) {
+
                         Log.w(
                                 TAG,
                                 "Tap failed",
+                                t);
+                    }
+                });
+    }
+
+    public void swipe(
+            float startX,
+            float startY,
+            float endX,
+            float endY,
+            long duration) {
+
+        if (!isActive()) {
+            return;
+        }
+
+        final int displayId =
+                display.getDisplayId();
+
+        final int x1 =
+                Math.round(
+                        mapX(startX));
+
+        final int y1 =
+                Math.round(
+                        mapY(startY));
+
+        final int x2 =
+                Math.round(
+                        mapX(endX));
+
+        final int y2 =
+                Math.round(
+                        mapY(endY));
+
+        final long safeDuration =
+                Math.max(
+                        80L,
+                        Math.min(
+                                800L,
+                                duration));
+
+        final String command =
+                "/system/bin/input -d "
+                        + displayId
+                        + " swipe "
+                        + x1
+                        + " "
+                        + y1
+                        + " "
+                        + x2
+                        + " "
+                        + y2
+                        + " "
+                        + safeDuration;
+
+        RootShellSession.EXEC.execute(
+                () -> {
+
+                    try {
+
+                        rootShell.run(
+                                5,
+                                command);
+
+                    } catch (Throwable t) {
+
+                        Log.w(
+                                TAG,
+                                "Swipe failed",
                                 t);
                     }
                 });
@@ -297,11 +445,15 @@ public final class V10ProjectionSession
 
         RootShellSession.EXEC.execute(
                 () -> {
+
                     try {
+
                         rootShell.run(
                                 5,
                                 command);
+
                     } catch (Throwable t) {
+
                         Log.w(
                                 TAG,
                                 "Back failed",
@@ -313,6 +465,7 @@ public final class V10ProjectionSession
     private void releaseDisplayOnly() {
 
         if (virtualDisplay != null) {
+
             try {
                 virtualDisplay.release();
             } catch (Throwable ignored) {
@@ -323,6 +476,7 @@ public final class V10ProjectionSession
         display = null;
 
         if (surface != null) {
+
             try {
                 surface.release();
             } catch (Throwable ignored) {

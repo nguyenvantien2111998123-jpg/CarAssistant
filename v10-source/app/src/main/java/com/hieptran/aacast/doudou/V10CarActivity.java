@@ -5,11 +5,8 @@ import android.graphics.Color;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
-import android.view.Gravity;
-import android.view.MotionEvent;
 import android.view.TextureView;
 import android.widget.FrameLayout;
-import android.widget.TextView;
 
 import com.google.android.apps.auto.sdk.CarActivity;
 
@@ -21,8 +18,8 @@ public final class V10CarActivity
                     Looper.getMainLooper());
 
     private TextureView textureView;
+
     private V10ProjectionSession session;
-    private TextView status;
 
     private boolean resumed;
 
@@ -45,19 +42,6 @@ public final class V10CarActivity
 
                         session.setTarget(
                                 target);
-
-                        if (session.isActive()) {
-
-                            status.setText(
-                                    "Car Assistant V10");
-
-                        } else {
-
-                            status.setText(
-                                    "Starting "
-                                            + target
-                                            .flattenToShortString());
-                        }
                     }
 
                     handler.postDelayed(
@@ -83,7 +67,8 @@ public final class V10CarActivity
     }
 
     @Override
-    public void onCreate(Bundle state) {
+    public void onCreate(
+            Bundle state) {
 
         setTheme(
                 R.style.Theme_AACast);
@@ -121,36 +106,6 @@ public final class V10CarActivity
                             FrameLayout.LayoutParams.MATCH_PARENT,
                             FrameLayout.LayoutParams.MATCH_PARENT));
 
-            status =
-                    new TextView(this);
-
-            status.setText(
-                    "Car Assistant V10");
-
-            status.setTextColor(
-                    Color.WHITE);
-
-            status.setTextSize(16);
-
-            status.setGravity(
-                    Gravity.CENTER);
-
-            status.setBackgroundColor(
-                    0x66000000);
-
-            FrameLayout.LayoutParams
-                    statusParams =
-                    new FrameLayout.LayoutParams(
-                            FrameLayout.LayoutParams.WRAP_CONTENT,
-                            FrameLayout.LayoutParams.WRAP_CONTENT);
-
-            statusParams.gravity =
-                    Gravity.CENTER;
-
-            root.addView(
-                    status,
-                    statusParams);
-
             session =
                     new V10ProjectionSession(
                             this);
@@ -158,19 +113,14 @@ public final class V10CarActivity
             session.attachTextureView(
                     textureView);
 
+            V10InputController
+                    inputController =
+                    new V10InputController(
+                            session);
+
             textureView.setOnTouchListener(
-                    (v, event) -> {
-
-                        if (event.getAction()
-                                == MotionEvent.ACTION_UP) {
-
-                            session.tap(
-                                    event.getX(),
-                                    event.getY());
-                        }
-
-                        return true;
-                    });
+                    inputController
+                            .createListener());
 
             setContentView(root);
         }
@@ -231,7 +181,9 @@ public final class V10CarActivity
                 targetPoller);
 
         if (session != null) {
+
             session.destroy();
+
             session = null;
         }
 
