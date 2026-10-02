@@ -1,0 +1,1274 @@
+name: Build Car Assistant V10.1.1 - Clean V9 Engine
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.13'
+
+      - name: Prepare clean V10.1.1 source
+        shell: bash
+        run: |
+          set -e
+
+          rm -rf v10-source
+
+          mkdir -p v10-source
+
+          cp -a v9-source/android-project/v9-source/. v10-source/
+
+          # V10 package
+          find v10-source -type f \( -name "*.java" -o -name "*.gradle" -o -name "*.xml" -o -name "*.properties" \) \
+            -print0 | xargs -0 sed -i \
+            -e 's/com\.carassistant\.v9/com.carassistant.v10/g' \
+            -e 's/Car Assistant V9/Car Assistant V10/g' \
+            -e 's/AACast V9/AACast V10/g'
+
+          # Application id / namespace
+          sed -i \
+            -e 's/applicationId "com\.carassistant\.v9"/applicationId "com.carassistant.v10"/g' \
+            -e 's/namespace "com\.carassistant\.v9"/namespace "com.carassistant.v10"/g' \
+            v10-source/app/build.gradle
+
+          echo "V10 source prepared."
+
+      - name: Remove old V10 generated duplicates
+        shell: bash
+        run: |
+          set -e
+
+          JAVA=v10-source/app/src/main/java
+
+          # Remove any previously generated V10 files from both possible locations.
+          find "$JAVA" -type f \
+            \( -name "V10ProjectionSession.java" \
+            -o -name "V10CarActivity.java" \
+            -o -name "V10Display.java" \
+            -o -name "V10InputController.java" \) \
+            -delete
+
+          find "$JAVA" -type f -path "*/hook/InputHooks.java" -delete
+          find "$JAVA" -type f -path "*/hook/DisplayReflect.java" -delete
+
+          echo "Old generated V10 files removed."
+
+      - name: Write V10Display
+        shell: bash
+        run: |
+          set -e
+
+          mkdir -p v10-source/app/src/main/java/com/hieptran/aacast/doudou
+
+          cat > v10-source/app/src/main/java/com/hieptran/aacast/doudou/V10Display.java <<'EOF'
+          package com.carassistant.v10;
+
+          /**
+           * Display identity used by Car Assistant V10.
+           *
+           * Keep these values synchronized with:
+           * 1. V10ProjectionSession.createVirtualDisplay()
+           * 2. InputHooks
+           * 3. any future Gearhead hooks
+           */
+          public final class V10Display {
+
+              public static final String PACKAGE = "com.carassistant.v10";
+              public static final String PREFIX = "Car Assistant V10 ";
+
+              private V10Display() {
+              }
+
+              public static String nameFor(int sessionIndex) {
+                  return PREFIX + (sessionIndex + 1);
+              }
+
+              public static boolean matches(
+                      String ownerPackage,
+                      String name,
+                      int type,
+                      int ownerUid) {
+
+                  if (!PACKAGE.equals(ownerPackage)
+                          || type != 5
+                          || ownerUid < 10000) {
+                      return false;
+                  }
+
+                  return (PREFIX + "1").equals(name)
+                          || (PREFIX + "2").equals(name)
+                          || (PREFIX + "3").equals(name);
+              }
+          }
+          EOF
+
+      - name: Write V10 InputController
+        shell: bash
+        run: |
+          set -e
+
+          cat > v10-source/app/src/main/java/com/hieptran/aacast/doudou/V10InputController.java <<'EOF'
+          package com.carassistant.v10;
+
+          import java.util.Locale;
+
+          /**
+           * Sends input to the currently projected virtual display.
+           *
+           * The actual system-side injection bridge is InputHooks.
+           */
+          public final class V10InputController {
+
+              private final RootShellSession shell;
+
+              public V10InputController(RootShellSession shell) {
+                  this.shell = shell;
+              }
+
+              public void back(int displayId) {
+                  if (displayId <= 0) {
+                      return;
+                  }
+
+                  shell.run(
+                          15,
+                          "/system/bin/input -d "
+                                  + displayId
+                                  + " keyevent 4");
+              }
+
+              public void tap(int displayId, float x, float y) {
+                  if (displayId <= 0) {
+                      return;
+                  }
+
+                  shell.run(
+                          15,
+                          "/system/bin/input touchscreen -d "
+                                  + displayId
+                                  + " tap "
+                                  + number(x)
+                                  + " "
+                                  + number(y));
+              }
+
+              public void swipe(
+                      int displayId,
+                      float x1,
+                      float y1,
+                      float x2,
+                      float y2,
+                      long durationMs) {
+
+                  if (displayId <= 0) {
+                      return;
+                  }
+
+                  long duration = Math.max(1L, Math.min(10000L, durationMs));
+
+                  shell.run(
+                          15,
+                          "/system/bin/input touchscreen -d "
+                                  + displayId
+                                  + " swipe "
+                                  + number(x1)
+                                  + " "
+                                  + number(y1)
+                                  + " "
+                                  + number(x2)
+                                  + " "
+                                  + number(y2)
+                                  + " "
+                                  + duration);
+              }
+
+              private static String number(float value) {
+                  return String.format(Locale.US, "%.2f", value);
+              }
+          }
+          EOF
+
+      - name: Write V10 ProjectionSession
+        shell: bash
+        run: |
+          set -e
+
+          cat > v10-source/app/src/main/java/com/hieptran/aacast/doudou/V10ProjectionSession.java <<'EOF'
+          package com.carassistant.v10;
+
+          import android.content.ComponentName;
+          import android.content.Context;
+          import android.content.pm.ActivityInfo;
+          import android.content.pm.PackageManager;
+          import android.graphics.SurfaceTexture;
+          import android.hardware.display.DisplayManager;
+          import android.hardware.display.VirtualDisplay;
+          import android.os.Process;
+          import android.util.Log;
+          import android.view.MotionEvent;
+          import android.view.Surface;
+          import android.view.TextureView;
+
+          /**
+           * One V10 projection session.
+           *
+           * This deliberately follows the proven V9 projection sequence:
+           *
+           * TextureView Surface available
+           * -> setDefaultBufferSize
+           * -> Surface
+           * -> createVirtualDisplay(flags=10)
+           * -> am start --display
+           */
+          public final class V10ProjectionSession
+                  implements TextureView.SurfaceTextureListener {
+
+              private static final String TAG = "CarAssistant-V10";
+
+              private final Context context;
+              private final RootShellSession shell;
+              private final V10InputController input;
+
+              private TextureView textureView;
+
+              private VirtualDisplay display;
+              private Surface surface;
+
+              private ComponentName target;
+
+              private int bufferW = 1280;
+              private int bufferH = 720;
+
+              private int generation;
+              private boolean destroyed;
+
+              public V10ProjectionSession(Context context) {
+                  this.context = context;
+                  this.shell = new RootShellSession();
+                  this.input = new V10InputController(shell);
+              }
+
+              public void attachTextureView(TextureView view) {
+                  if (textureView == view) {
+                      return;
+                  }
+
+                  if (textureView != null) {
+                      textureView.setSurfaceTextureListener(null);
+                  }
+
+                  textureView = view;
+
+                  if (textureView != null) {
+                      textureView.setSurfaceTextureListener(this);
+
+                      if (textureView.isAvailable()) {
+                          onSurfaceTextureAvailable(
+                                  textureView.getSurfaceTexture(),
+                                  textureView.getWidth(),
+                                  textureView.getHeight());
+                      }
+                  }
+              }
+
+              public void setTarget(ComponentName component) {
+                  target = component;
+                  ensureDisplay();
+              }
+
+              public ComponentName getTarget() {
+                  return target;
+              }
+
+              public int getDisplayId() {
+                  return display == null ? -1 : display.getDisplay().getDisplayId();
+              }
+
+              public boolean isActive() {
+                  return !destroyed && display != null;
+              }
+
+              private void ensureDisplay() {
+                  if (destroyed
+                          || target == null
+                          || textureView == null
+                          || !textureView.isAvailable()
+                          || textureView.getWidth() < 1
+                          || textureView.getHeight() < 1
+                          || display != null) {
+                      return;
+                  }
+
+                  int localGeneration = ++generation;
+
+                  try {
+                      computeBuffer(
+                              textureView.getWidth(),
+                              textureView.getHeight());
+
+                      SurfaceTexture texture = textureView.getSurfaceTexture();
+
+                      if (texture == null) {
+                          return;
+                      }
+
+                      texture.setDefaultBufferSize(bufferW, bufferH);
+
+                      Surface newSurface = new Surface(texture);
+
+                      VirtualDisplay newDisplay = null;
+
+                      try {
+                          DisplayManager dm =
+                                  (DisplayManager) context.getSystemService(
+                                          Context.DISPLAY_SERVICE);
+
+                          if (dm == null) {
+                              throw new IllegalStateException(
+                                      "DisplayManager unavailable");
+                          }
+
+                          newDisplay = dm.createVirtualDisplay(
+                                  V10Display.nameFor(0),
+                                  bufferW,
+                                  bufferH,
+                                  160,
+                                  newSurface,
+                                  10);
+
+                          if (newDisplay == null) {
+                              throw new IllegalStateException(
+                                      "Cannot create virtual display");
+                          }
+
+                          display = newDisplay;
+                          surface = newSurface;
+
+                      } catch (RuntimeException e) {
+                          newSurface.release();
+                          throw e;
+                      }
+
+                      if (localGeneration != generation || destroyed) {
+                          release();
+                          return;
+                      }
+
+                      launch(localGeneration);
+
+                  } catch (RuntimeException e) {
+                      release();
+                      Log.e(TAG,
+                              "Virtual display creation failed",
+                              e);
+                  }
+              }
+
+              private void computeBuffer(int viewW, int viewH) {
+                  float aspect =
+                          viewW > 0 && viewH > 0
+                                  ? (float) viewW / (float) viewH
+                                  : (16f / 9f);
+
+                  if (aspect >= 1f) {
+                      bufferW = 1280;
+                      bufferH = Math.max(
+                              480,
+                              Math.round(bufferW / aspect));
+                  } else {
+                      bufferH = 1280;
+                      bufferW = Math.max(
+                              480,
+                              Math.round(bufferH * aspect));
+                  }
+              }
+
+              private void launch(int localGeneration) {
+                  if (destroyed
+                          || display == null
+                          || target == null
+                          || localGeneration != generation) {
+                      return;
+                  }
+
+                  int displayId =
+                          display.getDisplay().getDisplayId();
+
+                  if (displayId <= 0) {
+                      throw new IllegalStateException(
+                              "Invalid virtual display id: "
+                                      + displayId);
+                  }
+
+                  ActivityInfo info = resolveTarget(target);
+
+                  if (info == null) {
+                      throw new IllegalStateException(
+                              "Target activity unavailable: "
+                                      + target.flattenToShortString());
+                  }
+
+                  int userId = Process.myUid() / 100000;
+
+                  String flat =
+                          target.flattenToString()
+                                  .replace(
+                                          "'",
+                                          "'\"'\"'");
+
+                  String cmd =
+                          "/system/bin/am start --user "
+                                  + userId
+                                  + " --display "
+                                  + displayId
+                                  + " --windowingMode 1"
+                                  + " -a android.intent.action.MAIN"
+                                  + " -c android.intent.category.LAUNCHER"
+                                  + " -f 0x18000000"
+                                  + " -n '"
+                                  + flat
+                                  + "'";
+
+                  final int expectedDisplay = displayId;
+
+                  RootShellSession.EXEC.execute(() -> {
+                      try {
+                          shell.run(15, cmd);
+
+                          if (destroyed
+                                  || generation != localGeneration
+                                  || display == null
+                                  || getDisplayId() != expectedDisplay) {
+                              return;
+                          }
+
+                          Log.i(
+                                  TAG,
+                                  "Launched "
+                                          + target.flattenToShortString()
+                                          + " on display "
+                                          + expectedDisplay);
+
+                      } catch (RuntimeException e) {
+                          if (!destroyed
+                                  && generation == localGeneration) {
+                              Log.e(
+                                      TAG,
+                                      "Launch failed: "
+                                              + target.flattenToShortString(),
+                                      e);
+                          }
+                      }
+                  });
+              }
+
+              private ActivityInfo resolveTarget(ComponentName component) {
+                  try {
+                      PackageManager pm =
+                              context.getPackageManager();
+
+                      ActivityInfo ai =
+                              pm.getActivityInfo(
+                                      component,
+                                      PackageManager.GET_META_DATA);
+
+                      if (!ai.enabled
+                              || !ai.exported
+                              || !ai.applicationInfo.enabled) {
+                          return null;
+                      }
+
+                      if (ai.permission != null
+                              && context.checkSelfPermission(ai.permission)
+                                      != PackageManager.PERMISSION_GRANTED) {
+                          return null;
+                      }
+
+                      if (context.getPackageName().equals(
+                              component.getPackageName())) {
+                          return null;
+                      }
+
+                      return ai;
+
+                  } catch (PackageManager.NameNotFoundException e) {
+                      return null;
+                  }
+              }
+
+              public void sendTap(float viewX, float viewY) {
+                  if (display == null || textureView == null) {
+                      return;
+                  }
+
+                  int id = getDisplayId();
+
+                  float sx =
+                          bufferW
+                                  / (float) Math.max(
+                                          1,
+                                          textureView.getWidth());
+
+                  float sy =
+                          bufferH
+                                  / (float) Math.max(
+                                          1,
+                                          textureView.getHeight());
+
+                  input.tap(
+                          id,
+                          viewX * sx,
+                          viewY * sy);
+              }
+
+              public void sendSwipe(
+                      float x1,
+                      float y1,
+                      float x2,
+                      float y2,
+                      long durationMs) {
+
+                  if (display == null || textureView == null) {
+                      return;
+                  }
+
+                  int id = getDisplayId();
+
+                  float sx =
+                          bufferW
+                                  / (float) Math.max(
+                                          1,
+                                          textureView.getWidth());
+
+                  float sy =
+                          bufferH
+                                  / (float) Math.max(
+                                          1,
+                                          textureView.getHeight());
+
+                  input.swipe(
+                          id,
+                          x1 * sx,
+                          y1 * sy,
+                          x2 * sx,
+                          y2 * sy,
+                          durationMs);
+              }
+
+              public void sendBack() {
+                  if (display != null) {
+                      input.back(getDisplayId());
+                  }
+              }
+
+              public void release() {
+                  generation++;
+
+                  if (display != null) {
+                      try {
+                          display.release();
+                      } catch (RuntimeException ignored) {
+                      }
+                  }
+
+                  display = null;
+
+                  if (surface != null) {
+                      try {
+                          surface.release();
+                      } catch (RuntimeException ignored) {
+                      }
+                  }
+
+                  surface = null;
+              }
+
+              public void destroy() {
+                  if (destroyed) {
+                      return;
+                  }
+
+                  destroyed = true;
+
+                  if (textureView != null) {
+                      textureView.setSurfaceTextureListener(null);
+                  }
+
+                  release();
+                  shell.destroy();
+              }
+
+              @Override
+              public void onSurfaceTextureAvailable(
+                      SurfaceTexture surface,
+                      int width,
+                      int height) {
+
+                  if (surface != null) {
+                      surface.setDefaultBufferSize(
+                              Math.max(1, bufferW),
+                              Math.max(1, bufferH));
+                  }
+
+                  ensureDisplay();
+              }
+
+              @Override
+              public void onSurfaceTextureSizeChanged(
+                      SurfaceTexture surface,
+                      int width,
+                      int height) {
+
+                  if (surface != null) {
+                      computeBuffer(width, height);
+                      surface.setDefaultBufferSize(
+                              bufferW,
+                              bufferH);
+                  }
+
+                  if (display != null) {
+                      try {
+                          display.resize(
+                                  bufferW,
+                                  bufferH,
+                                  160);
+                      } catch (RuntimeException e) {
+                          Log.w(
+                                  TAG,
+                                  "Display resize failed",
+                                  e);
+                      }
+                  }
+              }
+
+              @Override
+              public boolean onSurfaceTextureDestroyed(
+                      SurfaceTexture surface) {
+
+                  release();
+                  return true;
+              }
+
+              @Override
+              public void onSurfaceTextureUpdated(
+                      SurfaceTexture surface) {
+              }
+          }
+          EOF
+
+      - name: Write V10 CarActivity
+        shell: bash
+        run: |
+          set -e
+
+          cat > v10-source/app/src/main/java/com/hieptran/aacast/doudou/V10CarActivity.java <<'EOF'
+          package com.carassistant.v10;
+
+          import android.os.Bundle;
+          import android.view.MotionEvent;
+          import android.view.TextureView;
+          import android.widget.FrameLayout;
+
+          import com.google.android.apps.auto.sdk.CarActivity;
+
+          /**
+           * Android Auto car-side activity.
+           *
+           * The TextureView is attached BEFORE the target is assigned so that
+           * the projection engine follows the same lifecycle as V9.
+           */
+          public final class V10CarActivity extends CarActivity {
+
+              private FrameLayout root;
+              private TextureView textureView;
+              private V10ProjectionSession session;
+
+              @Override
+              public void onCreate(Bundle bundle) {
+                  setTheme(R.style.Theme_AACast);
+                  super.onCreate(bundle);
+                  setIgnoreConfigChanges(-1);
+              }
+
+              @Override
+              public void onResume() {
+                  super.onResume();
+
+                  if (root == null) {
+                      root = new FrameLayout(this);
+
+                      textureView = new TextureView(this);
+                      textureView.setOpaque(false);
+
+                      root.addView(
+                              textureView,
+                              new FrameLayout.LayoutParams(
+                                      FrameLayout.LayoutParams.MATCH_PARENT,
+                                      FrameLayout.LayoutParams.MATCH_PARENT));
+
+                      session =
+                              new V10ProjectionSession(this);
+
+                      // IMPORTANT:
+                      // Surface listener is installed first.
+                      session.attachTextureView(textureView);
+
+                      textureView.setOnTouchListener(
+                              (v, event) -> handleTouch(event));
+
+                      setContentView(root);
+                  }
+              }
+
+              private boolean handleTouch(MotionEvent event) {
+                  if (session == null) {
+                      return false;
+                  }
+
+                  switch (event.getActionMasked()) {
+
+                      case MotionEvent.ACTION_UP:
+                          session.sendTap(
+                                  event.getX(),
+                                  event.getY());
+                          return true;
+
+                      case MotionEvent.ACTION_CANCEL:
+                          return true;
+
+                      default:
+                          return true;
+                  }
+              }
+
+              /**
+               * Called by launcher/controller through the existing V10 activity.
+               */
+              public void setProjectionTarget(
+                      android.content.ComponentName component) {
+
+                  if (session != null) {
+                      session.setTarget(component);
+                  }
+              }
+
+              public V10ProjectionSession getProjectionSession() {
+                  return session;
+              }
+
+              @Override
+              public void onPause() {
+                  super.onPause();
+              }
+
+              @Override
+              public void onStop() {
+                  if (session != null) {
+                      session.release();
+                  }
+
+                  super.onStop();
+              }
+
+              @Override
+              public void onDestroy() {
+                  if (session != null) {
+                      session.destroy();
+                      session = null;
+                  }
+
+                  root = null;
+                  textureView = null;
+
+                  super.onDestroy();
+              }
+
+              @Override
+              public void onBackPressed() {
+                  if (session != null
+                          && session.isActive()) {
+                      session.sendBack();
+                      return;
+                  }
+
+                  super.onBackPressed();
+              }
+          }
+          EOF
+
+      - name: Write V10 DisplayReflect
+        shell: bash
+        run: |
+          set -e
+
+          mkdir -p v10-source/app/src/main/java/com/hieptran/aacast/doudou/hook
+
+          cat > v10-source/app/src/main/java/com/hieptran/aacast/doudou/hook/DisplayReflect.java <<'EOF'
+          package com.carassistant.v10.hook;
+
+          import android.view.Display;
+
+          import de.robv.android.xposed.XposedHelpers;
+
+          /**
+           * Access hidden Display APIs through reflection.
+           */
+          final class DisplayReflect {
+
+              private DisplayReflect() {
+              }
+
+              static String ownerPackage(Display display) {
+                  try {
+                      return (String) XposedHelpers.callMethod(
+                              display,
+                              "getOwnerPackageName");
+                  } catch (Throwable t) {
+                      return null;
+                  }
+              }
+
+              static int type(Display display) {
+                  try {
+                      return (Integer) XposedHelpers.callMethod(
+                              display,
+                              "getType");
+                  } catch (Throwable t) {
+                      return -1;
+                  }
+              }
+
+              static int ownerUid(Display display) {
+                  try {
+                      return (Integer) XposedHelpers.callMethod(
+                              display,
+                              "getOwnerUid");
+                  } catch (Throwable t) {
+                      return -1;
+                  }
+              }
+          }
+          EOF
+
+      - name: Write V10 InputHooks from proven V9 implementation
+        shell: bash
+        run: |
+          set -e
+
+          cat > v10-source/app/src/main/java/com/hieptran/aacast/doudou/hook/InputHooks.java <<'EOF'
+          package com.carassistant.v10.hook;
+
+          import android.hardware.display.DisplayManager;
+          import android.os.Binder;
+          import android.view.Display;
+          import android.view.InputEvent;
+          import android.view.MotionEvent;
+
+          import com.carassistant.v10.V10Display;
+
+          import de.robv.android.xposed.XC_MethodHook;
+          import de.robv.android.xposed.XposedBridge;
+          import de.robv.android.xposed.XposedHelpers;
+
+          /**
+           * System-server input bridge.
+           *
+           * This is the V9 implementation adapted only for the V10 display
+           * identity.
+           */
+          public final class InputHooks {
+
+              private static final String TAG_INPUT =
+                      "[CarAssistant V10 Input]";
+
+              private static final int INJECT_TIMEOUT =
+                      0x1F40;
+
+              private static final int POLICY_FLAGS =
+                      0x44000000;
+
+              private InputHooks() {
+              }
+
+              public static void install(
+                      ClassLoader classLoader) {
+
+                  try {
+                      XposedHelpers.findAndHookMethod(
+                              XposedHelpers.findClass(
+                                      "com.android.server.input.InputManagerService",
+                                      classLoader),
+                              "injectInputEventToTarget",
+                              InputEvent.class,
+                              int.class,
+                              int.class,
+                              new XC_MethodHook() {
+
+                                  private boolean logged;
+
+                                  @Override
+                                  protected void beforeHookedMethod(
+                                          MethodHookParam param) {
+
+                                      if (!(param.args[0]
+                                              instanceof MotionEvent)) {
+                                          return;
+                                      }
+
+                                      int mode =
+                                              (Integer) param.args[1];
+
+                                      int targetUid =
+                                              (Integer) param.args[2];
+
+                                      if (Binder.getCallingUid() != 0
+                                              || mode < 0
+                                              || mode > 2
+                                              || targetUid != -1) {
+                                          return;
+                                      }
+
+                                      MotionEvent event =
+                                              (MotionEvent) param.args[0];
+
+                                      int displayId =
+                                              (Integer) XposedHelpers.callMethod(
+                                                      event,
+                                                      "getDisplayId");
+
+                                      if (displayId <= 0) {
+                                          return;
+                                      }
+
+                                      try {
+                                          android.content.Context context =
+                                                  (android.content.Context)
+                                                          XposedHelpers.getObjectField(
+                                                                  param.thisObject,
+                                                                  "mContext");
+
+                                          DisplayManager displayManager =
+                                                  (DisplayManager)
+                                                          context.getSystemService(
+                                                                  android.content.Context.DISPLAY_SERVICE);
+
+                                          Display display =
+                                                  displayManager == null
+                                                          ? null
+                                                          : displayManager.getDisplay(
+                                                                  displayId);
+
+                                          if (display == null
+                                                  || display.getState()
+                                                          != Display.STATE_ON
+                                                  || !V10Display.matches(
+                                                          DisplayReflect.ownerPackage(
+                                                                  display),
+                                                          display.getName(),
+                                                          DisplayReflect.type(
+                                                                  display),
+                                                          DisplayReflect.ownerUid(
+                                                                  display))) {
+                                              return;
+                                          }
+
+                                          Object nativeInputManager =
+                                                  XposedHelpers.getObjectField(
+                                                          param.thisObject,
+                                                          "mNative");
+
+                                          MotionEvent copy =
+                                                  cloneWithDisplay(
+                                                          event,
+                                                          displayId);
+
+                                          long token =
+                                                  Binder.clearCallingIdentity();
+
+                                          try {
+                                              int result =
+                                                      (Integer)
+                                                              XposedHelpers.callMethod(
+                                                                      nativeInputManager,
+                                                                      "injectInputEvent",
+                                                                      copy,
+                                                                      Boolean.FALSE,
+                                                                      -1,
+                                                                      mode,
+                                                                      INJECT_TIMEOUT,
+                                                                      POLICY_FLAGS);
+
+                                              param.setResult(
+                                                      result == 0);
+
+                                              if (!logged
+                                                      || result != 0) {
+                                                  logged = true;
+
+                                                  XposedBridge.log(
+                                                          TAG_INPUT
+                                                                  + " display="
+                                                                  + displayId
+                                                                  + " nativeResult="
+                                                                  + result);
+                                              }
+
+                                          } finally {
+                                              Binder.restoreCallingIdentity(
+                                                      token);
+
+                                              copy.recycle();
+                                          }
+
+                                      } catch (Throwable t) {
+
+                                          if (!logged) {
+                                              logged = true;
+
+                                              XposedBridge.log(
+                                                      TAG_INPUT
+                                                              + " Original path retained: "
+                                                              + t);
+                                          }
+                                      }
+                                  }
+                              });
+
+                      XposedBridge.log(
+                              TAG_INPUT
+                                      + " Root injection hook installed");
+
+                  } catch (Throwable t) {
+
+                      XposedBridge.log(
+                              TAG_INPUT
+                                      + " Hook unavailable: "
+                                      + t);
+                  }
+              }
+
+              private static MotionEvent cloneWithDisplay(
+                      MotionEvent source,
+                      int displayId) {
+
+                  int pointerCount =
+                          source.getPointerCount();
+
+                  MotionEvent.PointerProperties[] properties =
+                          new MotionEvent.PointerProperties[
+                                  pointerCount];
+
+                  MotionEvent.PointerCoords[] coords =
+                          new MotionEvent.PointerCoords[
+                                  pointerCount];
+
+                  for (int i = 0;
+                       i < pointerCount;
+                       i++) {
+
+                      properties[i] =
+                              new MotionEvent.PointerProperties();
+
+                      coords[i] =
+                              new MotionEvent.PointerCoords();
+
+                      source.getPointerProperties(
+                              i,
+                              properties[i]);
+
+                      source.getPointerCoords(
+                              i,
+                              coords[i]);
+                  }
+
+                  MotionEvent copy =
+                          MotionEvent.obtain(
+                                  source.getDownTime(),
+                                  source.getEventTime(),
+                                  source.getAction(),
+                                  pointerCount,
+                                  properties,
+                                  coords,
+                                  source.getMetaState(),
+                                  source.getButtonState(),
+                                  source.getXPrecision(),
+                                  source.getYPrecision(),
+                                  -1,
+                                  source.getEdgeFlags(),
+                                  source.getSource(),
+                                  source.getFlags());
+
+                  XposedHelpers.callMethod(
+                          copy,
+                          "setDisplayId",
+                          displayId);
+
+                  return copy;
+              }
+          }
+          EOF
+
+      - name: Patch V10 CarActivity service
+        shell: bash
+        run: |
+          set -e
+
+          SERVICE=v10-source/app/src/main/java/com/hieptran/aacast/doudou/AACastCarService.java
+
+          cat > "$SERVICE" <<'EOF'
+          package com.carassistant.v10;
+
+          import com.google.android.apps.auto.sdk.CarActivity;
+          import com.google.android.apps.auto.sdk.CarActivityService;
+
+          /**
+           * Registers Car Assistant V10 with Android Auto.
+           */
+          public final class AACastCarService
+                  extends CarActivityService {
+
+              @Override
+              public Class<? extends CarActivity> getCarActivity() {
+                  return V10CarActivity.class;
+              }
+          }
+          EOF
+
+      - name: Patch manifest activity
+        shell: bash
+        run: |
+          set -e
+
+          MANIFEST=v10-source/app/src/main/AndroidManifest.xml
+
+          sed -i \
+            -e 's/\.MainActivity/\.V10LauncherActivity/g' \
+            -e 's/\.AACastCarActivity/\.V10CarActivity/g' \
+            "$MANIFEST"
+
+          # Make sure V10 launcher/car activity names are not accidentally
+          # duplicated by the old V9 declarations.
+          grep -n "V10LauncherActivity\|V10CarActivity\|AACastCarService" "$MANIFEST" || true
+
+      - name: Verify no duplicate V10 classes
+        shell: bash
+        run: |
+          set -e
+
+          echo "Checking V10ProjectionSession:"
+          find v10-source/app/src/main/java -name V10ProjectionSession.java -print
+
+          echo "Checking V10CarActivity:"
+          find v10-source/app/src/main/java -name V10CarActivity.java -print
+
+          echo "Checking InputHooks:"
+          find v10-source/app/src/main/java -path "*/hook/InputHooks.java" -print
+
+          COUNT=$(find v10-source/app/src/main/java \
+            -name V10ProjectionSession.java | wc -l)
+
+          test "$COUNT" -eq 1
+
+          COUNT=$(find v10-source/app/src/main/java \
+            -name V10CarActivity.java | wc -l)
+
+          test "$COUNT" -eq 1
+
+          COUNT=$(find v10-source/app/src/main/java \
+            -path "*/hook/InputHooks.java" | wc -l)
+
+          test "$COUNT" -eq 1
+
+      - name: Verify critical V9 engine rules
+        shell: bash
+        run: |
+          set -e
+
+          SESSION=v10-source/app/src/main/java/com/hieptran/aacast/doudou/V10ProjectionSession.java
+          HOOK=v10-source/app/src/main/java/com/hieptran/aacast/doudou/hook/InputHooks.java
+          DISPLAY=v10-source/app/src/main/java/com/hieptran/aacast/doudou/V10Display.java
+
+          grep -q "setDefaultBufferSize" "$SESSION"
+          grep -q "createVirtualDisplay" "$SESSION"
+          grep -q "160" "$SESSION"
+          grep -q "new Surface(texture)" "$SESSION"
+          grep -q "Process.myUid() / 100000" "$SESSION"
+          grep -q -- "--display" "$SESSION"
+          grep -q -- "--windowingMode 1" "$SESSION"
+
+          grep -q "V10Display.matches" "$HOOK"
+          grep -q "injectInputEventToTarget" "$HOOK"
+          grep -q "0x44000000" "$HOOK"
+
+          grep -q 'com.carassistant.v10' "$DISPLAY"
+
+          echo "Critical V9 engine rules verified."
+
+      - name: Build V10.1.1
+        working-directory: v10-source
+        shell: bash
+        run: |
+          set -e
+          gradle --no-daemon --stacktrace assembleDebug
+
+      - name: Verify APK
+        shell: bash
+        run: |
+          set -e
+
+          APK=$(find v10-source/app/build/outputs/apk/debug \
+            -maxdepth 1 \
+            -type f \
+            -name "*.apk" \
+            | head -n 1)
+
+          test -n "$APK"
+          test -f "$APK"
+
+          mkdir -p output
+          cp "$APK" output/CarAssistant-V10.1.1-debug.apk
+
+          sha256sum output/CarAssistant-V10.1.1-debug.apk
+
+      - name: Upload V10.1.1 APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: CarAssistant-V10.1.1-debug
+          path: output/CarAssistant-V10.1.1-debug.apk
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Commit V10.1.1 source
+        shell: bash
+        run: |
+          set -e
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          git add v10-source
+
+          if git diff --cached --quiet; then
+            echo "No source changes to commit."
+          else
+            git commit -m "Build Car Assistant V10.1.1 clean V9 engine"
+            git push origin HEAD:main
+          fi
