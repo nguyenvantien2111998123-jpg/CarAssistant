@@ -1,4 +1,4 @@
-name: Build Car Assistant V10.2-A2.1 Gearhead Control Bar V4
+name: Build Car Assistant V10.2-A2.1 Gearhead Control Bar V5
 
 on:
   workflow_dispatch:
@@ -12,8 +12,16 @@ jobs:
 
     steps:
 
+      # ============================================================
+      # 1. CHECKOUT
+      # ============================================================
+
       - name: Checkout
         uses: actions/checkout@v4
+
+      # ============================================================
+      # 2. JAVA
+      # ============================================================
 
       - name: Set up JDK 17
         uses: actions/setup-java@v4
@@ -21,19 +29,29 @@ jobs:
           distribution: temurin
           java-version: '17'
 
+      # ============================================================
+      # 3. GRADLE
+      # ============================================================
+
       - name: Install Gradle 8.13
         shell: bash
         run: |
           set -euo pipefail
 
-          wget -q https://services.gradle.org/distributions/gradle-8.13-bin.zip
-          unzip -q gradle-8.13-bin.zip -d "$RUNNER_TEMP"
+          wget -q \
+            https://services.gradle.org/distributions/gradle-8.13-bin.zip
+
+          unzip -q \
+            gradle-8.13-bin.zip \
+            -d "$RUNNER_TEMP"
 
           echo "$RUNNER_TEMP/gradle-8.13/bin" >> "$GITHUB_PATH"
 
-      # ------------------------------------------------------------
-      # 1. Verify current V10 source
-      # ------------------------------------------------------------
+          gradle --version
+
+      # ============================================================
+      # 4. VERIFY V10 SOURCE
+      # ============================================================
 
       - name: Verify V10 source
         shell: bash
@@ -47,9 +65,9 @@ jobs:
 
           echo "V10 source exists."
 
-      # ------------------------------------------------------------
-      # 2. Normalize package only
-      # ------------------------------------------------------------
+      # ============================================================
+      # 5. NORMALIZE PACKAGE
+      # ============================================================
 
       - name: Normalize V10 package
         shell: bash
@@ -70,9 +88,9 @@ jobs:
             -e 's/Car Assistant V9/Car Assistant V10/g' \
             -e 's/AACast V9/AACast V10/g'
 
-      # ------------------------------------------------------------
-      # 3. Remove obsolete V9 activity files
-      # ------------------------------------------------------------
+      # ============================================================
+      # 6. REMOVE OBSOLETE V9 ACTIVITIES
+      # ============================================================
 
       - name: Remove obsolete V9 activities
         shell: bash
@@ -106,14 +124,15 @@ jobs:
             exit 1
           fi
 
-          echo "Obsolete V9 files removed."
+          echo "Obsolete V9 activities removed."
 
-      # ------------------------------------------------------------
-      # 4. Write V10SessionStore
+      # ============================================================
+      # 7. WRITE SESSION STORE
       #
-      # Preserve existing target persistence and add only the
-      # currently-running CarActivity reference.
-      # ------------------------------------------------------------
+      # IMPORTANT:
+      # Preserve target persistence used by V10LauncherActivity.
+      # Only add current CarActivity reference.
+      # ============================================================
 
       - name: Write V10SessionStore
         shell: bash
@@ -124,13 +143,7 @@ jobs:
 
           mkdir -p "$(dirname "$STORE")"
 
-          python3 - "$STORE" <<'PY'
-          import sys
-          from pathlib import Path
-
-          path = Path(sys.argv[1])
-
-          source = r'''
+          cat > "$STORE" <<'JAVA'
           package com.carassistant.v10;
 
           import android.content.ComponentName;
@@ -221,26 +234,13 @@ jobs:
                   }
               }
           }
-          '''
+          JAVA
 
-          path.write_text(
-              source.strip() + "\n",
-              encoding="utf-8"
-          )
+          echo "V10SessionStore written."
 
-          print("V10SessionStore written.")
-          PY
-
-      # ------------------------------------------------------------
-      # 5. Patch V10CarActivity
-      #
-      # Only add:
-      # - current activity registration
-      # - Back control
-      # - safe Home control
-      #
-      # We deliberately DO NOT invent recents/apps projection APIs.
-      # ------------------------------------------------------------
+      # ============================================================
+      # 8. PATCH V10 CAR ACTIVITY
+      # ============================================================
 
       - name: Patch V10CarActivity
         shell: bash
@@ -249,6 +249,8 @@ jobs:
 
           ACTIVITY="v10-source/app/src/main/java/com/hieptran/aacast/doudou/V10CarActivity.java"
 
+          test -f "$ACTIVITY"
+
           python3 - "$ACTIVITY" <<'PY'
           import sys
           from pathlib import Path
@@ -256,83 +258,89 @@ jobs:
           path = Path(sys.argv[1])
           text = path.read_text(encoding="utf-8")
 
-          # Register activity immediately after super.onCreate(...)
+          # --------------------------------------------------------
+          # Register current activity.
+          # --------------------------------------------------------
+
           if "V10SessionStore.setCurrentActivity(this);" not in text:
 
-              needle = """        super.onCreate(state);
-"""
+              marker = "        super.onCreate(state);\n"
 
-              replacement = """        super.onCreate(state);
-
-        V10SessionStore.setCurrentActivity(this);
-"""
-
-              if needle not in text:
+              if marker not in text:
                   raise SystemExit(
-                      "ERROR: V10CarActivity onCreate marker not found"
+                      "ERROR: onCreate marker not found"
                   )
 
               text = text.replace(
-                  needle,
-                  replacement,
+                  marker,
+                  marker
+                  + "\n"
+                  + "        V10SessionStore.setCurrentActivity(this);\n",
                   1
               )
 
-          # Clear activity reference before destruction.
+          # --------------------------------------------------------
+          # Clear current activity.
+          # --------------------------------------------------------
+
           if "V10SessionStore.clearCurrentActivity(this);" not in text:
 
-              needle = """        super.onDestroy();
-"""
+              marker = "        super.onDestroy();\n"
 
-              replacement = """        V10SessionStore.clearCurrentActivity(this);
-
-        super.onDestroy();
-"""
-
-              if needle not in text:
+              if marker not in text:
                   raise SystemExit(
-                      "ERROR: V10CarActivity onDestroy marker not found"
+                      "ERROR: onDestroy marker not found"
                   )
 
               text = text.replace(
-                  needle,
-                  replacement,
+                  marker,
+                  "        V10SessionStore.clearCurrentActivity(this);\n\n"
+                  + marker,
                   1
               )
 
-          # Add only methods supported by the actual current
-          # V10ProjectionSession.
+          # --------------------------------------------------------
+          # Add control methods only if absent.
+          #
+          # These methods use APIs verified in the actual
+          # V10ProjectionSession:
+          #
+          #   isActive()
+          #   back()
+          #   release()
+          #
+          # No invented home()/recents()/apps() calls.
+          # --------------------------------------------------------
+
           if "public void handleControlBack()" not in text:
 
-              marker = """
-}
-"""
+              marker = "\n}\n"
 
               methods = r'''
-    public void handleControlBack() {
+              public void handleControlBack() {
 
-        if (session != null
-                && session.isActive()) {
+                  if (session != null
+                          && session.isActive()) {
 
-            session.back();
-        }
-    }
+                      session.back();
+                  }
+              }
 
-    public void handleControlHome() {
+              public void handleControlHome() {
 
-        if (session != null) {
-            session.release();
-        }
-    }
+                  if (session != null) {
+                      session.release();
+                  }
+              }
 
-    public void handleControlRecents() {
-        // Reserved for the next control-session implementation.
-    }
+              public void handleControlRecents() {
+                  // Reserved for the next control-session implementation.
+              }
 
-    public void handleControlApps() {
-        // Reserved for the next launcher/control implementation.
-    }
-'''
+              public void handleControlApps() {
+                  // Reserved for the next launcher/control implementation.
+              }
+          '''
 
               pos = text.rfind(marker)
 
@@ -353,12 +361,11 @@ jobs:
               encoding="utf-8"
           )
 
-          print("V10CarActivity patched safely.")
-          PY
+          print("V10CarActivity patched.")
 
-      # ------------------------------------------------------------
-      # 6. Write deterministic BroadcastReceiver
-      # ------------------------------------------------------------
+      # ============================================================
+      # 9. WRITE CONTROL RECEIVER
+      # ============================================================
 
       - name: Write V10ControlReceiver
         shell: bash
@@ -369,13 +376,7 @@ jobs:
 
           mkdir -p "$(dirname "$RECEIVER")"
 
-          python3 - "$RECEIVER" <<'PY'
-          import sys
-          from pathlib import Path
-
-          path = Path(sys.argv[1])
-
-          source = r'''
+          cat > "$RECEIVER" <<'JAVA'
           package com.carassistant.v10;
 
           import android.content.BroadcastReceiver;
@@ -448,19 +449,13 @@ jobs:
                   }
               }
           }
-          '''
+          JAVA
 
-          path.write_text(
-              source.strip() + "\n",
-              encoding="utf-8"
-          )
+          echo "V10ControlReceiver written."
 
-          print("V10ControlReceiver written.")
-          PY
-
-      # ------------------------------------------------------------
-      # 7. Write GearheadControlBar
-      # ------------------------------------------------------------
+      # ============================================================
+      # 10. WRITE GEARHEAD CONTROL BAR
+      # ============================================================
 
       - name: Write GearheadControlBar
         shell: bash
@@ -471,13 +466,7 @@ jobs:
 
           mkdir -p "$(dirname "$BAR")"
 
-          python3 - "$BAR" <<'PY'
-          import sys
-          from pathlib import Path
-
-          path = Path(sys.argv[1])
-
-          source = r'''
+          cat > "$BAR" <<'JAVA'
           package com.carassistant.v10.hook;
 
           import android.content.Context;
@@ -651,7 +640,8 @@ jobs:
                   }
               }
 
-              private static void scanRoot(View root) {
+              private static void scanRoot(
+                      View root) {
 
                   try {
 
@@ -663,7 +653,8 @@ jobs:
                           return;
                       }
 
-                      if (root.getDisplay().getDisplayId() <= 0) {
+                      if (root.getDisplay()
+                              .getDisplayId() <= 0) {
                           return;
                       }
 
@@ -901,7 +892,8 @@ jobs:
                       Intent intent =
                               new Intent(ACTION);
 
-                      intent.setPackage(SELF);
+                      intent.setPackage(
+                              SELF);
 
                       intent.putExtra(
                               "command",
@@ -924,23 +916,13 @@ jobs:
                   }
               }
           }
-          '''
+          JAVA
 
-          path.write_text(
-              source.strip() + "\n",
-              encoding="utf-8"
-          )
+          echo "GearheadControlBar written."
 
-          print("GearheadControlBar written.")
-          PY
-
-      # ------------------------------------------------------------
-      # 8. Patch Xposed bridge
-      #
-      # CRITICAL:
-      # Preserve existing GearheadDockPatcher.
-      # Add GearheadControlBar.install().
-      # ------------------------------------------------------------
+      # ============================================================
+      # 11. PATCH XPOSED BRIDGE
+      # ============================================================
 
       - name: Patch AACastBridge
         shell: bash
@@ -958,10 +940,11 @@ jobs:
           path = Path(sys.argv[1])
           text = path.read_text(encoding="utf-8")
 
-          # Add import without destroying existing hooks.
           if "import com.carassistant.v10.hook.GearheadControlBar;" not in text:
 
-              needle = "import com.carassistant.v10.hook.GearheadAllow;\n"
+              needle = (
+                  "import com.carassistant.v10.hook.GearheadAllow;\n"
+              )
 
               if needle not in text:
                   raise SystemExit(
@@ -975,7 +958,6 @@ jobs:
                   1
               )
 
-          # Install both existing dock patcher and new control bar.
           if "GearheadControlBar.install();" not in text:
 
               needle = "GearheadDockPatcher.install();"
@@ -1000,9 +982,9 @@ jobs:
           print("AACastBridge patched.")
           PY
 
-      # ------------------------------------------------------------
-      # 9. Rebuild Manifest
-      # ------------------------------------------------------------
+      # ============================================================
+      # 12. REBUILD MANIFEST
+      # ============================================================
 
       - name: Rebuild Manifest
         shell: bash
@@ -1019,7 +1001,6 @@ jobs:
           path = Path(sys.argv[1])
           text = path.read_text(encoding="utf-8")
 
-          # Remove only V10 components that this workflow owns.
           pattern = re.compile(
               r'\s*<(activity|receiver)\b[^>]*'
               r'android:name="'
@@ -1082,9 +1063,9 @@ jobs:
           print("Manifest rebuilt.")
           PY
 
-      # ------------------------------------------------------------
-      # 10. Validate Manifest
-      # ------------------------------------------------------------
+      # ============================================================
+      # 13. VALIDATE MANIFEST
+      # ============================================================
 
       - name: Validate Manifest
         shell: bash
@@ -1136,9 +1117,9 @@ jobs:
           print("Manifest verified.")
           PY
 
-      # ------------------------------------------------------------
-      # 11. Static source validation
-      # ------------------------------------------------------------
+      # ============================================================
+      # 14. VERIFY SOURCE STRUCTURE
+      # ============================================================
 
       - name: Verify V10 source
         shell: bash
@@ -1186,9 +1167,59 @@ jobs:
 
           echo "V10 source verification passed."
 
-      # ------------------------------------------------------------
-      # 12. Verify projection invariants
-      # ------------------------------------------------------------
+      # ============================================================
+      # 15. VERIFY SESSION STORE API
+      # ============================================================
+
+      - name: Verify SessionStore API
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          STORE="v10-source/app/src/main/java/com/hieptran/aacast/doudou/V10SessionStore.java"
+
+          grep -q 'setTarget' "$STORE"
+          grep -q 'getTarget' "$STORE"
+          grep -q 'clearTarget' "$STORE"
+          grep -q 'setCurrentActivity' "$STORE"
+          grep -q 'getCurrentActivity' "$STORE"
+          grep -q 'clearCurrentActivity' "$STORE"
+
+          echo "SessionStore API verified."
+
+      # ============================================================
+      # 16. VERIFY CAR ACTIVITY CONTROL API
+      # ============================================================
+
+      - name: Verify CarActivity control API
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          ACTIVITY="v10-source/app/src/main/java/com/hieptran/aacast/doudou/V10CarActivity.java"
+
+          grep -q 'handleControlBack' "$ACTIVITY"
+          grep -q 'handleControlHome' "$ACTIVITY"
+          grep -q 'handleControlRecents' "$ACTIVITY"
+          grep -q 'handleControlApps' "$ACTIVITY"
+
+          grep -q 'session.isActive' "$ACTIVITY"
+          grep -q 'session.back' "$ACTIVITY"
+          grep -q 'session.release' "$ACTIVITY"
+
+          if grep -q \
+              'session.home\|session.recents\|session.apps' \
+              "$ACTIVITY"; then
+
+            echo "ERROR: invented ProjectionSession API detected."
+            exit 1
+          fi
+
+          echo "CarActivity control API verified."
+
+      # ============================================================
+      # 17. VERIFY PROJECTION ENGINE
+      # ============================================================
 
       - name: Verify projection engine
         shell: bash
@@ -1207,12 +1238,14 @@ jobs:
           grep -q -- '--display' "$SESSION"
           grep -q -- '--windowingMode 1' "$SESSION"
           grep -q 'input -d' "$SESSION"
+          grep -q 'public void back' "$SESSION"
+          grep -q 'public void release' "$SESSION"
 
           echo "Projection engine verified."
 
-      # ------------------------------------------------------------
-      # 13. Verify swipe
-      # ------------------------------------------------------------
+      # ============================================================
+      # 18. VERIFY SWIPE
+      # ============================================================
 
       - name: Verify swipe input
         shell: bash
@@ -1230,9 +1263,9 @@ jobs:
 
           echo "Swipe input verified."
 
-      # ------------------------------------------------------------
-      # 14. Verify control receiver
-      # ------------------------------------------------------------
+      # ============================================================
+      # 19. VERIFY RECEIVER
+      # ============================================================
 
       - name: Verify control receiver
         shell: bash
@@ -1254,9 +1287,9 @@ jobs:
 
           echo "Control receiver verified."
 
-      # ------------------------------------------------------------
-      # 15. Verify Gearhead control bar
-      # ------------------------------------------------------------
+      # ============================================================
+      # 20. VERIFY GEARHEAD CONTROL BAR
+      # ============================================================
 
       - name: Verify Gearhead control bar
         shell: bash
@@ -1268,6 +1301,7 @@ jobs:
           test -f "$BAR"
 
           grep -q 'WindowManagerGlobal' "$BAR"
+          grep -q 'hookAllMethods' "$BAR"
           grep -q 'addView' "$BAR"
           grep -q 'com.google.android.projection.gearhead' "$BAR"
           grep -q 'com.carassistant.v10.CONTROL' "$BAR"
@@ -1280,12 +1314,9 @@ jobs:
 
           echo "Gearhead control bar verified."
 
-      # ------------------------------------------------------------
-      # 16. Verify Xposed bridge
-      #
-      # This specifically catches the error from run
-      # 37056585621.
-      # ------------------------------------------------------------
+      # ============================================================
+      # 21. VERIFY XPOSED BRIDGE
+      # ============================================================
 
       - name: Verify Xposed bridge
         shell: bash
@@ -1322,9 +1353,9 @@ jobs:
 
           echo "Xposed bridge verified."
 
-      # ------------------------------------------------------------
-      # 17. Android 12 compatibility
-      # ------------------------------------------------------------
+      # ============================================================
+      # 22. ANDROID 12 COMPATIBILITY
+      # ============================================================
 
       - name: Verify Android 12 compatibility
         shell: bash
@@ -1342,9 +1373,9 @@ jobs:
 
           echo "Android 12 compatibility verified."
 
-      # ------------------------------------------------------------
-      # 18. Compile BEFORE anything is committed
-      # ------------------------------------------------------------
+      # ============================================================
+      # 23. GRADLE CLEAN
+      # ============================================================
 
       - name: Gradle clean
         shell: bash
@@ -1358,6 +1389,10 @@ jobs:
             --no-daemon \
             --stacktrace
 
+      # ============================================================
+      # 24. BUILD
+      # ============================================================
+
       - name: Build Debug APK
         shell: bash
         run: |
@@ -1370,9 +1405,9 @@ jobs:
             --no-daemon \
             --stacktrace
 
-      # ------------------------------------------------------------
-      # 19. Verify APK
-      # ------------------------------------------------------------
+      # ============================================================
+      # 25. VERIFY APK
+      # ============================================================
 
       - name: Verify APK
         shell: bash
@@ -1389,22 +1424,22 @@ jobs:
           echo "APK SHA256:"
           sha256sum "$APK"
 
-      # ------------------------------------------------------------
-      # 20. Upload APK
-      # ------------------------------------------------------------
+      # ============================================================
+      # 26. UPLOAD APK
+      # ============================================================
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: CarAssistant-V10.2-A2.1-V4-debug
+          name: CarAssistant-V10.2-A2.1-V5-debug
           path: v10-source/app/build/outputs/apk/debug/app-debug.apk
           if-no-files-found: error
 
-      # ------------------------------------------------------------
-      # 21. Commit only after successful build
-      # ------------------------------------------------------------
+      # ============================================================
+      # 27. COMMIT ONLY AFTER SUCCESSFUL BUILD
+      # ============================================================
 
-      - name: Commit V10.2-A2.1 source
+      - name: Commit V10.2-A2.1 V5
         shell: bash
         run: |
           set -euo pipefail
@@ -1426,6 +1461,6 @@ jobs:
 
           git commit \
             -m \
-            "Build Car Assistant V10.2-A2.1 Gearhead control bar V4"
+            "Build Car Assistant V10.2-A2.1 Gearhead control bar V5"
 
           git push
