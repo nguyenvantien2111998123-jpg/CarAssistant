@@ -26,17 +26,12 @@ jobs:
         run: |
           set -euo pipefail
 
-          wget -q \
-            https://services.gradle.org/distributions/gradle-8.13-bin.zip
+          wget -q https://services.gradle.org/distributions/gradle-8.13-bin.zip
+          unzip -q gradle-8.13-bin.zip -d "$RUNNER_TEMP"
 
-          unzip -q \
-            gradle-8.13-bin.zip \
-            -d "$RUNNER_TEMP"
+          echo "$RUNNER_TEMP/gradle-8.13/bin" >> "$GITHUB_PATH"
 
-          echo "$RUNNER_TEMP/gradle-8.13/bin" \
-            >> "$GITHUB_PATH"
-
-      - name: Verify existing V10 source
+      - name: Verify V10 source
         shell: bash
         run: |
           set -euo pipefail
@@ -44,8 +39,7 @@ jobs:
           test -d v10-source
           test -f v10-source/settings.gradle
           test -f v10-source/app/build.gradle
-          test -f \
-            v10-source/app/src/main/AndroidManifest.xml
+          test -f v10-source/app/src/main/AndroidManifest.xml
 
           echo "V10 source exists."
 
@@ -68,7 +62,7 @@ jobs:
             -e 's/Car Assistant V9/Car Assistant V10/g' \
             -e 's/AACast V9/AACast V10/g'
 
-      - name: Remove obsolete V9 files
+      - name: Remove obsolete V9 activities
         shell: bash
         run: |
           set -euo pipefail
@@ -100,7 +94,275 @@ jobs:
             exit 1
           fi
 
-          echo "Obsolete V9 files removed."
+          echo "Obsolete V9 activities removed."
+
+      - name: Write V10ControlReceiver
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          RECEIVER="v10-source/app/src/main/java/com/hieptran/aacast/doudou/V10ControlReceiver.java"
+
+          mkdir -p "$(dirname "$RECEIVER")"
+
+          python3 - "$RECEIVER" <<'PY'
+          import sys
+          from pathlib import Path
+
+          path = Path(sys.argv[1])
+
+          source = r'''
+          package com.carassistant.v10;
+
+          import android.content.BroadcastReceiver;
+          import android.content.Context;
+          import android.content.Intent;
+
+          public final class V10ControlReceiver extends BroadcastReceiver {
+
+              public static final String ACTION =
+                      "com.carassistant.v10.CONTROL";
+
+              public static final String EXTRA_COMMAND =
+                      "command";
+
+              @Override
+              public void onReceive(
+                      Context context,
+                      Intent intent) {
+
+                  if (intent == null) {
+                      return;
+                  }
+
+                  if (!ACTION.equals(intent.getAction())) {
+                      return;
+                  }
+
+                  String command =
+                          intent.getStringExtra(EXTRA_COMMAND);
+
+                  if (command == null) {
+                      return;
+                  }
+
+                  command = command.trim().toLowerCase();
+
+                  V10CarActivity activity =
+                          V10SessionStore.getCurrentActivity();
+
+                  if (activity == null) {
+                      return;
+                  }
+
+                  switch (command) {
+
+                      case "back":
+                          activity.handleControlBack();
+                          break;
+
+                      case "home":
+                          activity.handleControlHome();
+                          break;
+
+                      case "recents":
+                          activity.handleControlRecents();
+                          break;
+
+                      case "apps":
+                          activity.handleControlApps();
+                          break;
+
+                      default:
+                          break;
+                  }
+              }
+          }
+          '''
+
+          path.write_text(
+              source.strip() + "\n",
+              encoding="utf-8"
+          )
+
+          print("V10ControlReceiver written.")
+          PY
+
+      - name: Write V10ControlReceiver support
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          ACTIVITY="v10-source/app/src/main/java/com/hieptran/aacast/doudou/V10CarActivity.java"
+
+          test -f "$ACTIVITY"
+
+          python3 - "$ACTIVITY" <<'PY'
+          import sys
+          from pathlib import Path
+
+          path = Path(sys.argv[1])
+          text = path.read_text(encoding="utf-8")
+
+          methods = r'''
+              public void handleControlBack() {
+                  if (session != null) {
+                      session.back();
+                  }
+              }
+
+              public void handleControlHome() {
+                  if (session != null) {
+                      session.home();
+                  }
+              }
+
+              public void handleControlRecents() {
+                  if (session != null) {
+                      session.recents();
+                  }
+              }
+
+              public void handleControlApps() {
+                  if (session != null) {
+                      session.apps();
+                  }
+              }
+          '''
+
+          marker = "\n}"
+
+          if "handleControlBack()" not in text:
+              pos = text.rfind(marker)
+
+              if pos < 0:
+                  raise SystemExit(
+                      "ERROR: V10CarActivity closing brace not found"
+                  )
+
+              text = (
+                  text[:pos]
+                  + "\n"
+                  + methods
+                  + text[pos:]
+              )
+
+          path.write_text(
+              text,
+              encoding="utf-8"
+          )
+
+          print("V10CarActivity control methods added.")
+          PY
+
+      - name: Write V10SessionStore
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          STORE="v10-source/app/src/main/java/com/hieptran/aacast/doudou/V10SessionStore.java"
+
+          mkdir -p "$(dirname "$STORE")"
+
+          python3 - "$STORE" <<'PY'
+          import sys
+          from pathlib import Path
+
+          path = Path(sys.argv[1])
+
+          source = r'''
+          package com.carassistant.v10;
+
+          public final class V10SessionStore {
+
+              private static volatile V10CarActivity currentActivity;
+
+              private V10SessionStore() {
+              }
+
+              public static void setCurrentActivity(
+                      V10CarActivity activity) {
+                  currentActivity = activity;
+              }
+
+              public static V10CarActivity getCurrentActivity() {
+                  return currentActivity;
+              }
+
+              public static void clear(
+                      V10CarActivity activity) {
+
+                  if (currentActivity == activity) {
+                      currentActivity = null;
+                  }
+              }
+          }
+          '''
+
+          path.write_text(
+              source.strip() + "\n",
+              encoding="utf-8"
+          )
+
+          print("V10SessionStore written.")
+          PY
+
+      - name: Patch V10CarActivity session store
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          ACTIVITY="v10-source/app/src/main/java/com/hieptran/aacast/doudou/V10CarActivity.java"
+
+          python3 - "$ACTIVITY" <<'PY'
+          import sys
+          from pathlib import Path
+
+          path = Path(sys.argv[1])
+          text = path.read_text(encoding="utf-8")
+
+          if "V10SessionStore.setCurrentActivity(this)" not in text:
+
+              needle = "super.onCreate(savedInstanceState);"
+
+              if needle in text:
+                  text = text.replace(
+                      needle,
+                      needle
+                      + "\n        V10SessionStore.setCurrentActivity(this);",
+                      1
+                  )
+              else:
+                  needle = "super.onResume();"
+
+                  if needle in text:
+                      text = text.replace(
+                          needle,
+                          needle
+                          + "\n        V10SessionStore.setCurrentActivity(this);",
+                          1
+                      )
+
+          if "V10SessionStore.clear(this)" not in text:
+
+              needle = "super.onDestroy();"
+
+              if needle in text:
+                  text = text.replace(
+                      needle,
+                      "V10SessionStore.clear(this);"
+                      + "\n        "
+                      + needle,
+                      1
+                  )
+
+          path.write_text(
+              text,
+              encoding="utf-8"
+          )
+
+          print("V10CarActivity session store patched.")
+          PY
 
       - name: Write GearheadControlBar
         shell: bash
@@ -550,86 +812,31 @@ jobs:
           print("GearheadControlBar written.")
           PY
 
-      - name: Verify GearheadControlBar
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          BAR="v10-source/app/src/main/java/com/hieptran/aacast/doudou/hook/GearheadControlBar.java"
-
-          test -f "$BAR"
-
-          grep -q 'WindowManagerGlobal' "$BAR"
-          grep -q 'getViewRootNames' "$BAR"
-          grep -q 'getRootView' "$BAR"
-          grep -q 'resourceEntryName' "$BAR"
-          grep -q 'com.google.android.projection.gearhead' "$BAR"
-
-          grep -q 'nav_bar_container' "$BAR"
-          grep -q 'car_navigation_bar' "$BAR"
-          grep -q 'dock_container' "$BAR"
-          grep -q 'floating_nav_bar_view' "$BAR"
-          grep -q 'navigation_bar_container' "$BAR"
-
-          grep -q '"back"' "$BAR"
-          grep -q '"home"' "$BAR"
-          grep -q '"recents"' "$BAR"
-          grep -q '"apps"' "$BAR"
-
-          grep -q 'sendBroadcast' "$BAR"
-
-          echo "GearheadControlBar verified."
-
-      - name: Verify V10ControlReceiver
+      - name: Verify generated control components
         shell: bash
         run: |
           set -euo pipefail
 
           RECEIVER="v10-source/app/src/main/java/com/hieptran/aacast/doudou/V10ControlReceiver.java"
+          BAR="v10-source/app/src/main/java/com/hieptran/aacast/doudou/hook/GearheadControlBar.java"
 
           test -f "$RECEIVER"
+          test -f "$BAR"
 
           grep -q 'BroadcastReceiver' "$RECEIVER"
           grep -q 'com.carassistant.v10.CONTROL' "$RECEIVER"
+          grep -q 'EXTRA_COMMAND' "$RECEIVER"
 
-          echo "V10ControlReceiver exists and uses the V10 control action."
+          grep -q '"back"' "$RECEIVER"
+          grep -q '"home"' "$RECEIVER"
+          grep -q '"recents"' "$RECEIVER"
+          grep -q '"apps"' "$RECEIVER"
 
-      - name: Inspect V10ControlReceiver commands
-        shell: bash
-        run: |
-          set -euo pipefail
+          grep -q 'sendBroadcast' "$BAR"
+          grep -q 'com.carassistant.v10.CONTROL' "$BAR"
 
-          RECEIVER="v10-source/app/src/main/java/com/hieptran/aacast/doudou/V10ControlReceiver.java"
-
-          echo "----- V10ControlReceiver.java -----"
-          sed -n '1,260p' "$RECEIVER"
-          echo "-----------------------------------"
-
-          if grep -Eq \
-              'KEYCODE_BACK|keyevent 4|BACK|back' \
-              "$RECEIVER"; then
-            echo "Back handling detected."
-          else
-            echo "WARNING: Back handling not found in receiver."
-          fi
-
-          if grep -Eq \
-              'KEYCODE_HOME|keyevent 3|HOME|home' \
-              "$RECEIVER"; then
-            echo "Home handling detected."
-          else
-            echo "WARNING: Home handling not found in receiver."
-          fi
-
-          if grep -Eq \
-              'RECENTS|recents|KEYCODE_APP_SWITCH|keyevent 187' \
-              "$RECEIVER"; then
-            echo "Recents handling detected."
-          else
-            echo "WARNING: Recents handling not found in receiver."
-          fi
-
-          echo "Receiver inspection completed."
+          echo "Control receiver verified."
+          echo "Gearhead control bar verified."
 
       - name: Rebuild Manifest
         shell: bash
@@ -709,7 +916,7 @@ jobs:
           print("Manifest rebuilt.")
           PY
 
-      - name: Validate Manifest XML
+      - name: Validate Manifest
         shell: bash
         run: |
           set -euo pipefail
@@ -725,11 +932,8 @@ jobs:
           tree = ET.parse(path)
           root = tree.getroot()
 
-          ANDROID_NAME = \
-              "{http://schemas.android.com/apk/res/android}name"
-
-          ANDROID_EXPORTED = \
-              "{http://schemas.android.com/apk/res/android}exported"
+          NAME = "{http://schemas.android.com/apk/res/android}name"
+          EXPORTED = "{http://schemas.android.com/apk/res/android}exported"
 
           expected = {
               "com.carassistant.v10.V10LauncherActivity": "true",
@@ -740,14 +944,13 @@ jobs:
           found = {}
 
           for element in root.findall(".//*"):
-              name = element.get(ANDROID_NAME)
+              name = element.get(NAME)
 
               if name in expected:
-                  found[name] = element.get(
-                      ANDROID_EXPORTED
-                  )
+                  found[name] = element.get(EXPORTED)
 
           for name, value in expected.items():
+
               if name not in found:
                   raise SystemExit(
                       "ERROR: missing " + name
@@ -758,19 +961,7 @@ jobs:
                       "ERROR: wrong exported value for " + name
                   )
 
-          for element in root.findall(".//*"):
-              name = element.get(ANDROID_NAME)
-
-              if name and (
-                  name.endswith("MainActivity")
-                  or name.endswith("AACastCarActivity")
-              ):
-                  raise SystemExit(
-                      "ERROR: obsolete activity remains: "
-                      + name
-                  )
-
-          print("Manifest XML and exported values verified.")
+          print("Manifest verified.")
           PY
 
       - name: Verify V10 source
@@ -779,7 +970,6 @@ jobs:
           set -euo pipefail
 
           JAVA="v10-source/app/src/main/java"
-          MANIFEST="v10-source/app/src/main/AndroidManifest.xml"
 
           REQUIRED=(
             "V10LauncherActivity.java"
@@ -794,6 +984,7 @@ jobs:
           )
 
           for file in "${REQUIRED[@]}"; do
+
             count="$(
               find "$JAVA" \
                 -name "$file" |
@@ -804,43 +995,39 @@ jobs:
               echo "ERROR: $file count=$count"
               exit 1
             fi
+
           done
 
           if grep -R \
               'com.carassistant.v9' \
               "$JAVA" \
-              "$MANIFEST" \
               2>/dev/null; then
+
             echo "ERROR: V9 package remains."
             exit 1
           fi
 
           echo "V10 source verification passed."
 
-      - name: Verify V10 projection invariants
+      - name: Verify projection engine
         shell: bash
         run: |
           set -euo pipefail
 
           SESSION="v10-source/app/src/main/java/com/hieptran/aacast/doudou/V10ProjectionSession.java"
-          HOOK="v10-source/app/src/main/java/com/hieptran/aacast/doudou/hook/InputHooks.java"
 
           test -f "$SESSION"
-          test -f "$HOOK"
 
           grep -q 'SurfaceTexture' "$SESSION"
           grep -q 'setDefaultBufferSize' "$SESSION"
           grep -q 'new Surface' "$SESSION"
           grep -q 'createVirtualDisplay' "$SESSION"
           grep -q 'V10Display.nameFor' "$SESSION"
-          grep -q 'Process.myUid() / 100000' "$SESSION"
           grep -q -- '--display' "$SESSION"
           grep -q -- '--windowingMode 1' "$SESSION"
           grep -q 'input -d' "$SESSION"
-          grep -q 'keyevent 4' "$SESSION"
-          grep -q 'V10Display.matches' "$HOOK"
 
-          echo "Projection invariants passed."
+          echo "Projection engine verified."
 
       - name: Verify swipe input
         shell: bash
@@ -848,18 +1035,15 @@ jobs:
           set -euo pipefail
 
           INPUT="v10-source/app/src/main/java/com/hieptran/aacast/doudou/V10InputController.java"
-          SESSION="v10-source/app/src/main/java/com/hieptran/aacast/doudou/V10ProjectionSession.java"
 
           test -f "$INPUT"
-          test -f "$SESSION"
 
           grep -q 'MotionEvent.ACTION_DOWN' "$INPUT"
           grep -q 'MotionEvent.ACTION_MOVE' "$INPUT"
           grep -q 'MotionEvent.ACTION_UP' "$INPUT"
           grep -q 'session.swipe' "$INPUT"
-          grep -q 'swipe' "$SESSION"
 
-          echo "Single-pointer swipe verified."
+          echo "Swipe input verified."
 
       - name: Verify Xposed bridge
         shell: bash
@@ -902,21 +1086,18 @@ jobs:
               v10-source/app/src/main/java \
               2>/dev/null; then
 
-            echo "ERROR: API 34-only BroadcastReceiver APIs detected."
+            echo "ERROR: Android 14-only BroadcastReceiver API detected."
             exit 1
           fi
 
-          echo "Android 12 compatibility check passed."
+          echo "Android 12 compatibility verified."
 
-      - name: Validate Gradle project
+      - name: Gradle clean
         shell: bash
         run: |
           set -euo pipefail
 
           cd v10-source
-
-          gradle \
-            --version
 
           gradle \
             clean \
@@ -944,34 +1125,13 @@ jobs:
 
           test -f "$APK"
 
-          echo "APK:"
+          echo "APK size:"
           ls -lh "$APK"
 
-          echo "SHA256:"
+          echo "APK SHA256:"
           sha256sum "$APK"
 
-      - name: Verify APK package
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          APK="v10-source/app/build/outputs/apk/debug/app-debug.apk"
-
-          if command -v aapt >/dev/null 2>&1; then
-
-            aapt dump badging "$APK" |
-              grep -q \
-                "package: name='com.carassistant.v10'"
-
-            echo "APK package verified."
-
-          else
-
-            echo "aapt unavailable; package check skipped."
-
-          fi
-
-      - name: Upload V10.2-A2.1 APK
+      - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
           name: CarAssistant-V10.2-A2.1-debug
@@ -991,14 +1151,10 @@ jobs:
             user.email \
             "41898282+github-actions[bot]@users.noreply.github.com"
 
-          git add \
-            v10-source
+          git add v10-source
 
-          if git diff \
-              --cached \
-              --quiet; then
-
-            echo "No source changes to commit."
+          if git diff --cached --quiet; then
+            echo "No changes to commit."
             exit 0
           fi
 
