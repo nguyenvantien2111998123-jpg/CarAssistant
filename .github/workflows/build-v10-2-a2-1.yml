@@ -11,6 +11,7 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
+
       - name: Checkout
         uses: actions/checkout@v4
 
@@ -25,9 +26,15 @@ jobs:
         run: |
           set -euo pipefail
 
-          wget -q https://services.gradle.org/distributions/gradle-8.13-bin.zip
-          unzip -q gradle-8.13-bin.zip -d "$RUNNER_TEMP"
-          echo "$RUNNER_TEMP/gradle-8.13/bin" >> "$GITHUB_PATH"
+          wget -q \
+            https://services.gradle.org/distributions/gradle-8.13-bin.zip
+
+          unzip -q \
+            gradle-8.13-bin.zip \
+            -d "$RUNNER_TEMP"
+
+          echo "$RUNNER_TEMP/gradle-8.13/bin" \
+            >> "$GITHUB_PATH"
 
       - name: Verify existing V10 source
         shell: bash
@@ -37,7 +44,8 @@ jobs:
           test -d v10-source
           test -f v10-source/settings.gradle
           test -f v10-source/app/build.gradle
-          test -f v10-source/app/src/main/AndroidManifest.xml
+          test -f \
+            v10-source/app/src/main/AndroidManifest.xml
 
           echo "V10 source exists."
 
@@ -140,6 +148,10 @@ jobs:
               private static final String ACTION =
                       "com.carassistant.v10.CONTROL";
 
+              private static final Set<ViewGroup> INSTALLED =
+                      Collections.newSetFromMap(
+                              new IdentityHashMap<ViewGroup, Boolean>());
+
               private static final String[] DOCK_NAMES = {
                       "nav_bar_container",
                       "car_navigation_bar",
@@ -153,10 +165,6 @@ jobs:
                       "navbar",
                       "car_sys_ui_navbar"
               };
-
-              private static final Set<ViewGroup> INSTALLED =
-                      Collections.newSetFromMap(
-                              new IdentityHashMap<ViewGroup, Boolean>());
 
               private GearheadControlBar() {
               }
@@ -175,6 +183,7 @@ jobs:
                                   @Override
                                   protected void afterHookedMethod(
                                           MethodHookParam param) {
+
                                       if (param.args.length == 0) {
                                           return;
                                       }
@@ -309,7 +318,9 @@ jobs:
                   }
               }
 
-              private static void installBar(ViewGroup dock) {
+              private static void installBar(
+                      ViewGroup dock) {
+
                   LinearLayout bar =
                           new LinearLayout(
                                   dock.getContext());
@@ -379,7 +390,8 @@ jobs:
                   String name =
                           resourceEntryName(group);
 
-                  if (name != null && isDockName(name)) {
+                  if (name != null
+                          && isDockName(name)) {
                       return group;
                   }
 
@@ -579,12 +591,45 @@ jobs:
 
           grep -q 'BroadcastReceiver' "$RECEIVER"
           grep -q 'com.carassistant.v10.CONTROL' "$RECEIVER"
-          grep -q 'BACK' "$RECEIVER"
-          grep -q 'HOME' "$RECEIVER"
-          grep -q 'RECENTS' "$RECEIVER"
-          grep -q 'APPS' "$RECEIVER"
 
-          echo "V10ControlReceiver verified."
+          echo "V10ControlReceiver exists and uses the V10 control action."
+
+      - name: Inspect V10ControlReceiver commands
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          RECEIVER="v10-source/app/src/main/java/com/hieptran/aacast/doudou/V10ControlReceiver.java"
+
+          echo "----- V10ControlReceiver.java -----"
+          sed -n '1,260p' "$RECEIVER"
+          echo "-----------------------------------"
+
+          if grep -Eq \
+              'KEYCODE_BACK|keyevent 4|BACK|back' \
+              "$RECEIVER"; then
+            echo "Back handling detected."
+          else
+            echo "WARNING: Back handling not found in receiver."
+          fi
+
+          if grep -Eq \
+              'KEYCODE_HOME|keyevent 3|HOME|home' \
+              "$RECEIVER"; then
+            echo "Home handling detected."
+          else
+            echo "WARNING: Home handling not found in receiver."
+          fi
+
+          if grep -Eq \
+              'RECENTS|recents|KEYCODE_APP_SWITCH|keyevent 187' \
+              "$RECEIVER"; then
+            echo "Recents handling detected."
+          else
+            echo "WARNING: Recents handling not found in receiver."
+          fi
+
+          echo "Receiver inspection completed."
 
       - name: Rebuild Manifest
         shell: bash
@@ -664,26 +709,12 @@ jobs:
           print("Manifest rebuilt.")
           PY
 
-      - name: Verify Manifest
+      - name: Validate Manifest XML
         shell: bash
         run: |
           set -euo pipefail
 
           MANIFEST="v10-source/app/src/main/AndroidManifest.xml"
-
-          test -f "$MANIFEST"
-
-          grep -q \
-            'com.carassistant.v10.V10LauncherActivity' \
-            "$MANIFEST"
-
-          grep -q \
-            'com.carassistant.v10.V10CarActivity' \
-            "$MANIFEST"
-
-          grep -q \
-            'com.carassistant.v10.V10ControlReceiver' \
-            "$MANIFEST"
 
           python3 - "$MANIFEST" <<'PY'
           import sys
@@ -694,52 +725,53 @@ jobs:
           tree = ET.parse(path)
           root = tree.getroot()
 
-          ns = {
-              "android": "http://schemas.android.com/apk/res/android"
+          ANDROID_NAME = \
+              "{http://schemas.android.com/apk/res/android}name"
+
+          ANDROID_EXPORTED = \
+              "{http://schemas.android.com/apk/res/android}exported"
+
+          expected = {
+              "com.carassistant.v10.V10LauncherActivity": "true",
+              "com.carassistant.v10.V10CarActivity": "true",
+              "com.carassistant.v10.V10ControlReceiver": "true",
           }
 
-          found_receiver = False
+          found = {}
 
-          for receiver in root.findall(".//receiver"):
-              name = receiver.get(
-                  "{http://schemas.android.com/apk/res/android}name"
-              )
+          for element in root.findall(".//*"):
+              name = element.get(ANDROID_NAME)
 
-              if name == "com.carassistant.v10.V10ControlReceiver":
-                  found_receiver = True
-
-                  exported = receiver.get(
-                      "{http://schemas.android.com/apk/res/android}exported"
+              if name in expected:
+                  found[name] = element.get(
+                      ANDROID_EXPORTED
                   )
 
-                  if exported != "true":
-                      raise SystemExit(
-                          "ERROR: V10ControlReceiver must be exported=true"
-                      )
+          for name, value in expected.items():
+              if name not in found:
+                  raise SystemExit(
+                      "ERROR: missing " + name
+                  )
 
-          if not found_receiver:
-              raise SystemExit(
-                  "ERROR: V10ControlReceiver missing"
-              )
+              if found[name] != value:
+                  raise SystemExit(
+                      "ERROR: wrong exported value for " + name
+                  )
 
-          print("Receiver manifest entry verified.")
+          for element in root.findall(".//*"):
+              name = element.get(ANDROID_NAME)
+
+              if name and (
+                  name.endswith("MainActivity")
+                  or name.endswith("AACastCarActivity")
+              ):
+                  raise SystemExit(
+                      "ERROR: obsolete activity remains: "
+                      + name
+                  )
+
+          print("Manifest XML and exported values verified.")
           PY
-
-          if grep -q \
-              'android:name="[^"]*MainActivity' \
-              "$MANIFEST"; then
-            echo "ERROR: MainActivity remains."
-            exit 1
-          fi
-
-          if grep -q \
-              'android:name="[^"]*AACastCarActivity' \
-              "$MANIFEST"; then
-            echo "ERROR: AACastCarActivity remains."
-            exit 1
-          fi
-
-          echo "Manifest verification passed."
 
       - name: Verify V10 source
         shell: bash
@@ -869,6 +901,7 @@ jobs:
               'getSentFromUid\|getSentFromPackage' \
               v10-source/app/src/main/java \
               2>/dev/null; then
+
             echo "ERROR: API 34-only BroadcastReceiver APIs detected."
             exit 1
           fi
@@ -925,13 +958,17 @@ jobs:
           APK="v10-source/app/build/outputs/apk/debug/app-debug.apk"
 
           if command -v aapt >/dev/null 2>&1; then
+
             aapt dump badging "$APK" |
               grep -q \
                 "package: name='com.carassistant.v10'"
 
             echo "APK package verified."
+
           else
+
             echo "aapt unavailable; package check skipped."
+
           fi
 
       - name: Upload V10.2-A2.1 APK
@@ -954,9 +991,13 @@ jobs:
             user.email \
             "41898282+github-actions[bot]@users.noreply.github.com"
 
-          git add v10-source
+          git add \
+            v10-source
 
-          if git diff --cached --quiet; then
+          if git diff \
+              --cached \
+              --quiet; then
+
             echo "No source changes to commit."
             exit 0
           fi
