@@ -1,0 +1,1365 @@
+name: Build Car Assistant V10.1 - V9 Engine
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build Car Assistant V10.1
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: "8.13"
+
+      # ============================================================
+      # 1. PREPARE EXISTING V10 SOURCE
+      # ============================================================
+      - name: Prepare V10.1 source
+        shell: bash
+        run: |
+          set -e
+
+          echo "=========================================="
+          echo " PREPARE CAR ASSISTANT V10.1"
+          echo "=========================================="
+
+          test -d v10-source
+
+          rm -rf v10-source/.gradle
+          rm -rf v10-source/app/build
+
+          mkdir -p \
+            v10-source/app/src/main/java/com/carassistant/v10/hook
+
+          echo "V10 source:"
+          find v10-source/app/src/main -type f | sort
+
+      # ============================================================
+      # 2. V10 DISPLAY IDENTIFIER
+      # Based directly on V9 AACastDisplay
+      # ============================================================
+      - name: Write V10Display
+        shell: bash
+        run: |
+          set -e
+
+          cat > v10-source/app/src/main/java/com/carassistant/v10/V10Display.java <<'EOF'
+          package com.carassistant.v10;
+
+          public final class V10Display {
+
+              public static final String PACKAGE =
+                      "com.carassistant.v10";
+
+              public static final String PREFIX =
+                      "Car Assistant V10 ";
+
+              private V10Display() {
+              }
+
+              public static String nameFor(int sessionIndex) {
+                  return PREFIX + (sessionIndex + 1);
+              }
+
+              public static boolean matches(
+                      String ownerPackage,
+                      String name,
+                      int type,
+                      int ownerUid) {
+
+                  if (!PACKAGE.equals(ownerPackage)
+                          || type != 5
+                          || ownerUid < 10000) {
+                      return false;
+                  }
+
+                  return (PREFIX + "1").equals(name)
+                          || (PREFIX + "2").equals(name)
+                          || (PREFIX + "3").equals(name);
+              }
+          }
+          EOF
+
+      # ============================================================
+      # 3. V10 INPUT CONTROLLER
+      # Same root input mechanism as V9
+      # ============================================================
+      - name: Write V10InputController
+        shell: bash
+        run: |
+          set -e
+
+          cat > v10-source/app/src/main/java/com/carassistant/v10/V10InputController.java <<'EOF'
+          package com.carassistant.v10;
+
+          import android.util.Log;
+
+          public final class V10InputController {
+
+              private static final String TAG =
+                      "CarAssistantV10Input";
+
+              private final RootShellSession shell;
+
+              public V10InputController(RootShellSession shell) {
+                  this.shell = shell;
+              }
+
+              public void back(int displayId) {
+                  if (displayId <= 0) {
+                      return;
+                  }
+
+                  run(
+                          "/system/bin/input -d "
+                                  + displayId
+                                  + " keyevent 4"
+                  );
+              }
+
+              public void tap(
+                      int displayId,
+                      int x,
+                      int y) {
+
+                  if (displayId <= 0) {
+                      return;
+                  }
+
+                  run(
+                          "/system/bin/input touchscreen -d "
+                                  + displayId
+                                  + " tap "
+                                  + x
+                                  + " "
+                                  + y
+                  );
+              }
+
+              public void swipe(
+                      int displayId,
+                      int x1,
+                      int y1,
+                      int x2,
+                      int y2,
+                      int duration) {
+
+                  if (displayId <= 0) {
+                      return;
+                  }
+
+                  run(
+                          "/system/bin/input touchscreen -d "
+                                  + displayId
+                                  + " swipe "
+                                  + x1
+                                  + " "
+                                  + y1
+                                  + " "
+                                  + x2
+                                  + " "
+                                  + y2
+                                  + " "
+                                  + duration
+                  );
+              }
+
+              private void run(String command) {
+                  try {
+                      shell.run(5, command);
+                  } catch (Throwable e) {
+                      Log.e(TAG, "Input command failed", e);
+                  }
+              }
+          }
+          EOF
+
+      # ============================================================
+      # 4. V10 PROJECTION SESSION
+      # Directly follows the proven V9 PaneView sequence:
+      #
+      # TextureView
+      # -> SurfaceTexture
+      # -> setDefaultBufferSize
+      # -> Surface
+      # -> VirtualDisplay flags=10
+      # -> launch on display
+      # ============================================================
+      - name: Write V10ProjectionSession
+        shell: bash
+        run: |
+          set -e
+
+          cat > v10-source/app/src/main/java/com/carassistant/v10/V10ProjectionSession.java <<'EOF'
+          package com.carassistant.v10;
+
+          import android.content.ComponentName;
+          import android.content.Context;
+          import android.content.pm.ActivityInfo;
+          import android.content.pm.PackageManager;
+          import android.graphics.SurfaceTexture;
+          import android.hardware.display.DisplayManager;
+          import android.hardware.display.VirtualDisplay;
+          import android.os.Handler;
+          import android.os.Looper;
+          import android.os.Process;
+          import android.util.Log;
+          import android.view.Surface;
+          import android.view.TextureView;
+
+          public final class V10ProjectionSession
+                  implements TextureView.SurfaceTextureListener {
+
+              private static final String TAG =
+                      "CarAssistantV10";
+
+              private final Context context;
+              private final StatusListener statusListener;
+              private final Handler mainHandler =
+                      new Handler(Looper.getMainLooper());
+
+              private final RootShellSession shell;
+              private final V10InputController inputController;
+
+              private TextureView textureView;
+              private Surface surface;
+              private VirtualDisplay display;
+
+              private ComponentName target;
+
+              private int bufferW;
+              private int bufferH;
+
+              private boolean destroyed;
+              private int generation;
+
+              public interface StatusListener {
+                  void onStatus(String status);
+              }
+
+              public V10ProjectionSession(
+                      Context context,
+                      StatusListener listener) {
+
+                  this.context = context;
+                  this.statusListener = listener;
+
+                  shell = new RootShellSession();
+                  inputController =
+                          new V10InputController(shell);
+
+                  status("SESSION CREATED");
+              }
+
+              public void attachTextureView(TextureView view) {
+
+                  if (destroyed) {
+                      return;
+                  }
+
+                  textureView = view;
+
+                  textureView.setSurfaceTextureListener(this);
+
+                  if (textureView.isAvailable()) {
+                      onSurfaceTextureAvailable(
+                              textureView.getSurfaceTexture(),
+                              textureView.getWidth(),
+                              textureView.getHeight()
+                      );
+                  }
+              }
+
+              public void setTarget(ComponentName component) {
+
+                  if (destroyed) {
+                      return;
+                  }
+
+                  target = component;
+
+                  status(
+                          "TARGET\n"
+                                  + component.flattenToShortString()
+                  );
+
+                  if (!resolveTarget()) {
+                      return;
+                  }
+
+                  ensureDisplay();
+              }
+
+              private boolean resolveTarget() {
+
+                  if (target == null) {
+                      fail("TARGET NULL");
+                      return false;
+                  }
+
+                  try {
+                      PackageManager pm =
+                              context.getPackageManager();
+
+                      ActivityInfo ai =
+                              pm.getActivityInfo(
+                                      target,
+                                      PackageManager.MATCH_ALL
+                              );
+
+                      if (ai == null) {
+                          fail("ACTIVITY NOT FOUND");
+                          return false;
+                      }
+
+                      if (!ai.enabled) {
+                          fail("ACTIVITY DISABLED");
+                          return false;
+                      }
+
+                      if (ai.applicationInfo == null
+                              || !ai.applicationInfo.enabled) {
+                          fail("APPLICATION DISABLED");
+                          return false;
+                      }
+
+                      if (ai.exported) {
+                          if (ai.permission != null
+                                  && context.checkSelfPermission(
+                                  ai.permission)
+                                  != PackageManager.PERMISSION_GRANTED) {
+                              fail("ACTIVITY PERMISSION DENIED");
+                              return false;
+                          }
+                      }
+
+                      if (context.getPackageName()
+                              .equals(ai.packageName)) {
+                          fail("SELF TARGET NOT ALLOWED");
+                          return false;
+                      }
+
+                      status("TARGET VALID");
+
+                      return true;
+
+                  } catch (Throwable e) {
+
+                      fail(
+                              "TARGET RESOLVE FAILED\n"
+                                      + errorText(e)
+                      );
+
+                      return false;
+                  }
+              }
+
+              private void ensureDisplay() {
+
+                  if (destroyed) {
+                      return;
+                  }
+
+                  if (textureView == null
+                          || !textureView.isAvailable()) {
+
+                      status("WAITING FOR SURFACE");
+                      return;
+                  }
+
+                  if (display != null) {
+                      return;
+                  }
+
+                  SurfaceTexture st =
+                          textureView.getSurfaceTexture();
+
+                  if (st == null) {
+                      status("SURFACE TEXTURE NULL");
+                      return;
+                  }
+
+                  int width = textureView.getWidth();
+                  int height = textureView.getHeight();
+
+                  if (width < 1 || height < 1) {
+                      status("INVALID SURFACE SIZE");
+                      return;
+                  }
+
+                  try {
+
+                      bufferW = width;
+                      bufferH = height;
+
+                      /*
+                       * This is deliberately done before
+                       * VirtualDisplay creation.
+                       *
+                       * Same sequence as V9.
+                       */
+                      st.setDefaultBufferSize(
+                              bufferW,
+                              bufferH
+                      );
+
+                      Surface newSurface =
+                              new Surface(st);
+
+                      VirtualDisplay newDisplay;
+
+                      try {
+
+                          /*
+                           * V9 uses flags = 10.
+                           *
+                           * Do NOT replace this with PUBLIC /
+                           * PRESENTATION / OWN_CONTENT_ONLY.
+                           */
+                          newDisplay =
+                                  ((DisplayManager)
+                                          context.getSystemService(
+                                                  Context.DISPLAY_SERVICE))
+                                          .createVirtualDisplay(
+                                                  V10Display.nameFor(0),
+                                                  bufferW,
+                                                  bufferH,
+                                                  160,
+                                                  newSurface,
+                                                  10
+                                          );
+
+                          if (newDisplay == null) {
+                              throw new IllegalStateException(
+                                      "Cannot create virtual display"
+                              );
+                          }
+
+                      } catch (RuntimeException e) {
+
+                          newSurface.release();
+                          throw e;
+                      }
+
+                      display = newDisplay;
+                      surface = newSurface;
+
+                      int displayId =
+                              display.getDisplay()
+                                      .getDisplayId();
+
+                      status(
+                              "DISPLAY OK\nID="
+                                      + displayId
+                      );
+
+                      launch();
+
+                  } catch (Throwable e) {
+
+                      releaseDisplay();
+
+                      Log.e(
+                              TAG,
+                              "Display creation failed",
+                              e
+                      );
+
+                      fail(
+                              "DISPLAY FAILED\n"
+                                      + errorText(e)
+                      );
+                  }
+              }
+
+              private void launch() {
+
+                  if (destroyed
+                          || target == null
+                          || display == null) {
+                      return;
+                  }
+
+                  final int localGeneration =
+                          ++generation;
+
+                  final int displayId =
+                          display.getDisplay()
+                                  .getDisplayId();
+
+                  if (displayId <= 0) {
+                      fail("INVALID DISPLAY ID");
+                      return;
+                  }
+
+                  final int userId =
+                          Process.myUid() / 100000;
+
+                  final String flat =
+                          target.flattenToShortString();
+
+                  final String safeComponent =
+                          flat.replace(
+                                  "'",
+                                  "'\"'\"'"
+                          );
+
+                  final String command =
+                          "/system/bin/am start"
+                                  + " --user "
+                                  + userId
+                                  + " --display "
+                                  + displayId
+                                  + " --windowingMode 1"
+                                  + " -a android.intent.action.MAIN"
+                                  + " -c android.intent.category.LAUNCHER"
+                                  + " -f 0x18000000"
+                                  + " -n '"
+                                  + safeComponent
+                                  + "'";
+
+                  status(
+                          "LAUNCHING\n"
+                                  + flat
+                                  + "\nDISPLAY="
+                                  + displayId
+                                  + "\nUSER="
+                                  + userId
+                  );
+
+                  RootShellSession.EXEC.execute(
+                          () -> {
+
+                              try {
+
+                                  String result =
+                                          shell.run(
+                                                  15,
+                                                  command
+                                          );
+
+                                  if (destroyed
+                                          || localGeneration
+                                          != generation) {
+                                      return;
+                                  }
+
+                                  Log.i(
+                                          TAG,
+                                          "am start:\n"
+                                                  + result
+                                  );
+
+                                  status(
+                                          "APP START OK\n"
+                                                  + flat
+                                                  + "\nDISPLAY="
+                                                  + displayId
+                                  );
+
+                              } catch (Throwable e) {
+
+                                  Log.e(
+                                          TAG,
+                                          "Launch failed",
+                                          e
+                                  );
+
+                                  fail(
+                                          "APP START FAILED\n"
+                                                  + errorText(e)
+                                  );
+                              }
+                          }
+                  );
+              }
+
+              public void tap(
+                      float x,
+                      float y) {
+
+                  if (display == null) {
+                      return;
+                  }
+
+                  int displayId =
+                          display.getDisplay()
+                                  .getDisplayId();
+
+                  int ix = clamp(
+                          (int) x,
+                          0,
+                          Math.max(0, bufferW - 1)
+                  );
+
+                  int iy = clamp(
+                          (int) y,
+                          0,
+                          Math.max(0, bufferH - 1)
+                  );
+
+                  inputController.tap(
+                          displayId,
+                          ix,
+                          iy
+                  );
+              }
+
+              public void back() {
+
+                  if (display == null) {
+                      return;
+                  }
+
+                  inputController.back(
+                          display.getDisplay()
+                                  .getDisplayId()
+                  );
+              }
+
+              private int clamp(
+                      int value,
+                      int min,
+                      int max) {
+
+                  return Math.max(
+                          min,
+                          Math.min(max, value)
+                  );
+              }
+
+              @Override
+              public boolean onSurfaceTextureAvailable(
+                      SurfaceTexture surfaceTexture,
+                      int width,
+                      int height) {
+
+                  status(
+                          "SURFACE AVAILABLE\n"
+                                  + width
+                                  + "x"
+                                  + height
+                  );
+
+                  ensureDisplay();
+
+                  return true;
+              }
+
+              @Override
+              public void onSurfaceTextureSizeChanged(
+                      SurfaceTexture surfaceTexture,
+                      int width,
+                      int height) {
+
+                  bufferW = width;
+                  bufferH = height;
+
+                  try {
+
+                      if (surfaceTexture != null) {
+                          surfaceTexture.setDefaultBufferSize(
+                                  width,
+                                  height
+                          );
+                      }
+
+                      if (display != null) {
+                          display.resize(
+                                  width,
+                                  height,
+                                  160
+                          );
+                      }
+
+                      status(
+                              "DISPLAY RESIZED\n"
+                                      + width
+                                      + "x"
+                                      + height
+                      );
+
+                  } catch (Throwable e) {
+
+                      Log.e(
+                              TAG,
+                              "Resize failed",
+                              e
+                      );
+                  }
+              }
+
+              @Override
+              public boolean onSurfaceTextureDestroyed(
+                      SurfaceTexture surfaceTexture) {
+
+                  generation++;
+
+                  releaseDisplay();
+
+                  return true;
+              }
+
+              @Override
+              public void onSurfaceTextureUpdated(
+                      SurfaceTexture surfaceTexture) {
+              }
+
+              private void releaseDisplay() {
+
+                  if (display != null) {
+
+                      try {
+                          display.release();
+                      } catch (Throwable e) {
+                          Log.e(
+                                  TAG,
+                                  "Display release failed",
+                                  e
+                          );
+                      }
+
+                      display = null;
+                  }
+
+                  if (surface != null) {
+
+                      try {
+                          surface.release();
+                      } catch (Throwable e) {
+                          Log.e(
+                                  TAG,
+                                  "Surface release failed",
+                                  e
+                          );
+                      }
+
+                      surface = null;
+                  }
+              }
+
+              public void destroy() {
+
+                  if (destroyed) {
+                      return;
+                  }
+
+                  destroyed = true;
+                  generation++;
+
+                  releaseDisplay();
+
+                  try {
+                      shell.destroy();
+                  } catch (Throwable e) {
+                      Log.e(
+                              TAG,
+                              "Shell destroy failed",
+                              e
+                      );
+                  }
+              }
+
+              private void status(String value) {
+
+                  if (statusListener == null) {
+                      return;
+                  }
+
+                  mainHandler.post(
+                          () -> statusListener.onStatus(value)
+                  );
+              }
+
+              private void fail(String value) {
+
+                  Log.e(TAG, value);
+                  status(value);
+              }
+
+              private String errorText(Throwable e) {
+
+                  String text =
+                          e.getClass().getName();
+
+                  if (e.getMessage() != null) {
+                      text += "\n" + e.getMessage();
+                  }
+
+                  return text;
+              }
+          }
+          EOF
+
+      # ============================================================
+      # 5. V10 CAR ACTIVITY
+      # V9 lifecycle model:
+      # create root
+      # -> create TextureView
+      # -> attach TextureView
+      # -> set target
+      # ============================================================
+      - name: Write V10CarActivity
+        shell: bash
+        run: |
+          set -e
+
+          cat > v10-source/app/src/main/java/com/carassistant/v10/V10CarActivity.java <<'EOF'
+          package com.carassistant.v10;
+
+          import android.content.ComponentName;
+          import android.os.Bundle;
+          import android.util.Log;
+          import android.view.Gravity;
+          import android.view.TextureView;
+          import android.view.ViewGroup;
+          import android.view.Window;
+          import android.view.WindowManager;
+          import android.widget.FrameLayout;
+          import android.widget.TextView;
+
+          import com.google.android.apps.auto.sdk.CarActivity;
+
+          public final class V10CarActivity extends CarActivity {
+
+              private static final String TAG =
+                      "CarAssistantV10";
+
+              private V10ProjectionSession session;
+              private TextureView textureView;
+
+              @Override
+              protected void onCreate(Bundle savedInstanceState) {
+
+                  super.onCreate(savedInstanceState);
+
+                  requestWindowFeature(
+                          Window.FEATURE_NO_TITLE
+                  );
+
+                  getWindow().setFlags(
+                          WindowManager.LayoutParams.FLAG_FULLSCREEN,
+                          WindowManager.LayoutParams.FLAG_FULLSCREEN
+                  );
+
+                  FrameLayout root =
+                          new FrameLayout(this);
+
+                  root.setBackgroundColor(
+                          0xff000000
+                  );
+
+                  textureView =
+                          new TextureView(this);
+
+                  textureView.setOpaque(false);
+
+                  root.addView(
+                          textureView,
+                          new FrameLayout.LayoutParams(
+                                  -1,
+                                  -1
+                          )
+                  );
+
+                  setContentView(root);
+
+                  try {
+
+                      session =
+                              new V10ProjectionSession(
+                                      this,
+                                      message -> Log.i(
+                                              TAG,
+                                              message
+                                      )
+                              );
+
+                      /*
+                       * IMPORTANT:
+                       *
+                       * Attach surface BEFORE target.
+                       *
+                       * V9 creates the VirtualDisplay only
+                       * after SurfaceTexture is available.
+                       */
+                      session.attachTextureView(
+                              textureView
+                      );
+
+                      String value =
+                              getIntent().getStringExtra(
+                                      "target"
+                              );
+
+                      if (value == null
+                              || value.trim().isEmpty()) {
+
+                          session.fail(
+                                  "NO TARGET COMPONENT"
+                          );
+
+                          return;
+                      }
+
+                      ComponentName component =
+                              ComponentName
+                                      .unflattenFromString(
+                                              value
+                                      );
+
+                      if (component == null) {
+
+                          session.fail(
+                                  "INVALID TARGET\n"
+                                          + value
+                          );
+
+                          return;
+                      }
+
+                      session.setTarget(
+                              component
+                      );
+
+                  } catch (Throwable e) {
+
+                      Log.e(
+                              TAG,
+                              "CarActivity failed",
+                              e
+                      );
+                  }
+              }
+
+              @Override
+              public void onBackPressed() {
+
+                  if (session != null) {
+                      session.back();
+                      return;
+                  }
+
+                  super.onBackPressed();
+              }
+
+              @Override
+              protected void onDestroy() {
+
+                  if (session != null) {
+
+                      try {
+                          session.destroy();
+                      } catch (Throwable e) {
+                          Log.e(
+                                  TAG,
+                                  "Session destroy failed",
+                                  e
+                          );
+                      }
+
+                      session = null;
+                  }
+
+                  super.onDestroy();
+              }
+          }
+          EOF
+
+      # ============================================================
+      # 6. V10 INPUT HOOK
+      # ============================================================
+      - name: Write V10 InputHooks
+        shell: bash
+        run: |
+          set -e
+
+          cat > v10-source/app/src/main/java/com/carassistant/v10/hook/InputHooks.java <<'EOF'
+          package com.carassistant.v10.hook;
+
+          import android.hardware.display.DisplayManager;
+          import android.os.Binder;
+          import android.util.Log;
+          import android.view.Display;
+          import android.view.MotionEvent;
+
+          import de.robv.android.xposed.XC_MethodHook;
+          import de.robv.android.xposed.XposedBridge;
+          import de.robv.android.xposed.XposedHelpers;
+
+          import com.carassistant.v10.V10Display;
+
+          public final class InputHooks {
+
+              private static final String TAG =
+                      "CarAssistantV10Hook";
+
+              private InputHooks() {
+              }
+
+              public static void install(
+                      ClassLoader classLoader) {
+
+                  try {
+
+                      Class<?> ims =
+                              XposedHelpers.findClass(
+                                      "com.android.server.input.InputManagerService",
+                                      classLoader
+                              );
+
+                      XposedHelpers.findAndHookMethod(
+                              ims,
+                              "injectInputEventToTarget",
+                              android.view.InputEvent.class,
+                              int.class,
+                              int.class,
+                              new XC_MethodHook() {
+
+                                  @Override
+                                  protected void beforeHookedMethod(
+                                          MethodHookParam param)
+                                          throws Throwable {
+
+                                      Object event =
+                                              param.args[0];
+
+                                      int mode =
+                                              (Integer)
+                                                      param.args[1];
+
+                                      int targetUid =
+                                              (Integer)
+                                                      param.args[2];
+
+                                      if (!(event instanceof MotionEvent)) {
+                                          return;
+                                      }
+
+                                      if (mode < 0 || mode > 2) {
+                                          return;
+                                      }
+
+                                      if (targetUid != -1) {
+                                          return;
+                                      }
+
+                                      if (Binder.getCallingUid() != 0) {
+                                          return;
+                                      }
+
+                                      MotionEvent motion =
+                                              (MotionEvent) event;
+
+                                      int displayId =
+                                              motion.getDisplayId();
+
+                                      if (displayId <= 0) {
+                                          return;
+                                      }
+
+                                      DisplayManager dm =
+                                              (DisplayManager)
+                                                      param.thisObject
+                                                              .getClass()
+                                                              .getMethod(
+                                                                      "getContext"
+                                                              )
+                                                              .invoke(
+                                                                      param.thisObject
+                                                              )
+                                                              .getSystemService(
+                                                                      DisplayManager.class
+                                                              );
+
+                                      if (dm == null) {
+                                          return;
+                                      }
+
+                                      Display display =
+                                              dm.getDisplay(
+                                                      displayId
+                                              );
+
+                                      if (display == null) {
+                                          return;
+                                      }
+
+                                      if (!V10Display.matches(
+                                              getOwnerPackage(display),
+                                              display.getName(),
+                                              getDisplayType(display),
+                                              getOwnerUid(display)
+                                      )) {
+                                          return;
+                                      }
+
+                                      MotionEvent copy =
+                                              MotionEvent.obtain(
+                                                      motion
+                                              );
+
+                                      copy.setDisplayId(
+                                              displayId
+                                      );
+
+                                      try {
+
+                                          Object[] args =
+                                                  new Object[] {
+                                                          copy,
+                                                          false,
+                                                          -1,
+                                                          mode,
+                                                          8000,
+                                                          0x44000000
+                                                  };
+
+                                          Object result =
+                                                  XposedHelpers.callMethod(
+                                                          param.thisObject,
+                                                          "injectInputEvent",
+                                                          args
+                                                  );
+
+                                          param.setResult(
+                                                  result
+                                          );
+
+                                      } finally {
+
+                                          copy.recycle();
+                                      }
+                                  }
+                              }
+                      );
+
+                      Log.i(
+                              TAG,
+                              "Input hook installed"
+                      );
+
+                  } catch (Throwable e) {
+
+                      XposedBridge.log(
+                              TAG
+                                      + " install failed: "
+                                      + Log.getStackTraceString(e)
+                      );
+                  }
+              }
+
+              private static String getOwnerPackage(
+                      Display display) {
+
+                  try {
+
+                      return (String)
+                              XposedHelpers.callMethod(
+                                      display,
+                                      "getOwnerPackageName"
+                              );
+
+                  } catch (Throwable ignored) {
+
+                      return null;
+                  }
+              }
+
+              private static int getDisplayType(
+                      Display display) {
+
+                  try {
+
+                      return display.getType();
+
+                  } catch (Throwable ignored) {
+
+                      return -1;
+                  }
+              }
+
+              private static int getOwnerUid(
+                      Display display) {
+
+                  try {
+
+                      return (Integer)
+                              XposedHelpers.callMethod(
+                                      display,
+                                      "getOwnerUid"
+                              );
+
+                  } catch (Throwable ignored) {
+
+                      return -1;
+                  }
+              }
+          }
+          EOF
+
+      # ============================================================
+      # 7. PATCH SERVICE TO V10 CAR ACTIVITY
+      # ============================================================
+      - name: Patch AACastCarService
+        shell: bash
+        run: |
+          set -e
+
+          SERVICE=$(find \
+            v10-source/app/src/main/java \
+            -name "AACastCarService.java" \
+            -print -quit)
+
+          test -n "$SERVICE"
+
+          sed -i \
+            's/AACastCarActivity/V10CarActivity/g' \
+            "$SERVICE"
+
+          sed -i \
+            's/com\.carassistant\.v9/com.carassistant.v10/g' \
+            "$SERVICE"
+
+          echo "Patched:"
+          cat "$SERVICE"
+
+      # ============================================================
+      # 8. VERIFY NO OLD V9 PACKAGE REMAINS IN ACTIVE V10 CODE
+      # ============================================================
+      - name: Verify V10 package
+        shell: bash
+        run: |
+          set -e
+
+          echo "Checking V10 Java sources..."
+
+          grep -R \
+            "package com.carassistant.v10" \
+            v10-source/app/src/main/java/com/carassistant/v10
+
+          echo "Checking V9 package references..."
+
+          if grep -R \
+            "com.carassistant.v9" \
+            v10-source/app/src/main/java/com/carassistant/v10 \
+            --include="*.java"; then
+
+            echo "ERROR: V9 package reference remains."
+            exit 1
+          fi
+
+          echo "PACKAGE CHECK PASSED"
+
+      # ============================================================
+      # 9. VERIFY CRITICAL V9 ENGINE DETAILS
+      # ============================================================
+      - name: Verify V9 engine rules
+        shell: bash
+        run: |
+          set -e
+
+          FILE="v10-source/app/src/main/java/com/carassistant/v10/V10ProjectionSession.java"
+
+          grep -q "setDefaultBufferSize" "$FILE"
+          grep -q "createVirtualDisplay" "$FILE"
+          grep -q "V10Display.nameFor" "$FILE"
+          grep -q "Process.myUid()" "$FILE"
+          grep -q '"/system/bin/am start"' "$FILE"
+          grep -q '" --display "' "$FILE"
+          grep -q '" --windowingMode 1"' "$FILE"
+          grep -q '" -a android.intent.action.MAIN"' "$FILE"
+          grep -q '" -c android.intent.category.LAUNCHER"' "$FILE"
+
+          echo "=========================================="
+          echo " V9 ENGINE RULE CHECK PASSED"
+          echo "=========================================="
+
+      # ============================================================
+      # 10. BUILD
+      # ============================================================
+      - name: Build V10.1
+        working-directory: v10-source
+        shell: bash
+        run: |
+          set -e
+
+          chmod +x gradlew
+
+          ./gradlew \
+            clean \
+            assembleDebug \
+            --no-daemon \
+            --stacktrace
+
+      # ============================================================
+      # 11. VERIFY APK
+      # ============================================================
+      - name: Verify APK
+        shell: bash
+        run: |
+          set -e
+
+          APK="v10-source/app/build/outputs/apk/debug/app-debug.apk"
+
+          test -f "$APK"
+
+          echo "=========================================="
+          echo " V10.1 BUILD SUCCESS"
+          echo "=========================================="
+
+          ls -lh "$APK"
+
+          sha256sum "$APK"
+
+      # ============================================================
+      # 12. UPLOAD APK
+      # ============================================================
+      - name: Upload V10.1 APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: CarAssistant-V10.1-V9Engine-debug
+          path: v10-source/app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error
+          retention-days: 14
+
+      # ============================================================
+      # 13. COMMIT SOURCE
+      # ============================================================
+      - name: Commit V10.1 source
+        shell: bash
+        run: |
+          set -e
+
+          git config user.name \
+            "github-actions[bot]"
+
+          git config user.email \
+            "41898282+github-actions[bot]@users.noreply.github.com"
+
+          git add v10-source
+
+          if git diff --cached --quiet; then
+            echo "No source changes."
+            exit 0
+          fi
+
+          git commit \
+            -m "Build V10.1 using proven V9 projection engine"
+
+          git push origin HEAD:main
