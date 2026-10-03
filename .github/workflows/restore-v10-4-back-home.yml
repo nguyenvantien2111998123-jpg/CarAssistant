@@ -31,11 +31,19 @@ jobs:
           path = Path(sys.argv[1])
           s = path.read_text()
 
+          # Add field only once.
           if "private LinearLayout projectionControls;" not in s:
+              marker = "    private TextureView textureView;\n"
+
+              if marker not in s:
+                  raise SystemExit(
+                      "Không tìm thấy field TextureView trong V10CarActivity.java"
+                  )
+
               s = s.replace(
-                  "    private TextureView textureView;\n",
-                  "    private TextureView textureView;\n"
-                  "    private LinearLayout projectionControls;\n",
+                  marker,
+                  marker
+                  + "    private LinearLayout projectionControls;\n",
                   1
               )
 
@@ -125,32 +133,51 @@ jobs:
 
           if old not in s:
               if "Restored from V10-3:" in s:
-                  print("Already restored.")
+                  print("BACK/HOME controls already restored.")
                   raise SystemExit(0)
+
               raise SystemExit(
-                  "Expected attachProjection block was not found"
+                  "Không tìm thấy attachProjection block cần patch."
               )
 
           s = s.replace(old, new, 1)
+
           path.write_text(s)
-          print("V10-3 BACK/HOME controls restored.")
+
+          print("V10-3 BACK/HOME controls restored successfully.")
           PY
 
       - name: Verify restoration
+        shell: bash
         run: |
           set -euo pipefail
 
           FILE="v10-source/app/src/main/java/com/hieptran/aacast/doudou/V10CarActivity.java"
 
-          grep -q 'Restored from V10-3:' "$FILE"
+          test -f "$FILE"
+
+          grep -q 'private LinearLayout projectionControls;' "$FILE"
           grep -q 'backButton.setOnClickListener' "$FILE"
           grep -q 'homeButton.setOnClickListener' "$FILE"
+          grep -q 'handleControlBack()' "$FILE"
+          grep -q 'handleControlHome()' "$FILE"
 
-          echo "V10-3 navigation overlay restored successfully."
+          echo "V10-3 BACK/HOME navigation overlay verified."
 
-      - name: Build V10
+      - name: Make Gradle executable
         working-directory: v10-source
-        run: ./gradlew --no-daemon --stacktrace assembleDebug
+        run: chmod +x ./gradlew
+
+      - name: Build V10 Debug APK
+        working-directory: v10-source
+        run: |
+          ./gradlew --no-daemon --stacktrace assembleDebug
+
+      - name: List generated APK
+        working-directory: v10-source
+        run: |
+          echo "Generated APK files:"
+          find app/build/outputs/apk/debug -type f -name "*.apk" -print
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
@@ -159,7 +186,7 @@ jobs:
           path: v10-source/app/build/outputs/apk/debug/*.apk
           if-no-files-found: error
 
-      - name: Upload patched source
+      - name: Upload patched V10 source
         uses: actions/upload-artifact@v4
         with:
           name: CarAssistant-V10-4-Restored-Source
