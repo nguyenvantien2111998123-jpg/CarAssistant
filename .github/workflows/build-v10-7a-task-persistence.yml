@@ -18,10 +18,9 @@ jobs:
           java-version: '17'
 
       # ============================================================
-      # V10-6 PATCH
-      # Floating touch key + BACK/RECENTS/2 SCREEN/3 SCREEN
+      # V10-6 - FLOATING TOUCH KEY
       # ============================================================
-      - name: Patch V10CarActivity - V10-6 floating key
+      - name: Patch V10CarActivity
         shell: python
         run: |
           from pathlib import Path
@@ -46,12 +45,11 @@ jobs:
 
           marker = "import android.view.View;"
 
+          if marker not in text:
+              raise SystemExit("Cannot find android.view.View import.")
+
           for imp in imports:
               if imp not in text:
-                  if marker not in text:
-                      raise SystemExit(
-                          "Cannot find View import marker."
-                      )
                   text = text.replace(
                       marker,
                       marker + "\n" + imp,
@@ -63,16 +61,16 @@ jobs:
           # --------------------------------------------------------
           field_marker = "    private final RootShellSession shell"
 
-          fields = """
-    private TextView floatingTouchKey;
-    private LinearLayout floatingMenu;
-    private long floatingLastTap;
-    private boolean floatingDragging;
-    private float floatingDownRawX;
-    private float floatingDownRawY;
-    private float floatingStartX;
-    private float floatingStartY;
-"""
+          fields = [
+              "    private TextView floatingTouchKey;",
+              "    private LinearLayout floatingMenu;",
+              "    private long floatingLastTap;",
+              "    private boolean floatingDragging;",
+              "    private float floatingDownRawX;",
+              "    private float floatingDownRawY;",
+              "    private float floatingStartX;",
+              "    private float floatingStartY;",
+          ]
 
           if "floatingTouchKey" not in text:
               if field_marker not in text:
@@ -82,301 +80,228 @@ jobs:
 
               text = text.replace(
                   field_marker,
-                  fields + "\n" + field_marker,
+                  "\n".join(fields) + "\n" + field_marker,
                   1
               )
 
           # --------------------------------------------------------
-          # Create floating key after projection attach
+          # Floating-key methods
+          #
+          # Built line-by-line so YAML indentation cannot break.
           # --------------------------------------------------------
-          attach_marker = "    private void attachProjection()"
+          if "private void createFloatingTouchKey()" not in text:
 
-          if "createFloatingTouchKey()" not in text:
+              attach_marker = "    private void attachProjection()"
+
               if attach_marker not in text:
                   raise SystemExit(
                       "Cannot find attachProjection marker."
                   )
 
-              methods = r'''
-    private void createFloatingTouchKey() {
-        if (floatingTouchKey != null) {
-            return;
-        }
-
-        final SharedPreferences prefs =
-                getSharedPreferences(
-                        "v10_floating_key",
-                        MODE_PRIVATE);
-
-        floatingTouchKey = new TextView(this);
-        floatingTouchKey.setText("●");
-        floatingTouchKey.setTextSize(18f);
-        floatingTouchKey.setGravity(Gravity.CENTER);
-        floatingTouchKey.setClickable(true);
-
-        final int size =
-                (int) (52 * getResources().getDisplayMetrics().density);
-
-        FrameLayout.LayoutParams lp =
-                new FrameLayout.LayoutParams(size, size);
-
-        lp.leftMargin =
-                prefs.getInt("x", 24);
-
-        lp.topMargin =
-                prefs.getInt("y", 180);
-
-        projectionLayer.addView(
-                floatingTouchKey,
-                lp);
-
-        floatingTouchKey.setOnTouchListener(
-                (v, event) -> {
-
-                    FrameLayout.LayoutParams params =
-                            (FrameLayout.LayoutParams)
-                                    v.getLayoutParams();
-
-                    switch (event.getActionMasked()) {
-
-                        case MotionEvent.ACTION_DOWN:
-
-                            floatingDragging = false;
-
-                            floatingDownRawX =
-                                    event.getRawX();
-
-                            floatingDownRawY =
-                                    event.getRawY();
-
-                            floatingStartX =
-                                    params.leftMargin;
-
-                            floatingStartY =
-                                    params.topMargin;
-
-                            return true;
-
-                        case MotionEvent.ACTION_MOVE:
-
-                            float dx =
-                                    event.getRawX()
-                                            - floatingDownRawX;
-
-                            float dy =
-                                    event.getRawY()
-                                            - floatingDownRawY;
-
-                            if (Math.abs(dx)
-                                    > ViewConfiguration
-                                            .get(this)
-                                            .getScaledTouchSlop()
-                                    || Math.abs(dy)
-                                    > ViewConfiguration
-                                            .get(this)
-                                            .getScaledTouchSlop()) {
-
-                                floatingDragging = true;
-                            }
-
-                            if (floatingDragging) {
-
-                                params.leftMargin =
-                                        (int)
-                                                (floatingStartX + dx);
-
-                                params.topMargin =
-                                        (int)
-                                                (floatingStartY + dy);
-
-                                v.setLayoutParams(params);
-                            }
-
-                            return true;
-
-                        case MotionEvent.ACTION_UP:
-
-                            if (floatingDragging) {
-
-                                prefs.edit()
-                                        .putInt(
-                                                "x",
-                                                params.leftMargin)
-                                        .putInt(
-                                                "y",
-                                                params.topMargin)
-                                        .apply();
-
-                                return true;
-                            }
-
-                            long now =
-                                    SystemClock.uptimeMillis();
-
-                            if (now - floatingLastTap
-                                    < 350) {
-
-                                floatingLastTap = 0;
-
-                                hideFloatingMenu();
-
-                                RootShellSession.EXEC.execute(
-                                        () -> {
-
-                                            RootShellSession shell =
-                                                    new RootShellSession();
-
-                                            try {
-                                                shell.run(
-                                                        8,
-                                                        "/system/bin/input keyevent 3");
-                                            } catch (Exception ignored) {
-                                            } finally {
-                                                shell.destroy();
-                                            }
-                                        });
-
-                            } else {
-
-                                floatingLastTap = now;
-                                showFloatingMenu();
-                            }
-
-                            return true;
-                    }
-
-                    return true;
-                });
-    }
-
-    private void showFloatingMenu() {
-
-        if (floatingMenu != null) {
-            return;
-        }
-
-        floatingMenu =
-                new LinearLayout(this);
-
-        floatingMenu.setOrientation(
-                LinearLayout.VERTICAL);
-
-        floatingMenu.setPadding(
-                8,
-                8,
-                8,
-                8);
-
-        FrameLayout.LayoutParams menuLp =
-                new FrameLayout.LayoutParams(
-                        ViewGroup.LayoutParams.WRAP_CONTENT,
-                        ViewGroup.LayoutParams.WRAP_CONTENT);
-
-        menuLp.leftMargin = 24;
-        menuLp.topMargin = 120;
-
-        projectionLayer.addView(
-                floatingMenu,
-                menuLp);
-
-        addFloatingMenuButton(
-                "BACK",
-                this::handleControlBack);
-
-        addFloatingMenuButton(
-                "RECENTS",
-                this::openSystemRecents);
-
-        addFloatingMenuButton(
-                "2 SCREEN",
-                this::switchToTwoScreen);
-
-        addFloatingMenuButton(
-                "3 SCREEN",
-                this::switchToThreeScreen);
-    }
-
-    private void addFloatingMenuButton(
-            String text,
-            Runnable action) {
-
-        TextView button =
-                new TextView(this);
-
-        button.setText(text);
-        button.setTextSize(14f);
-        button.setGravity(Gravity.CENTER);
-        button.setPadding(
-                24,
-                14,
-                24,
-                14);
-        button.setClickable(true);
-
-        button.setOnClickListener(
-                v -> {
-                    hideFloatingMenu();
-                    action.run();
-                });
-
-        floatingMenu.addView(button);
-    }
-
-    private void hideFloatingMenu() {
-
-        if (floatingMenu != null) {
-
-            projectionLayer.removeView(
-                    floatingMenu);
-
-            floatingMenu = null;
-        }
-    }
-
-    private void openSystemRecents() {
-
-        RootShellSession.EXEC.execute(
-                () -> {
-
-                    RootShellSession shell =
-                            new RootShellSession();
-
-                    try {
-
-                        shell.run(
-                                8,
-                                "/system/bin/input keyevent 187");
-
-                    } catch (Exception ignored) {
-
-                    } finally {
-
-                        shell.destroy();
-                    }
-                });
-    }
-
-    private void switchToTwoScreen() {
-
-        RootView root =
-                RootView.getCurrent();
-
-        if (root != null) {
-            root.setLayoutModeExternal(0);
-        }
-    }
-
-    private void switchToThreeScreen() {
-
-        RootView root =
-                RootView.getCurrent();
-
-        if (root != null) {
-            root.setLayoutModeExternal(2);
-        }
-    }
-
-'''
+              method_lines = [
+                  "    private void createFloatingTouchKey() {",
+                  "        if (floatingTouchKey != null) {",
+                  "            return;",
+                  "        }",
+                  "",
+                  "        final SharedPreferences prefs =",
+                  "                getSharedPreferences(",
+                  '                        "v10_floating_key",',
+                  "                        MODE_PRIVATE);",
+                  "",
+                  "        floatingTouchKey = new TextView(this);",
+                  '        floatingTouchKey.setText("●");',
+                  "        floatingTouchKey.setTextSize(18f);",
+                  "        floatingTouchKey.setGravity(Gravity.CENTER);",
+                  "        floatingTouchKey.setClickable(true);",
+                  "",
+                  "        final int size =",
+                  "                (int) (52 * getResources().getDisplayMetrics().density);",
+                  "",
+                  "        FrameLayout.LayoutParams lp =",
+                  "                new FrameLayout.LayoutParams(size, size);",
+                  "",
+                  '        lp.leftMargin = prefs.getInt("x", 24);',
+                  '        lp.topMargin = prefs.getInt("y", 180);',
+                  "",
+                  "        projectionLayer.addView(",
+                  "                floatingTouchKey,",
+                  "                lp);",
+                  "",
+                  "        floatingTouchKey.setOnTouchListener(",
+                  "                (v, event) -> {",
+                  "",
+                  "                    FrameLayout.LayoutParams params =",
+                  "                            (FrameLayout.LayoutParams)",
+                  "                                    v.getLayoutParams();",
+                  "",
+                  "                    switch (event.getActionMasked()) {",
+                  "",
+                  "                        case MotionEvent.ACTION_DOWN:",
+                  "                            floatingDragging = false;",
+                  "                            floatingDownRawX = event.getRawX();",
+                  "                            floatingDownRawY = event.getRawY();",
+                  "                            floatingStartX = params.leftMargin;",
+                  "                            floatingStartY = params.topMargin;",
+                  "                            return true;",
+                  "",
+                  "                        case MotionEvent.ACTION_MOVE:",
+                  "                            float dx =",
+                  "                                    event.getRawX() - floatingDownRawX;",
+                  "                            float dy =",
+                  "                                    event.getRawY() - floatingDownRawY;",
+                  "",
+                  "                            if (Math.abs(dx) >",
+                  "                                    ViewConfiguration.get(this).getScaledTouchSlop()",
+                  "                                    || Math.abs(dy) >",
+                  "                                    ViewConfiguration.get(this).getScaledTouchSlop()) {",
+                  "                                floatingDragging = true;",
+                  "                            }",
+                  "",
+                  "                            if (floatingDragging) {",
+                  "                                params.leftMargin = (int) (floatingStartX + dx);",
+                  "                                params.topMargin = (int) (floatingStartY + dy);",
+                  "                                v.setLayoutParams(params);",
+                  "                            }",
+                  "",
+                  "                            return true;",
+                  "",
+                  "                        case MotionEvent.ACTION_UP:",
+                  "                            if (floatingDragging) {",
+                  "                                prefs.edit()",
+                  '                                        .putInt("x", params.leftMargin)',
+                  '                                        .putInt("y", params.topMargin)',
+                  "                                        .apply();",
+                  "                                return true;",
+                  "                            }",
+                  "",
+                  "                            long now = SystemClock.uptimeMillis();",
+                  "",
+                  "                            if (now - floatingLastTap < 350) {",
+                  "                                floatingLastTap = 0;",
+                  "                                hideFloatingMenu();",
+                  "",
+                  "                                RootShellSession.EXEC.execute(",
+                  "                                        () -> {",
+                  "                                            RootShellSession shell =",
+                  "                                                    new RootShellSession();",
+                  "                                            try {",
+                  "                                                shell.run(",
+                  "                                                        8,",
+                  '                                                        "/system/bin/input keyevent 3");',
+                  "                                            } catch (Exception ignored) {",
+                  "                                            } finally {",
+                  "                                                shell.destroy();",
+                  "                                            }",
+                  "                                        });",
+                  "                            } else {",
+                  "                                floatingLastTap = now;",
+                  "                                showFloatingMenu();",
+                  "                            }",
+                  "",
+                  "                            return true;",
+                  "                    }",
+                  "",
+                  "                    return true;",
+                  "                });",
+                  "    }",
+                  "",
+                  "    private void showFloatingMenu() {",
+                  "        if (floatingMenu != null) {",
+                  "            return;",
+                  "        }",
+                  "",
+                  "        floatingMenu = new LinearLayout(this);",
+                  "        floatingMenu.setOrientation(LinearLayout.VERTICAL);",
+                  "        floatingMenu.setPadding(8, 8, 8, 8);",
+                  "",
+                  "        FrameLayout.LayoutParams menuLp =",
+                  "                new FrameLayout.LayoutParams(",
+                  "                        ViewGroup.LayoutParams.WRAP_CONTENT,",
+                  "                        ViewGroup.LayoutParams.WRAP_CONTENT);",
+                  "",
+                  "        menuLp.leftMargin = 24;",
+                  "        menuLp.topMargin = 120;",
+                  "",
+                  "        projectionLayer.addView(floatingMenu, menuLp);",
+                  "",
+                  "        addFloatingMenuButton(",
+                  '                "BACK",',
+                  "                this::handleControlBack);",
+                  "",
+                  "        addFloatingMenuButton(",
+                  '                "RECENTS",',
+                  "                this::openSystemRecents);",
+                  "",
+                  "        addFloatingMenuButton(",
+                  '                "2 SCREEN",',
+                  "                this::switchToTwoScreen);",
+                  "",
+                  "        addFloatingMenuButton(",
+                  '                "3 SCREEN",',
+                  "                this::switchToThreeScreen);",
+                  "    }",
+                  "",
+                  "    private void addFloatingMenuButton(",
+                  "            String text,",
+                  "            Runnable action) {",
+                  "",
+                  "        TextView button = new TextView(this);",
+                  "        button.setText(text);",
+                  "        button.setTextSize(14f);",
+                  "        button.setGravity(Gravity.CENTER);",
+                  "        button.setPadding(24, 14, 24, 14);",
+                  "        button.setClickable(true);",
+                  "",
+                  "        button.setOnClickListener(",
+                  "                v -> {",
+                  "                    hideFloatingMenu();",
+                  "                    action.run();",
+                  "                });",
+                  "",
+                  "        floatingMenu.addView(button);",
+                  "    }",
+                  "",
+                  "    private void hideFloatingMenu() {",
+                  "        if (floatingMenu != null) {",
+                  "            projectionLayer.removeView(floatingMenu);",
+                  "            floatingMenu = null;",
+                  "        }",
+                  "    }",
+                  "",
+                  "    private void openSystemRecents() {",
+                  "        RootShellSession.EXEC.execute(",
+                  "                () -> {",
+                  "                    RootShellSession shell =",
+                  "                            new RootShellSession();",
+                  "                    try {",
+                  "                        shell.run(",
+                  "                                8,",
+                  '                                "/system/bin/input keyevent 187");',
+                  "                    } catch (Exception ignored) {",
+                  "                    } finally {",
+                  "                        shell.destroy();",
+                  "                    }",
+                  "                });",
+                  "    }",
+                  "",
+                  "    private void switchToTwoScreen() {",
+                  "        RootView root = RootView.getCurrent();",
+                  "        if (root != null) {",
+                  "            root.setLayoutModeExternal(0);",
+                  "        }",
+                  "    }",
+                  "",
+                  "    private void switchToThreeScreen() {",
+                  "        RootView root = RootView.getCurrent();",
+                  "        if (root != null) {",
+                  "            root.setLayoutModeExternal(2);",
+                  "        }",
+                  "    }",
+                  "",
+              ]
+
+              methods = "\n".join(method_lines)
 
               text = text.replace(
                   attach_marker,
@@ -385,29 +310,24 @@ jobs:
               )
 
           # --------------------------------------------------------
-          # Ensure floating key is created when projection attaches
+          # Create floating key after texture is added.
           # --------------------------------------------------------
           if "createFloatingTouchKey();" not in text:
-              raise SystemExit(
-                  "Floating key creation method missing."
+
+              projection_marker = (
+                  "        projectionLayer.addView(texture);"
               )
 
-          # Insert immediately after attachProjection body call site.
-          # We use the known projectionLayer setup marker.
-          projection_marker = "        projectionLayer.addView(texture);"
+              if projection_marker not in text:
+                  raise SystemExit(
+                      "Cannot find projectionLayer.addView(texture)."
+                  )
 
-          if projection_marker in text:
               text = text.replace(
                   projection_marker,
                   projection_marker
                   + "\n        createFloatingTouchKey();",
                   1
-              )
-          else:
-              # Fallback: append call after the attachProjection method
-              # has been located by its method body.
-              raise SystemExit(
-                  "Cannot find projection texture add marker."
               )
 
           path.write_text(text)
@@ -415,10 +335,9 @@ jobs:
           print("V10-6 V10CarActivity patch applied.")
 
       # ============================================================
-      # V10-6 PATCH
-      # External layout mode control
+      # V10-6 - EXTERNAL LAYOUT MODE
       # ============================================================
-      - name: Patch RootView - external layout mode
+      - name: Patch RootView
         shell: python
         run: |
           from pathlib import Path
@@ -434,40 +353,36 @@ jobs:
 
               marker = "    public void reloadSettings()"
 
-              method = r'''    public void setLayoutModeExternal(int mode) {
-        final int targetMode =
-                clamp(mode, 0, 5);
-
-        handler.post(() -> {
-
-            if (destroyed) {
-                return;
-            }
-
-            layoutMode =
-                    targetMode;
-
-            loadRatios();
-
-            prefs.edit()
-                    .putInt(
-                            "layout_mode_v3",
-                            layoutMode)
-                    .apply();
-
-            applyVisibility();
-
-            container.requestLayout();
-            container.resizeAll();
-        });
-    }
-
-'''
-
               if marker not in text:
                   raise SystemExit(
                       "Cannot find RootView reloadSettings marker."
                   )
+
+              method_lines = [
+                  "    public void setLayoutModeExternal(int mode) {",
+                  "        final int targetMode = clamp(mode, 0, 5);",
+                  "",
+                  "        handler.post(() -> {",
+                  "            if (destroyed) {",
+                  "                return;",
+                  "            }",
+                  "",
+                  "            layoutMode = targetMode;",
+                  "            loadRatios();",
+                  "",
+                  "            prefs.edit()",
+                  '                    .putInt("layout_mode_v3", layoutMode)',
+                  "                    .apply();",
+                  "",
+                  "            applyVisibility();",
+                  "            container.requestLayout();",
+                  "            container.resizeAll();",
+                  "        });",
+                  "    }",
+                  "",
+              ]
+
+              method = "\n".join(method_lines)
 
               text = text.replace(
                   marker,
@@ -477,22 +392,16 @@ jobs:
 
           path.write_text(text)
 
-          print(
-              "RootView setLayoutModeExternal patch applied."
-          )
+          print("RootView patch applied.")
 
       # ============================================================
-      # V10-7A
-      # TASK PERSISTENCE FIX
-      #
-      # IMPORTANT:
-      # Do NOT match the entire multiline command.
-      # Modify the individual source fragments instead.
+      # V10-7A - TASK PERSISTENCE
       # ============================================================
-      - name: Patch V10ProjectionSession - task persistence
+      - name: Patch V10ProjectionSession
         shell: python
         run: |
           from pathlib import Path
+          import re
 
           path = Path(
               "v10-source/app/src/main/java/"
@@ -503,111 +412,49 @@ jobs:
           text = path.read_text()
 
           # --------------------------------------------------------
-          # 1. Remove force-stop.
+          # Remove force-stop using regex.
           #
-          # The source currently has:
-          #
-          # "/system/bin/am force-stop '"
-          #     + packageName
-          #     + "'; "
-          #     + "/system/bin/am start"
-          #
-          # Instead of matching the whole command block, remove
-          # only the exact Java fragments.
+          # This matches the actual Java source regardless of
+          # indentation.
           # --------------------------------------------------------
-
-          old_force_stop_1 = (
-              '"/system/bin/am force-stop \'"'
+          pattern = re.compile(
+              r'''(?m)^[ \t]*"/system/bin/am force-stop '"[ \t]*\n'''
+              r'''[ \t]*\+[ \t]*packageName[ \t]*\n'''
+              r'''[ \t]*\+[ \t]*"'; "[ \t]*\n'''
+              r'''[ \t]*\+[ \t]*"/system/bin/am start"[ \t]*'''
           )
 
-          old_force_stop_2 = (
-              "+ packageName\n"
-              "                        + \"'; \"\n"
-              "                        + \"/system/bin/am start\""
+          text, count = pattern.subn(
+              '                "/system/bin/am start"',
+              text,
+              count=1
           )
 
-          if "/system/bin/am force-stop" in text:
-
-              if old_force_stop_1 not in text:
-                  raise SystemExit(
-                      "force-stop exists but source format is "
-                      "unexpected at fragment 1."
-                  )
-
-              if old_force_stop_2 not in text:
-                  raise SystemExit(
-                      "force-stop exists but source format is "
-                      "unexpected at fragment 2."
-                  )
-
-              text = text.replace(
-                  old_force_stop_1,
-                  '"/system/bin/am start"',
-                  1
+          if count == 1:
+              print("Removed am force-stop.")
+          elif "/system/bin/am force-stop" in text:
+              raise SystemExit(
+                  "force-stop exists but could not be patched."
               )
-
-              text = text.replace(
-                  old_force_stop_2,
-                  "",
-                  1
-              )
-
-              print(
-                  "Removed am force-stop."
-              )
-
           else:
-              print(
-                  "am force-stop already absent."
-              )
+              print("am force-stop already absent.")
 
           # --------------------------------------------------------
-          # 2. Remove MULTIPLE_TASK.
-          #
-          # 0x18000000 =
-          # NEW_TASK       0x10000000
-          # MULTIPLE_TASK  0x08000000
-          #
-          # We only want NEW_TASK.
+          # Remove MULTIPLE_TASK flag.
           # --------------------------------------------------------
-
-          old_flag = (
-              '+ " -f 0x18000000"'
-          )
-
-          new_flag = (
-              '+ " -f 0x10000000"'
-          )
-
-          if old_flag in text:
-
+          if '0x18000000' in text:
               text = text.replace(
-                  old_flag,
-                  new_flag,
+                  '0x18000000',
+                  '0x10000000',
                   1
               )
-
               print(
                   "Changed 0x18000000 -> 0x10000000."
               )
 
-          elif "0x18000000" in text:
-
-              raise SystemExit(
-                  "0x18000000 exists but source format "
-                  "is unexpected."
-              )
-
-          else:
-
-              print(
-                  "0x18000000 already absent."
-              )
-
           # --------------------------------------------------------
-          # 3. Safety verification
+          # Verify.
           # --------------------------------------------------------
-
           if "/system/bin/am force-stop" in text:
               raise SystemExit(
                   "ERROR: am force-stop still exists."
@@ -615,57 +462,58 @@ jobs:
 
           if "0x18000000" in text:
               raise SystemExit(
-                  "ERROR: MULTIPLE_TASK flag still exists."
+                  "ERROR: 0x18000000 still exists."
               )
 
           if "/system/bin/am start" not in text:
               raise SystemExit(
-                  "ERROR: am start is missing."
+                  "ERROR: am start missing."
               )
 
           if "0x10000000" not in text:
               raise SystemExit(
-                  "ERROR: NEW_TASK flag is missing."
+                  "ERROR: NEW_TASK flag missing."
               )
 
           path.write_text(text)
 
-          print(
-              "V10-7A task persistence patch applied."
-          )
+          print("V10-7A task persistence patch applied.")
 
       # ============================================================
-      # VALIDATION
+      # FINAL VALIDATION
       # ============================================================
-      - name: Verify V10-7A patches
+      - name: Verify all patches
         shell: python
         run: |
           from pathlib import Path
 
-          activity = Path(
-              "v10-source/app/src/main/java/"
-              "com/hieptran/aacast/doudou/V10CarActivity.java"
-          ).read_text()
-
-          root = Path(
-              "v10-source/app/src/main/java/"
-              "com/hieptran/aacast/doudou/RootView.java"
-          ).read_text()
-
-          projection = Path(
+          base = Path(
               "v10-source/app/src/main/java/"
               "com/hieptran/aacast/doudou/"
-              "V10ProjectionSession.java"
+          )
+
+          activity = (
+              base / "V10CarActivity.java"
           ).read_text()
 
+          root = (
+              base / "RootView.java"
+          ).read_text()
+
+          projection = (
+              base / "V10ProjectionSession.java"
+          ).read_text()
+
+          # --------------------------------------------------------
           # V10-6
+          # --------------------------------------------------------
           required_activity = [
               "floatingTouchKey",
               "floatingMenu",
+              "createFloatingTouchKey",
               "openSystemRecents",
               "switchToTwoScreen",
               "switchToThreeScreen",
-              "createFloatingTouchKey",
           ]
 
           for item in required_activity:
@@ -676,63 +524,46 @@ jobs:
 
           if "setLayoutModeExternal" not in root:
               raise SystemExit(
-                  "Missing RootView external layout method."
+                  "Missing setLayoutModeExternal."
               )
 
+          # --------------------------------------------------------
           # V10-7A
-          forbidden = [
-              "/system/bin/am force-stop",
-              "0x18000000",
-          ]
-
-          for item in forbidden:
-              if item in projection:
-                  raise SystemExit(
-                      f"FORBIDDEN V10-7A item remains: {item}"
-                  )
-
-          required_projection = [
-              "/system/bin/am start",
-              "0x10000000",
-          ]
-
-          for item in required_projection:
-              if item not in projection:
-                  raise SystemExit(
-                      f"Missing V10-7A item: {item}"
-                  )
-
-          print("")
-          print("==========================================")
-          print("V10-7A PATCH VERIFICATION PASSED")
-          print("==========================================")
-          print("")
-          print("V10-6 floating key: OK")
-          print("RootView external layout: OK")
-          print("force-stop: ABSENT")
-          print("MULTIPLE_TASK 0x18000000: ABSENT")
-          print("NEW_TASK 0x10000000: PRESENT")
-          print("am start: PRESENT")
-          print("")
-          print("Launch command section:")
-          print("------------------------------------------")
-
-          start = projection.find(
-              'final String command ='
-          )
-
-          if start >= 0:
-              end = projection.find(
-                  'RootShellSession.EXEC.execute',
-                  start
+          # --------------------------------------------------------
+          if "/system/bin/am force-stop" in projection:
+              raise SystemExit(
+                  "force-stop is still present."
               )
 
-              if end >= 0:
-                  print(
-                      projection[start:end]
-                  )
+          if "0x18000000" in projection:
+              raise SystemExit(
+                  "MULTIPLE_TASK flag is still present."
+              )
 
-          print("------------------------------------------")
+          if "/system/bin/am start" not in projection:
+              raise SystemExit(
+                  "am start is missing."
+              )
+
+          if "0x10000000" not in projection:
+              raise SystemExit(
+                  "NEW_TASK flag is missing."
+              )
+
+          print("")
+          print("==========================================")
+          print("V10-7A VERIFICATION PASSED")
+          print("==========================================")
+          print("Floating key              : OK")
+          print("BACK                      : OK")
+          print("RECENTS                   : OK")
+          print("2 SCREEN                  : OK")
+          print("3 SCREEN                  : OK")
+          print("External layout           : OK")
+          print("force-stop                : ABSENT")
+          print("MULTIPLE_TASK             : ABSENT")
+          print("NEW_TASK                  : PRESENT")
+          print("==========================================")
 
       # ============================================================
       # BUILD
