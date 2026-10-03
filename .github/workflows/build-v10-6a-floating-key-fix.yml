@@ -8,9 +8,16 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
+
+      # ============================================================
+      # CHECKOUT
+      # ============================================================
       - name: Checkout
         uses: actions/checkout@v4
 
+      # ============================================================
+      # JAVA
+      # ============================================================
       - name: Set up JDK 17
         uses: actions/setup-java@v5
         with:
@@ -18,7 +25,9 @@ jobs:
           java-version: "17"
 
       # ============================================================
-      # PATCH V10ProjectionSession - RECENTS on virtual display
+      # PATCH V10ProjectionSession
+      #
+      # RECENTS must be sent to the virtual display.
       # ============================================================
       - name: Patch V10ProjectionSession
         working-directory: v10-source
@@ -40,9 +49,13 @@ jobs:
 
           text = path.read_text(encoding="utf-8")
 
+          # ----------------------------------------------------------
+          # Do not insert twice.
+          # ----------------------------------------------------------
           if "public void recents()" in text:
               print("RECENTS method already exists.")
           else:
+
               method = r'''
               public void recents() {
 
@@ -79,13 +92,19 @@ jobs:
 
               '''
 
-              pattern = r'(?m)^(\s*)public\s+void\s+back\s*\(\s*\)\s*\{'
+              # ------------------------------------------------------
+              # Find the real back() method using regex.
+              # Whitespace is intentionally ignored.
+              # ------------------------------------------------------
+              pattern = re.compile(
+                  r"(?m)^(?P<indent>[ \t]*)public\s+void\s+back\s*\(\s*\)\s*\{"
+              )
 
-              match = re.search(pattern, text)
+              match = pattern.search(text)
 
               if not match:
                   raise SystemExit(
-                      "Cannot find public void back() method"
+                      "ERROR: Cannot find public void back() method."
                   )
 
               insert_at = match.start()
@@ -101,28 +120,45 @@ jobs:
                   encoding="utf-8"
               )
 
-              print("V10ProjectionSession RECENTS patch applied.")
+              print(
+                  "V10ProjectionSession RECENTS method inserted."
+              )
 
-          # Final verification of this patch.
+          # ----------------------------------------------------------
+          # Verify exact implementation.
+          # ----------------------------------------------------------
           text = path.read_text(encoding="utf-8")
 
           required = [
               "public void recents()",
-              "/system/bin/input -d",
+              "display.getDisplayId()",
+              "/system/bin/input -d ",
               "keyevent 187",
+              "rootShell.run",
           ]
 
           for item in required:
               if item not in text:
                   raise SystemExit(
-                      f"RECENTS patch verification failed: {item}"
+                      "ERROR: Missing V10ProjectionSession item: "
+                      + item
                   )
 
-          print("V10ProjectionSession verification: PASSED")
-          PY
+          # Exactly one RECENTS method.
+          if text.count("public void recents()") != 1:
+              raise SystemExit(
+                  "ERROR: RECENTS method count is not exactly 1."
+              )
+
+          print(
+              "V10ProjectionSession verification: PASSED"
+          )
 
       # ============================================================
-      # PATCH V10CarActivity - FLOATING KEY
+      # PATCH V10CarActivity
+      #
+      # Reuse the known-good V10-6 floating key.
+      # Only change RECENTS routing.
       # ============================================================
       - name: Patch V10CarActivity
         working-directory: v10-source
@@ -146,10 +182,11 @@ jobs:
           # ----------------------------------------------------------
           # Imports
           # ----------------------------------------------------------
+          import_marker = (
+              "import android.content.pm.ResolveInfo;"
+          )
 
-          marker = "import android.content.pm.ResolveInfo;"
-
-          imports = [
+          required_imports = [
               "import android.content.SharedPreferences;",
               "import android.os.SystemClock;",
               "import android.view.MotionEvent;",
@@ -157,30 +194,31 @@ jobs:
               "import android.view.ViewGroup;",
           ]
 
-          if marker not in text:
+          if import_marker not in text:
               raise SystemExit(
-                  "Cannot find ResolveInfo import marker"
+                  "ERROR: Cannot find ResolveInfo import marker."
               )
 
-          for imp in imports:
+          for imp in required_imports:
               if imp not in text:
                   text = text.replace(
-                      marker,
-                      marker + "\n" + imp,
+                      import_marker,
+                      import_marker + "\n" + imp,
                       1
                   )
 
           # ----------------------------------------------------------
-          # Fields
+          # Floating key fields
           # ----------------------------------------------------------
-
-          field_marker = "    private V10ProjectionSession session;"
+          field_marker = (
+              "    private V10ProjectionSession session;"
+          )
 
           if "private TextView floatingTouchKey;" not in text:
 
               if field_marker not in text:
                   raise SystemExit(
-                      "Cannot find V10ProjectionSession field"
+                      "ERROR: Cannot find V10ProjectionSession field."
                   )
 
               fields = """
@@ -203,49 +241,38 @@ jobs:
           # ----------------------------------------------------------
           # Attach floating key
           # ----------------------------------------------------------
-
           if "createFloatingTouchKey();" not in text:
 
-              attach_start = text.find(
-                  "    private void attachProjection()"
+              attach_marker = (
+                  "        session.attachTextureView(\n"
+                  "                textureView);"
               )
 
-              if attach_start < 0:
+              if attach_marker not in text:
                   raise SystemExit(
-                      "attachProjection() not found"
+                      "ERROR: Cannot find attachTextureView marker."
                   )
 
-              attach_end = text.find(
-                  "\n    }",
-                  attach_start
-              )
-
-              if attach_end < 0:
-                  raise SystemExit(
-                      "attachProjection() end not found"
-                  )
-
-              insert = """
-        createFloatingTouchKey();
-"""
-
-              text = (
-                  text[:attach_end]
-                  + insert
-                  + text[attach_end:]
+              text = text.replace(
+                  attach_marker,
+                  attach_marker
+                  + "\n\n"
+                  + "        createFloatingTouchKey();",
+                  1
               )
 
           # ----------------------------------------------------------
           # Floating key implementation
           # ----------------------------------------------------------
-
           if "private void createFloatingTouchKey()" not in text:
 
-              marker = "    public void handleControlBack()"
+              method_marker = (
+                  "    public void handleControlBack()"
+              )
 
-              if marker not in text:
+              if method_marker not in text:
                   raise SystemExit(
-                      "handleControlBack() not found"
+                      "ERROR: Cannot find handleControlBack()."
                   )
 
               methods = r'''
@@ -276,7 +303,9 @@ jobs:
                 Color.rgb(80, 170, 230));
 
         floatingTouchKey.setBackground(bg);
-        floatingTouchKey.setElevation(dp(12));
+
+        floatingTouchKey.setElevation(
+                dp(12));
 
         SharedPreferences prefs =
                 getSharedPreferences(
@@ -290,10 +319,14 @@ jobs:
                         Gravity.TOP | Gravity.END);
 
         int savedX =
-                prefs.getInt("x", dp(18));
+                prefs.getInt(
+                        "x",
+                        dp(18));
 
         int savedY =
-                prefs.getInt("y", dp(120));
+                prefs.getInt(
+                        "y",
+                        dp(120));
 
         params.setMargins(
                 0,
@@ -350,7 +383,9 @@ jobs:
                                             - floatingDownRawY;
 
                             if (!floatingDragging
-                                    && Math.hypot(dx, dy)
+                                    && Math.hypot(
+                                            dx,
+                                            dy)
                                     > ViewConfiguration
                                             .get(this)
                                             .getScaledTouchSlop()) {
@@ -405,8 +440,11 @@ jobs:
                                         (FrameLayout.LayoutParams)
                                                 view.getLayoutParams();
 
-                                fp.rightMargin = right;
-                                fp.topMargin = top;
+                                fp.rightMargin =
+                                        right;
+
+                                fp.topMargin =
+                                        top;
 
                                 view.setLayoutParams(fp);
                             }
@@ -447,6 +485,7 @@ jobs:
                                     && delta < 320) {
 
                                 handleControlHome();
+
                                 hideFloatingMenu();
 
                             } else {
@@ -504,8 +543,11 @@ jobs:
                 dp(1),
                 Color.rgb(65, 85, 105));
 
-        floatingMenu.setBackground(menuBg);
-        floatingMenu.setElevation(dp(14));
+        floatingMenu.setBackground(
+                menuBg);
+
+        floatingMenu.setElevation(
+                dp(14));
 
         addFloatingMenuButton(
                 "BACK",
@@ -626,7 +668,9 @@ jobs:
                 RootView.getCurrent();
 
         if (rootView != null) {
-            rootView.setLayoutModeExternal(0);
+
+            rootView.setLayoutModeExternal(
+                    0);
         }
     }
 
@@ -636,94 +680,45 @@ jobs:
                 RootView.getCurrent();
 
         if (rootView != null) {
-            rootView.setLayoutModeExternal(2);
+
+            rootView.setLayoutModeExternal(
+                    2);
         }
     }
 
 '''
 
               text = text.replace(
-                  marker,
-                  methods + "\n" + marker,
+                  method_marker,
+                  methods
+                  + "\n"
+                  + method_marker,
                   1
               )
 
-          path.write_text(
-              text,
-              encoding="utf-8"
+          # ----------------------------------------------------------
+          # If an old phone-level RECENTS method exists,
+          # remove it. The floating key must NOT call it.
+          # ----------------------------------------------------------
+          old_method_start = text.find(
+              "    private void openSystemRecents()"
           )
 
-          print("V10-6A V10CarActivity patch applied.")
-          PY
+          if old_method_start >= 0:
 
-      # ============================================================
-      # PATCH ROOTVIEW
-      # ============================================================
-      - name: Patch RootView
-        working-directory: v10-source
-        shell: bash
-        run: |
-          set -euo pipefail
+              old_method_end = text.find(
+                  "\n    private void switchToTwoScreen()",
+                  old_method_start
+              )
 
-          FILE="app/src/main/java/com/hieptran/aacast/doudou/RootView.java"
-
-          test -f "$FILE"
-
-          python3 <<'PY'
-          from pathlib import Path
-
-          path = Path(
-              "app/src/main/java/com/hieptran/aacast/doudou/RootView.java"
-          )
-
-          text = path.read_text(encoding="utf-8")
-
-          if "public void setLayoutModeExternal(" not in text:
-
-              marker = "    public void reloadSettings()"
-
-              if marker not in text:
+              if old_method_end < 0:
                   raise SystemExit(
-                      "RootView insertion marker not found"
+                      "ERROR: Cannot find end of old openSystemRecents()."
                   )
 
-              method = r'''
-    public void setLayoutModeExternal(int mode) {
-
-        final int targetMode =
-                clamp(mode, 0, 5);
-
-        handler.post(() -> {
-
-            if (destroyed) {
-                return;
-            }
-
-            layoutMode =
-                    targetMode;
-
-            loadRatios();
-
-            prefs.edit()
-                    .putInt(
-                            "layout_mode_v3",
-                            layoutMode)
-                    .apply();
-
-            applyVisibility();
-
-            container.requestLayout();
-
-            container.resizeAll();
-        });
-    }
-
-'''
-
-              text = text.replace(
-                  marker,
-                  method + marker,
-                  1
+              text = (
+                  text[:old_method_start]
+                  + text[old_method_end:]
               )
 
           path.write_text(
@@ -731,13 +726,15 @@ jobs:
               encoding="utf-8"
           )
 
-          print("RootView patch applied.")
+          print(
+              "V10CarActivity V10-6A patch applied."
+          )
           PY
 
       # ============================================================
-      # COMPLETE VERIFICATION
+      # STATIC VALIDATION
       # ============================================================
-      - name: Verify V10-6A patch
+      - name: Verify V10-6A
         working-directory: v10-source
         shell: bash
         run: |
@@ -745,38 +742,46 @@ jobs:
 
           V10="app/src/main/java/com/hieptran/aacast/doudou/V10CarActivity.java"
           PROJ="app/src/main/java/com/hieptran/aacast/doudou/V10ProjectionSession.java"
-          ROOT="app/src/main/java/com/hieptran/aacast/doudou/RootView.java"
 
           test -f "$V10"
           test -f "$PROJ"
-          test -f "$ROOT"
 
+          # Floating key
           grep -q "createFloatingTouchKey" "$V10"
+          grep -q "showFloatingMenu" "$V10"
+          grep -q "floatingTouchKey" "$V10"
+
+          # RECENTS route
           grep -q "session.recents()" "$V10"
           grep -q "public void recents()" "$PROJ"
-          grep -q "/system/bin/input -d" "$PROJ"
-          grep -q "keyevent 187" "$PROJ"
-          grep -q "public void setLayoutModeExternal" "$ROOT"
 
-          if grep -q '"/system/bin/input keyevent 187"' "$V10"; then
-            echo "ERROR: old phone-level RECENTS command remains."
+          # Virtual display targeting
+          grep -q "display.getDisplayId()" "$PROJ"
+          grep -q '/system/bin/input -d ' "$PROJ"
+          grep -q 'keyevent 187' "$PROJ"
+
+          # Old phone-level RECENTS must not remain.
+          if grep -q '/system/bin/input keyevent 187' "$V10"; then
+            echo "ERROR: Old phone-level RECENTS command remains."
             exit 1
           fi
 
-          # Ensure RECENTS is actually routed through the projection session.
-          if ! grep -q "session.recents()" "$V10"; then
-            echo "ERROR: floating RECENTS is not routed to session."
+          # Old helper must not remain.
+          if grep -q "openSystemRecents" "$V10"; then
+            echo "ERROR: Old openSystemRecents() remains."
             exit 1
           fi
 
-          # Ensure the virtual-display command targets a display.
-          if ! grep -q '"/system/bin/input -d "' "$PROJ"; then
-            echo "ERROR: RECENTS command is missing display targeting."
+          # Exactly one RECENTS implementation.
+          COUNT=$(grep -c "public void recents()" "$PROJ")
+
+          if [ "$COUNT" -ne 1 ]; then
+            echo "ERROR: Expected exactly one recents() method."
             exit 1
           fi
 
           echo "========================================"
-          echo "V10-6A patch verification: PASSED"
+          echo "V10-6A static verification: PASSED"
           echo "========================================"
 
       # ============================================================
@@ -796,7 +801,7 @@ jobs:
             assembleDebug
 
       # ============================================================
-      # ARTIFACT
+      # APK ARTIFACT
       # ============================================================
       - name: Upload APK
         uses: actions/upload-artifact@v4
