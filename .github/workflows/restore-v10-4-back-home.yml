@@ -17,137 +17,7 @@ jobs:
           distribution: temurin
           java-version: "17"
 
-      - name: Restore V10-3 Back Home controls
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          FILE="v10-source/app/src/main/java/com/hieptran/aacast/doudou/V10CarActivity.java"
-
-          python3 - "$FILE" <<'PY'
-          import sys
-          from pathlib import Path
-
-          path = Path(sys.argv[1])
-          s = path.read_text()
-
-          # Add field only once.
-          if "private LinearLayout projectionControls;" not in s:
-              marker = "    private TextureView textureView;\n"
-
-              if marker not in s:
-                  raise SystemExit(
-                      "Không tìm thấy field TextureView trong V10CarActivity.java"
-                  )
-
-              s = s.replace(
-                  marker,
-                  marker
-                  + "    private LinearLayout projectionControls;\n",
-                  1
-              )
-
-          old = """        V10InputController
-                inputController =
-                        new V10InputController(
-                                session);
-
-        textureView
-                .setOnTouchListener(
-                        inputController
-                                .createListener());
-"""
-
-          new = """        V10InputController
-                inputController =
-                        new V10InputController(
-                                session);
-
-        textureView
-                .setOnTouchListener(
-                        inputController
-                                .createListener());
-
-        /*
-         * Restored from V10-3:
-         * projection navigation controls.
-         */
-        projectionControls =
-                new LinearLayout(this);
-
-        projectionControls.setOrientation(
-                LinearLayout.HORIZONTAL);
-
-        projectionControls.setGravity(
-                Gravity.CENTER);
-
-        TextView backButton =
-                buttonText("BACK");
-
-        backButton.setOnClickListener(
-                v -> handleControlBack());
-
-        TextView homeButton =
-                buttonText("HOME");
-
-        homeButton.setOnClickListener(
-                v -> handleControlHome());
-
-        projectionControls.addView(
-                backButton,
-                new LinearLayout.LayoutParams(
-                        dp(90),
-                        dp(52)));
-
-        LinearLayout.LayoutParams homeParams =
-                new LinearLayout.LayoutParams(
-                        dp(90),
-                        dp(52));
-
-        homeParams.setMargins(
-                dp(8),
-                0,
-                0,
-                0);
-
-        projectionControls.addView(
-                homeButton,
-                homeParams);
-
-        FrameLayout.LayoutParams controlsParams =
-                new FrameLayout.LayoutParams(
-                        -2,
-                        dp(60),
-                        Gravity.TOP | Gravity.END);
-
-        controlsParams.setMargins(
-                0,
-                dp(12),
-                dp(12),
-                0);
-
-        projectionLayer.addView(
-                projectionControls,
-                controlsParams);
-"""
-
-          if old not in s:
-              if "Restored from V10-3:" in s:
-                  print("BACK/HOME controls already restored.")
-                  raise SystemExit(0)
-
-              raise SystemExit(
-                  "Không tìm thấy attachProjection block cần patch."
-              )
-
-          s = s.replace(old, new, 1)
-
-          path.write_text(s)
-
-          print("V10-3 BACK/HOME controls restored successfully.")
-          PY
-
-      - name: Verify restoration
+      - name: Patch V10CarActivity
         shell: bash
         run: |
           set -euo pipefail
@@ -156,28 +26,30 @@ jobs:
 
           test -f "$FILE"
 
+          grep -q 'private TextureView textureView;' "$FILE"
+
+          if ! grep -q 'private LinearLayout projectionControls;' "$FILE"; then
+            sed -i '/private TextureView textureView;/a\    private LinearLayout projectionControls;' "$FILE"
+          fi
+
+          if ! grep -q 'Restored from V10-3:' "$FILE"; then
+            perl -0pi -e 's|        textureView\n                \.setOnTouchListener\(\n                        inputController\n                                \.createListener\(\)\);|        textureView\n                .setOnTouchListener(\n                        inputController\n                                .createListener());\n\n        /*\n         * Restored from V10-3:\n         * projection navigation controls.\n         */\n        projectionControls = new LinearLayout(this);\n        projectionControls.setOrientation(LinearLayout.HORIZONTAL);\n        projectionControls.setGravity(Gravity.CENTER);\n\n        TextView backButton = buttonText("BACK");\n        backButton.setOnClickListener(v -> handleControlBack());\n\n        TextView homeButton = buttonText("HOME");\n        homeButton.setOnClickListener(v -> handleControlHome());\n\n        projectionControls.addView(\n                backButton,\n                new LinearLayout.LayoutParams(dp(90), dp(52)));\n\n        LinearLayout.LayoutParams homeParams =\n                new LinearLayout.LayoutParams(dp(90), dp(52));\n        homeParams.setMargins(dp(8), 0, 0, 0);\n        projectionControls.addView(homeButton, homeParams);\n\n        FrameLayout.LayoutParams controlsParams =\n                new FrameLayout.LayoutParams(\n                        -2, dp(60), Gravity.TOP | Gravity.END);\n        controlsParams.setMargins(0, dp(12), dp(12), 0);\n\n        projectionLayer.addView(\n                projectionControls,\n                controlsParams);|s' "$FILE"
+          fi
+
           grep -q 'private LinearLayout projectionControls;' "$FILE"
-          grep -q 'backButton.setOnClickListener' "$FILE"
-          grep -q 'homeButton.setOnClickListener' "$FILE"
-          grep -q 'handleControlBack()' "$FILE"
-          grep -q 'handleControlHome()' "$FILE"
+          grep -q 'Restored from V10-3:' "$FILE"
+          grep -q 'buttonText("BACK")' "$FILE"
+          grep -q 'buttonText("HOME")' "$FILE"
 
-          echo "V10-3 BACK/HOME navigation overlay verified."
+          echo "V10 BACK/HOME controls restored."
 
-      - name: Make Gradle executable
+      - name: Build V10
         working-directory: v10-source
-        run: chmod +x ./gradlew
-
-      - name: Build V10 Debug APK
-        working-directory: v10-source
+        shell: bash
         run: |
+          set -euo pipefail
+          chmod +x ./gradlew
           ./gradlew --no-daemon --stacktrace assembleDebug
-
-      - name: List generated APK
-        working-directory: v10-source
-        run: |
-          echo "Generated APK files:"
-          find app/build/outputs/apk/debug -type f -name "*.apk" -print
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
@@ -186,7 +58,7 @@ jobs:
           path: v10-source/app/build/outputs/apk/debug/*.apk
           if-no-files-found: error
 
-      - name: Upload patched V10 source
+      - name: Upload patched source
         uses: actions/upload-artifact@v4
         with:
           name: CarAssistant-V10-4-Restored-Source
