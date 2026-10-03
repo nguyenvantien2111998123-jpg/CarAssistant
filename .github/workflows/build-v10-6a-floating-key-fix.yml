@@ -8,6 +8,7 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
+
       - name: Checkout
         uses: actions/checkout@v4
 
@@ -18,7 +19,8 @@ jobs:
           java-version: "17"
 
       # ============================================================
-      # PATCH V10ProjectionSession - RECENTS on virtual display
+      # V10ProjectionSession
+      # Add RECENTS targeted at the virtual display.
       # ============================================================
       - name: Patch V10ProjectionSession
         working-directory: v10-source
@@ -32,6 +34,7 @@ jobs:
 
           python3 <<'PY'
           from pathlib import Path
+          import re
 
           path = Path(
               "app/src/main/java/com/hieptran/aacast/doudou/V10ProjectionSession.java"
@@ -41,17 +44,7 @@ jobs:
 
           if "public void recents()" not in text:
 
-              marker = """
-              public void back() {
-              """
-
-              if marker not in text:
-                  raise SystemExit(
-                      "Cannot find back() insertion marker"
-                  )
-
               method = r'''
-          
               public void recents() {
 
                   if (!isActive()) {
@@ -85,24 +78,62 @@ jobs:
                           });
               }
 
-          '''
+              '''
 
-              text = text.replace(
-                  marker,
-                  method + marker,
-                  1
+              pattern = re.compile(
+                  r"(?m)^[ \t]*public\s+void\s+back\s*\(\s*\)\s*\{"
               )
 
-          path.write_text(
-              text,
-              encoding="utf-8"
-          )
+              match = pattern.search(text)
 
-          print("V10ProjectionSession RECENTS patch applied.")
+              if not match:
+                  raise SystemExit(
+                      "ERROR: Cannot find V10ProjectionSession.back()."
+                  )
+
+              text = (
+                  text[:match.start()]
+                  + method
+                  + text[match.start():]
+              )
+
+              path.write_text(
+                  text,
+                  encoding="utf-8"
+              )
+
+          # ----------------------------------------------------------
+          # Verify
+          # ----------------------------------------------------------
+
+          text = path.read_text(encoding="utf-8")
+
+          required = [
+              "public void recents()",
+              "display.getDisplayId()",
+              "/system/bin/input -d ",
+              "keyevent 187",
+              "rootShell.run",
+          ]
+
+          for item in required:
+              if item not in text:
+                  raise SystemExit(
+                      "ERROR: Missing: " + item
+                  )
+
+          if text.count("public void recents()") != 1:
+              raise SystemExit(
+                  "ERROR: recents() must exist exactly once."
+              )
+
+          print("V10ProjectionSession: PASSED")
           PY
 
       # ============================================================
-      # PATCH V10CarActivity - V10-6 Floating Key
+      # V10CarActivity
+      # Reproduce the known-good V10-6 floating key,
+      # but route RECENTS through session.recents().
       # ============================================================
       - name: Patch V10CarActivity
         working-directory: v10-source
@@ -129,6 +160,11 @@ jobs:
 
           marker = "import android.content.pm.ResolveInfo;"
 
+          if marker not in text:
+              raise SystemExit(
+                  "ERROR: ResolveInfo import not found."
+              )
+
           imports = [
               "import android.content.SharedPreferences;",
               "import android.os.SystemClock;",
@@ -136,11 +172,6 @@ jobs:
               "import android.view.ViewConfiguration;",
               "import android.view.ViewGroup;",
           ]
-
-          if marker not in text:
-              raise SystemExit(
-                  "Cannot find ResolveInfo import marker"
-              )
 
           for imp in imports:
               if imp not in text:
@@ -154,27 +185,27 @@ jobs:
           # Fields
           # ----------------------------------------------------------
 
-          field_marker = (
-              "    private V10ProjectionSession session;"
-          )
-
           if "private TextView floatingTouchKey;" not in text:
+
+              field_marker = (
+                  "    private V10ProjectionSession session;"
+              )
 
               if field_marker not in text:
                   raise SystemExit(
-                      "Cannot find V10ProjectionSession field"
+                      "ERROR: V10ProjectionSession field not found."
                   )
 
               fields = """
-              private TextView floatingTouchKey;
-              private LinearLayout floatingMenu;
-              private long floatingLastTap;
-              private boolean floatingDragging;
-              private float floatingDownRawX;
-              private float floatingDownRawY;
-              private float floatingStartX;
-              private float floatingStartY;
-          """
+    private TextView floatingTouchKey;
+    private LinearLayout floatingMenu;
+    private long floatingLastTap;
+    private boolean floatingDragging;
+    private float floatingDownRawX;
+    private float floatingDownRawY;
+    private float floatingStartX;
+    private float floatingStartY;
+"""
 
               text = text.replace(
                   field_marker,
@@ -183,43 +214,33 @@ jobs:
               )
 
           # ----------------------------------------------------------
-          # Add floating key
+          # attachProjection()
+          # Insert after session.attachTextureView(...)
+          # instead of searching for a generic closing brace.
           # ----------------------------------------------------------
 
           if "createFloatingTouchKey();" not in text:
 
-              attach_start = text.find(
-                  "    private void attachProjection()"
+              attach_marker = (
+                  "        session.attachTextureView(\n"
+                  "                textureView);"
               )
 
-              if attach_start < 0:
+              if attach_marker not in text:
                   raise SystemExit(
-                      "attachProjection() not found"
+                      "ERROR: session.attachTextureView() marker not found."
                   )
 
-              attach_end = text.find(
-                  "\n    }",
-                  attach_start
-              )
-
-              if attach_end < 0:
-                  raise SystemExit(
-                      "attachProjection() end not found"
-                  )
-
-              insert = """
-
-                  createFloatingTouchKey();
-              """
-
-              text = (
-                  text[:attach_end]
-                  + insert
-                  + text[attach_end:]
+              text = text.replace(
+                  attach_marker,
+                  attach_marker
+                  + "\n\n"
+                  + "        createFloatingTouchKey();",
+                  1
               )
 
           # ----------------------------------------------------------
-          # Floating key implementation
+          # Floating implementation
           # ----------------------------------------------------------
 
           if "private void createFloatingTouchKey()" not in text:
@@ -230,403 +251,414 @@ jobs:
 
               if marker not in text:
                   raise SystemExit(
-                      "handleControlBack() not found"
+                      "ERROR: handleControlBack() not found."
                   )
 
               methods = r'''
-          
-              private void createFloatingTouchKey() {
+    private void createFloatingTouchKey() {
 
-                  if (floatingTouchKey != null) {
-                      return;
-                  }
+        if (floatingTouchKey != null) {
+            return;
+        }
 
-                  floatingTouchKey = new TextView(this);
+        floatingTouchKey = new TextView(this);
 
-                  floatingTouchKey.setText("●");
-                  floatingTouchKey.setTextColor(Color.WHITE);
-                  floatingTouchKey.setTextSize(22);
-                  floatingTouchKey.setGravity(Gravity.CENTER);
+        floatingTouchKey.setText("●");
+        floatingTouchKey.setTextColor(Color.WHITE);
+        floatingTouchKey.setTextSize(22);
+        floatingTouchKey.setGravity(Gravity.CENTER);
 
-                  GradientDrawable bg =
-                          new GradientDrawable();
+        GradientDrawable bg =
+                new GradientDrawable();
 
-                  bg.setShape(
-                          GradientDrawable.OVAL);
+        bg.setShape(
+                GradientDrawable.OVAL);
 
-                  bg.setColor(
-                          Color.rgb(25, 35, 45));
+        bg.setColor(
+                Color.rgb(25, 35, 45));
 
-                  bg.setStroke(
-                          dp(2),
-                          Color.rgb(80, 170, 230));
+        bg.setStroke(
+                dp(2),
+                Color.rgb(80, 170, 230));
 
-                  floatingTouchKey.setBackground(bg);
-                  floatingTouchKey.setElevation(dp(12));
+        floatingTouchKey.setBackground(bg);
+        floatingTouchKey.setElevation(dp(12));
 
-                  SharedPreferences prefs =
-                          getSharedPreferences(
-                                  "v10_floating_key",
-                                  MODE_PRIVATE);
+        SharedPreferences prefs =
+                getSharedPreferences(
+                        "v10_floating_key",
+                        MODE_PRIVATE);
 
-                  FrameLayout.LayoutParams params =
-                          new FrameLayout.LayoutParams(
-                                  dp(58),
-                                  dp(58),
-                                  Gravity.TOP | Gravity.END);
+        FrameLayout.LayoutParams params =
+                new FrameLayout.LayoutParams(
+                        dp(58),
+                        dp(58),
+                        Gravity.TOP | Gravity.END);
 
-                  int savedX =
-                          prefs.getInt("x", dp(18));
+        int savedX =
+                prefs.getInt(
+                        "x",
+                        dp(18));
 
-                  int savedY =
-                          prefs.getInt("y", dp(120));
+        int savedY =
+                prefs.getInt(
+                        "y",
+                        dp(120));
 
-                  params.setMargins(
-                          0,
-                          savedY,
-                          savedX,
-                          0);
+        params.setMargins(
+                0,
+                savedY,
+                savedX,
+                0);
 
-                  projectionLayer.addView(
-                          floatingTouchKey,
-                          params);
+        projectionLayer.addView(
+                floatingTouchKey,
+                params);
 
-                  floatingTouchKey.setOnTouchListener(
-                          (view, event) -> {
+        floatingTouchKey.setOnTouchListener(
+                (view, event) -> {
 
-                              switch (
-                                      event.getActionMasked()) {
+                    switch (
+                            event.getActionMasked()) {
 
-                                  case MotionEvent.ACTION_DOWN:
+                        case MotionEvent.ACTION_DOWN:
 
-                                      floatingDragging = false;
+                            floatingDragging = false;
 
-                                      floatingDownRawX =
-                                              event.getRawX();
+                            floatingDownRawX =
+                                    event.getRawX();
 
-                                      floatingDownRawY =
-                                              event.getRawY();
+                            floatingDownRawY =
+                                    event.getRawY();
 
-                                      ViewGroup.LayoutParams lp =
-                                              view.getLayoutParams();
+                            ViewGroup.LayoutParams lp =
+                                    view.getLayoutParams();
 
-                                      if (lp instanceof
-                                              FrameLayout.LayoutParams) {
+                            if (lp instanceof
+                                    FrameLayout.LayoutParams) {
 
-                                          FrameLayout.LayoutParams fp =
-                                                  (FrameLayout.LayoutParams) lp;
+                                FrameLayout.LayoutParams fp =
+                                        (FrameLayout.LayoutParams) lp;
 
-                                          floatingStartX =
-                                                  fp.rightMargin;
+                                floatingStartX =
+                                        fp.rightMargin;
 
-                                          floatingStartY =
-                                                  fp.topMargin;
-                                      }
+                                floatingStartY =
+                                        fp.topMargin;
+                            }
 
-                                      return true;
+                            return true;
 
-                                  case MotionEvent.ACTION_MOVE:
+                        case MotionEvent.ACTION_MOVE:
 
-                                      float dx =
-                                              event.getRawX()
-                                                      - floatingDownRawX;
+                            float dx =
+                                    event.getRawX()
+                                            - floatingDownRawX;
 
-                                      float dy =
-                                              event.getRawY()
-                                                      - floatingDownRawY;
+                            float dy =
+                                    event.getRawY()
+                                            - floatingDownRawY;
+
+                            if (!floatingDragging
+                                    && Math.hypot(
+                                            dx,
+                                            dy)
+                                    > ViewConfiguration
+                                            .get(this)
+                                            .getScaledTouchSlop()) {
 
-                                      if (!floatingDragging
-                                              && Math.hypot(dx, dy)
-                                              > ViewConfiguration
-                                                      .get(this)
-                                                      .getScaledTouchSlop()) {
+                                floatingDragging = true;
+                            }
 
-                                          floatingDragging = true;
-                                      }
+                            if (floatingDragging) {
 
-                                      if (floatingDragging) {
+                                int width =
+                                        projectionLayer
+                                                .getWidth();
 
-                                          int width =
-                                                  projectionLayer
-                                                          .getWidth();
+                                int height =
+                                        projectionLayer
+                                                .getHeight();
 
-                                          int height =
-                                                  projectionLayer
-                                                          .getHeight();
+                                int keySize =
+                                        dp(58);
 
-                                          int keySize =
-                                                  dp(58);
+                                int right =
+                                        Math.round(
+                                                floatingStartX
+                                                        - dx);
 
-                                          int right =
-                                                  Math.round(
-                                                          floatingStartX
-                                                                  - dx);
+                                int top =
+                                        Math.round(
+                                                floatingStartY
+                                                        + dy);
 
-                                          int top =
-                                                  Math.round(
-                                                          floatingStartY
-                                                                  + dy);
+                                right =
+                                        Math.max(
+                                                0,
+                                                Math.min(
+                                                        Math.max(
+                                                                0,
+                                                                width
+                                                                        - keySize),
+                                                        right));
 
-                                          right =
-                                                  Math.max(
-                                                          0,
-                                                          Math.min(
-                                                                  Math.max(
-                                                                          0,
-                                                                          width
-                                                                                  - keySize),
-                                                                  right));
+                                top =
+                                        Math.max(
+                                                0,
+                                                Math.min(
+                                                        Math.max(
+                                                                0,
+                                                                height
+                                                                        - keySize),
+                                                        top));
 
-                                          top =
-                                                  Math.max(
-                                                          0,
-                                                          Math.min(
-                                                                  Math.max(
-                                                                          0,
-                                                                          height
-                                                                                  - keySize),
-                                                                  top));
+                                FrameLayout.LayoutParams fp =
+                                        (FrameLayout.LayoutParams)
+                                                view.getLayoutParams();
 
-                                          FrameLayout.LayoutParams fp =
-                                                  (FrameLayout.LayoutParams)
-                                                          view.getLayoutParams();
+                                fp.rightMargin =
+                                        right;
 
-                                          fp.rightMargin = right;
-                                          fp.topMargin = top;
+                                fp.topMargin =
+                                        top;
 
-                                          view.setLayoutParams(fp);
-                                      }
+                                view.setLayoutParams(fp);
+                            }
 
-                                      return true;
+                            return true;
 
-                                  case MotionEvent.ACTION_UP:
+                        case MotionEvent.ACTION_UP:
 
-                                      if (floatingDragging) {
+                            if (floatingDragging) {
 
-                                          FrameLayout.LayoutParams fp =
-                                                  (FrameLayout.LayoutParams)
-                                                          view.getLayoutParams();
+                                FrameLayout.LayoutParams fp =
+                                        (FrameLayout.LayoutParams)
+                                                view.getLayoutParams();
 
-                                          prefs.edit()
-                                                  .putInt(
-                                                          "x",
-                                                          fp.rightMargin)
-                                                  .putInt(
-                                                          "y",
-                                                          fp.topMargin)
-                                                  .apply();
+                                prefs.edit()
+                                        .putInt(
+                                                "x",
+                                                fp.rightMargin)
+                                        .putInt(
+                                                "y",
+                                                fp.topMargin)
+                                        .apply();
 
-                                          floatingDragging = false;
+                                floatingDragging = false;
 
-                                          return true;
-                                      }
+                                return true;
+                            }
 
-                                      long now =
-                                              SystemClock.uptimeMillis();
+                            long now =
+                                    SystemClock.uptimeMillis();
 
-                                      long delta =
-                                              now - floatingLastTap;
+                            long delta =
+                                    now - floatingLastTap;
 
-                                      floatingLastTap = now;
+                            floatingLastTap = now;
 
-                                      if (delta > 0
-                                              && delta < 320) {
+                            if (delta > 0
+                                    && delta < 320) {
 
-                                          handleControlHome();
-                                          hideFloatingMenu();
+                                handleControlHome();
+                                hideFloatingMenu();
 
-                                      } else {
+                            } else {
 
-                                          showFloatingMenu();
-                                      }
+                                showFloatingMenu();
+                            }
 
-                                      view.performClick();
+                            view.performClick();
 
-                                      return true;
+                            return true;
 
-                                  case MotionEvent.ACTION_CANCEL:
+                        case MotionEvent.ACTION_CANCEL:
 
-                                      floatingDragging = false;
+                            floatingDragging = false;
 
-                                      return true;
+                            return true;
 
-                                  default:
-                                      return true;
-                              }
-                          });
+                        default:
+                            return true;
+                    }
+                });
 
-                  floatingTouchKey.bringToFront();
-              }
+        floatingTouchKey.bringToFront();
+    }
 
-              private void showFloatingMenu() {
+    private void showFloatingMenu() {
 
-                  if (floatingMenu != null) {
-                      hideFloatingMenu();
-                      return;
-                  }
+        if (floatingMenu != null) {
+            hideFloatingMenu();
+            return;
+        }
 
-                  floatingMenu =
-                          new LinearLayout(this);
+        floatingMenu =
+                new LinearLayout(this);
 
-                  floatingMenu.setOrientation(
-                          LinearLayout.VERTICAL);
+        floatingMenu.setOrientation(
+                LinearLayout.VERTICAL);
 
-                  floatingMenu.setPadding(
-                          dp(8),
-                          dp(8),
-                          dp(8),
-                          dp(8));
+        floatingMenu.setPadding(
+                dp(8),
+                dp(8),
+                dp(8),
+                dp(8));
 
-                  GradientDrawable menuBg =
-                          new GradientDrawable();
+        GradientDrawable menuBg =
+                new GradientDrawable();
 
-                  menuBg.setColor(
-                          Color.rgb(15, 20, 26));
+        menuBg.setColor(
+                Color.rgb(15, 20, 26));
 
-                  menuBg.setCornerRadius(
-                          dp(16));
+        menuBg.setCornerRadius(
+                dp(16));
 
-                  menuBg.setStroke(
-                          dp(1),
-                          Color.rgb(65, 85, 105));
+        menuBg.setStroke(
+                dp(1),
+                Color.rgb(65, 85, 105));
 
-                  floatingMenu.setBackground(menuBg);
-                  floatingMenu.setElevation(dp(14));
+        floatingMenu.setBackground(
+                menuBg);
 
-                  addFloatingMenuButton(
-                          "BACK",
-                          () -> {
-                              handleControlBack();
-                              hideFloatingMenu();
-                          });
+        floatingMenu.setElevation(
+                dp(14));
 
-                  addFloatingMenuButton(
-                          "RECENTS",
-                          () -> {
+        addFloatingMenuButton(
+                "BACK",
+                () -> {
+                    handleControlBack();
+                    hideFloatingMenu();
+                });
 
-                              if (session != null) {
-                                  session.recents();
-                              }
+        addFloatingMenuButton(
+                "RECENTS",
+                () -> {
 
-                              hideFloatingMenu();
-                          });
+                    if (session != null) {
+                        session.recents();
+                    }
 
-                  addFloatingMenuButton(
-                          "2 SCREEN",
-                          () -> {
-                              switchToTwoScreen();
-                              hideFloatingMenu();
-                          });
+                    hideFloatingMenu();
+                });
 
-                  addFloatingMenuButton(
-                          "3 SCREEN",
-                          () -> {
-                              switchToThreeScreen();
-                              hideFloatingMenu();
-                          });
+        addFloatingMenuButton(
+                "2 SCREEN",
+                () -> {
+                    switchToTwoScreen();
+                    hideFloatingMenu();
+                });
 
-                  FrameLayout.LayoutParams params =
-                          new FrameLayout.LayoutParams(
-                                  dp(170),
-                                  -2,
-                                  Gravity.TOP | Gravity.END);
+        addFloatingMenuButton(
+                "3 SCREEN",
+                () -> {
+                    switchToThreeScreen();
+                    hideFloatingMenu();
+                });
 
-                  params.setMargins(
-                          0,
-                          dp(70),
-                          dp(18),
-                          0);
+        FrameLayout.LayoutParams params =
+                new FrameLayout.LayoutParams(
+                        dp(170),
+                        -2,
+                        Gravity.TOP | Gravity.END);
 
-                  projectionLayer.addView(
-                          floatingMenu,
-                          params);
+        params.setMargins(
+                0,
+                dp(70),
+                dp(18),
+                0);
 
-                  floatingMenu.bringToFront();
-                  floatingTouchKey.bringToFront();
-              }
+        projectionLayer.addView(
+                floatingMenu,
+                params);
 
-              private void addFloatingMenuButton(
-                      String label,
-                      Runnable action) {
+        floatingMenu.bringToFront();
+        floatingTouchKey.bringToFront();
+    }
 
-                  TextView button =
-                          new TextView(this);
+    private void addFloatingMenuButton(
+            String label,
+            Runnable action) {
 
-                  button.setText(label);
-                  button.setTextColor(Color.WHITE);
-                  button.setTextSize(14);
-                  button.setGravity(
-                          Gravity.CENTER_VERTICAL);
+        TextView button =
+                new TextView(this);
 
-                  GradientDrawable bg =
-                          new GradientDrawable();
+        button.setText(label);
+        button.setTextColor(Color.WHITE);
+        button.setTextSize(14);
+        button.setGravity(
+                Gravity.CENTER_VERTICAL);
 
-                  bg.setColor(
-                          Color.rgb(28, 38, 48));
+        GradientDrawable bg =
+                new GradientDrawable();
 
-                  bg.setCornerRadius(
-                          dp(10));
+        bg.setColor(
+                Color.rgb(28, 38, 48));
 
-                  button.setBackground(bg);
+        bg.setCornerRadius(
+                dp(10));
 
-                  button.setPadding(
-                          dp(16),
-                          0,
-                          dp(16),
-                          0);
+        button.setBackground(bg);
 
-                  button.setOnClickListener(
-                          v -> action.run());
+        button.setPadding(
+                dp(16),
+                0,
+                dp(16),
+                0);
 
-                  LinearLayout.LayoutParams params =
-                          new LinearLayout.LayoutParams(
-                                  -1,
-                                  dp(48));
+        button.setOnClickListener(
+                v -> action.run());
 
-                  params.setMargins(
-                          0,
-                          dp(3),
-                          0,
-                          dp(3));
+        LinearLayout.LayoutParams params =
+                new LinearLayout.LayoutParams(
+                        -1,
+                        dp(48));
 
-                  floatingMenu.addView(
-                          button,
-                          params);
-              }
+        params.setMargins(
+                0,
+                dp(3),
+                0,
+                dp(3));
 
-              private void hideFloatingMenu() {
+        floatingMenu.addView(
+                button,
+                params);
+    }
 
-                  if (floatingMenu == null) {
-                      return;
-                  }
+    private void hideFloatingMenu() {
 
-                  projectionLayer.removeView(
-                          floatingMenu);
+        if (floatingMenu == null) {
+            return;
+        }
 
-                  floatingMenu = null;
-              }
+        projectionLayer.removeView(
+                floatingMenu);
 
-              private void switchToTwoScreen() {
+        floatingMenu = null;
+    }
 
-                  RootView rootView =
-                          RootView.getCurrent();
+    private void switchToTwoScreen() {
 
-                  if (rootView != null) {
-                      rootView.setLayoutModeExternal(0);
-                  }
-              }
+        RootView rootView =
+                RootView.getCurrent();
 
-              private void switchToThreeScreen() {
+        if (rootView != null) {
+            rootView.setLayoutModeExternal(0);
+        }
+    }
 
-                  RootView rootView =
-                          RootView.getCurrent();
+    private void switchToThreeScreen() {
 
-                  if (rootView != null) {
-                      rootView.setLayoutModeExternal(2);
-                  }
-              }
+        RootView rootView =
+                RootView.getCurrent();
 
-          '''
+        if (rootView != null) {
+            rootView.setLayoutModeExternal(2);
+        }
+    }
+
+'''
 
               text = text.replace(
                   marker,
@@ -639,11 +671,11 @@ jobs:
               encoding="utf-8"
           )
 
-          print("V10-6A V10CarActivity patch applied.")
+          print("V10CarActivity: PASSED")
           PY
 
       # ============================================================
-      # PATCH ROOTVIEW
+      # ROOTVIEW
       # ============================================================
       - name: Patch RootView
         working-directory: v10-source
@@ -657,6 +689,7 @@ jobs:
 
           python3 <<'PY'
           from pathlib import Path
+          import re
 
           path = Path(
               "app/src/main/java/com/hieptran/aacast/doudou/RootView.java"
@@ -666,65 +699,68 @@ jobs:
 
           if "public void setLayoutModeExternal(" not in text:
 
-              marker = "    public void reloadSettings()"
-
-              if marker not in text:
-                  raise SystemExit(
-                      "RootView insertion marker not found"
-                  )
-
               method = r'''
-          
-              public void setLayoutModeExternal(int mode) {
+    public void setLayoutModeExternal(int mode) {
 
-                  final int targetMode =
-                          clamp(mode, 0, 5);
+        final int targetMode =
+                clamp(mode, 0, 5);
 
-                  handler.post(() -> {
+        handler.post(() -> {
 
-                      if (destroyed) {
-                          return;
-                      }
+            if (destroyed) {
+                return;
+            }
 
-                      layoutMode =
-                              targetMode;
+            layoutMode =
+                    targetMode;
 
-                      loadRatios();
+            loadRatios();
 
-                      prefs.edit()
-                              .putInt(
-                                      "layout_mode_v3",
-                                      layoutMode)
-                              .apply();
+            prefs.edit()
+                    .putInt(
+                            "layout_mode_v3",
+                            layoutMode)
+                    .apply();
 
-                      applyVisibility();
+            applyVisibility();
 
-                      container.requestLayout();
+            container.requestLayout();
 
-                      container.resizeAll();
-                  });
-              }
+            container.resizeAll();
+        });
+    }
 
-          '''
+'''
 
-              text = text.replace(
-                  marker,
-                  method + "\n" + marker,
-                  1
+              pattern = re.compile(
+                  r"(?m)^[ \t]*public\s+void\s+reloadSettings\s*\(\s*\)\s*\{"
               )
 
-          path.write_text(
-              text,
-              encoding="utf-8"
-          )
+              match = pattern.search(text)
 
-          print("RootView patch applied.")
+              if not match:
+                  raise SystemExit(
+                      "ERROR: Cannot find reloadSettings()."
+                  )
+
+              text = (
+                  text[:match.start()]
+                  + method
+                  + text[match.start():]
+              )
+
+              path.write_text(
+                  text,
+                  encoding="utf-8"
+              )
+
+          print("RootView: PASSED")
           PY
 
       # ============================================================
-      # VERIFY
+      # FINAL STATIC CHECK
       # ============================================================
-      - name: Verify V10-6A patch
+      - name: Verify complete V10-6A patch
         working-directory: v10-source
         shell: bash
         run: |
@@ -739,19 +775,27 @@ jobs:
           test -f "$ROOT"
 
           grep -q "createFloatingTouchKey" "$V10"
-          grep -q 'session.recents()' "$V10"
+          grep -q "session.recents()" "$V10"
+
           grep -q "public void recents()" "$PROJ"
-          grep -q 'input -d' "$PROJ"
+          grep -q "display.getDisplayId()" "$PROJ"
+          grep -q '/system/bin/input -d ' "$PROJ"
           grep -q "keyevent 187" "$PROJ"
+
           grep -q "public void setLayoutModeExternal" "$ROOT"
 
-          if grep -q '"/system/bin/input keyevent 187"' "$V10"; then
-            echo "ERROR: old phone-level RECENTS command remains."
+          if grep -q "openSystemRecents" "$V10"; then
+            echo "ERROR: openSystemRecents still exists."
+            exit 1
+          fi
+
+          if grep -q '/system/bin/input keyevent 187' "$V10"; then
+            echo "ERROR: phone-level RECENTS command remains."
             exit 1
           fi
 
           echo "========================================"
-          echo "V10-6A patch verification: PASSED"
+          echo "V10-6A STATIC CHECK: PASSED"
           echo "========================================"
 
       # ============================================================
@@ -771,7 +815,7 @@ jobs:
             assembleDebug
 
       # ============================================================
-      # ARTIFACT
+      # APK
       # ============================================================
       - name: Upload APK
         uses: actions/upload-artifact@v4
