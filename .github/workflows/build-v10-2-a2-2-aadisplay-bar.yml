@@ -1,0 +1,635 @@
+name: Build Car Assistant V10.2-A2.2 AADisplay Bar
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Install Gradle 8.13
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          wget -q https://services.gradle.org/distributions/gradle-8.13-bin.zip
+          unzip -q gradle-8.13-bin.zip -d "$RUNNER_TEMP"
+
+          echo "$RUNNER_TEMP/gradle-8.13/bin" >> "$GITHUB_PATH"
+
+          gradle --version
+
+      # ============================================================
+      # AADISPLAY-STYLE GEARHEAD CONTROL BAR
+      # ============================================================
+
+      - name: Write AADisplay-style GearheadControlBar
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          BAR="v10-source/app/src/main/java/com/hieptran/aacast/doudou/hook/GearheadControlBar.java"
+
+          mkdir -p "$(dirname "$BAR")"
+
+          cat > "$BAR" <<'JAVA'
+          package com.carassistant.v10.hook;
+
+          import android.content.Context;
+          import android.content.Intent;
+          import android.graphics.Color;
+          import android.view.Gravity;
+          import android.view.LayoutInflater;
+          import android.view.View;
+          import android.view.ViewGroup;
+          import android.widget.LinearLayout;
+          import android.widget.TextView;
+
+          import de.robv.android.xposed.XC_MethodHook;
+          import de.robv.android.xposed.XposedBridge;
+          import de.robv.android.xposed.XposedHelpers;
+
+          /**
+           * V10 AADisplay-style Gearhead control bar.
+           *
+           * Architecture:
+           *
+           * Gearhead
+           *    |
+           *    +-- LayoutInflater.inflate()
+           *             |
+           *             +-- gh_coolwalk_vertical_facet_bar
+           *             +-- gh_coolwalk_facet_bar
+           *             +-- gh_coolwalk_facet_bar_rhd
+           *                         |
+           *                         +-- V10 controls
+           *
+           * No WindowManagerGlobal overlay is used.
+           *
+           * The implementation follows the integration approach used by
+           * AADisplay, while remaining an independent Java implementation.
+           */
+          public final class GearheadControlBar {
+
+              private static final String TAG =
+                      "[V10 AAFacetBar]";
+
+              private static final String GEARHEAD_PACKAGE =
+                      "com.google.android.projection.gearhead";
+
+              private static final String SELF_PACKAGE =
+                      "com.carassistant.v10";
+
+              private static final String CONTROL_ACTION =
+                      "com.carassistant.v10.CONTROL";
+
+              private static final String[] FACET_LAYOUT_NAMES = {
+                      "gh_coolwalk_vertical_facet_bar",
+                      "gh_coolwalk_facet_bar",
+                      "gh_coolwalk_facet_bar_rhd"
+              };
+
+              private static volatile boolean installed;
+
+              private GearheadControlBar() {
+              }
+
+              public static void install() {
+
+                  if (installed) {
+                      return;
+                  }
+
+                  installed = true;
+
+                  try {
+
+                      XposedHelpers.findAndHookMethod(
+                              LayoutInflater.class,
+                              "inflate",
+                              int.class,
+                              ViewGroup.class,
+                              boolean.class,
+                              new XC_MethodHook() {
+
+                                  @Override
+                                  protected void afterHookedMethod(
+                                          MethodHookParam param) {
+
+                                      try {
+
+                                          int resourceId =
+                                                  (Integer) param.args[0];
+
+                                          if (!isFacetLayout(
+                                                  param.thisObject,
+                                                  resourceId)) {
+                                              return;
+                                          }
+
+                                          Object result =
+                                                  param.getResult();
+
+                                          if (!(result instanceof ViewGroup)) {
+                                              return;
+                                          }
+
+                                          ViewGroup facetBar =
+                                                  (ViewGroup) result;
+
+                                          injectControls(
+                                                  facetBar,
+                                                  ((LayoutInflater)
+                                                          param.thisObject)
+                                                          .getContext());
+
+                                      } catch (Throwable t) {
+
+                                          XposedBridge.log(
+                                                  TAG
+                                                          + " inflate hook error: "
+                                                          + t);
+                                      }
+                                  }
+                              });
+
+                      XposedBridge.log(
+                              TAG
+                                      + " LayoutInflater hook installed");
+
+                  } catch (Throwable t) {
+
+                      XposedBridge.log(
+                              TAG
+                                      + " install failed: "
+                                      + t);
+                  }
+              }
+
+              private static boolean isFacetLayout(
+                      Object inflaterObject,
+                      int resourceId) {
+
+                  try {
+
+                      Context context =
+                              ((LayoutInflater) inflaterObject)
+                                      .getContext();
+
+                      if (context == null) {
+                          return false;
+                      }
+
+                      for (String name :
+                              FACET_LAYOUT_NAMES) {
+
+                          int id =
+                                  context.getResources()
+                                          .getIdentifier(
+                                                  name,
+                                                  "layout",
+                                                  GEARHEAD_PACKAGE);
+
+                          if (id != 0
+                                  && id == resourceId) {
+
+                              XposedBridge.log(
+                                      TAG
+                                              + " facet layout matched: "
+                                              + name);
+
+                              return true;
+                          }
+                      }
+
+                  } catch (Throwable t) {
+
+                      XposedBridge.log(
+                              TAG
+                                      + " resource lookup failed: "
+                                      + t);
+                  }
+
+                  return false;
+              }
+
+              private static void injectControls(
+                      ViewGroup facetBar,
+                      Context context) {
+
+                  try {
+
+                      Object oldTag =
+                              facetBar.getTag();
+
+                      if ("CarAssistant-V10-AADisplay"
+                              .equals(oldTag)) {
+                          return;
+                      }
+
+                      facetBar.setTag(
+                              "CarAssistant-V10-AADisplay");
+
+                      /*
+                       * Horizontal on portrait/bottom bars,
+                       * vertical on classic rail bars.
+                       *
+                       * We deliberately keep this simple in A2.2.
+                       * The actual AA facet-bar slot determines placement.
+                       */
+
+                      LinearLayout controlBar =
+                              new LinearLayout(context);
+
+                      controlBar.setGravity(
+                              Gravity.CENTER);
+
+                      controlBar.setOrientation(
+                              LinearLayout.VERTICAL);
+
+                      controlBar.setPadding(
+                              2,
+                              4,
+                              2,
+                              4);
+
+                      controlBar.setBackgroundColor(
+                              Color.TRANSPARENT);
+
+                      addButton(
+                              controlBar,
+                              "⌂",
+                              "home",
+                              26);
+
+                      addButton(
+                              controlBar,
+                              "▣",
+                              "recents",
+                              22);
+
+                      addButton(
+                              controlBar,
+                              "‹",
+                              "back",
+                              30);
+
+                      addButton(
+                              controlBar,
+                              "Apps",
+                              "apps",
+                              11);
+
+                      ViewGroup.LayoutParams params =
+                              new ViewGroup.LayoutParams(
+                                      ViewGroup.LayoutParams.WRAP_CONTENT,
+                                      ViewGroup.LayoutParams.MATCH_PARENT);
+
+                      facetBar.addView(
+                              controlBar,
+                              params);
+
+                      controlBar.bringToFront();
+
+                      XposedBridge.log(
+                              TAG
+                                      + " controls injected into "
+                                      + facetBar.getClass()
+                                              .getName());
+
+                  } catch (Throwable t) {
+
+                      XposedBridge.log(
+                              TAG
+                                      + " injection failed: "
+                                      + t);
+                  }
+              }
+
+              private static void addButton(
+                      LinearLayout parent,
+                      String text,
+                      String command,
+                      float textSize) {
+
+                  TextView button =
+                          new TextView(
+                                  parent.getContext());
+
+                  button.setText(text);
+
+                  button.setTextColor(
+                          Color.WHITE);
+
+                  button.setTextSize(
+                          textSize);
+
+                  button.setGravity(
+                          Gravity.CENTER);
+
+                  button.setClickable(true);
+
+                  button.setFocusable(true);
+
+                  button.setPadding(
+                          8,
+                          4,
+                          8,
+                          4);
+
+                  button.setOnClickListener(
+                          new View.OnClickListener() {
+
+                              @Override
+                              public void onClick(
+                                      View view) {
+
+                                  sendCommand(
+                                          view.getContext(),
+                                          command);
+                              }
+                          });
+
+                  parent.addView(
+                          button,
+                          new LinearLayout.LayoutParams(
+                                  ViewGroup.LayoutParams.MATCH_PARENT,
+                                  0,
+                                  1.0f));
+              }
+
+              private static void sendCommand(
+                      Context context,
+                      String command) {
+
+                  try {
+
+                      Intent intent =
+                              new Intent(
+                                      CONTROL_ACTION);
+
+                      intent.setPackage(
+                              SELF_PACKAGE);
+
+                      intent.putExtra(
+                              "command",
+                              command);
+
+                      context.sendBroadcast(
+                              intent);
+
+                      XposedBridge.log(
+                              TAG
+                                      + " command="
+                                      + command);
+
+                  } catch (Throwable t) {
+
+                      XposedBridge.log(
+                              TAG
+                                      + " broadcast failed: "
+                                      + t);
+                  }
+              }
+          }
+          JAVA
+
+          echo "AADisplay-style GearheadControlBar written."
+
+      # ============================================================
+      # VERIFY BRIDGE
+      # ============================================================
+
+      - name: Verify Xposed bridge
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          BRIDGE="v10-source/app/src/main/java/com/hieptran/aacast/doudou/aabridge/AACastBridge.java"
+
+          test -f "$BRIDGE"
+
+          grep -q \
+            'com.google.android.projection.gearhead' \
+            "$BRIDGE"
+
+          grep -Eq \
+            'GearheadDockPatcher[[:space:]]*\.[[:space:]]*install' \
+            "$BRIDGE"
+
+          grep -Eq \
+            'GearheadControlBar[[:space:]]*\.[[:space:]]*install' \
+            "$BRIDGE"
+
+          grep -Eq \
+            'InputHooks[[:space:]]*\.[[:space:]]*install' \
+            "$BRIDGE"
+
+          grep -Eq \
+            'DisplayHooks[[:space:]]*\.[[:space:]]*installDisplayFlags' \
+            "$BRIDGE"
+
+          echo "Xposed bridge verified."
+
+      # ============================================================
+      # VERIFY CONTROL BAR
+      # ============================================================
+
+      - name: Verify AADisplay-style facet hook
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          BAR="v10-source/app/src/main/java/com/hieptran/aacast/doudou/hook/GearheadControlBar.java"
+
+          test -f "$BAR"
+
+          grep -q 'LayoutInflater' "$BAR"
+
+          grep -q \
+            'gh_coolwalk_vertical_facet_bar' \
+            "$BAR"
+
+          grep -q \
+            'gh_coolwalk_facet_bar' \
+            "$BAR"
+
+          grep -q \
+            'gh_coolwalk_facet_bar_rhd' \
+            "$BAR"
+
+          grep -q \
+            'sendBroadcast' \
+            "$BAR"
+
+          grep -q '"back"' "$BAR"
+          grep -q '"home"' "$BAR"
+          grep -q '"recents"' "$BAR"
+          grep -q '"apps"' "$BAR"
+
+          if grep -q \
+              'WindowManagerGlobal' \
+              "$BAR"; then
+
+            echo "ERROR: WindowManagerGlobal overlay still exists."
+
+            exit 1
+          fi
+
+          echo "AADisplay-style facet hook verified."
+
+      # ============================================================
+      # VERIFY RECEIVER
+      # ============================================================
+
+      - name: Verify V10ControlReceiver
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          RECEIVER="v10-source/app/src/main/java/com/hieptran/aacast/doudou/V10ControlReceiver.java"
+
+          test -f "$RECEIVER"
+
+          grep -q \
+            'BroadcastReceiver' \
+            "$RECEIVER"
+
+          grep -q \
+            'com.carassistant.v10.CONTROL' \
+            "$RECEIVER"
+
+          grep -q \
+            'handleControlBack' \
+            "$RECEIVER"
+
+          grep -q \
+            'handleControlHome' \
+            "$RECEIVER"
+
+          grep -q \
+            'handleControlRecents' \
+            "$RECEIVER"
+
+          grep -q \
+            'handleControlApps' \
+            "$RECEIVER"
+
+          echo "V10ControlReceiver verified."
+
+      # ============================================================
+      # ANDROID 12 CHECK
+      # ============================================================
+
+      - name: Verify Android 12 compatibility
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          if grep -R \
+              'getSentFromUid\|getSentFromPackage' \
+              v10-source/app/src/main/java \
+              2>/dev/null; then
+
+            echo "ERROR: Android 14-only BroadcastReceiver API found."
+
+            exit 1
+          fi
+
+          echo "Android 12 compatibility verified."
+
+      # ============================================================
+      # CLEAN BUILD
+      # ============================================================
+
+      - name: Gradle clean
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          cd v10-source
+
+          gradle clean \
+            --no-daemon \
+            --stacktrace
+
+      - name: Build Debug APK
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          cd v10-source
+
+          gradle assembleDebug \
+            --no-daemon \
+            --stacktrace
+
+      # ============================================================
+      # APK VERIFY
+      # ============================================================
+
+      - name: Verify APK
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          APK="v10-source/app/build/outputs/apk/debug/app-debug.apk"
+
+          test -f "$APK"
+
+          echo "APK:"
+          ls -lh "$APK"
+
+          echo "SHA256:"
+          sha256sum "$APK"
+
+      # ============================================================
+      # ARTIFACT
+      # ============================================================
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: CarAssistant-V10.2-A2.2-AADisplay-Bar-debug
+          path: v10-source/app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error
+
+      # ============================================================
+      # COMMIT ONLY AFTER SUCCESSFUL BUILD
+      # ============================================================
+
+      - name: Commit successful build
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          git config user.name \
+            "github-actions[bot]"
+
+          git config user.email \
+            "41898282+github-actions[bot]@users.noreply.github.com"
+
+          git add v10-source
+
+          if git diff --cached --quiet; then
+            echo "No changes to commit."
+            exit 0
+          fi
+
+          git commit \
+            -m "Build V10.2-A2.2 AADisplay-style Gearhead facet bar"
+
+          git push
