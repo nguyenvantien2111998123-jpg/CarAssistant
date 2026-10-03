@@ -10,42 +10,62 @@ import android.view.ViewGroup;
 import android.widget.LinearLayout;
 import android.widget.TextView;
 
+import java.lang.reflect.Constructor;
+import java.lang.reflect.Field;
+import java.util.Enumeration;
+
+import dalvik.system.BaseDexClassLoader;
+import dalvik.system.DexFile;
+
 import de.robv.android.xposed.XC_MethodHook;
 import de.robv.android.xposed.XposedBridge;
 import de.robv.android.xposed.XposedHelpers;
 
 /**
- * V10 AADisplay-style Gearhead facet-bar hook.
+ * Car Assistant V10.2-A3.
  *
- * The control bar is inserted directly into the Android Auto
- * Gearhead facet-bar ViewGroup after its layout is inflated.
+ * AADisplay-style Android Auto UI hook.
  *
- * This does not create a WindowManager overlay.
+ * Important:
+ * - No WindowManagerGlobal overlay.
+ * - Hooks Gearhead's LayoutInfo constructor.
+ * - Forces the vertical rail layout.
+ * - Hooks the real Gearhead facet-bar inflation.
+ *
+ * Relevant implementation approach derived from
+ * AADisplay (GPL-3.0).
  */
 public final class GearheadControlBar {
 
     private static final String TAG =
-            "[V10 AAFacetBar]";
+            "[V10 A3 AAFacetBar]";
 
-    private static final String GEARHEAD_PACKAGE =
+    private static final String GEARHEAD =
             "com.google.android.projection.gearhead";
 
-    private static final String SELF_PACKAGE =
+    private static final String SELF =
             "com.carassistant.v10";
 
-    private static final String CONTROL_ACTION =
+    private static final String ACTION =
             "com.carassistant.v10.CONTROL";
 
-    private static final String CONTROL_TAG =
-            "CarAssistant-V10-AADisplay";
+    private static final String MARKER =
+            "CarAssistant-V10-A3";
 
-    private static final String[] FACET_LAYOUT_NAMES = {
+    private static final String[] FACET_LAYOUTS = {
             "gh_coolwalk_vertical_facet_bar",
             "gh_coolwalk_facet_bar",
             "gh_coolwalk_facet_bar_rhd"
     };
 
-    private static volatile boolean installed;
+    private static final String LEFT_RAIL =
+            "sys_ui_layout_canonical_vertical_rail_lhd";
+
+    private static final String RIGHT_RAIL =
+            "sys_ui_layout_canonical_vertical_rail_rhd";
+
+    private static boolean installed;
+    private static boolean layoutInfoInstalled;
 
     private GearheadControlBar() {
     }
@@ -57,6 +77,40 @@ public final class GearheadControlBar {
         }
 
         installed = true;
+
+        try {
+
+            Context context =
+                    (Context) XposedHelpers.callStaticMethod(
+                            Class.forName(
+                                    "android.app.ActivityThread"),
+                            "currentApplication");
+
+            if (context == null) {
+
+                XposedBridge.log(
+                        TAG + " no application context");
+
+                return;
+            }
+
+            installLayoutInfoHook(
+                    context.getClassLoader(),
+                    context);
+
+            installFacetInflateHook();
+
+            XposedBridge.log(
+                    TAG + " A3 hooks installed");
+
+        } catch (Throwable t) {
+
+            XposedBridge.log(
+                    TAG + " install failed: " + t);
+        }
+    }
+
+    private static void installFacetInflateHook() {
 
         try {
 
@@ -74,12 +128,19 @@ public final class GearheadControlBar {
 
                             try {
 
-                                int resourceId =
+                                int resource =
                                         (Integer) param.args[0];
 
-                                if (!isFacetLayout(
-                                        param.thisObject,
-                                        resourceId)) {
+                                LayoutInflater inflater =
+                                        (LayoutInflater)
+                                                param.thisObject;
+
+                                Context context =
+                                        inflater.getContext();
+
+                                if (!isFacetResource(
+                                        context,
+                                        resource)) {
                                     return;
                                 }
 
@@ -87,235 +148,180 @@ public final class GearheadControlBar {
                                         param.getResult();
 
                                 if (!(result instanceof ViewGroup)) {
+
+                                    XposedBridge.log(
+                                            TAG
+                                                    + " facet result not ViewGroup");
+
                                     return;
                                 }
 
-                                ViewGroup facetBar =
-                                        (ViewGroup) result;
-
-                                Context context =
-                                        ((LayoutInflater)
-                                                param.thisObject)
-                                                .getContext();
-
-                                injectControls(
-                                        facetBar,
+                                inject(
+                                        (ViewGroup) result,
                                         context);
 
                             } catch (Throwable t) {
 
                                 XposedBridge.log(
                                         TAG
-                                                + " inflate hook error: "
+                                                + " facet hook error: "
                                                 + t);
                             }
                         }
                     });
 
             XposedBridge.log(
-                    TAG
-                            + " LayoutInflater hook installed");
+                    TAG + " LayoutInflater hook ready");
 
         } catch (Throwable t) {
 
             XposedBridge.log(
-                    TAG
-                            + " install failed: "
+                    TAG + " LayoutInflater hook failed: "
                             + t);
         }
     }
 
-    private static boolean isFacetLayout(
-            Object inflaterObject,
-            int resourceId) {
+    private static boolean isFacetResource(
+            Context context,
+            int resource) {
 
-        try {
+        if (context == null || resource == 0) {
+            return false;
+        }
 
-            LayoutInflater inflater =
-                    (LayoutInflater) inflaterObject;
+        for (String name : FACET_LAYOUTS) {
 
-            Context context =
-                    inflater.getContext();
+            int id =
+                    context.getResources()
+                            .getIdentifier(
+                                    name,
+                                    "layout",
+                                    GEARHEAD);
 
-            if (context == null) {
-                return false;
+            if (id != 0 && id == resource) {
+
+                XposedBridge.log(
+                        TAG
+                                + " facet matched "
+                                + name
+                                + " id="
+                                + resource);
+
+                return true;
             }
-
-            for (String name :
-                    FACET_LAYOUT_NAMES) {
-
-                int id =
-                        context.getResources()
-                                .getIdentifier(
-                                        name,
-                                        "layout",
-                                        GEARHEAD_PACKAGE);
-
-                if (id != 0
-                        && id == resourceId) {
-
-                    XposedBridge.log(
-                            TAG
-                                    + " facet layout matched: "
-                                    + name);
-
-                    return true;
-                }
-            }
-
-        } catch (Throwable t) {
-
-            XposedBridge.log(
-                    TAG
-                            + " resource lookup failed: "
-                            + t);
         }
 
         return false;
     }
 
-    private static void injectControls(
-            ViewGroup facetBar,
+    private static void inject(
+            ViewGroup facet,
             Context context) {
+
+        if (facet == null || context == null) {
+            return;
+        }
+
+        if (MARKER.equals(facet.getTag())) {
+            return;
+        }
 
         try {
 
-            if (facetBar == null
-                    || context == null) {
-                return;
-            }
+            facet.setTag(MARKER);
 
-            Object tag =
-                    facetBar.getTag();
-
-            if (CONTROL_TAG.equals(tag)) {
-                return;
-            }
-
-            /*
-             * Mark this exact AA ViewGroup so repeated
-             * LayoutInflater calls do not inject twice.
-             */
-            facetBar.setTag(CONTROL_TAG);
-
-            LinearLayout controlBar =
+            LinearLayout controls =
                     new LinearLayout(context);
 
-            controlBar.setOrientation(
+            controls.setOrientation(
                     LinearLayout.VERTICAL);
 
-            controlBar.setGravity(
+            controls.setGravity(
                     Gravity.CENTER);
 
-            controlBar.setPadding(
+            controls.setPadding(
+                    0,
                     2,
-                    4,
-                    2,
-                    4);
-
-            controlBar.setBackgroundColor(
-                    Color.TRANSPARENT);
+                    0,
+                    2);
 
             addButton(
-                    controlBar,
+                    controls,
                     "⌂",
                     "home",
-                    26f);
-
-            addButton(
-                    controlBar,
-                    "▣",
-                    "recents",
                     22f);
 
             addButton(
-                    controlBar,
-                    "‹",
-                    "back",
-                    30f);
+                    controls,
+                    "▣",
+                    "recents",
+                    20f);
 
             addButton(
-                    controlBar,
+                    controls,
+                    "‹",
+                    "back",
+                    28f);
+
+            addButton(
+                    controls,
                     "Apps",
                     "apps",
-                    11f);
+                    10f);
 
-            LinearLayout.LayoutParams params =
-                    new LinearLayout.LayoutParams(
+            facet.addView(
+                    controls,
+                    new ViewGroup.LayoutParams(
                             ViewGroup.LayoutParams.WRAP_CONTENT,
-                            ViewGroup.LayoutParams.MATCH_PARENT);
-
-            facetBar.addView(
-                    controlBar,
-                    params);
-
-            controlBar.bringToFront();
+                            ViewGroup.LayoutParams.MATCH_PARENT));
 
             XposedBridge.log(
                     TAG
-                            + " controls injected into "
-                            + facetBar.getClass()
-                                    .getName());
+                            + " controls injected childCount="
+                            + facet.getChildCount());
 
         } catch (Throwable t) {
 
             XposedBridge.log(
-                    TAG
-                            + " injection failed: "
-                            + t);
+                    TAG + " injection failed: " + t);
         }
     }
 
     private static void addButton(
             LinearLayout parent,
-            String text,
+            String label,
             String command,
-            float textSize) {
+            float size) {
 
         TextView button =
                 new TextView(
                         parent.getContext());
 
-        button.setText(text);
-
-        button.setTextColor(
-                Color.WHITE);
-
-        button.setTextSize(
-                textSize);
-
-        button.setGravity(
-                Gravity.CENTER);
+        button.setText(label);
+        button.setTextColor(Color.WHITE);
+        button.setTextSize(size);
+        button.setGravity(Gravity.CENTER);
 
         button.setClickable(true);
-
         button.setFocusable(true);
 
         button.setPadding(
-                8,
-                4,
-                8,
-                4);
+                6,
+                2,
+                6,
+                2);
 
         button.setOnClickListener(
-                new View.OnClickListener() {
-
-                    @Override
-                    public void onClick(
-                            View view) {
-
-                        sendCommand(
-                                view.getContext(),
-                                command);
-                    }
-                });
+                view -> sendCommand(
+                        view.getContext(),
+                        command));
 
         parent.addView(
                 button,
                 new LinearLayout.LayoutParams(
                         ViewGroup.LayoutParams.MATCH_PARENT,
                         0,
-                        1.0f));
+                        1f));
     }
 
     private static void sendCommand(
@@ -325,11 +331,10 @@ public final class GearheadControlBar {
         try {
 
             Intent intent =
-                    new Intent(
-                            CONTROL_ACTION);
+                    new Intent(ACTION);
 
             intent.setPackage(
-                    SELF_PACKAGE);
+                    SELF);
 
             intent.putExtra(
                     "command",
@@ -349,6 +354,310 @@ public final class GearheadControlBar {
                     TAG
                             + " broadcast failed: "
                             + t);
+        }
+    }
+
+    private static void installLayoutInfoHook(
+            ClassLoader loader,
+            Context context) {
+
+        if (layoutInfoInstalled) {
+            return;
+        }
+
+        try {
+
+            Class<?> layoutInfo =
+                    findLayoutInfoClass(loader);
+
+            if (layoutInfo == null) {
+
+                XposedBridge.log(
+                        TAG
+                                + " LayoutInfo class not found");
+
+                return;
+            }
+
+            Constructor<?> constructor =
+                    findLayoutInfoConstructor(
+                            layoutInfo);
+
+            if (constructor == null) {
+
+                XposedBridge.log(
+                        TAG
+                                + " LayoutInfo constructor not found");
+
+                return;
+            }
+
+            final int left =
+                    context.getResources()
+                            .getIdentifier(
+                                    LEFT_RAIL,
+                                    "layout",
+                                    GEARHEAD);
+
+            final int right =
+                    context.getResources()
+                            .getIdentifier(
+                                    RIGHT_RAIL,
+                                    "layout",
+                                    GEARHEAD);
+
+            XposedBridge.hookMethod(
+                    constructor,
+                    new XC_MethodHook() {
+
+                        @Override
+                        protected void beforeHookedMethod(
+                                MethodHookParam param) {
+
+                            try {
+
+                                if (param.args.length != 8) {
+                                    return;
+                                }
+
+                                if (!(param.args[0]
+                                        instanceof Integer)
+                                        || !(param.args[1]
+                                        instanceof Integer)
+                                        || !(param.args[2]
+                                        instanceof Integer)
+                                        || !(param.args[3]
+                                        instanceof Integer)
+                                        || !(param.args[4]
+                                        instanceof Boolean)
+                                        || !(param.args[5]
+                                        instanceof Boolean)
+                                        || !(param.args[7]
+                                        instanceof Boolean)) {
+                                    return;
+                                }
+
+                                boolean rhd =
+                                        (Boolean)
+                                                param.args[4];
+
+                                if (rhd && right != 0) {
+
+                                    param.args[0] =
+                                            right;
+
+                                    param.args[3] =
+                                            4;
+
+                                } else if (!rhd
+                                        && left != 0) {
+
+                                    param.args[0] =
+                                            left;
+
+                                    param.args[3] =
+                                            3;
+                                }
+
+                                param.args[5] =
+                                        true;
+
+                                XposedBridge.log(
+                                        TAG
+                                                + " LayoutInfo patched rhd="
+                                                + rhd);
+
+                            } catch (Throwable t) {
+
+                                XposedBridge.log(
+                                        TAG
+                                                + " LayoutInfo patch error: "
+                                                + t);
+                            }
+                        }
+                    });
+
+            layoutInfoInstalled = true;
+
+            XposedBridge.log(
+                    TAG
+                            + " LayoutInfo hook installed: "
+                            + layoutInfo.getName());
+
+        } catch (Throwable t) {
+
+            XposedBridge.log(
+                    TAG
+                            + " LayoutInfo scan failed: "
+                            + t);
+        }
+    }
+
+    private static Constructor<?> findLayoutInfoConstructor(
+            Class<?> type) {
+
+        for (Constructor<?> constructor :
+                type.getDeclaredConstructors()) {
+
+            Class<?>[] p =
+                    constructor.getParameterTypes();
+
+            if (p.length == 8
+                    && p[0] == int.class
+                    && p[1] == int.class
+                    && p[2] == int.class
+                    && p[3] == int.class
+                    && p[4] == boolean.class
+                    && p[5] == boolean.class
+                    && p[7] == boolean.class) {
+
+                return constructor;
+            }
+        }
+
+        return null;
+    }
+
+    private static Class<?> findLayoutInfoClass(
+            ClassLoader loader) {
+
+        try {
+
+            Field pathList =
+                    BaseDexClassLoader.class
+                            .getDeclaredField(
+                                    "pathList");
+
+            pathList.setAccessible(true);
+
+            Object dexPathList =
+                    pathList.get(loader);
+
+            Field dexElements =
+                    dexPathList.getClass()
+                            .getDeclaredField(
+                                    "dexElements");
+
+            dexElements.setAccessible(true);
+
+            Object[] elements =
+                    (Object[]) dexElements.get(
+                            dexPathList);
+
+            for (Object element :
+                    elements) {
+
+                Field dexFileField =
+                        element.getClass()
+                                .getDeclaredField(
+                                        "dexFile");
+
+                dexFileField.setAccessible(true);
+
+                DexFile dex =
+                        (DexFile)
+                                dexFileField.get(
+                                        element);
+
+                if (dex == null) {
+                    continue;
+                }
+
+                Enumeration<String> names =
+                        dex.entries();
+
+                while (names.hasMoreElements()) {
+
+                    String name =
+                            names.nextElement();
+
+                    if (!name.startsWith(
+                            GEARHEAD)) {
+                        continue;
+                    }
+
+                    try {
+
+                        Class<?> type =
+                                Class.forName(
+                                        name,
+                                        false,
+                                        loader);
+
+                        for (Constructor<?> constructor :
+                                type.getDeclaredConstructors()) {
+
+                            if (!looksLikeLayoutInfo(
+                                    constructor)) {
+                                continue;
+                            }
+
+                            if (hasLayoutInfoStringShape(
+                                    constructor)) {
+
+                                return type;
+                            }
+                        }
+
+                    } catch (Throwable ignored) {
+                    }
+                }
+            }
+
+        } catch (Throwable t) {
+
+            XposedBridge.log(
+                    TAG
+                            + " dex scan error: "
+                            + t);
+        }
+
+        return null;
+    }
+
+    private static boolean looksLikeLayoutInfo(
+            Constructor<?> constructor) {
+
+        Class<?>[] p =
+                constructor.getParameterTypes();
+
+        return p.length == 8
+                && p[0] == int.class
+                && p[1] == int.class
+                && p[2] == int.class
+                && p[3] == int.class
+                && p[4] == boolean.class
+                && p[5] == boolean.class
+                && p[7] == boolean.class;
+    }
+
+    private static boolean hasLayoutInfoStringShape(
+            Constructor<?> constructor) {
+
+        try {
+
+            constructor.setAccessible(true);
+
+            Object value =
+                    constructor.newInstance(
+                            1,
+                            2,
+                            3,
+                            4,
+                            false,
+                            true,
+                            null,
+                            false);
+
+            String text =
+                    String.valueOf(value);
+
+            return text.startsWith(
+                    "LayoutInfo{layoutResourceId=");
+
+        } catch (Throwable ignored) {
+
+            return false;
         }
     }
 }
