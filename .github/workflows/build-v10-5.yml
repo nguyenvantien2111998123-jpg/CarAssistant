@@ -19,113 +19,111 @@ jobs:
 
       - name: Patch V10CarActivity
         working-directory: v10-source
-        shell: python
-        run: |
-          from pathlib import Path
-
-          file = Path("app/src/main/java/com/hieptran/aacast/doudou/V10CarActivity.java")
-
-          if not file.exists():
-              raise SystemExit("V10CarActivity.java not found")
-
-          text = file.read_text(encoding="utf-8")
-
-          if "projectionControls" in text:
-              print("V10-5 patch already exists.")
-              raise SystemExit(0)
-
-          marker = """        textureView
-                .setOnTouchListener(
-                        inputController
-                                .createListener());
-"""
-
-          if marker not in text:
-              raise SystemExit(
-                  "Expected attachProjection() marker was not found"
-              )
-
-          insert = "\n".join([
-              "        // V10-5 projection controls",
-              "        projectionControls = new LinearLayout(this);",
-              "        projectionControls.setOrientation(LinearLayout.HORIZONTAL);",
-              "        projectionControls.setGravity(Gravity.CENTER_VERTICAL);",
-              "",
-              '        TextView backButton = buttonText("BACK");',
-              "        backButton.setOnClickListener(",
-              "                v -> handleControlBack());",
-              "",
-              '        TextView homeButton = buttonText("HOME");',
-              "        homeButton.setOnClickListener(",
-              "                v -> handleControlHome());",
-              "",
-              "        projectionControls.addView(",
-              "                backButton,",
-              "                new LinearLayout.LayoutParams(",
-              "                        dp(90),",
-              "                        dp(52)));",
-              "",
-              "        LinearLayout.LayoutParams homeParams =",
-              "                new LinearLayout.LayoutParams(",
-              "                        dp(90),",
-              "                        dp(52));",
-              "",
-              "        homeParams.leftMargin = dp(8);",
-              "",
-              "        projectionControls.addView(",
-              "                homeButton,",
-              "                homeParams);",
-              "",
-              "        FrameLayout.LayoutParams controlsParams =",
-              "                new FrameLayout.LayoutParams(",
-              "                        -2,",
-              "                        dp(60),",
-              "                        Gravity.TOP | Gravity.END);",
-              "",
-              "        controlsParams.topMargin = dp(12);",
-              "        controlsParams.rightMargin = dp(12);",
-              "",
-              "        projectionLayer.addView(",
-              "                projectionControls,",
-              "                controlsParams);",
-          ])
-
-          replacement = marker + "\n" + insert + "\n"
-
-          text = text.replace(marker, replacement, 1)
-
-          file.write_text(text, encoding="utf-8")
-
-          print("V10-5 patch applied successfully.")
-
-      - name: Verify source
-        working-directory: v10-source
         shell: bash
         run: |
           set -euo pipefail
 
-          FILE="app/src/main/java/com/hieptran/aacast/doudou/V10CarActivity.java"
+          python3 <<'PY'
+          from pathlib import Path
 
-          grep -q "projectionControls" "$FILE"
-          grep -q 'buttonText("BACK")' "$FILE"
-          grep -q 'buttonText("HOME")' "$FILE"
-          grep -q "handleControlBack()" "$FILE"
-          grep -q "handleControlHome()" "$FILE"
+          path = Path(
+              "app/src/main/java/com/hieptran/aacast/doudou/V10CarActivity.java"
+          )
 
-          echo "V10-5 source verification OK"
+          if not path.exists():
+              raise SystemExit("V10CarActivity.java not found")
+
+          text = path.read_text(encoding="utf-8")
+
+          # Add the field if it does not exist.
+          field = "    private LinearLayout projectionControls;"
+
+          if field not in text:
+              marker = "    private V10ProjectionSession session;"
+
+              if marker not in text:
+                  raise SystemExit(
+                      "Cannot find V10ProjectionSession field"
+                  )
+
+              text = text.replace(
+                  marker,
+                  marker + "\n" + field,
+                  1
+              )
+
+          # Do not patch twice.
+          if "V10-5 projection controls" not in text:
+
+              lines = text.splitlines()
+
+              in_attach = False
+              target_index = -1
+
+              for i, line in enumerate(lines):
+                  if "private void attachProjection()" in line:
+                      in_attach = True
+                      continue
+
+                  if in_attach and line.strip() == ".createListener());":
+                      target_index = i
+                      break
+
+              if target_index == -1:
+                  raise SystemExit(
+                      "Cannot find attachProjection listener"
+                  )
+
+              insert = [
+                  "",
+                  "        // V10-5 projection controls",
+                  "        projectionControls = new LinearLayout(this);",
+                  "        projectionControls.setOrientation(LinearLayout.HORIZONTAL);",
+                  "",
+                  "        TextView backButton = buttonText(\"BACK\");",
+                  "        backButton.setOnClickListener(",
+                  "                v -> handleControlBack());",
+                  "",
+                  "        TextView homeButton = buttonText(\"HOME\");",
+                  "        homeButton.setOnClickListener(",
+                  "                v -> handleControlHome());",
+                  "",
+                  "        projectionControls.addView(backButton);",
+                  "        projectionControls.addView(homeButton);",
+                  "",
+                  "        FrameLayout.LayoutParams controlParams =",
+                  "                new FrameLayout.LayoutParams(",
+                  "                        -2,",
+                  "                        dp(60),",
+                  "                        Gravity.TOP | Gravity.END);",
+                  "",
+                  "        controlParams.setMargins(",
+                  "                dp(16),",
+                  "                dp(16),",
+                  "                dp(16),",
+                  "                0);",
+                  "",
+                  "        projectionLayer.addView(",
+                  "                projectionControls,",
+                  "                controlParams);",
+              ]
+
+              lines[target_index + 1:target_index + 1] = insert
+
+              text = "\n".join(lines) + "\n"
+
+          path.write_text(text, encoding="utf-8")
+
+          print("V10-5 patch applied successfully.")
+          PY
 
       - name: Build V10-5
         working-directory: v10-source
         shell: bash
         run: |
           set -euo pipefail
-
           chmod +x ./gradlew
-
-          ./gradlew \
-            --no-daemon \
-            --stacktrace \
-            assembleDebug
+          ./gradlew --no-daemon --stacktrace assembleDebug
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
