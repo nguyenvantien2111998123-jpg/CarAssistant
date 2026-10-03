@@ -748,33 +748,67 @@ public final class V10CarActivity
                                 .createListener());
     }
 
-    private void launchProjection(
-            ComponentName component) {
+    
+private void launchProjection(
+        ComponentName component) {
 
-        if (component == null
-                || session == null) {
-            return;
-        }
+    if (component == null
+            || session == null) {
 
-        activeTarget =
-                component;
-
-        V10SessionStore
-                .setTarget(
-                        this,
-                        component);
-
-        session.setTarget(
-                component);
-
-        launcherLayer
-                .setVisibility(
-                        View.GONE);
-
-        projectionLayer
-                .setVisibility(
-                        View.VISIBLE);
+        return;
     }
+
+    /*
+     * If the user selects another application while
+     * an application is already projected, release
+     * the old display first.
+     *
+     * V10ProjectionSession itself also handles target
+     * changes safely.
+     */
+    if (activeTarget != null
+            && !activeTarget.equals(component)) {
+
+        session.release();
+    }
+
+    activeTarget =
+            component;
+
+    /*
+     * Keep the existing V10 session persistence.
+     */
+    V10SessionStore
+            .setTarget(
+                    this,
+                    component);
+
+    /*
+     * Hide the complete launcher UI.
+     */
+    launcherLayer
+            .setVisibility(
+                    View.GONE);
+
+    appPanel
+            .setVisibility(
+                    View.GONE);
+
+    dashboard
+            .setVisibility(
+                    View.GONE);
+
+    projectionLayer
+            .setVisibility(
+                    View.VISIBLE);
+
+    /*
+     * Start the existing proven V10 projection
+     * engine.
+     */
+    session.setTarget(
+            component);
+}
 
     private void returnToLauncher() {
 
@@ -804,27 +838,84 @@ public final class V10CarActivity
                         View.GONE);
     }
 
-    private void showApps() {
+    
+private void showApps() {
 
-        dashboard
-                .setVisibility(
-                        View.GONE);
+    /*
+     * V10.4 V4
+     *
+     * APPS is a real Android Auto-side application
+     * selector.
+     *
+     * It works from:
+     *
+     * 1. Dashboard
+     * 2. Active projection
+     *
+     * Therefore the launcher layer is explicitly
+     * restored before displaying Applications.
+     */
 
-        appPanel
-                .setVisibility(
-                        View.VISIBLE);
+    if (launcherLayer == null
+            || appPanel == null
+            || dashboard == null) {
+
+        return;
     }
 
-    private void hideApps() {
+    /*
+     * Hide the projected application while the
+     * application selector is visible.
+     *
+     * The projection session itself is intentionally
+     * kept alive. If another application is selected,
+     * V10ProjectionSession.setTarget() will detect the
+     * changed target and recreate the display.
+     */
+    projectionLayer.setVisibility(
+            View.GONE);
 
-        appPanel
-                .setVisibility(
-                        View.GONE);
+    launcherLayer.setVisibility(
+            View.VISIBLE);
 
-        dashboard
-                .setVisibility(
-                        View.VISIBLE);
+    dashboard.setVisibility(
+            View.GONE);
+
+    appPanel.setVisibility(
+            View.VISIBLE);
+
+    loadApps();
+}
+
+    
+private void hideApps() {
+
+    if (appPanel == null
+            || dashboard == null
+            || launcherLayer == null) {
+
+        return;
     }
+
+    appPanel.setVisibility(
+            View.GONE);
+
+    dashboard.setVisibility(
+            View.VISIBLE);
+
+    launcherLayer.setVisibility(
+            View.VISIBLE);
+
+    /*
+     * The Applications screen belongs to the
+     * V10 dashboard.
+     *
+     * Projection is hidden until an application
+     * is selected again.
+     */
+    projectionLayer.setVisibility(
+            View.GONE);
+}
 
     public void handleControlBack() {
 
