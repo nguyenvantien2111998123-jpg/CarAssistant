@@ -1,4 +1,4 @@
-name: Build Car Assistant V10-7A Task Persistence v2
+name: Build Car Assistant V10-7A Task Persistence
 
 on:
   workflow_dispatch:
@@ -8,9 +8,15 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
+      # ============================================================
+      # CHECKOUT
+      # ============================================================
       - name: Checkout
         uses: actions/checkout@v4
 
+      # ============================================================
+      # JAVA 17
+      # ============================================================
       - name: Set up JDK 17
         uses: actions/setup-java@v5
         with:
@@ -18,7 +24,7 @@ jobs:
           java-version: "17"
 
       # ============================================================
-      # PATCH V10CarActivity
+      # V10-6 FLOATING KEY
       # ============================================================
       - name: Patch V10CarActivity
         working-directory: v10-source
@@ -38,10 +44,6 @@ jobs:
           )
 
           text = path.read_text(encoding="utf-8")
-
-          # ----------------------------------------------------------
-          # Imports
-          # ----------------------------------------------------------
 
           marker = "import android.content.pm.ResolveInfo;"
 
@@ -65,10 +67,6 @@ jobs:
                       marker + "\n" + imp,
                       1
                   )
-
-          # ----------------------------------------------------------
-          # Fields
-          # ----------------------------------------------------------
 
           field_marker = (
               "    private V10ProjectionSession session;"
@@ -98,10 +96,7 @@ jobs:
                   1
               )
 
-          # ----------------------------------------------------------
-          # Remove old V10-5 controls if they exist
-          # ----------------------------------------------------------
-
+          # Remove old V10-5 controls if they exist.
           if "V10-5 projection controls" in text:
 
               start = text.find(
@@ -128,10 +123,7 @@ jobs:
                           + text[end:]
                       )
 
-          # ----------------------------------------------------------
-          # Add floating key to attachProjection()
-          # ----------------------------------------------------------
-
+          # Add floating key creation after projection setup.
           if "createFloatingTouchKey();" not in text:
 
               attach_start = text.find(
@@ -154,10 +146,10 @@ jobs:
                   )
 
               insert = """
-          
+
                   // V10-6 floating touch key
                   createFloatingTouchKey();
-          """
+              """
 
               text = (
                   text[:attach_end]
@@ -165,10 +157,7 @@ jobs:
                   + text[attach_end:]
               )
 
-          # ----------------------------------------------------------
-          # Floating key implementation
-          # ----------------------------------------------------------
-
+          # Add floating key methods.
           if "private void createFloatingTouchKey()" not in text:
 
               marker = (
@@ -181,7 +170,7 @@ jobs:
                   )
 
               methods = r'''
-          
+
               private void createFloatingTouchKey() {
 
                   if (floatingTouchKey != null) {
@@ -629,7 +618,7 @@ jobs:
           PY
 
       # ============================================================
-      # PATCH ROOTVIEW
+      # V10-6 ROOTVIEW CONTROL
       # ============================================================
       - name: Patch RootView
         working-directory: v10-source
@@ -739,39 +728,80 @@ jobs:
 
           text = path.read_text(encoding="utf-8")
 
-          old = """            final String command =
-                    "/system/bin/am force-stop '" + packageName + "'; "
-                            + "/system/bin/am start"
-                            + " --user " + userId
-                            + " --display " + displayId
-                            + " --windowingMode 1"
-                            + " -a android.intent.action.MAIN"
-                            + " -c android.intent.category.LAUNCHER"
-                            + " -f 0x18000000"
-                            + " -n '" + flat + "'";"""
+          # --------------------------------------------------------
+          # Remove force-stop.
+          #
+          # Source is intentionally matched in pieces because the
+          # Java string is split across multiple concatenations.
+          # --------------------------------------------------------
 
-          new = """            // V10-7A: reuse the existing application task.
-            // Do not force-stop the target and do not use MULTIPLE_TASK.
-            final String command =
-                    "/system/bin/am start"
-                            + " --user " + userId
-                            + " --display " + displayId
-                            + " --windowingMode 1"
-                            + " -a android.intent.action.MAIN"
-                            + " -c android.intent.category.LAUNCHER"
-                            + " -f 0x10000000"
-                            + " -n '" + flat + "'";"""
+          force_stop = '''                "/system/bin/am force-stop '"
+                        + packageName
+                        + "'; "
+                        + "/system/bin/am start"'''
 
-          if old not in text:
-              raise SystemExit(
-                  "Expected original V10ProjectionSession launch command not found."
+          if force_stop in text:
+
+              text = text.replace(
+                  force_stop,
+                  '''                "/system/bin/am start"''',
+                  1
               )
 
-          text = text.replace(
-              old,
-              new,
-              1
+          elif "/system/bin/am force-stop" in text:
+
+              raise SystemExit(
+                  "force-stop exists but its source format is unexpected."
+              )
+
+          else:
+
+              print(
+                  "force-stop already absent."
+              )
+
+          # --------------------------------------------------------
+          # Replace MULTIPLE_TASK.
+          #
+          # 0x18000000 =
+          # NEW_TASK (0x10000000)
+          # +
+          # MULTIPLE_TASK (0x08000000)
+          #
+          # V10-7A keeps NEW_TASK only.
+          # --------------------------------------------------------
+
+          old_flag = (
+              '                        + " -f 0x18000000"'
           )
+
+          new_flag = (
+              '                        + " -f 0x10000000"'
+          )
+
+          if old_flag in text:
+
+              text = text.replace(
+                  old_flag,
+                  new_flag,
+                  1
+              )
+
+          elif "0x18000000" in text:
+
+              raise SystemExit(
+                  "0x18000000 exists but its source format is unexpected."
+              )
+
+          if "0x18000000" in text:
+              raise SystemExit(
+                  "ERROR: MULTIPLE_TASK flag still exists."
+              )
+
+          if "/system/bin/am force-stop" in text:
+              raise SystemExit(
+                  "ERROR: force-stop still exists."
+              )
 
           path.write_text(
               text,
@@ -784,9 +814,9 @@ jobs:
           PY
 
       # ============================================================
-      # STATIC VALIDATION
+      # VERIFY
       # ============================================================
-      - name: Verify V10-7A patch
+      - name: Verify V10-7A
         working-directory: v10-source
         shell: bash
         run: |
@@ -800,7 +830,8 @@ jobs:
           test -f "$ROOT"
           test -f "$PROJECTION"
 
-          # V10-6 floating key
+          echo "Checking V10-6 floating key..."
+
           grep -q "import android.view.ViewGroup;" "$V10"
           grep -q "createFloatingTouchKey" "$V10"
           grep -q "showFloatingMenu" "$V10"
@@ -808,27 +839,38 @@ jobs:
           grep -q "switchToTwoScreen" "$V10"
           grep -q "switchToThreeScreen" "$V10"
 
-          # V10-6 RootView external control
+          echo "V10-6 floating key: PASSED"
+
+          echo "Checking RootView external layout..."
+
           grep -q "public void setLayoutModeExternal" "$ROOT"
 
-          # V10-7A task persistence
+          echo "RootView external layout: PASSED"
+
+          echo "Checking V10-7A task persistence..."
+
           if grep -q "/system/bin/am force-stop" "$PROJECTION"; then
-            echo "ERROR: force-stop still exists."
-            exit 1
+              echo "ERROR: force-stop still exists."
+              exit 1
           fi
 
           if grep -q "0x18000000" "$PROJECTION"; then
-            echo "ERROR: MULTIPLE_TASK flag still exists."
-            exit 1
+              echo "ERROR: MULTIPLE_TASK flag still exists."
+              exit 1
           fi
 
           grep -q "/system/bin/am start" "$PROJECTION"
           grep -q "0x10000000" "$PROJECTION"
 
-          echo "========================================"
-          echo "V10-6 floating key: PASSED"
           echo "V10-7A task persistence: PASSED"
+
           echo "========================================"
+          echo "ALL STATIC CHECKS PASSED"
+          echo "========================================"
+
+          echo ""
+          echo "Final launch command:"
+          grep -A14 "final String command" "$PROJECTION" | head -n 16
 
       # ============================================================
       # BUILD
