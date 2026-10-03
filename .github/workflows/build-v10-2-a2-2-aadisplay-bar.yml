@@ -63,24 +63,12 @@ jobs:
           import de.robv.android.xposed.XposedHelpers;
 
           /**
-           * V10 AADisplay-style Gearhead control bar.
+           * V10 AADisplay-style Gearhead facet-bar hook.
            *
-           * Architecture:
+           * The control bar is inserted directly into the Android Auto
+           * Gearhead facet-bar ViewGroup after its layout is inflated.
            *
-           * Gearhead
-           *    |
-           *    +-- LayoutInflater.inflate()
-           *             |
-           *             +-- gh_coolwalk_vertical_facet_bar
-           *             +-- gh_coolwalk_facet_bar
-           *             +-- gh_coolwalk_facet_bar_rhd
-           *                         |
-           *                         +-- V10 controls
-           *
-           * No WindowManagerGlobal overlay is used.
-           *
-           * The implementation follows the integration approach used by
-           * AADisplay, while remaining an independent Java implementation.
+           * This does not create a WindowManager overlay.
            */
           public final class GearheadControlBar {
 
@@ -95,6 +83,9 @@ jobs:
 
               private static final String CONTROL_ACTION =
                       "com.carassistant.v10.CONTROL";
+
+              private static final String CONTROL_TAG =
+                      "CarAssistant-V10-AADisplay";
 
               private static final String[] FACET_LAYOUT_NAMES = {
                       "gh_coolwalk_vertical_facet_bar",
@@ -150,11 +141,14 @@ jobs:
                                           ViewGroup facetBar =
                                                   (ViewGroup) result;
 
-                                          injectControls(
-                                                  facetBar,
+                                          Context context =
                                                   ((LayoutInflater)
                                                           param.thisObject)
-                                                          .getContext());
+                                                          .getContext();
+
+                                          injectControls(
+                                                  facetBar,
+                                                  context);
 
                                       } catch (Throwable t) {
 
@@ -185,9 +179,11 @@ jobs:
 
                   try {
 
+                      LayoutInflater inflater =
+                              (LayoutInflater) inflaterObject;
+
                       Context context =
-                              ((LayoutInflater) inflaterObject)
-                                      .getContext();
+                              inflater.getContext();
 
                       if (context == null) {
                           return false;
@@ -232,33 +228,32 @@ jobs:
 
                   try {
 
-                      Object oldTag =
-                              facetBar.getTag();
-
-                      if ("CarAssistant-V10-AADisplay"
-                              .equals(oldTag)) {
+                      if (facetBar == null
+                              || context == null) {
                           return;
                       }
 
-                      facetBar.setTag(
-                              "CarAssistant-V10-AADisplay");
+                      Object tag =
+                              facetBar.getTag();
+
+                      if (CONTROL_TAG.equals(tag)) {
+                          return;
+                      }
 
                       /*
-                       * Horizontal on portrait/bottom bars,
-                       * vertical on classic rail bars.
-                       *
-                       * We deliberately keep this simple in A2.2.
-                       * The actual AA facet-bar slot determines placement.
+                       * Mark this exact AA ViewGroup so repeated
+                       * LayoutInflater calls do not inject twice.
                        */
+                      facetBar.setTag(CONTROL_TAG);
 
                       LinearLayout controlBar =
                               new LinearLayout(context);
 
-                      controlBar.setGravity(
-                              Gravity.CENTER);
-
                       controlBar.setOrientation(
                               LinearLayout.VERTICAL);
+
+                      controlBar.setGravity(
+                              Gravity.CENTER);
 
                       controlBar.setPadding(
                               2,
@@ -273,28 +268,28 @@ jobs:
                               controlBar,
                               "⌂",
                               "home",
-                              26);
+                              26f);
 
                       addButton(
                               controlBar,
                               "▣",
                               "recents",
-                              22);
+                              22f);
 
                       addButton(
                               controlBar,
                               "‹",
                               "back",
-                              30);
+                              30f);
 
                       addButton(
                               controlBar,
                               "Apps",
                               "apps",
-                              11);
+                              11f);
 
-                      ViewGroup.LayoutParams params =
-                              new ViewGroup.LayoutParams(
+                      LinearLayout.LayoutParams params =
+                              new LinearLayout.LayoutParams(
                                       ViewGroup.LayoutParams.WRAP_CONTENT,
                                       ViewGroup.LayoutParams.MATCH_PARENT);
 
@@ -410,7 +405,7 @@ jobs:
           echo "AADisplay-style GearheadControlBar written."
 
       # ============================================================
-      # VERIFY BRIDGE
+      # VERIFY XPOSED BRIDGE
       # ============================================================
 
       - name: Verify Xposed bridge
@@ -445,7 +440,7 @@ jobs:
           echo "Xposed bridge verified."
 
       # ============================================================
-      # VERIFY CONTROL BAR
+      # VERIFY AADISPLAY FACET HOOK
       # ============================================================
 
       - name: Verify AADisplay-style facet hook
@@ -480,11 +475,12 @@ jobs:
           grep -q '"recents"' "$BAR"
           grep -q '"apps"' "$BAR"
 
-          if grep -q \
-              'WindowManagerGlobal' \
+          # Only reject actual API usage, not comments or strings.
+          if grep -Eq \
+              'WindowManagerGlobal[[:space:]]*\.' \
               "$BAR"; then
 
-            echo "ERROR: WindowManagerGlobal overlay still exists."
+            echo "ERROR: WindowManagerGlobal API usage detected."
 
             exit 1
           fi
@@ -531,7 +527,38 @@ jobs:
           echo "V10ControlReceiver verified."
 
       # ============================================================
-      # ANDROID 12 CHECK
+      # VERIFY MANIFEST
+      # ============================================================
+
+      - name: Verify manifest
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          MANIFEST="v10-source/app/src/main/AndroidManifest.xml"
+
+          test -f "$MANIFEST"
+
+          grep -q \
+            'com.carassistant.v10.V10ControlReceiver' \
+            "$MANIFEST"
+
+          grep -Eq \
+            'android:exported="true"' \
+            "$MANIFEST"
+
+          grep -q \
+            'com.carassistant.v10.V10CarActivity' \
+            "$MANIFEST"
+
+          grep -q \
+            'com.carassistant.v10.AACastCarService' \
+            "$MANIFEST"
+
+          echo "Manifest verified."
+
+      # ============================================================
+      # VERIFY ANDROID 12 COMPATIBILITY
       # ============================================================
 
       - name: Verify Android 12 compatibility
@@ -552,6 +579,60 @@ jobs:
           echo "Android 12 compatibility verified."
 
       # ============================================================
+      # VERIFY PROJECTION ENGINE
+      # ============================================================
+
+      - name: Verify projection engine
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          PROJECTION="v10-source/app/src/main/java/com/hieptran/aacast/doudou/V10ProjectionSession.java"
+
+          test -f "$PROJECTION"
+
+          grep -q \
+            'createVirtualDisplay' \
+            "$PROJECTION"
+
+          grep -q \
+            'setDefaultBufferSize' \
+            "$PROJECTION"
+
+          grep -q \
+            'android.view.Surface' \
+            "$PROJECTION"
+
+          echo "Projection engine verified."
+
+      # ============================================================
+      # VERIFY SWIPE INPUT
+      # ============================================================
+
+      - name: Verify swipe input
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          INPUT="v10-source/app/src/main/java/com/hieptran/aacast/doudou/V10InputController.java"
+
+          test -f "$INPUT"
+
+          grep -q \
+            'ACTION_MOVE' \
+            "$INPUT"
+
+          grep -q \
+            'ACTION_UP' \
+            "$INPUT"
+
+          grep -q \
+            'session.swipe' \
+            "$INPUT"
+
+          echo "Swipe input verified."
+
+      # ============================================================
       # CLEAN BUILD
       # ============================================================
 
@@ -566,6 +647,10 @@ jobs:
             --no-daemon \
             --stacktrace
 
+      # ============================================================
+      # BUILD
+      # ============================================================
+
       - name: Build Debug APK
         shell: bash
         run: |
@@ -578,7 +663,7 @@ jobs:
             --stacktrace
 
       # ============================================================
-      # APK VERIFY
+      # VERIFY APK
       # ============================================================
 
       - name: Verify APK
@@ -597,7 +682,7 @@ jobs:
           sha256sum "$APK"
 
       # ============================================================
-      # ARTIFACT
+      # UPLOAD
       # ============================================================
 
       - name: Upload APK
