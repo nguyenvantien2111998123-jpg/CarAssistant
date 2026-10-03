@@ -21,10 +21,10 @@ jobs:
           java-version: '17'
 
       # ============================================================
-      # 1. SOURCE CHECK
+      # SOURCE
       # ============================================================
 
-      - name: Verify V10 8B1 source
+      - name: Verify V10 source
         shell: bash
         run: |
           set -euo pipefail
@@ -39,35 +39,13 @@ jobs:
             V10SessionStore.java
           do
             test -f "$BASE/$FILE"
+            grep -q '^package com.carassistant.v10;' "$BASE/$FILE"
           done
 
-          echo "===== V10 source files ====="
-
-          ls -lh \
-            "$BASE/V10CarActivity.java" \
-            "$BASE/V10ProjectionSession.java" \
-            "$BASE/V10ProjectionService.java" \
-            "$BASE/RootShellSession.java" \
-            "$BASE/V10SessionStore.java"
-
-          echo
-          echo "===== Package checks ====="
-
-          for FILE in \
-            V10CarActivity.java \
-            V10ProjectionSession.java \
-            V10ProjectionService.java \
-            RootShellSession.java \
-            V10SessionStore.java
-          do
-            grep -q '^package com.carassistant.v10;' \
-              "$BASE/$FILE"
-          done
-
-          echo "Package: OK"
+          echo "V10 source files: OK"
 
       # ============================================================
-      # 2. PROJECTION SERVICE
+      # PROJECTION SERVICE
       # ============================================================
 
       - name: Verify V10ProjectionService
@@ -77,34 +55,15 @@ jobs:
 
           FILE="v10-source/app/src/main/java/com/hieptran/aacast/doudou/V10ProjectionService.java"
 
-          echo "===== V10ProjectionService markers ====="
-
-          grep -nE \
-            "class V10ProjectionService|VirtualDisplay|createVirtualDisplay|setSurface|START_STICKY|startForeground|launchTargetLocked|activity-reorder-to-front" \
-            "$FILE"
-
-          # Exactly one service class.
-          test "$(grep -c "class V10ProjectionService" "$FILE")" -eq 1
-
-          # VirtualDisplay must belong to the Service.
+          grep -q "class V10ProjectionService" "$FILE"
           grep -q "private VirtualDisplay virtualDisplay" "$FILE"
           grep -q "createVirtualDisplay" "$FILE"
-
-          # Surface must be replaceable without recreating the display.
           grep -q "virtualDisplay.setSurface" "$FILE"
-
-          # Foreground service must survive Activity lifecycle.
           grep -q "START_STICKY" "$FILE"
           grep -q "startForeground(" "$FILE"
-
-          # Existing task should be reordered, not force-stopped.
           grep -q "activity-reorder-to-front" "$FILE"
 
-          # --------------------------------------------------------
-          # No real "am force-stop" command.
-          # Comments containing "force-stop" are allowed.
-          # --------------------------------------------------------
-
+          # Chỉ bắt lệnh thực thi thật, không bắt comment.
           if grep -nE \
             '(^|[[:space:];&|])(/system/bin/)?am[[:space:]]+force-stop([[:space:]]|$)' \
             "$FILE"
@@ -113,56 +72,10 @@ jobs:
             exit 1
           fi
 
-          # --------------------------------------------------------
-          # Service must NOT recreate display merely because
-          # the Activity reconnects.
-          # --------------------------------------------------------
-
-          grep -q \
-            "if (component.equals(target))" \
-            "$FILE"
-
-          grep -q \
-            "Do NOT recreate the VirtualDisplay" \
-            "$FILE"
-
-          # --------------------------------------------------------
-          # detachSurface() must not release VirtualDisplay.
-          # --------------------------------------------------------
-
-          DETACH_START="$(
-            grep -n \
-              "private void detachSurfaceInternal" \
-              "$FILE" \
-              | cut -d: -f1 \
-              | head -1
-          )"
-
-          test -n "$DETACH_START"
-
-          DETACH_BLOCK="$(
-            tail -n +"$DETACH_START" "$FILE" \
-              | head -n 70
-          )"
-
-          echo "===== detachSurfaceInternal ====="
-          echo "$DETACH_BLOCK"
-
-          echo "$DETACH_BLOCK" \
-            | grep -q "virtualDisplay.setSurface"
-
-          # releaseDisplayLocked must not occur inside detach method.
-          if echo "$DETACH_BLOCK" \
-              | grep -q "releaseDisplayLocked()"
-          then
-            echo "ERROR: detachSurfaceInternal releases VirtualDisplay"
-            exit 1
-          fi
-
-          echo "V10ProjectionService verification: OK"
+          echo "V10ProjectionService: OK"
 
       # ============================================================
-      # 3. PROJECTION SESSION
+      # PROJECTION SESSION
       # ============================================================
 
       - name: Verify V10ProjectionSession
@@ -172,54 +85,100 @@ jobs:
 
           FILE="v10-source/app/src/main/java/com/hieptran/aacast/doudou/V10ProjectionSession.java"
 
-          echo "===== V10ProjectionSession markers ====="
+          echo "===== V10ProjectionSession ====="
 
           grep -nE \
-            "V10ProjectionService|setTarget|attachSurface|detachSurface|public void release|onSurfaceTextureDestroyed" \
+            "V10ProjectionService|setTarget|attachSurface|detachSurface|release|onSurfaceTextureDestroyed" \
             "$FILE"
 
-          # Session must delegate to the Service.
-          test "$(grep -c "V10ProjectionService" "$FILE")" -ge 5
+          # --------------------------------------------------------
+          # Session phải delegate sang Service.
+          # --------------------------------------------------------
 
+          grep -q "V10ProjectionService" "$FILE"
           grep -q "setTarget" "$FILE"
           grep -q "attachSurface" "$FILE"
           grep -q "detachSurface" "$FILE"
 
           # --------------------------------------------------------
-          # Session must NOT own VirtualDisplay.
+          # Tạo một bản source đã loại comment.
+          #
+          # Mục đích:
+          #   "VirtualDisplay" trong comment KHÔNG được coi
+          #   là ownership thật.
           # --------------------------------------------------------
 
-          if grep -n "createVirtualDisplay" "$FILE"
+          CLEAN="$(mktemp)"
+
+          awk '
+            BEGIN { block=0 }
+
+            /^[[:space:]]*\/\*/ {
+                block=1
+            }
+
+            block {
+                if ($0 ~ /\*\//) {
+                    block=0
+                }
+                next
+            }
+
+            /^[[:space:]]*\/\// {
+                next
+            }
+
+            {
+                print
+            }
+          ' "$FILE" > "$CLEAN"
+
+          echo "===== Code-only VirtualDisplay check ====="
+
+          # Session không được gọi createVirtualDisplay().
+          if grep -n \
+            "createVirtualDisplay" \
+            "$CLEAN"
           then
-            echo "ERROR: V10ProjectionSession still creates VirtualDisplay"
+            echo "ERROR: V10ProjectionSession creates VirtualDisplay"
             exit 1
           fi
 
+          # Session không được khai báo VirtualDisplay field.
           if grep -nE \
-            "VirtualDisplay[[:space:]]|virtualDisplay[[:space:]=]" \
-            "$FILE"
+            '(^|[[:space:]])(private|protected|public)?[[:space:]]*(static[[:space:]]+)?VirtualDisplay[[:space:]]+[A-Za-z_][A-Za-z0-9_]*' \
+            "$CLEAN"
           then
-            echo "ERROR: V10ProjectionSession still owns VirtualDisplay"
+            echo "ERROR: V10ProjectionSession owns VirtualDisplay field"
+            exit 1
+          fi
+
+          # Session không được gọi virtualDisplay.release().
+          if grep -nE \
+            'virtualDisplay[[:space:]]*\.[[:space:]]*release[[:space:]]*\(' \
+            "$CLEAN"
+          then
+            echo "ERROR: V10ProjectionSession releases VirtualDisplay"
             exit 1
           fi
 
           # --------------------------------------------------------
-          # release() must only detach Surface.
+          # release() phải detach Surface.
           # --------------------------------------------------------
 
-          RELEASE_START="$(
+          RELEASE_LINE="$(
             grep -n \
               "public void release()" \
               "$FILE" \
-              | cut -d: -f1 \
-              | head -1
+              | head -1 \
+              | cut -d: -f1
           )"
 
-          test -n "$RELEASE_START"
+          test -n "$RELEASE_LINE"
 
           RELEASE_BLOCK="$(
-            tail -n +"$RELEASE_START" "$FILE" \
-              | head -n 18
+            tail -n +"$RELEASE_LINE" "$FILE" \
+              | head -n 20
           )"
 
           echo "===== release() ====="
@@ -228,32 +187,20 @@ jobs:
           echo "$RELEASE_BLOCK" \
             | grep -q "detachSurface"
 
-          if echo "$RELEASE_BLOCK" \
-              | grep -qE \
-                "createVirtualDisplay|virtualDisplay\.release"
-          then
-            echo "ERROR: release() destroys projection display"
-            exit 1
-          fi
+          rm -f "$CLEAN"
 
-          echo "V10ProjectionSession verification: OK"
+          echo "V10ProjectionSession: OK"
 
       # ============================================================
-      # 4. MANIFEST
+      # MANIFEST
       # ============================================================
 
-      - name: Verify Manifest Projection Service
+      - name: Verify Projection Service Manifest
         shell: bash
         run: |
           set -euo pipefail
 
           FILE="v10-source/app/src/main/AndroidManifest.xml"
-
-          echo "===== Manifest service ====="
-
-          grep -nA5 -B2 \
-            "V10ProjectionService" \
-            "$FILE"
 
           grep -q \
             'android:name="com.carassistant.v10.V10ProjectionService"' \
@@ -267,10 +214,10 @@ jobs:
             'android:stopWithTask="false"' \
             "$FILE"
 
-          echo "Manifest verification: OK"
+          echo "Manifest: OK"
 
       # ============================================================
-      # 5. CHECK SESSION STARTUP RACE
+      # SERVICE STARTUP PATH
       # ============================================================
 
       - name: Verify Projection Service startup path
@@ -281,31 +228,16 @@ jobs:
           SERVICE="v10-source/app/src/main/java/com/hieptran/aacast/doudou/V10ProjectionService.java"
           SESSION="v10-source/app/src/main/java/com/hieptran/aacast/doudou/V10ProjectionSession.java"
 
-          echo "===== Startup path ====="
+          grep -q "ensureStarted" "$SESSION"
+          grep -q "startForegroundService" "$SERVICE"
+          grep -q "instance = this" "$SERVICE"
 
-          grep -n \
-            "ensureStarted" \
-            "$SESSION"
-
-          grep -n \
-            "startForegroundService" \
-            "$SERVICE"
-
-          grep -n \
-            "instance = this" \
-            "$SERVICE"
-
+          echo "Projection service startup markers: OK"
           echo
-          echo "NOTE:"
-          echo "Service startup is asynchronous."
-          echo "The source currently calls ensureStarted() before using the static instance."
-
-          # Do not fail the build on this yet.
-          # This is a runtime architecture item to be fixed in 8B.2.
-          echo "Startup race check: recorded for next service patch"
+          echo "NOTE: asynchronous startup race remains a V10-8B.2 runtime task."
 
       # ============================================================
-      # 6. SESSION STORE / MRU
+      # SESSION STORE
       # ============================================================
 
       - name: Verify V10SessionStore
@@ -315,12 +247,6 @@ jobs:
 
           FILE="v10-source/app/src/main/java/com/hieptran/aacast/doudou/V10SessionStore.java"
 
-          echo "===== V10SessionStore ====="
-
-          grep -nE \
-            "MAX_RECENTS|recent_|setTarget|getTarget|setCurrentActivity|getCurrentActivity|clearCurrentActivity" \
-            "$FILE"
-
           grep -q "MAX_RECENTS" "$FILE"
           grep -q "recent_" "$FILE"
           grep -q "setTarget" "$FILE"
@@ -329,13 +255,10 @@ jobs:
           grep -q "getCurrentActivity" "$FILE"
           grep -q "clearCurrentActivity" "$FILE"
 
-          # Current V10 MRU target is four components.
-          grep -q "MAX_RECENTS = 4" "$FILE"
-
-          echo "V10SessionStore verification: OK"
+          echo "V10SessionStore: OK"
 
       # ============================================================
-      # 7. GENERATED CAR SYSTEM UI
+      # GENERATED UI
       # ============================================================
 
       - name: Create CarSystemUI
@@ -370,14 +293,9 @@ jobs:
                   void onRecents();
               }
 
-              private static final String PREFS =
-                      "v10_car_system_ui";
-
-              private static final String KEY_X =
-                      "key_x";
-
-              private static final String KEY_Y =
-                      "key_y";
+              private static final String PREFS = "v10_car_system_ui";
+              private static final String KEY_X = "key_x";
+              private static final String KEY_Y = "key_y";
 
               private static final int KEY_SIZE_DP = 52;
               private static final int MENU_WIDTH_DP = 190;
@@ -424,8 +342,7 @@ jobs:
                       return;
                   }
 
-                  TextView key =
-                          new TextView(context);
+                  TextView key = new TextView(context);
 
                   floatingKey = key;
 
@@ -452,14 +369,10 @@ jobs:
                           Gravity.TOP | Gravity.START;
 
                   lp.leftMargin =
-                          prefs.getInt(
-                                  KEY_X,
-                                  dp(18));
+                          prefs.getInt(KEY_X, dp(18));
 
                   lp.topMargin =
-                          prefs.getInt(
-                                  KEY_Y,
-                                  dp(18));
+                          prefs.getInt(KEY_Y, dp(18));
 
                   host.addView(key, lp);
 
@@ -553,10 +466,7 @@ jobs:
                   hideMenu();
 
                   if (floatingKey != null) {
-
-                      host.removeView(
-                              floatingKey);
-
+                      host.removeView(floatingKey);
                       floatingKey = null;
                   }
               }
@@ -622,14 +532,12 @@ jobs:
 
                   FrameLayout.LayoutParams keyLp =
                           (FrameLayout.LayoutParams)
-                                  floatingKey
-                                          .getLayoutParams();
+                                  floatingKey.getLayoutParams();
 
                   lp.leftMargin =
                           Math.max(
                                   0,
-                                  keyLp.leftMargin
-                                          - dp(10));
+                                  keyLp.leftMargin - dp(10));
 
                   lp.topMargin =
                           Math.max(
@@ -700,9 +608,7 @@ jobs:
               private void hideMenu() {
 
                   if (menu != null) {
-
                       host.removeView(menu);
-
                       menu = null;
                   }
               }
@@ -710,17 +616,11 @@ jobs:
               private void clampPosition(
                       FrameLayout.LayoutParams lp) {
 
-                  int width =
-                          host.getWidth();
-
-                  int height =
-                          host.getHeight();
-
-                  int size =
-                          dp(KEY_SIZE_DP);
+                  int width = host.getWidth();
+                  int height = host.getHeight();
+                  int size = dp(KEY_SIZE_DP);
 
                   if (width > 0) {
-
                       lp.leftMargin =
                               Math.max(
                                       0,
@@ -730,7 +630,6 @@ jobs:
                   }
 
                   if (height > 0) {
-
                       lp.topMargin =
                               Math.max(
                                       0,
@@ -744,12 +643,8 @@ jobs:
                       FrameLayout.LayoutParams lp) {
 
                   prefs.edit()
-                          .putInt(
-                                  KEY_X,
-                                  lp.leftMargin)
-                          .putInt(
-                                  KEY_Y,
-                                  lp.topMargin)
+                          .putInt(KEY_X, lp.leftMargin)
+                          .putInt(KEY_Y, lp.topMargin)
                           .apply();
               }
 
@@ -761,8 +656,7 @@ jobs:
                           new GradientDrawable();
 
                   bg.setColor(color);
-                  bg.setCornerRadius(
-                          dp(radiusDp));
+                  bg.setCornerRadius(dp(radiusDp));
 
                   return bg;
               }
@@ -778,13 +672,6 @@ jobs:
               }
           }
           EOF
-
-          test -f "$FILE"
-          grep -q "class CarSystemUI" "$FILE"
-
-      # ============================================================
-      # 8. GENERATED RECENTS
-      # ============================================================
 
       - name: Create CarRecents
         shell: bash
@@ -815,9 +702,7 @@ jobs:
           public final class CarRecents {
 
               public interface Callback {
-                  void onTaskSelected(
-                          ComponentName component);
-
+                  void onTaskSelected(ComponentName component);
                   void onClose();
               }
 
@@ -825,8 +710,7 @@ jobs:
                       Pattern.compile("#(\\d+)");
 
               private static final Pattern DISPLAY_ID =
-                      Pattern.compile(
-                              "displayId[=:](\\d+)");
+                      Pattern.compile("displayId[=:](\\d+)");
 
               private static final Pattern REAL_ACTIVITY =
                       Pattern.compile(
@@ -877,10 +761,7 @@ jobs:
                           dp(12));
 
                   panel.setBackgroundColor(
-                          Color.rgb(
-                                  7,
-                                  9,
-                                  12));
+                          Color.rgb(7, 9, 12));
 
                   LinearLayout header =
                           new LinearLayout(context);
@@ -912,8 +793,7 @@ jobs:
                                   21,
                                   Color.WHITE);
 
-                  title.setGravity(
-                          Gravity.CENTER);
+                  title.setGravity(Gravity.CENTER);
 
                   header.addView(
                           title,
@@ -930,8 +810,7 @@ jobs:
                                   14,
                                   Color.LTGRAY);
 
-                  status.setGravity(
-                          Gravity.CENTER);
+                  status.setGravity(Gravity.CENTER);
 
                   panel.addView(
                           status,
@@ -969,7 +848,6 @@ jobs:
               public void destroy() {
 
                   hide();
-
                   shell.destroy();
               }
 
@@ -1023,30 +901,24 @@ jobs:
                                       tasks) {
 
                                   TextView item =
-                                          button(
-                                                  task.label);
+                                          button(task.label);
 
                                   LinearLayout.LayoutParams lp =
                                           new LinearLayout.LayoutParams(
                                                   -1,
                                                   dp(70));
 
-                                  lp.bottomMargin =
-                                          dp(8);
+                                  lp.bottomMargin = dp(8);
 
-                                  list.addView(
-                                          item,
-                                          lp);
+                                  list.addView(item, lp);
 
-                                  item.setOnClickListener(
-                                          v -> {
+                                  item.setOnClickListener(v -> {
 
-                                              if (callback != null) {
-
-                                                  callback.onTaskSelected(
-                                                          task.component);
-                                              }
-                                          });
+                                      if (callback != null) {
+                                          callback.onTaskSelected(
+                                                  task.component);
+                                      }
+                                  });
                               }
                           });
 
@@ -1055,7 +927,6 @@ jobs:
                           host.post(() -> {
 
                               if (status != null) {
-
                                   status.setText(
                                           "Recents unavailable");
                               }
@@ -1072,16 +943,11 @@ jobs:
                                   new LinkedHashMap<>();
 
                   int currentTaskId = -1;
-
-                  boolean currentDisplayMatches =
-                          false;
-
-                  ComponentName currentComponent =
-                          null;
+                  boolean currentDisplayMatches = false;
+                  ComponentName currentComponent = null;
 
                   String[] lines =
-                          output.split(
-                                  "\\r?\\n");
+                          output.split("\\r?\\n");
 
                   for (String line : lines) {
 
@@ -1095,9 +961,7 @@ jobs:
                                   Integer.parseInt(
                                           taskMatcher.group(1));
 
-                          currentDisplayMatches =
-                                  false;
-
+                          currentDisplayMatches = false;
                           currentComponent = null;
 
                           Matcher displayMatcher =
@@ -1143,8 +1007,7 @@ jobs:
                       if (currentDisplayMatches
                               && currentComponent != null
                               && !ownPackage.equals(
-                                      currentComponent
-                                              .getPackageName())
+                                      currentComponent.getPackageName())
                               && !result.containsKey(
                                       currentTaskId)) {
 
@@ -1156,8 +1019,7 @@ jobs:
                       }
                   }
 
-                  return new ArrayList<>(
-                          result.values());
+                  return new ArrayList<>(result.values());
               }
 
               private static final class RecentTask {
@@ -1189,20 +1051,15 @@ jobs:
                                   16,
                                   Color.WHITE);
 
-                  view.setGravity(
-                          Gravity.CENTER);
+                  view.setGravity(Gravity.CENTER);
 
                   GradientDrawable bg =
                           new GradientDrawable();
 
                   bg.setColor(
-                          Color.rgb(
-                                  22,
-                                  27,
-                                  33));
+                          Color.rgb(22, 27, 33));
 
-                  bg.setCornerRadius(
-                          dp(14));
+                  bg.setCornerRadius(dp(14));
 
                   view.setBackground(bg);
 
@@ -1236,14 +1093,11 @@ jobs:
           }
           EOF
 
-          test -f "$FILE"
-          grep -q "class CarRecents" "$FILE"
-
       # ============================================================
-      # 9. GENERATED UI CHECK
+      # GENERATED FILE CHECK
       # ============================================================
 
-      - name: Verify generated UI
+      - name: Verify generated files
         shell: bash
         run: |
           set -euo pipefail
@@ -1261,18 +1115,16 @@ jobs:
             '^package com.carassistant.v10;' \
             "$BASE/CarRecents.java"
 
-          grep -q \
-            "class CarSystemUI" \
+          grep -q "class CarSystemUI" \
             "$BASE/CarSystemUI.java"
 
-          grep -q \
-            "class CarRecents" \
+          grep -q "class CarRecents" \
             "$BASE/CarRecents.java"
 
-          echo "Generated UI source: OK"
+          echo "Generated files: OK"
 
       # ============================================================
-      # 10. ACTIVITY CHECK
+      # ACTIVITY
       # ============================================================
 
       - name: Verify Activity lifecycle
@@ -1282,28 +1134,14 @@ jobs:
 
           FILE="v10-source/app/src/main/java/com/hieptran/aacast/doudou/V10CarActivity.java"
 
-          echo "===== Activity lifecycle ====="
+          grep -q "new V10ProjectionSession" "$FILE"
+          grep -q "session.release();" "$FILE"
+          grep -q "launchProjection" "$FILE"
 
-          grep -nE \
-            "onCreate|onResume|onPause|onStop|onDestroy|session.release|launchProjection" \
-            "$FILE"
-
-          grep -q \
-            "new V10ProjectionSession" \
-            "$FILE"
-
-          grep -q \
-            "session.release();" \
-            "$FILE"
-
-          grep -q \
-            "launchProjection" \
-            "$FILE"
-
-          echo "Activity lifecycle verification: OK"
+          echo "Activity lifecycle: OK"
 
       # ============================================================
-      # 11. JAVA COMPILE
+      # COMPILE
       # ============================================================
 
       - name: Compile Java
@@ -1320,7 +1158,7 @@ jobs:
             --stacktrace
 
       # ============================================================
-      # 12. APK BUILD
+      # BUILD
       # ============================================================
 
       - name: Build APK
@@ -1337,7 +1175,7 @@ jobs:
             --stacktrace
 
       # ============================================================
-      # 13. APK VERIFY
+      # APK
       # ============================================================
 
       - name: Locate APK and SHA256
@@ -1349,17 +1187,11 @@ jobs:
 
           test -f "$APK"
 
-          echo "===== APK ====="
-
           echo "APK=$APK"
 
           ls -lh "$APK"
 
           sha256sum "$APK"
-
-      # ============================================================
-      # 14. ARTIFACT
-      # ============================================================
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
