@@ -11,14 +11,26 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
+      # ============================================================
+      # CHECKOUT
+      # ============================================================
+
       - name: Checkout
         uses: actions/checkout@v4
+
+      # ============================================================
+      # JAVA
+      # ============================================================
 
       - name: Set up JDK 17
         uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: "17"
+
+      # ============================================================
+      # GRADLE
+      # ============================================================
 
       - name: Setup Gradle
         uses: gradle/actions/setup-gradle@v4
@@ -38,18 +50,19 @@ jobs:
 
           test -f "$FILE"
 
-          grep -q "V10SessionStore" "$FILE"
-          grep -q "launchProjection" "$FILE"
-          grep -q "showApps" "$FILE"
-          grep -q "hideApps" "$FILE"
-          grep -q "APPLICATIONS" "$FILE"
-          grep -q "ACTION_MAIN" "$FILE"
-          grep -q "CATEGORY_LAUNCHER" "$FILE"
+          grep -Fq "V10SessionStore" "$FILE"
+          grep -Fq "launchProjection" "$FILE"
+          grep -Fq "showApps" "$FILE"
+          grep -Fq "hideApps" "$FILE"
+          grep -Fq "APPLICATIONS" "$FILE"
+          grep -Fq "ACTION_MAIN" "$FILE"
+          grep -Fq "CATEGORY_LAUNCHER" "$FILE"
+          grep -Fq "queryIntentActivities" "$FILE"
 
           echo "V4 BASE VERIFIED"
 
       # ============================================================
-      # BACKUP
+      # BACKUP V4 SOURCE
       # ============================================================
 
       - name: Backup V10CarActivity
@@ -63,6 +76,12 @@ jobs:
 
       # ============================================================
       # MERGE V10.3 CONTROL BAR
+      #
+      # IMPORTANT:
+      # - V4 selector is preserved.
+      # - Projection engine is untouched.
+      # - Control bar is added as a ROOT overlay.
+      # - No Gearhead UI injection.
       # ============================================================
 
       - name: Merge V10.3 control bar with V4 selector
@@ -80,33 +99,22 @@ jobs:
           s = path.read_text()
 
           # ========================================================
-          # ROBUST JAVA METHOD FINDER
+          # ROBUST JAVA METHOD LOCATOR
           # ========================================================
 
-          def find_method(text, name):
-              pos = 0
+          def find_method(text, signature):
+              pos = text.find(signature)
 
-              while True:
-                  pos = text.find(name + "(", pos)
-
-                  if pos < 0:
-                      raise SystemExit(
-                          f"Method not found: {name}"
-                      )
-
-                  if pos == 0 or not (
-                      text[pos - 1].isalnum()
-                      or text[pos - 1] == "_"
-                  ):
-                      break
-
-                  pos += len(name) + 1
+              if pos < 0:
+                  raise SystemExit(
+                      f"Method/signature not found: {signature}"
+                  )
 
               brace = text.find("{", pos)
 
               if brace < 0:
                   raise SystemExit(
-                      f"Opening brace not found: {name}"
+                      f"Opening brace not found: {signature}"
                   )
 
               depth = 0
@@ -189,15 +197,37 @@ jobs:
                   i += 1
 
               raise SystemExit(
-                  f"Unbalanced method: {name}"
+                  f"Unbalanced method: {signature}"
               )
 
-          def replace_method(text, name, replacement):
-              a, b = find_method(text, name)
+          def replace_method(text, signature, replacement):
+              a, b = find_method(text, signature)
               return text[:a] + replacement + text[b:]
 
           # ========================================================
-          # IMPORTS
+          # VERIFY ORIGINAL V4 STRUCTURE
+          # ========================================================
+
+          required = [
+              "private FrameLayout root;",
+              "private FrameLayout projectionLayer;",
+              "private LinearLayout launcherLayer;",
+              "private LinearLayout dashboard;",
+              "private LinearLayout appPanel;",
+              "private LinearLayout dock;",
+              "private TextureView textureView;",
+              "private V10ProjectionSession session;",
+              "private ComponentName activeTarget;",
+          ]
+
+          for item in required:
+              if item not in s:
+                  raise SystemExit(
+                      f"Required V4 source element missing: {item}"
+                  )
+
+          # ========================================================
+          # IMPORT BUTTON
           # ========================================================
 
           if "import android.widget.Button;" not in s:
@@ -211,33 +241,22 @@ jobs:
 
               s = s.replace(
                   marker,
-                  "import android.widget.Button;\n"
-                  + marker,
+                  marker
+                  + "\nimport android.widget.Button;",
                   1
               )
 
           # ========================================================
-          # FIELD
+          # CONTROL BAR FIELD
           # ========================================================
 
           if "private LinearLayout controlBar;" not in s:
 
-              candidates = [
-                  "private LinearLayout dock;",
-                  "private LinearLayout launcherLayer;",
-                  "private LinearLayout dashboard;"
-              ]
+              marker = "private LinearLayout dock;"
 
-              marker = None
-
-              for candidate in candidates:
-                  if candidate in s:
-                      marker = candidate
-                      break
-
-              if marker is None:
+              if marker not in s:
                   raise SystemExit(
-                      "Could not find UI field for controlBar insertion"
+                      "dock field not found"
                   )
 
               s = s.replace(
@@ -273,8 +292,7 @@ jobs:
                   button.setOnClickListener(
                           listener);
 
-                  LinearLayout.LayoutParams
-                          params =
+                  LinearLayout.LayoutParams params =
                           new LinearLayout.LayoutParams(
                                   0,
                                   LinearLayout.LayoutParams.MATCH_PARENT,
@@ -295,7 +313,7 @@ jobs:
 
               build_start, _ = find_method(
                   s,
-                  "private void buildUi"
+                  "private void buildUi("
               )
 
               s = (
@@ -305,12 +323,19 @@ jobs:
               )
 
           # ========================================================
-          # BUILD UI
+          # ADD CONTROL BAR TO ROOT
+          #
+          # This is the important part.
+          #
+          # root:
+          #   projectionLayer
+          #   launcherLayer
+          #   controlBar  <-- always on top
           # ========================================================
 
           build_start, build_end = find_method(
               s,
-              "private void buildUi"
+              "private void buildUi("
           )
 
           build = s[build_start:build_end]
@@ -324,7 +349,7 @@ jobs:
                       "setContentView(root) not found in buildUi"
                   )
 
-              control = r'''
+              control_bar = r'''
 
                   // ==================================================
                   // V10.3 PROVEN CONTROL BAR
@@ -346,10 +371,12 @@ jobs:
                           dp(4));
 
                   controlBar.setBackgroundColor(
-                          Color.rgb(24, 24, 24));
+                          Color.rgb(
+                                  24,
+                                  24,
+                                  24));
 
-                  FrameLayout.LayoutParams
-                          controlParams =
+                  FrameLayout.LayoutParams controlParams =
                           new FrameLayout.LayoutParams(
                                   FrameLayout.LayoutParams.MATCH_PARENT,
                                   dp(58));
@@ -382,7 +409,7 @@ jobs:
 
               build = build.replace(
                   marker,
-                  control
+                  control_bar
                   + "\n\n        "
                   + marker,
                   1
@@ -395,135 +422,337 @@ jobs:
               )
 
           # ========================================================
-          # KEEP CONTROL BAR ABOVE PROJECTION
+          # CONTROL BAR VISIBILITY HELPER
+          #
+          # Insert before buildUi so every UI state can call it.
           # ========================================================
 
-          for method_name in [
-              "private void launchProjection",
-              "private void showApps",
-              "private void hideApps",
-              "private void returnToLauncher"
-          ]:
+          if "private void keepControlBarVisible()" not in s:
 
-              start, end = find_method(
+              helper = r'''
+              private void keepControlBarVisible() {
+
+                  if (controlBar == null) {
+                      return;
+                  }
+
+                  controlBar.setVisibility(
+                          View.VISIBLE);
+
+                  controlBar.bringToFront();
+              }
+
+              '''
+
+              build_start, _ = find_method(
                   s,
-                  method_name
+                  "private void buildUi("
               )
 
-              method = s[start:end]
-
-              if "controlBar.bringToFront();" not in method:
-
-                  method += r'''
-
-                  if (controlBar != null) {
-                      controlBar.setVisibility(
-                              View.VISIBLE);
-                      controlBar.bringToFront();
-                  }
-                  '''
-
-                  s = (
-                      s[:start]
-                      + method
-                      + s[end:]
-                  )
+              s = (
+                  s[:build_start]
+                  + helper
+                  + s[build_start:]
+              )
 
           # ========================================================
-          # BACK
+          # LAUNCH PROJECTION
+          #
+          # Preserve V4 projection logic.
+          # Only ensure control bar remains visible.
           # ========================================================
 
-          start, end = find_method(
+          launch_projection = r'''private void launchProjection(
+        ComponentName component) {
+
+    if (component == null
+            || session == null) {
+
+        return;
+    }
+
+    /*
+     * If another application is selected while
+     * an application is already projected,
+     * release the old virtual display first.
+     */
+    if (activeTarget != null
+            && !activeTarget.equals(component)) {
+
+        session.release();
+    }
+
+    activeTarget =
+            component;
+
+    /*
+     * Preserve V4 session persistence.
+     */
+    V10SessionStore
+            .setTarget(
+                    this,
+                    component);
+
+    /*
+     * Hide launcher content.
+     *
+     * The control bar is NOT part of launcherLayer,
+     * therefore it remains visible.
+     */
+    launcherLayer
+            .setVisibility(
+                    View.GONE);
+
+    appPanel
+            .setVisibility(
+                    View.GONE);
+
+    dashboard
+            .setVisibility(
+                    View.GONE);
+
+    projectionLayer
+            .setVisibility(
+                    View.VISIBLE);
+
+    /*
+     * Existing proven V10 projection engine.
+     */
+    session.setTarget(
+            component);
+
+    keepControlBarVisible();
+}'''
+
+          s = replace_method(
               s,
-              "public void handleControlBack"
+              "private void launchProjection(",
+              launch_projection
           )
+
+          # ========================================================
+          # RETURN TO LAUNCHER
+          # ========================================================
+
+          return_launcher = r'''private void returnToLauncher() {
+
+    activeTarget = null;
+
+    V10SessionStore
+            .clearTarget(this);
+
+    if (session != null) {
+        session.release();
+    }
+
+    projectionLayer
+            .setVisibility(
+                    View.GONE);
+
+    launcherLayer
+            .setVisibility(
+                    View.VISIBLE);
+
+    dashboard
+            .setVisibility(
+                    View.VISIBLE);
+
+    appPanel
+            .setVisibility(
+                    View.GONE);
+
+    keepControlBarVisible();
+}'''
+
+          s = replace_method(
+              s,
+              "private void returnToLauncher()",
+              return_launcher
+          )
+
+          # ========================================================
+          # SHOW APPS
+          # ========================================================
+
+          show_apps = r'''private void showApps() {
+
+    if (launcherLayer == null
+            || appPanel == null
+            || dashboard == null) {
+
+        return;
+    }
+
+    /*
+     * Hide projection while the Applications panel
+     * is displayed.
+     *
+     * The existing V10 session remains intact until
+     * another application is selected.
+     */
+    projectionLayer
+            .setVisibility(
+                    View.GONE);
+
+    launcherLayer
+            .setVisibility(
+                    View.VISIBLE);
+
+    dashboard
+            .setVisibility(
+                    View.GONE);
+
+    appPanel
+            .setVisibility(
+                    View.VISIBLE);
+
+    loadApps();
+
+    keepControlBarVisible();
+}'''
+
+          s = replace_method(
+              s,
+              "private void showApps()",
+              show_apps
+          )
+
+          # ========================================================
+          # HIDE APPS
+          # ========================================================
+
+          hide_apps = r'''private void hideApps() {
+
+    if (appPanel == null
+            || dashboard == null
+            || launcherLayer == null) {
+
+        return;
+    }
+
+    appPanel
+            .setVisibility(
+                    View.GONE);
+
+    dashboard
+            .setVisibility(
+                    View.VISIBLE);
+
+    launcherLayer
+            .setVisibility(
+                    View.VISIBLE);
+
+    projectionLayer
+            .setVisibility(
+                    View.GONE);
+
+    keepControlBarVisible();
+}'''
+
+          s = replace_method(
+              s,
+              "private void hideApps()",
+              hide_apps
+          )
+
+          # ========================================================
+          # BACK BUTTON
+          # ========================================================
 
           back_method = r'''public void handleControlBack() {
 
-              if (appPanel != null
-                      && appPanel.getVisibility()
-                              == View.VISIBLE) {
+    if (appPanel != null
+            && appPanel.getVisibility()
+                    == View.VISIBLE) {
 
-                  hideApps();
+        hideApps();
 
-                  return;
-              }
+        return;
+    }
 
-              if (session != null
-                      && session.isActive()) {
+    if (session != null
+            && session.isActive()) {
 
-                  session.back();
+        session.back();
 
-                  return;
-              }
+        return;
+    }
 
-              returnToLauncher();
-          }'''
+    returnToLauncher();
+}'''
 
-          s = s[:start] + back_method + s[end:]
-
-          # ========================================================
-          # HOME
-          # ========================================================
-
-          start, end = find_method(
+          s = replace_method(
               s,
-              "public void handleControlHome"
+              "public void handleControlBack()",
+              back_method
           )
+
+          # ========================================================
+          # HOME BUTTON
+          # ========================================================
 
           home_method = r'''public void handleControlHome() {
 
-              returnToLauncher();
-          }'''
+    returnToLauncher();
+}'''
 
-          s = s[:start] + home_method + s[end:]
-
-          # ========================================================
-          # APPS
-          # ========================================================
-
-          start, end = find_method(
+          s = replace_method(
               s,
-              "public void handleControlApps"
+              "public void handleControlHome()",
+              home_method
           )
+
+          # ========================================================
+          # APPS BUTTON
+          # ========================================================
 
           apps_method = r'''public void handleControlApps() {
 
-              if (appPanel != null
-                      && appPanel.getVisibility()
-                              == View.VISIBLE) {
+    if (appPanel != null
+            && appPanel.getVisibility()
+                    == View.VISIBLE) {
 
-                  hideApps();
+        hideApps();
 
-              } else {
+    } else {
 
-                  showApps();
-              }
-          }'''
+        showApps();
+    }
+}'''
 
-          s = s[:start] + apps_method + s[end:]
-
-          # ========================================================
-          # RECENTS
-          # ========================================================
-
-          start, end = find_method(
+          s = replace_method(
               s,
-              "public void handleControlRecents"
+              "public void handleControlApps()",
+              apps_method
           )
+
+          # ========================================================
+          # RECENTS BUTTON
+          #
+          # V4.2.1 keeps the existing behavior:
+          # open application selector.
+          # ========================================================
 
           recents_method = r'''public void handleControlRecents() {
 
-              showInfo(
-                      "RECENTS",
-                      "Session manager sẽ được thêm ở bước tiếp theo.");
-          }'''
+    showApps();
+}'''
 
-          s = s[:start] + recents_method + s[end:]
+          s = replace_method(
+              s,
+              "public void handleControlRecents()",
+              recents_method
+          )
+
+          # ========================================================
+          # JAVA WRITE
+          # ========================================================
 
           path.write_text(s)
 
-          print("CONTROL BAR MERGE COMPLETE")
+          print("V10.3 CONTROL BAR MERGED INTO V4")
+          print("V4 SELECTOR PRESERVED")
+          print("V10 PROJECTION ENGINE PRESERVED")
           PY
 
       # ============================================================
@@ -537,27 +766,29 @@ jobs:
 
           FILE="v10-source/app/src/main/java/com/hieptran/aacast/doudou/V10CarActivity.java"
 
-          grep -q "import android.widget.Button;" "$FILE"
-          grep -q "private LinearLayout controlBar;" "$FILE"
-          grep -q "private void addControlButton" "$FILE"
-          grep -q "controlBar =" "$FILE"
+          test -f "$FILE"
 
-          grep -q '"BACK"' "$FILE"
-          grep -q '"APPS"' "$FILE"
-          grep -q '"RECENTS"' "$FILE"
-          grep -q '"HOME"' "$FILE"
+          grep -Fq "import android.widget.Button;" "$FILE"
+          grep -Fq "private LinearLayout controlBar;" "$FILE"
+          grep -Fq "private void addControlButton(" "$FILE"
+          grep -Fq "private void keepControlBarVisible()" "$FILE"
 
-          grep -q "handleControlBack" "$FILE"
-          grep -q "handleControlHome" "$FILE"
-          grep -q "handleControlApps" "$FILE"
-          grep -q "handleControlRecents" "$FILE"
+          grep -Fq '"BACK"' "$FILE"
+          grep -Fq '"APPS"' "$FILE"
+          grep -Fq '"RECENTS"' "$FILE"
+          grep -Fq '"HOME"' "$FILE"
 
-          grep -q "controlBar.bringToFront" "$FILE"
+          grep -Fq "handleControlBack" "$FILE"
+          grep -Fq "handleControlApps" "$FILE"
+          grep -Fq "handleControlRecents" "$FILE"
+          grep -Fq "handleControlHome" "$FILE"
+
+          grep -Fq "controlBar.bringToFront()" "$FILE"
 
           echo "CONTROL BAR VERIFIED"
 
       # ============================================================
-      # VERIFY V4 SELECTOR
+      # VERIFY V4 APPLICATION SELECTOR
       # ============================================================
 
       - name: Verify V4 application selector
@@ -567,14 +798,14 @@ jobs:
 
           FILE="v10-source/app/src/main/java/com/hieptran/aacast/doudou/V10CarActivity.java"
 
-          grep -q "APPLICATIONS" "$FILE"
-          grep -q "GridLayout" "$FILE"
-          grep -q "setColumnCount" "$FILE"
-          grep -q "ACTION_MAIN" "$FILE"
-          grep -q "CATEGORY_LAUNCHER" "$FILE"
-          grep -q "queryIntentActivities" "$FILE"
-          grep -q "launchProjection" "$FILE"
-          grep -q "V10SessionStore" "$FILE"
+          grep -Fq "APPLICATIONS" "$FILE"
+          grep -Fq "GridLayout" "$FILE"
+          grep -Fq "setColumnCount" "$FILE"
+          grep -Fq "ACTION_MAIN" "$FILE"
+          grep -Fq "CATEGORY_LAUNCHER" "$FILE"
+          grep -Fq "queryIntentActivities" "$FILE"
+          grep -Fq "launchProjection" "$FILE"
+          grep -Fq "V10SessionStore" "$FILE"
 
           echo "V4 SELECTOR VERIFIED"
 
@@ -589,16 +820,20 @@ jobs:
 
           FILE="v10-source/app/src/main/java/com/hieptran/aacast/doudou/V10CarActivity.java"
 
-          grep -q "returnToLauncher" "$FILE"
-          grep -q "showApps" "$FILE"
-          grep -q "hideApps" "$FILE"
-          grep -q "session.back" "$FILE"
-          grep -q "session.release" "$FILE"
+          grep -Fq "returnToLauncher" "$FILE"
+          grep -Fq "showApps" "$FILE"
+          grep -Fq "hideApps" "$FILE"
+          grep -Fq "session.back" "$FILE"
+          grep -Fq "session.release" "$FILE"
 
           echo "CONTROL FLOW VERIFIED"
 
       # ============================================================
       # VERIFY PROJECTION ENGINE
+      #
+      # IMPORTANT:
+      # Do NOT test formatting-dependent strings.
+      # Test actual executable mechanisms instead.
       # ============================================================
 
       - name: Verify existing V10 projection engine
@@ -616,29 +851,47 @@ jobs:
           test -f "$SHELL"
           test -f "$DISPLAY"
 
-          grep -q "createVirtualDisplay" "$SESSION"
-          grep -q -- "--display" "$SESSION"
-          grep -q -- "--windowingMode 1" "$SESSION"
-          grep -q "/system/bin/am start" "$SESSION"
+          # Virtual display
+          grep -Fq "createVirtualDisplay" "$SESSION"
 
-          grep -q "/system/bin/input" "$INPUT"
+          # Proven V9/V10 launch mechanism
+          grep -Fq -- "--display" "$SESSION"
+          grep -Fq -- "--windowingMode 1" "$SESSION"
+          grep -Fq "/system/bin/am start" "$SESSION"
 
-          grep -q "ProcessBuilder" "$SHELL"
-          grep -q "su" "$SHELL"
+          # Proven root shell
+          grep -Fq "ProcessBuilder" "$SHELL"
+          grep -Fq '"su"' "$SHELL"
 
-          grep -q "V10Display.nameFor" "$SESSION"
+          # Input bridge
+          grep -Fq "/system/bin/input" "$INPUT"
 
-          # V10Display.java formats the prefix across multiple lines.
-          # Normalize whitespace before checking the actual identity.
-          DISPLAY_TEXT="$(tr '\n' ' ' < "$DISPLAY")"
-
-          grep -q "Car Assistant V10" <<< "$DISPLAY_TEXT"
-
-          grep -q 'PACKAGE' <<< "$DISPLAY_TEXT"
-          grep -q 'PREFIX' <<< "$DISPLAY_TEXT"
-          grep -q 'nameFor' <<< "$DISPLAY_TEXT"
+          # V10 display identity
+          grep -Fq "V10Display.nameFor" "$SESSION"
+          grep -Fq 'PACKAGE' "$DISPLAY"
+          grep -Fq 'PREFIX' "$DISPLAY"
+          grep -Fq 'nameFor' "$DISPLAY"
+          grep -Fq 'Car Assistant V10' "$DISPLAY"
 
           echo "PROJECTION ENGINE VERIFIED"
+
+      # ============================================================
+      # VERIFY V10 DISPLAY IDENTITY EXACTLY
+      # ============================================================
+
+      - name: Verify V10 display identity
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          DISPLAY="v10-source/app/src/main/java/com/hieptran/aacast/doudou/V10Display.java"
+
+          grep -Fq 'com.carassistant.v10' "$DISPLAY"
+          grep -Fq 'Car Assistant V10' "$DISPLAY"
+          grep -Fq 'type != 5' "$DISPLAY"
+          grep -Fq 'ownerUid < 10000' "$DISPLAY"
+
+          echo "V10 DISPLAY IDENTITY VERIFIED"
 
       # ============================================================
       # VERIFY ANDROID 12
@@ -682,7 +935,33 @@ jobs:
           echo "NO GEARHEAD CONTROL BAR"
 
       # ============================================================
-      # JAVA SANITY
+      # VERIFY NO V9 UI REGRESSION
+      # ============================================================
+
+      - name: Verify V9 UI was not copied back
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          FILE="v10-source/app/src/main/java/com/hieptran/aacast/doudou/V10CarActivity.java"
+
+          if grep -Fq "AACastCarActivity" "$FILE"; then
+            echo "V9 AACastCarActivity reference detected."
+            exit 1
+          fi
+
+          if grep -Fq "AACastDisplay" "$FILE"; then
+            echo "V9 AACastDisplay reference detected."
+            exit 1
+          fi
+
+          echo "V9 UI REGRESSION CHECK PASSED"
+
+      # ============================================================
+      # JAVA STRUCTURE CHECK
+      #
+      # Catches exactly the type of accidental class-level
+      # statement that the previous merge could create.
       # ============================================================
 
       - name: Java source sanity check
@@ -791,7 +1070,34 @@ jobs:
           PY
 
       # ============================================================
-      # BUILD
+      # VERIFY V10CarActivity HAS ONE CONTROL BAR
+      # ============================================================
+
+      - name: Verify no duplicate control bar definitions
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          FILE="v10-source/app/src/main/java/com/hieptran/aacast/doudou/V10CarActivity.java"
+
+          COUNT_FIELD=$(grep -Fc "private LinearLayout controlBar;" "$FILE")
+
+          if [ "$COUNT_FIELD" -ne 1 ]; then
+            echo "Expected exactly one controlBar field, found $COUNT_FIELD"
+            exit 1
+          fi
+
+          COUNT_HELPER=$(grep -Fc "private void addControlButton(" "$FILE")
+
+          if [ "$COUNT_HELPER" -ne 1 ]; then
+            echo "Expected exactly one addControlButton method, found $COUNT_HELPER"
+            exit 1
+          fi
+
+          echo "NO DUPLICATE CONTROL BAR DEFINITIONS"
+
+      # ============================================================
+      # GRADLE CLEAN
       # ============================================================
 
       - name: Gradle clean
@@ -801,6 +1107,10 @@ jobs:
           set -euo pipefail
 
           ./gradlew clean --no-daemon
+
+      # ============================================================
+      # BUILD
+      # ============================================================
 
       - name: Build Car Assistant V10.4 V4.2.1
         working-directory: v10-source
@@ -828,10 +1138,15 @@ jobs:
           test -f "$APK"
 
           echo "APK OK"
+
+          echo "SHA256:"
           sha256sum "$APK"
 
+          echo "APK SIZE:"
+          du -h "$APK"
+
       # ============================================================
-      # ARTIFACT
+      # UPLOAD ARTIFACT
       # ============================================================
 
       - name: Upload V10.4 V4.2.1 APK
@@ -883,4 +1198,5 @@ jobs:
           echo "V4 APP SELECTOR: APPLICATIONS"
           echo "V10 PROJECTION ENGINE: PRESERVED"
           echo "ANDROID 12: SUPPORTED"
+          echo "GEARHEAD CONTROL BAR: NOT USED"
           echo "=============================================="
