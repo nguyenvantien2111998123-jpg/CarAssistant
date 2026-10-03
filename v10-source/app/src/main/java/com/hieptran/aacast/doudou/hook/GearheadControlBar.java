@@ -4,161 +4,162 @@ import android.content.Context;
 import android.content.Intent;
 import android.graphics.Color;
 import android.view.Gravity;
+import android.view.LayoutInflater;
 import android.view.View;
 import android.view.ViewGroup;
 import android.widget.LinearLayout;
 import android.widget.TextView;
 
-import java.util.Collections;
-import java.util.IdentityHashMap;
-import java.util.Set;
-
 import de.robv.android.xposed.XC_MethodHook;
 import de.robv.android.xposed.XposedBridge;
 import de.robv.android.xposed.XposedHelpers;
 
+/**
+ * V10 AADisplay-style Gearhead facet-bar hook.
+ *
+ * The control bar is inserted directly into the Android Auto
+ * Gearhead facet-bar ViewGroup after its layout is inflated.
+ *
+ * This does not create a WindowManager overlay.
+ */
 public final class GearheadControlBar {
 
     private static final String TAG =
-            "[V10 ControlBar]";
+            "[V10 AAFacetBar]";
 
-    private static final String GEARHEAD =
+    private static final String GEARHEAD_PACKAGE =
             "com.google.android.projection.gearhead";
 
-    private static final String ACTION =
-            "com.carassistant.v10.CONTROL";
-
-    private static final String SELF =
+    private static final String SELF_PACKAGE =
             "com.carassistant.v10";
 
-    private static final Set<ViewGroup> INSTALLED =
-            Collections.newSetFromMap(
-                    new IdentityHashMap<ViewGroup, Boolean>());
+    private static final String CONTROL_ACTION =
+            "com.carassistant.v10.CONTROL";
 
-    private static final String[] DOCK_NAMES = {
-            "nav_bar_container",
-            "car_navigation_bar",
-            "dock_container",
-            "nav_bar",
-            "floating_nav_bar_view",
-            "navigation_bar_container",
-            "navigation_bar",
-            "bottom_navigation_bar",
-            "system_navigation_bar",
-            "navbar",
-            "car_sys_ui_navbar"
+    private static final String CONTROL_TAG =
+            "CarAssistant-V10-AADisplay";
+
+    private static final String[] FACET_LAYOUT_NAMES = {
+            "gh_coolwalk_vertical_facet_bar",
+            "gh_coolwalk_facet_bar",
+            "gh_coolwalk_facet_bar_rhd"
     };
+
+    private static volatile boolean installed;
 
     private GearheadControlBar() {
     }
 
     public static void install() {
 
+        if (installed) {
+            return;
+        }
+
+        installed = true;
+
         try {
 
-            Class<?> wmg =
-                    XposedHelpers.findClass(
-                            "android.view.WindowManagerGlobal",
-                            null);
-
-            XposedBridge.hookAllMethods(
-                    wmg,
-                    "addView",
+            XposedHelpers.findAndHookMethod(
+                    LayoutInflater.class,
+                    "inflate",
+                    int.class,
+                    ViewGroup.class,
+                    boolean.class,
                     new XC_MethodHook() {
 
                         @Override
                         protected void afterHookedMethod(
                                 MethodHookParam param) {
 
-                            if (param.args.length == 0) {
-                                return;
+                            try {
+
+                                int resourceId =
+                                        (Integer) param.args[0];
+
+                                if (!isFacetLayout(
+                                        param.thisObject,
+                                        resourceId)) {
+                                    return;
+                                }
+
+                                Object result =
+                                        param.getResult();
+
+                                if (!(result instanceof ViewGroup)) {
+                                    return;
+                                }
+
+                                ViewGroup facetBar =
+                                        (ViewGroup) result;
+
+                                Context context =
+                                        ((LayoutInflater)
+                                                param.thisObject)
+                                                .getContext();
+
+                                injectControls(
+                                        facetBar,
+                                        context);
+
+                            } catch (Throwable t) {
+
+                                XposedBridge.log(
+                                        TAG
+                                                + " inflate hook error: "
+                                                + t);
                             }
-
-                            Object value =
-                                    param.args[0];
-
-                            if (!(value instanceof View)) {
-                                return;
-                            }
-
-                            final View root =
-                                    (View) value;
-
-                            root.post(
-                                    new Runnable() {
-                                        @Override
-                                        public void run() {
-                                            scanRoot(root);
-                                        }
-                                    });
                         }
                     });
 
-            scanExistingRoots();
-
             XposedBridge.log(
                     TAG
-                    + " Gearhead dock hook installed");
+                            + " LayoutInflater hook installed");
 
         } catch (Throwable t) {
 
             XposedBridge.log(
                     TAG
-                    + " install failed: "
-                    + t);
+                            + " install failed: "
+                            + t);
         }
     }
 
-    private static void scanExistingRoots() {
+    private static boolean isFacetLayout(
+            Object inflaterObject,
+            int resourceId) {
 
         try {
 
-            Class<?> cls =
-                    XposedHelpers.findClass(
-                            "android.view.WindowManagerGlobal",
-                            null);
+            LayoutInflater inflater =
+                    (LayoutInflater) inflaterObject;
 
-            Object global =
-                    XposedHelpers.callStaticMethod(
-                            cls,
-                            "getInstance");
+            Context context =
+                    inflater.getContext();
 
-            String[] names =
-                    (String[])
-                            XposedHelpers.callMethod(
-                                    global,
-                                    "getViewRootNames");
-
-            if (names == null) {
-                return;
+            if (context == null) {
+                return false;
             }
 
-            for (String name : names) {
+            for (String name :
+                    FACET_LAYOUT_NAMES) {
 
-                try {
+                int id =
+                        context.getResources()
+                                .getIdentifier(
+                                        name,
+                                        "layout",
+                                        GEARHEAD_PACKAGE);
 
-                    Object root =
-                            XposedHelpers.callMethod(
-                                    global,
-                                    "getRootView",
-                                    name);
+                if (id != 0
+                        && id == resourceId) {
 
-                    if (!(root instanceof View)) {
-                        continue;
-                    }
+                    XposedBridge.log(
+                            TAG
+                                    + " facet layout matched: "
+                                    + name);
 
-                    final View view =
-                            (View) root;
-
-                    view.post(
-                            new Runnable() {
-                                @Override
-                                public void run() {
-                                    scanRoot(view);
-                                }
-                            });
-
-                } catch (Throwable ignored) {
+                    return true;
                 }
             }
 
@@ -166,243 +167,145 @@ public final class GearheadControlBar {
 
             XposedBridge.log(
                     TAG
-                    + " root scan failed: "
-                    + t);
-        }
-    }
-
-    private static void scanRoot(
-            View root) {
-
-        try {
-
-            if (!root.isAttachedToWindow()) {
-                return;
-            }
-
-            if (root.getDisplay() == null) {
-                return;
-            }
-
-            if (root.getDisplay()
-                    .getDisplayId() <= 0) {
-                return;
-            }
-
-            if (!(root instanceof ViewGroup)) {
-                return;
-            }
-
-            ViewGroup dock =
-                    findDockContainer(
-                            (ViewGroup) root,
-                            1500);
-
-            if (dock == null) {
-                return;
-            }
-
-            if (INSTALLED.contains(dock)) {
-                return;
-            }
-
-            installBar(dock);
-
-        } catch (Throwable t) {
-
-            XposedBridge.log(
-                    TAG
-                    + " scan failed: "
-                    + t);
-        }
-    }
-
-    private static ViewGroup findDockContainer(
-            ViewGroup group,
-            int budget) {
-
-        if (budget <= 0) {
-            return null;
-        }
-
-        String name =
-                resourceEntryName(group);
-
-        if (name != null
-                && isDockName(name)) {
-
-            return group;
-        }
-
-        int nextBudget =
-                budget - 1;
-
-        for (int i = 0;
-                i < group.getChildCount();
-                i++) {
-
-            View child =
-                    group.getChildAt(i);
-
-            if (!(child instanceof ViewGroup)) {
-                continue;
-            }
-
-            ViewGroup found =
-                    findDockContainer(
-                            (ViewGroup) child,
-                            nextBudget);
-
-            if (found != null) {
-                return found;
-            }
-        }
-
-        return null;
-    }
-
-    private static String resourceEntryName(
-            View view) {
-
-        if (view.getId() == View.NO_ID) {
-            return null;
-        }
-
-        try {
-
-            String packageName =
-                    view.getResources()
-                            .getResourcePackageName(
-                                    view.getId());
-
-            if (!GEARHEAD.equals(
-                    packageName)) {
-                return null;
-            }
-
-            return view.getResources()
-                    .getResourceEntryName(
-                            view.getId());
-
-        } catch (Throwable ignored) {
-
-            return null;
-        }
-    }
-
-    private static boolean isDockName(
-            String name) {
-
-        for (String candidate :
-                DOCK_NAMES) {
-
-            if (candidate.equals(name)) {
-                return true;
-            }
+                            + " resource lookup failed: "
+                            + t);
         }
 
         return false;
     }
 
-    private static void installBar(
-            ViewGroup dock) {
+    private static void injectControls(
+            ViewGroup facetBar,
+            Context context) {
 
-        LinearLayout bar =
-                new LinearLayout(
-                        dock.getContext());
+        try {
 
-        bar.setOrientation(
-                LinearLayout.HORIZONTAL);
+            if (facetBar == null
+                    || context == null) {
+                return;
+            }
 
-        bar.setGravity(
-                Gravity.CENTER_VERTICAL);
+            Object tag =
+                    facetBar.getTag();
 
-        bar.setPadding(
-                4,
-                2,
-                4,
-                2);
+            if (CONTROL_TAG.equals(tag)) {
+                return;
+            }
 
-        bar.setBackgroundColor(
-                0xDD202124);
+            /*
+             * Mark this exact AA ViewGroup so repeated
+             * LayoutInflater calls do not inject twice.
+             */
+            facetBar.setTag(CONTROL_TAG);
 
-        addButton(
-                bar,
-                "←",
-                "back");
+            LinearLayout controlBar =
+                    new LinearLayout(context);
 
-        addButton(
-                bar,
-                "⌂",
-                "home");
+            controlBar.setOrientation(
+                    LinearLayout.VERTICAL);
 
-        addButton(
-                bar,
-                "▣",
-                "recents");
+            controlBar.setGravity(
+                    Gravity.CENTER);
 
-        addButton(
-                bar,
-                "Apps",
-                "apps");
+            controlBar.setPadding(
+                    2,
+                    4,
+                    2,
+                    4);
 
-        dock.addView(
-                bar,
-                new ViewGroup.LayoutParams(
-                        ViewGroup.LayoutParams.WRAP_CONTENT,
-                        ViewGroup.LayoutParams.MATCH_PARENT));
+            controlBar.setBackgroundColor(
+                    Color.TRANSPARENT);
 
-        bar.bringToFront();
+            addButton(
+                    controlBar,
+                    "⌂",
+                    "home",
+                    26f);
 
-        INSTALLED.add(dock);
+            addButton(
+                    controlBar,
+                    "▣",
+                    "recents",
+                    22f);
 
-        XposedBridge.log(
-                TAG
-                + " installed in "
-                + resourceEntryName(dock));
+            addButton(
+                    controlBar,
+                    "‹",
+                    "back",
+                    30f);
+
+            addButton(
+                    controlBar,
+                    "Apps",
+                    "apps",
+                    11f);
+
+            LinearLayout.LayoutParams params =
+                    new LinearLayout.LayoutParams(
+                            ViewGroup.LayoutParams.WRAP_CONTENT,
+                            ViewGroup.LayoutParams.MATCH_PARENT);
+
+            facetBar.addView(
+                    controlBar,
+                    params);
+
+            controlBar.bringToFront();
+
+            XposedBridge.log(
+                    TAG
+                            + " controls injected into "
+                            + facetBar.getClass()
+                                    .getName());
+
+        } catch (Throwable t) {
+
+            XposedBridge.log(
+                    TAG
+                            + " injection failed: "
+                            + t);
+        }
     }
 
     private static void addButton(
             LinearLayout parent,
-            String label,
-            String command) {
+            String text,
+            String command,
+            float textSize) {
 
         TextView button =
                 new TextView(
                         parent.getContext());
 
-        button.setText(label);
+        button.setText(text);
 
         button.setTextColor(
                 Color.WHITE);
 
         button.setTextSize(
-                "Apps".equals(label)
-                        ? 13
-                        : 20);
+                textSize);
 
         button.setGravity(
                 Gravity.CENTER);
 
-        button.setPadding(
-                18,
-                0,
-                18,
-                0);
-
         button.setClickable(true);
 
         button.setFocusable(true);
+
+        button.setPadding(
+                8,
+                4,
+                8,
+                4);
 
         button.setOnClickListener(
                 new View.OnClickListener() {
 
                     @Override
                     public void onClick(
-                            View v) {
+                            View view) {
 
                         sendCommand(
-                                parent.getContext(),
+                                view.getContext(),
                                 command);
                     }
                 });
@@ -410,8 +313,9 @@ public final class GearheadControlBar {
         parent.addView(
                 button,
                 new LinearLayout.LayoutParams(
-                        ViewGroup.LayoutParams.WRAP_CONTENT,
-                        ViewGroup.LayoutParams.MATCH_PARENT));
+                        ViewGroup.LayoutParams.MATCH_PARENT,
+                        0,
+                        1.0f));
     }
 
     private static void sendCommand(
@@ -421,10 +325,11 @@ public final class GearheadControlBar {
         try {
 
             Intent intent =
-                    new Intent(ACTION);
+                    new Intent(
+                            CONTROL_ACTION);
 
             intent.setPackage(
-                    SELF);
+                    SELF_PACKAGE);
 
             intent.putExtra(
                     "command",
@@ -435,15 +340,15 @@ public final class GearheadControlBar {
 
             XposedBridge.log(
                     TAG
-                    + " command="
-                    + command);
+                            + " command="
+                            + command);
 
         } catch (Throwable t) {
 
             XposedBridge.log(
                     TAG
-                    + " broadcast failed: "
-                    + t);
+                            + " broadcast failed: "
+                            + t);
         }
     }
 }
