@@ -18,10 +18,29 @@ public final class V10SessionStore {
             "recent_";
 
     private static final int MAX_RECENTS = 4;
+    private static volatile V10CarActivity currentActivity;
 
     private V10SessionStore() {
     }
 
+    public static void setCurrentActivity(
+        V10CarActivity activity) {
+
+    currentActivity = activity;
+}
+
+public static V10CarActivity getCurrentActivity() {
+
+    return currentActivity;
+}
+
+public static void clearCurrentActivity(
+        V10CarActivity activity) {
+
+    if (currentActivity == activity) {
+        currentActivity = null;
+    }
+}
     public static void setTarget(
             Context context,
             ComponentName component) {
