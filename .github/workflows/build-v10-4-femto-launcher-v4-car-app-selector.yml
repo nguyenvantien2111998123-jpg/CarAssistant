@@ -1,0 +1,646 @@
+name: Build Car Assistant V10.4 - V4 Car App Selector
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+
+      # ============================================================
+      # CHECKOUT
+      # ============================================================
+
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # ============================================================
+      # JAVA
+      # ============================================================
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      # ============================================================
+      # GRADLE
+      # ============================================================
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: "8.13"
+
+      # ============================================================
+      # VERIFY V10.4 V3 BASE
+      # ============================================================
+
+      - name: Verify V10.4 V3 base
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          ROOT="v10-source/app/src/main/java/com/hieptran/aacast/doudou"
+
+          test -f "$ROOT/V10CarActivity.java"
+          test -f "$ROOT/V10LauncherActivity.java"
+          test -f "$ROOT/V10ProjectionSession.java"
+          test -f "$ROOT/V10InputController.java"
+          test -f "$ROOT/V10SessionStore.java"
+          test -f "$ROOT/V10ControlReceiver.java"
+          test -f "$ROOT/RootShellSession.java"
+
+          echo "V10.4 V3 BASE OK"
+
+      # ============================================================
+      # PATCH CAR ACTIVITY
+      #
+      # IMPORTANT:
+      # Keep the existing V10 projection engine untouched.
+      #
+      # The only change here is UI/session navigation:
+      #
+      # Dashboard
+      #      |
+      #      +-- APPS
+      #            |
+      #            +-- Applications
+      #                  |
+      #                  +-- select app
+      #                        |
+      #                        +-- Projection
+      #
+      # APPS can also be opened while projection is active.
+      # ============================================================
+
+      - name: Patch V10CarActivity for direct Android Auto App Selector
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          python3 <<'PY'
+          from pathlib import Path
+
+          p = Path(
+              "v10-source/app/src/main/java/com/hieptran/aacast/doudou/V10CarActivity.java"
+          )
+
+          s = p.read_text()
+
+          # --------------------------------------------------------
+          # Replace showApps()
+          # --------------------------------------------------------
+
+          old = """    private void showApps() {
+
+          dashboard
+                  .setVisibility(
+                          View.GONE);
+
+          appPanel
+                  .setVisibility(
+                          View.VISIBLE);
+      }
+  """
+
+          new = """    private void showApps() {
+
+          /*
+           * V10.4 V4:
+           *
+           * APPS is a real car-side application selector.
+           *
+           * It must work from:
+           * 1. Dashboard
+           * 2. Active projection
+           *
+           * Therefore the launcher layer must always become
+           * visible before the Applications panel is shown.
+           */
+
+          if (launcherLayer == null
+                  || appPanel == null
+                  || dashboard == null) {
+              return;
+          }
+
+          /*
+           * Hide the currently projected application.
+           *
+           * We deliberately keep the session object alive until
+           * the user chooses another application. This prevents
+           * unnecessary projection-engine recreation while
+           * opening the selector.
+           */
+          projectionLayer.setVisibility(
+                  View.GONE);
+
+          launcherLayer.setVisibility(
+                  View.VISIBLE);
+
+          dashboard.setVisibility(
+                  View.GONE);
+
+          appPanel.setVisibility(
+                  View.VISIBLE);
+
+          loadApps();
+      }
+  """
+
+          if old not in s:
+              raise SystemExit(
+                  "ERROR: existing showApps() block not found"
+              )
+
+          s = s.replace(old, new, 1)
+
+          # --------------------------------------------------------
+          # Replace hideApps()
+          # --------------------------------------------------------
+
+          old = """    private void hideApps() {
+
+          appPanel
+                  .setVisibility(
+                          View.GONE);
+
+          dashboard
+                  .setVisibility(
+                          View.VISIBLE);
+      }
+  """
+
+          new = """    private void hideApps() {
+
+          if (appPanel == null
+                  || dashboard == null
+                  || launcherLayer == null) {
+              return;
+          }
+
+          appPanel.setVisibility(
+                  View.GONE);
+
+          dashboard.setVisibility(
+                  View.VISIBLE);
+
+          launcherLayer.setVisibility(
+                  View.VISIBLE);
+
+          /*
+           * If a projection is still active, keep it hidden here.
+           * The user explicitly returned to the dashboard.
+           */
+          projectionLayer.setVisibility(
+                  View.GONE);
+      }
+  """
+
+          if old not in s:
+              raise SystemExit(
+                  "ERROR: existing hideApps() block not found"
+              )
+
+          s = s.replace(old, new, 1)
+
+          # --------------------------------------------------------
+          # Replace launchProjection()
+          #
+          # Selecting an application from the Android Auto
+          # application grid must immediately launch that app.
+          # --------------------------------------------------------
+
+          old = """    private void launchProjection(
+              ComponentName component) {
+
+          if (component == null
+                  || session == null) {
+              return;
+          }
+
+          activeTarget =
+                  component;
+
+          V10SessionStore
+                  .setTarget(
+                          this,
+                          component);
+
+          session.setTarget(
+                  component);
+
+          launcherLayer
+                  .setVisibility(
+                          View.GONE);
+
+          projectionLayer
+                  .setVisibility(
+                          View.VISIBLE);
+      }
+  """
+
+          new = """    private void launchProjection(
+              ComponentName component) {
+
+          if (component == null
+                  || session == null) {
+              return;
+          }
+
+          /*
+           * If another app is currently projected, release its
+           * display before switching to the new application.
+           *
+           * This is a UI/session change only. The proven
+           * V10ProjectionSession implementation is unchanged.
+           */
+          if (activeTarget != null
+                  && !activeTarget.equals(component)) {
+
+              session.release();
+          }
+
+          activeTarget =
+                  component;
+
+          V10SessionStore
+                  .setTarget(
+                          this,
+                          component);
+
+          launcherLayer
+                  .setVisibility(
+                          View.GONE);
+
+          appPanel
+                  .setVisibility(
+                          View.GONE);
+
+          dashboard
+                  .setVisibility(
+                          View.GONE);
+
+          projectionLayer
+                  .setVisibility(
+                          View.VISIBLE);
+
+          session.setTarget(
+                  component);
+      }
+  """
+
+          if old not in s:
+              raise SystemExit(
+                  "ERROR: existing launchProjection() block not found"
+              )
+
+          s = s.replace(old, new, 1)
+
+          # --------------------------------------------------------
+          # Replace handleControlApps()
+          # --------------------------------------------------------
+
+          old = """    public void handleControlApps() {
+
+          showApps();
+      }
+  """
+
+          new = """    public void handleControlApps() {
+
+          /*
+           * APPS is intentionally car-side.
+           *
+           * It does NOT depend on the phone launcher.
+           */
+          showApps();
+      }
+  """
+
+          if old not in s:
+              raise SystemExit(
+                  "ERROR: existing handleControlApps() block not found"
+              )
+
+          s = s.replace(old, new, 1)
+
+          # --------------------------------------------------------
+          # Strengthen handleControlHome()
+          # --------------------------------------------------------
+
+          old = """    public void handleControlHome() {
+
+          returnToLauncher();
+      }
+  """
+
+          new = """    public void handleControlHome() {
+
+          /*
+           * HOME always returns to the V10 dashboard.
+           */
+          returnToLauncher();
+      }
+  """
+
+          if old not in s:
+              raise SystemExit(
+                  "ERROR: existing handleControlHome() block not found"
+              )
+
+          s = s.replace(old, new, 1)
+
+          # --------------------------------------------------------
+          # Ensure returnToLauncher restores launcher layer
+          # --------------------------------------------------------
+
+          old = """        projectionLayer
+                .setVisibility(
+                        View.GONE);
+
+        launcherLayer
+                .setVisibility(
+                        View.VISIBLE);
+
+        dashboard
+                .setVisibility(
+                        View.VISIBLE);
+
+        appPanel
+                .setVisibility(
+                        View.GONE);
+  """
+
+          new = """        projectionLayer
+                .setVisibility(
+                        View.GONE);
+
+        launcherLayer
+                .setVisibility(
+                        View.VISIBLE);
+
+        dashboard
+                .setVisibility(
+                        View.VISIBLE);
+
+        appPanel
+                .setVisibility(
+                        View.GONE);
+  """
+
+          if old not in s:
+              raise SystemExit(
+                  "ERROR: returnToLauncher structure not found"
+              )
+
+          s = s.replace(old, new, 1)
+
+          p.write_text(s)
+
+          print("V10CarActivity patched successfully.")
+          PY
+
+      # ============================================================
+      # ADD EXPLICIT CAR APP SELECTOR MARKERS
+      # ============================================================
+
+      - name: Verify direct Android Auto selector
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          CAR="v10-source/app/src/main/java/com/hieptran/aacast/doudou/V10CarActivity.java"
+
+          echo "=== VERIFY CAR APP SELECTOR ==="
+
+          grep -q "private void showApps()" "$CAR"
+          grep -q "private void hideApps()" "$CAR"
+          grep -q "APPLICATIONS" "$CAR"
+          grep -q "ACTION_MAIN" "$CAR"
+          grep -q "CATEGORY_LAUNCHER" "$CAR"
+          grep -q "launchProjection" "$CAR"
+          grep -q "handleControlApps" "$CAR"
+          grep -q "projectionLayer.setVisibility" "$CAR"
+
+          echo "CAR APP SELECTOR OK"
+
+      # ============================================================
+      # VERIFY PROJECTION ENGINE IS STILL PRESENT
+      # ============================================================
+
+      - name: Verify projection engine
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          SESSION="v10-source/app/src/main/java/com/hieptran/aacast/doudou/V10ProjectionSession.java"
+          INPUT="v10-source/app/src/main/java/com/hieptran/aacast/doudou/V10InputController.java"
+          SHELL="v10-source/app/src/main/java/com/hieptran/aacast/doudou/RootShellSession.java"
+
+          echo "=== VERIFY PROJECTION ==="
+
+          grep -q "createVirtualDisplay" "$SESSION"
+          grep -q "V10Display.nameFor" "$SESSION"
+          grep -q "setDefaultBufferSize" "$SESSION"
+          grep -q "am start" "$SESSION"
+
+          echo "Projection engine OK"
+
+          echo "=== VERIFY INPUT ==="
+
+          grep -q "session.tap" "$INPUT"
+          grep -q "session.swipe" "$INPUT"
+
+          echo "Input controller OK"
+
+          echo "=== VERIFY ROOT ==="
+
+          grep -q 'ProcessBuilder("su")' "$SHELL"
+
+          echo "Root shell OK"
+
+      # ============================================================
+      # VERIFY CONTROL RECEIVER
+      # ============================================================
+
+      - name: Verify Android Auto controls
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          RECEIVER="v10-source/app/src/main/java/com/hieptran/aacast/doudou/V10ControlReceiver.java"
+
+          grep -q "handleControlBack" "$RECEIVER"
+          grep -q "handleControlHome" "$RECEIVER"
+          grep -q "handleControlRecents" "$RECEIVER"
+          grep -q "handleControlApps" "$RECEIVER"
+
+          echo "Control receiver OK"
+
+      # ============================================================
+      # VERIFY NO GEARHEAD UI INJECTION
+      # ============================================================
+
+      - name: Verify V10 does not depend on Gearhead UI injection
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          if grep -R \
+            "GearheadControlBar" \
+            v10-source/app/src/main/java/com/hieptran/aacast/doudou \
+            --include="*.java"; then
+
+            echo "ERROR: GearheadControlBar still present"
+            exit 1
+          fi
+
+          echo "No GearheadControlBar dependency."
+
+      # ============================================================
+      # VERIFY ANDROID 12 TARGET
+      # ============================================================
+
+      - name: Verify Android 12 compatibility
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          GRADLE="v10-source/app/build.gradle"
+
+          grep -q "compileSdk" "$GRADLE"
+          grep -q "minSdk" "$GRADLE"
+
+          echo "Android SDK configuration present."
+
+          if grep -R \
+            "33" \
+            v10-source/app/build.gradle \
+            v10-source/gradle.properties \
+            2>/dev/null | grep -q "minSdk"; then
+
+            echo "ERROR: minSdk appears to be 33+"
+            exit 1
+          fi
+
+          echo "Android 12 compatibility check passed."
+
+      # ============================================================
+      # COMPILE
+      # ============================================================
+
+      - name: Build V10.4 V4
+        working-directory: v10-source
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          echo "=== CLEAN BUILD ==="
+
+          ./gradlew \
+            clean \
+            assembleDebug \
+            --no-daemon \
+            --stacktrace
+
+      # ============================================================
+      # VERIFY APK
+      # ============================================================
+
+      - name: Verify APK
+        working-directory: v10-source
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          APK="app/build/outputs/apk/debug/app-debug.apk"
+
+          test -f "$APK"
+
+          echo
+          echo "========================================"
+          echo " CAR ASSISTANT V10.4 V4 BUILD PASSED"
+          echo "========================================"
+
+          echo
+          echo "APK:"
+          ls -lh "$APK"
+
+          echo
+          echo "SHA256:"
+          sha256sum "$APK"
+
+      # ============================================================
+      # UPLOAD
+      # ============================================================
+
+      - name: Upload V10.4 V4 APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: CarAssistant-V10.4-Femto-Launcher-V4-Car-App-Selector
+          path: v10-source/app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error
+          retention-days: 30
+
+      # ============================================================
+      # COMMIT
+      # ============================================================
+
+      - name: Commit V10.4 V4
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          git config user.name \
+            "github-actions[bot]"
+
+          git config user.email \
+            "41898282+github-actions[bot]@users.noreply.github.com"
+
+          git add \
+            v10-source/app/src/main/java/com/hieptran/aacast/doudou/V10CarActivity.java
+
+          if git diff --cached --quiet; then
+            echo "No source changes."
+          else
+            git commit \
+              -m "Add direct Android Auto app selector"
+
+            git push
+          fi
+
+      # ============================================================
+      # COMPLETE
+      # ============================================================
+
+      - name: Complete
+        run: |
+          echo
+          echo "=============================================="
+          echo " CAR ASSISTANT V10.4 V4 COMPLETE"
+          echo "=============================================="
+          echo
+          echo "Android Auto:"
+          echo "  Dashboard"
+          echo "      -> APPS"
+          echo "      -> Applications"
+          echo "      -> Select app"
+          echo "      -> Projection"
+          echo
+          echo "During projection:"
+          echo "  APPS -> Applications -> another app"
+          echo
+          echo "Phone:"
+          echo "  Femto-style dashboard preserved"
+          echo
+          echo "Projection engine:"
+          echo "  V10.4 V3 engine preserved"
+          echo
