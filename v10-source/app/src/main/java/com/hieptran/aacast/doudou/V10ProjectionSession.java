@@ -3,34 +3,17 @@ package com.carassistant.v10;
 import android.content.ComponentName;
 import android.content.Context;
 import android.graphics.SurfaceTexture;
-import android.hardware.display.DisplayManager;
-import android.os.Process;
-import android.util.Log;
-import android.view.Display;
 import android.view.Surface;
 import android.view.TextureView;
 
 public final class V10ProjectionSession
         implements TextureView.SurfaceTextureListener {
 
-    private static final String TAG =
-            "CarAssistantV10Projection";
-
     private final Context context;
-
-    private final RootShellSession rootShell =
-            new RootShellSession();
 
     private TextureView textureView;
 
     private ComponentName target;
-
-    private Display display;
-
-    private android.hardware.display.VirtualDisplay
-            virtualDisplay;
-
-    private Surface surface;
 
     private boolean destroyed;
 
@@ -38,12 +21,21 @@ public final class V10ProjectionSession
 
     private int contentHeight;
 
+
     public V10ProjectionSession(
             Context context) {
 
         this.context =
                 context.getApplicationContext();
+
+        /*
+         * Start the projection owner independently
+         * from V10CarActivity.
+         */
+        V10ProjectionService.ensureStarted(
+                this.context);
     }
+
 
     public void attachTextureView(
             TextureView view) {
@@ -54,56 +46,132 @@ public final class V10ProjectionSession
                 this);
 
         if (view.isAvailable()) {
-            ensureDisplay();
+
+            attachCurrentSurface();
         }
     }
+
 
     public void setTarget(
             ComponentName component) {
 
-        if (component == null) {
-            target = null;
-            release();
+        if (destroyed) {
             return;
         }
 
-        boolean changed =
-                !component.equals(target);
-
         target = component;
 
-        if (changed
-                && virtualDisplay != null) {
-            releaseDisplayOnly();
+
+        if (component == null) {
+
+            V10ProjectionService
+                    .clearTarget();
+
+            return;
         }
 
-        ensureDisplay();
+
+        V10SessionStore.setTarget(
+                context,
+                component);
+
+
+        V10ProjectionService.setTarget(
+                context,
+                component);
+
+
+        /*
+         * If TextureView already exists,
+         * connect its current Surface.
+         */
+        attachCurrentSurface();
     }
+
 
     public boolean isActive() {
 
         return !destroyed
-                && target != null
-                && virtualDisplay != null
-                && display != null;
+                && V10ProjectionService
+                        .isActive();
     }
 
-    private void ensureDisplay() {
+
+    public int getDisplayId() {
+
+        return V10ProjectionService
+                .getDisplayId();
+    }
+
+
+    public void tap(
+            float x,
+            float y) {
+
+        if (!isActive()) {
+            return;
+        }
+
+        V10ProjectionService.tap(
+                Math.round(
+                        mapX(x)),
+                Math.round(
+                        mapY(y)));
+    }
+
+
+    public void swipe(
+            float startX,
+            float startY,
+            float endX,
+            float endY,
+            long duration) {
+
+        if (!isActive()) {
+            return;
+        }
+
+        V10ProjectionService.swipe(
+                Math.round(
+                        mapX(startX)),
+                Math.round(
+                        mapY(startY)),
+                Math.round(
+                        mapX(endX)),
+                Math.round(
+                        mapY(endY)),
+                duration);
+    }
+
+
+    public void back() {
+
+        if (isActive()) {
+
+            V10ProjectionService.back();
+        }
+    }
+
+
+    private void attachCurrentSurface() {
 
         if (destroyed
                 || target == null
                 || textureView == null
-                || !textureView.isAvailable()
-                || virtualDisplay != null) {
+                || !textureView.isAvailable()) {
+
             return;
         }
 
-        SurfaceTexture st =
-                textureView.getSurfaceTexture();
 
-        if (st == null) {
+        SurfaceTexture surfaceTexture =
+                textureView
+                        .getSurfaceTexture();
+
+        if (surfaceTexture == null) {
             return;
         }
+
 
         int width =
                 textureView.getWidth();
@@ -111,196 +179,88 @@ public final class V10ProjectionSession
         int height =
                 textureView.getHeight();
 
-        if (width < 1 || height < 1) {
+
+        if (width < 1
+                || height < 1) {
+
             return;
         }
 
-        try {
 
-            /*
-             * IMPORTANT:
-             * This is the V9 proven sequence.
-             */
+        surfaceTexture.setDefaultBufferSize(
+                width,
+                height);
 
-            st.setDefaultBufferSize(
-                    width,
-                    height);
 
-            Surface newSurface =
-                    new Surface(st);
+        contentWidth = width;
 
-            DisplayManager manager =
-                    (DisplayManager)
-                            context.getSystemService(
-                                    Context.DISPLAY_SERVICE);
+        contentHeight = height;
 
-            if (manager == null) {
 
-                newSurface.release();
+        Surface surface =
+                new Surface(
+                        surfaceTexture);
 
-                throw new IllegalStateException(
-                        "DisplayManager unavailable");
-            }
 
-            android.hardware.display.VirtualDisplay
-                    newVirtualDisplay =
-                    manager.createVirtualDisplay(
-                            V10Display.nameFor(0),
-                            width,
-                            height,
-                            160,
-                            newSurface,
-                            10);
-
-            if (newVirtualDisplay == null) {
-
-                newSurface.release();
-
-                throw new IllegalStateException(
-                        "Cannot create virtual display");
-            }
-
-            Display newDisplay =
-                    newVirtualDisplay.getDisplay();
-
-            if (newDisplay == null) {
-
-                newVirtualDisplay.release();
-                newSurface.release();
-
-                throw new IllegalStateException(
-                        "Virtual display has no Display");
-            }
-
-            surface =
-                    newSurface;
-
-            virtualDisplay =
-                    newVirtualDisplay;
-
-            display =
-                    newDisplay;
-
-            contentWidth =
-                    width;
-
-            contentHeight =
-                    height;
-
-            launchTarget();
-
-        } catch (RuntimeException e) {
-
-            release();
-
-            Log.w(
-                    TAG,
-                    "Display creation failed",
-                    e);
-        }
+        V10ProjectionService.attachSurface(
+                context,
+                surface,
+                width,
+                height);
     }
 
-    private void launchTarget() {
 
-    if (display == null
-            || target == null) {
-        return;
-    }
-
-    final int displayId =
-            display.getDisplayId();
-
-    final int userId =
-            Process.myUid() / 100000;
-
-    final String flat =
-            target.flattenToString()
-                    .replace(
-                            "'",
-                            "'\"'\"'");
-
-    /*
-     * IMPORTANT:
-     *
-     * Do NOT force-stop the target application here.
-     *
-     * V10 releases/recreates its VirtualDisplay when the
-     * car activity stops/resumes, but the Android application
-     * task itself should remain alive.
-     *
-     * --activity-reorder-to-front tells ActivityManager to
-     * bring the existing task/activity to the foreground
-     * instead of intentionally killing and recreating it.
-     */
-    final String command =
-            "/system/bin/am start"
-                    + " --user "
-                    + userId
-                    + " --display "
-                    + displayId
-                    + " --activity-reorder-to-front"
-                    + " -n '"
-                    + flat
-                    + "'";
-
-    RootShellSession.EXEC.execute(
-            () -> {
-
-                try {
-
-                    rootShell.run(
-                            10,
-                            command);
-
-                } catch (Throwable t) {
-
-                    Log.w(
-                            TAG,
-                            "Launch existing task failed",
-                            t);
-                }
-            });
-    }
-
-    private float mapX(float x) {
+    private float mapX(
+            float x) {
 
         if (textureView == null
                 || contentWidth < 1) {
+
             return x;
         }
 
-        float sourceWidth =
+
+        float viewWidth =
                 textureView.getWidth();
 
-        if (sourceWidth <= 0) {
+        if (viewWidth <= 0) {
             return x;
         }
 
+
         return clamp(
-                x * contentWidth / sourceWidth,
+                x * contentWidth
+                        / viewWidth,
                 0,
                 contentWidth - 1);
     }
 
-    private float mapY(float y) {
+
+    private float mapY(
+            float y) {
 
         if (textureView == null
                 || contentHeight < 1) {
+
             return y;
         }
 
-        float sourceHeight =
+
+        float viewHeight =
                 textureView.getHeight();
 
-        if (sourceHeight <= 0) {
+        if (viewHeight <= 0) {
             return y;
         }
 
+
         return clamp(
-                y * contentHeight / sourceHeight,
+                y * contentHeight
+                        / viewHeight,
                 0,
                 contentHeight - 1);
     }
+
 
     private static float clamp(
             float value,
@@ -314,182 +274,25 @@ public final class V10ProjectionSession
                         value));
     }
 
-    public void tap(
-            float x,
-            float y) {
 
-        if (!isActive()) {
-            return;
-        }
-
-        final int displayId =
-                display.getDisplayId();
-
-        final int ix =
-                Math.round(
-                        mapX(x));
-
-        final int iy =
-                Math.round(
-                        mapY(y));
-
-        final String command =
-                "/system/bin/input -d "
-                        + displayId
-                        + " tap "
-                        + ix
-                        + " "
-                        + iy;
-
-        RootShellSession.EXEC.execute(
-                () -> {
-
-                    try {
-
-                        rootShell.run(
-                                5,
-                                command);
-
-                    } catch (Throwable t) {
-
-                        Log.w(
-                                TAG,
-                                "Tap failed",
-                                t);
-                    }
-                });
-    }
-
-    public void swipe(
-            float startX,
-            float startY,
-            float endX,
-            float endY,
-            long duration) {
-
-        if (!isActive()) {
-            return;
-        }
-
-        final int displayId =
-                display.getDisplayId();
-
-        final int x1 =
-                Math.round(
-                        mapX(startX));
-
-        final int y1 =
-                Math.round(
-                        mapY(startY));
-
-        final int x2 =
-                Math.round(
-                        mapX(endX));
-
-        final int y2 =
-                Math.round(
-                        mapY(endY));
-
-        final long safeDuration =
-                Math.max(
-                        80L,
-                        Math.min(
-                                800L,
-                                duration));
-
-        final String command =
-                "/system/bin/input -d "
-                        + displayId
-                        + " swipe "
-                        + x1
-                        + " "
-                        + y1
-                        + " "
-                        + x2
-                        + " "
-                        + y2
-                        + " "
-                        + safeDuration;
-
-        RootShellSession.EXEC.execute(
-                () -> {
-
-                    try {
-
-                        rootShell.run(
-                                5,
-                                command);
-
-                    } catch (Throwable t) {
-
-                        Log.w(
-                                TAG,
-                                "Swipe failed",
-                                t);
-                    }
-                });
-    }
-
-    public void back() {
-
-        if (!isActive()) {
-            return;
-        }
-
-        final int displayId =
-                display.getDisplayId();
-
-        final String command =
-                "/system/bin/input -d "
-                        + displayId
-                        + " keyevent 4";
-
-        RootShellSession.EXEC.execute(
-                () -> {
-
-                    try {
-
-                        rootShell.run(
-                                5,
-                                command);
-
-                    } catch (Throwable t) {
-
-                        Log.w(
-                                TAG,
-                                "Back failed",
-                                t);
-                    }
-                });
-    }
-
-    private void releaseDisplayOnly() {
-
-        if (virtualDisplay != null) {
-
-            try {
-                virtualDisplay.release();
-            } catch (Throwable ignored) {
-            }
-        }
-
-        virtualDisplay = null;
-        display = null;
-
-        if (surface != null) {
-
-            try {
-                surface.release();
-            } catch (Throwable ignored) {
-            }
-        }
-
-        surface = null;
-    }
-
+    /*
+     * IMPORTANT:
+     *
+     * release() now means:
+     *
+     * detach Surface only.
+     *
+     * It does NOT release VirtualDisplay.
+     */
     public void release() {
-        releaseDisplayOnly();
+
+        if (!destroyed) {
+
+            V10ProjectionService
+                    .detachSurface();
+        }
     }
+
 
     public void destroy() {
 
@@ -499,10 +302,14 @@ public final class V10ProjectionSession
 
         destroyed = true;
 
-        release();
-
-        rootShell.destroy();
+        /*
+         * Activity destruction must not destroy
+         * the service-owned VirtualDisplay.
+         */
+        V10ProjectionService
+                .detachSurface();
     }
+
 
     @Override
     public void onSurfaceTextureAvailable(
@@ -510,24 +317,38 @@ public final class V10ProjectionSession
             int width,
             int height) {
 
-        ensureDisplay();
+        attachCurrentSurface();
     }
+
 
     @Override
     public void onSurfaceTextureSizeChanged(
             SurfaceTexture surface,
             int width,
             int height) {
+
+        contentWidth = width;
+
+        contentHeight = height;
     }
+
 
     @Override
     public boolean onSurfaceTextureDestroyed(
             SurfaceTexture surface) {
 
-        releaseDisplayOnly();
+        /*
+         * Detach only.
+         *
+         * The VirtualDisplay itself remains alive
+         * inside V10ProjectionService.
+         */
+        V10ProjectionService
+                .detachSurface();
 
         return true;
     }
+
 
     @Override
     public void onSurfaceTextureUpdated(
