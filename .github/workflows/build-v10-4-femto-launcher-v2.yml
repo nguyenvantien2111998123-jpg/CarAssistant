@@ -1,0 +1,1941 @@
+name: Build Car Assistant V10.4 - Femto Launcher V2
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build V10.4 Femto Launcher V2
+    runs-on: ubuntu-latest
+
+    steps:
+
+      # ============================================================
+      # CHECKOUT
+      # ============================================================
+
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # ============================================================
+      # JAVA 17
+      # ============================================================
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      # ============================================================
+      # GRADLE 8.13
+      # ============================================================
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: "8.13"
+          cache-disabled: true
+
+      # ============================================================
+      # VERIFY EXISTING V10 BASE
+      # ============================================================
+
+      - name: Verify V10.3 base
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          test -d v10-source
+
+          test -f \
+            v10-source/app/src/main/AndroidManifest.xml
+
+          test -f \
+            v10-source/app/src/main/java/com/hieptran/aacast/doudou/V10ProjectionSession.java
+
+          test -f \
+            v10-source/app/src/main/java/com/hieptran/aacast/doudou/V10InputController.java
+
+          test -f \
+            v10-source/app/src/main/java/com/hieptran/aacast/doudou/V10SessionStore.java
+
+          test -f \
+            v10-source/app/src/main/java/com/hieptran/aacast/doudou/V10ControlReceiver.java
+
+          echo "========================================"
+          echo " V10 BASE SOURCE OK"
+          echo "========================================"
+
+      # ============================================================
+      # REMOVE OBSOLETE GEARHEAD UI
+      # ============================================================
+
+      - name: Remove obsolete Gearhead UI
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          find v10-source/app/src/main/java \
+            -type f \
+            -name "GearheadControlBar.java" \
+            -print \
+            -delete
+
+          BRIDGE="$(
+            find v10-source/app/src/main/java \
+              -type f \
+              -name "AACastBridge.java" \
+              | head -1
+          )"
+
+          if [ -n "$BRIDGE" ]; then
+
+            sed -i \
+              '/GearheadControlBar/d' \
+              "$BRIDGE"
+
+          fi
+
+          echo "GEARHEAD UI REMOVED"
+
+      # ============================================================
+      # WRITE V10.4 FEMTO-STYLE LAUNCHER
+      # ============================================================
+
+      - name: Write V10.4 Femto launcher
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          cat > \
+          v10-source/app/src/main/java/com/hieptran/aacast/doudou/V10CarActivity.java \
+          <<'EOF'
+
+          package com.carassistant.v10;
+
+          import android.content.ComponentName;
+          import android.content.Intent;
+          import android.content.pm.ResolveInfo;
+          import android.graphics.Color;
+          import android.graphics.Typeface;
+          import android.graphics.drawable.GradientDrawable;
+          import android.os.Bundle;
+          import android.os.Handler;
+          import android.os.Looper;
+          import android.view.Gravity;
+          import android.view.TextureView;
+          import android.view.View;
+          import android.widget.FrameLayout;
+          import android.widget.GridLayout;
+          import android.widget.LinearLayout;
+          import android.widget.ScrollView;
+          import android.widget.TextView;
+
+          import com.google.android.apps.auto.sdk.CarActivity;
+
+          import java.text.SimpleDateFormat;
+          import java.util.ArrayList;
+          import java.util.Collections;
+          import java.util.Comparator;
+          import java.util.Date;
+          import java.util.List;
+          import java.util.Locale;
+
+          public final class V10CarActivity
+                  extends CarActivity {
+
+              private final Handler handler =
+                      new Handler(Looper.getMainLooper());
+
+              private FrameLayout root;
+
+              private FrameLayout projectionLayer;
+
+              private LinearLayout launcherLayer;
+
+              private LinearLayout dashboard;
+
+              private LinearLayout appPanel;
+
+              private LinearLayout dock;
+
+              private TextureView textureView;
+
+              private V10ProjectionSession session;
+
+              private TextView clock;
+
+              private TextView date;
+
+              private boolean resumed;
+
+              private ComponentName activeTarget;
+
+              private final ArrayList<AppInfo> apps =
+                      new ArrayList<>();
+
+              private final Runnable clockTicker =
+                      new Runnable() {
+
+                          @Override
+                          public void run() {
+
+                              updateClock();
+
+                              if (resumed) {
+
+                                  handler.postDelayed(
+                                          this,
+                                          1000);
+                              }
+                          }
+                      };
+
+              private final Runnable targetPoller =
+                      new Runnable() {
+
+                          @Override
+                          public void run() {
+
+                              if (!resumed) {
+                                  return;
+                              }
+
+                              ComponentName target =
+                                      V10SessionStore
+                                              .getTarget(
+                                                      V10CarActivity.this);
+
+                              if (target != null
+                                      && !target.equals(
+                                              activeTarget)) {
+
+                                  launchProjection(
+                                          target);
+                              }
+
+                              handler.postDelayed(
+                                      this,
+                                      500);
+                          }
+                      };
+
+              // ======================================================
+              // ANDROID AUTO CHROME
+              // ======================================================
+
+              private void applyChrome() {
+
+                  try {
+
+                      getCarUiController()
+                              .getStatusBarController()
+                              .hideAppHeader();
+
+                      getCarUiController()
+                              .getMenuController()
+                              .hideMenuButton();
+
+                  } catch (RuntimeException ignored) {
+                  }
+              }
+
+              // ======================================================
+              // CREATE
+              // ======================================================
+
+              @Override
+              public void onCreate(
+                      Bundle state) {
+
+                  setTheme(
+                          R.style.Theme_AACast);
+
+                  super.onCreate(state);
+
+                  setIgnoreConfigChanges(-1);
+
+                  V10SessionStore
+                          .setCurrentActivity(this);
+
+                  applyChrome();
+              }
+
+              // ======================================================
+              // RESUME
+              // ======================================================
+
+              @Override
+              public void onResume() {
+
+                  super.onResume();
+
+                  resumed = true;
+
+                  applyChrome();
+
+                  if (root == null) {
+
+                      buildUi();
+
+                      attachProjection();
+                  }
+
+                  loadApps();
+
+                  rebuildDock();
+
+                  handler.removeCallbacks(
+                          clockTicker);
+
+                  handler.removeCallbacks(
+                          targetPoller);
+
+                  handler.post(
+                          clockTicker);
+
+                  handler.post(
+                          targetPoller);
+
+                  ComponentName target =
+                          V10SessionStore
+                                  .getTarget(this);
+
+                  if (target != null) {
+
+                      launchProjection(
+                              target);
+                  }
+              }
+
+              // ======================================================
+              // BUILD ROOT
+              // ======================================================
+
+              private void buildUi() {
+
+                  root =
+                          new FrameLayout(this);
+
+                  root.setBackgroundColor(
+                          Color.rgb(
+                                  7,
+                                  9,
+                                  12));
+
+                  /*
+                   * Layer 1:
+                   *
+                   * Android app projection.
+                   *
+                   * Hidden while launcher is shown.
+                   */
+
+                  projectionLayer =
+                          new FrameLayout(this);
+
+                  projectionLayer
+                          .setVisibility(
+                                  View.GONE);
+
+                  root.addView(
+                          projectionLayer,
+                          new FrameLayout.LayoutParams(
+                                  -1,
+                                  -1));
+
+                  /*
+                   * Layer 2:
+                   *
+                   * Femto-style launcher.
+                   */
+
+                  launcherLayer =
+                          new LinearLayout(this);
+
+                  launcherLayer
+                          .setOrientation(
+                                  LinearLayout.VERTICAL);
+
+                  launcherLayer.setPadding(
+                          dp(18),
+                          dp(12),
+                          dp(18),
+                          dp(8));
+
+                  root.addView(
+                          launcherLayer,
+                          new FrameLayout.LayoutParams(
+                                  -1,
+                                  -1));
+
+                  buildDashboard();
+
+                  buildAppPanel();
+
+                  setContentView(root);
+              }
+
+              // ======================================================
+              // DASHBOARD
+              // ======================================================
+
+              private void buildDashboard() {
+
+                  dashboard =
+                          new LinearLayout(this);
+
+                  dashboard.setOrientation(
+                          LinearLayout.VERTICAL);
+
+                  launcherLayer.addView(
+                          dashboard,
+                          new LinearLayout.LayoutParams(
+                                  -1,
+                                  -1));
+
+                  /*
+                   * HEADER
+                   */
+
+                  LinearLayout header =
+                          new LinearLayout(this);
+
+                  header.setGravity(
+                          Gravity.CENTER_VERTICAL);
+
+                  LinearLayout titleBox =
+                          new LinearLayout(this);
+
+                  titleBox.setOrientation(
+                          LinearLayout.VERTICAL);
+
+                  TextView title =
+                          text(
+                                  "CAR ASSISTANT",
+                                  21,
+                                  Color.WHITE);
+
+                  title.setTypeface(
+                          Typeface.DEFAULT,
+                          Typeface.BOLD);
+
+                  date =
+                          text(
+                                  "",
+                                  12,
+                                  Color.LTGRAY);
+
+                  titleBox.addView(title);
+
+                  titleBox.addView(date);
+
+                  header.addView(
+                          titleBox,
+                          new LinearLayout.LayoutParams(
+                                  0,
+                                  -2,
+                                  1));
+
+                  clock =
+                          text(
+                                  "",
+                                  27,
+                                  Color.WHITE);
+
+                  clock.setGravity(
+                          Gravity.CENTER);
+
+                  header.addView(
+                          clock,
+                          new LinearLayout.LayoutParams(
+                                  dp(130),
+                                  dp(58)));
+
+                  dashboard.addView(
+                          header,
+                          new LinearLayout.LayoutParams(
+                                  -1,
+                                  dp(65)));
+
+                  /*
+                   * MAIN CONTENT
+                   */
+
+                  LinearLayout content =
+                          new LinearLayout(this);
+
+                  content.setOrientation(
+                          LinearLayout.VERTICAL);
+
+                  /*
+                   * MAP
+                   */
+
+                  LinearLayout map =
+                          card();
+
+                  map.addView(
+                          text(
+                                  "MAP",
+                                  12,
+                                  Color.LTGRAY));
+
+                  TextView mapText =
+                          text(
+                                  "Navigation",
+                                  28,
+                                  Color.WHITE);
+
+                  mapText.setGravity(
+                          Gravity.CENTER);
+
+                  map.addView(
+                          mapText,
+                          new LinearLayout.LayoutParams(
+                                  -1,
+                                  0,
+                                  1));
+
+                  content.addView(
+                          map,
+                          new LinearLayout.LayoutParams(
+                                  -1,
+                                  0,
+                                  2));
+
+                  /*
+                   * INFO
+                   */
+
+                  LinearLayout info =
+                          new LinearLayout(this);
+
+                  info.setOrientation(
+                          LinearLayout.HORIZONTAL);
+
+                  info.addView(
+                          infoCard(
+                                  "SPEED",
+                                  "0 km/h"),
+                          weightParams());
+
+                  info.addView(
+                          infoCard(
+                                  "WEATHER",
+                                  "-- °C"),
+                          weightParams());
+
+                  info.addView(
+                          infoCard(
+                                  "MEDIA",
+                                  "No media"),
+                          weightParams());
+
+                  content.addView(
+                          info,
+                          new LinearLayout.LayoutParams(
+                                  -1,
+                                  dp(120)));
+
+                  dashboard.addView(
+                          content,
+                          new LinearLayout.LayoutParams(
+                                  -1,
+                                  0,
+                                  1));
+
+                  /*
+                   * DOCK
+                   */
+
+                  LinearLayout dockRow =
+                          new LinearLayout(this);
+
+                  dockRow.setGravity(
+                          Gravity.CENTER_VERTICAL);
+
+                  dock =
+                          new LinearLayout(this);
+
+                  dock.setGravity(
+                          Gravity.CENTER_VERTICAL);
+
+                  dockRow.addView(
+                          dock,
+                          new LinearLayout.LayoutParams(
+                                  0,
+                                  -1,
+                                  1));
+
+                  TextView appsButton =
+                          buttonText("APPS");
+
+                  appsButton.setOnClickListener(
+                          v -> showApps());
+
+                  dockRow.addView(
+                          appsButton,
+                          new LinearLayout.LayoutParams(
+                                  dp(90),
+                                  dp(58)));
+
+                  dashboard.addView(
+                          dockRow,
+                          new LinearLayout.LayoutParams(
+                                  -1,
+                                  dp(70)));
+              }
+
+              // ======================================================
+              // APPLICATION PANEL
+              // ======================================================
+
+              private void buildAppPanel() {
+
+                  appPanel =
+                          new LinearLayout(this);
+
+                  appPanel.setOrientation(
+                          LinearLayout.VERTICAL);
+
+                  appPanel.setBackgroundColor(
+                          Color.rgb(
+                                  7,
+                                  9,
+                                  12));
+
+                  appPanel.setVisibility(
+                          View.GONE);
+
+                  launcherLayer.addView(
+                          appPanel,
+                          new LinearLayout.LayoutParams(
+                                  -1,
+                                  -1));
+
+                  /*
+                   * APP PANEL HEADER
+                   */
+
+                  LinearLayout header =
+                          new LinearLayout(this);
+
+                  header.setGravity(
+                          Gravity.CENTER_VERTICAL);
+
+                  TextView back =
+                          buttonText("BACK");
+
+                  back.setOnClickListener(
+                          v -> hideApps());
+
+                  header.addView(
+                          back,
+                          new LinearLayout.LayoutParams(
+                                  dp(90),
+                                  dp(58)));
+
+                  TextView title =
+                          text(
+                                  "APPLICATIONS",
+                                  21,
+                                  Color.WHITE);
+
+                  title.setGravity(
+                          Gravity.CENTER);
+
+                  header.addView(
+                          title,
+                          new LinearLayout.LayoutParams(
+                                  0,
+                                  dp(58),
+                                  1));
+
+                  appPanel.addView(header);
+
+                  /*
+                   * APP GRID
+                   */
+
+                  ScrollView scroll =
+                          new ScrollView(this);
+
+                  GridLayout grid =
+                          new GridLayout(this);
+
+                  grid.setColumnCount(4);
+
+                  grid.setUseDefaultMargins(
+                          false);
+
+                  scroll.addView(grid);
+
+                  appPanel.addView(
+                          scroll,
+                          new LinearLayout.LayoutParams(
+                                  -1,
+                                  0,
+                                  1));
+
+                  rebuildAppGrid(grid);
+              }
+
+              // ======================================================
+              // APP GRID
+              // ======================================================
+
+              private void rebuildAppGrid(
+                      GridLayout grid) {
+
+                  grid.removeAllViews();
+
+                  for (AppInfo app : apps) {
+
+                      LinearLayout tile =
+                              appTile(app);
+
+                      GridLayout.LayoutParams params =
+                              new GridLayout.LayoutParams();
+
+                      params.width = 0;
+
+                      params.height =
+                              dp(105);
+
+                      params.columnSpec =
+                              GridLayout.spec(
+                                      GridLayout.UNDEFINED,
+                                      1f);
+
+                      params.setMargins(
+                              dp(5),
+                              dp(5),
+                              dp(5),
+                              dp(5));
+
+                      grid.addView(
+                              tile,
+                              params);
+                  }
+              }
+
+              // ======================================================
+              // APP DISCOVERY
+              // ======================================================
+
+              private void loadApps() {
+
+                  apps.clear();
+
+                  Intent intent =
+                          new Intent(
+                                  Intent.ACTION_MAIN);
+
+                  intent.addCategory(
+                          Intent.CATEGORY_LAUNCHER);
+
+                  List<ResolveInfo> result =
+                          getPackageManager()
+                                  .queryIntentActivities(
+                                          intent,
+                                          0);
+
+                  for (ResolveInfo info :
+                          result) {
+
+                      String pkg =
+                              info.activityInfo
+                                      .packageName;
+
+                      if (getPackageName()
+                              .equals(pkg)) {
+
+                          continue;
+                      }
+
+                      ComponentName component =
+                              new ComponentName(
+                                      pkg,
+                                      info.activityInfo
+                                              .name);
+
+                      CharSequence label =
+                              info.loadLabel(
+                                      getPackageManager());
+
+                      String name =
+                              label == null
+                                      ? pkg
+                                      : label.toString();
+
+                      apps.add(
+                              new AppInfo(
+                                      component,
+                                      name));
+                  }
+
+                  Collections.sort(
+                          apps,
+                          new Comparator<AppInfo>() {
+
+                              @Override
+                              public int compare(
+                                      AppInfo a,
+                                      AppInfo b) {
+
+                                  return a.name
+                                          .compareToIgnoreCase(
+                                                  b.name);
+                              }
+                          });
+
+                  if (appPanel != null) {
+
+                      if (appPanel
+                              .getChildCount()
+                              > 1) {
+
+                          View child =
+                                  appPanel
+                                          .getChildAt(
+                                                  1);
+
+                          if (child
+                                  instanceof ScrollView) {
+
+                              View inside =
+                                      ((ScrollView)
+                                              child)
+                                              .getChildAt(
+                                                      0);
+
+                              if (inside
+                                      instanceof GridLayout) {
+
+                                  rebuildAppGrid(
+                                          (GridLayout)
+                                                  inside);
+                              }
+                          }
+                      }
+                  }
+              }
+
+              // ======================================================
+              // DOCK
+              // ======================================================
+
+              private void rebuildDock() {
+
+                  if (dock == null) {
+                      return;
+                  }
+
+                  dock.removeAllViews();
+
+                  int count =
+                          Math.min(
+                                  5,
+                                  apps.size());
+
+                  for (int i = 0;
+                       i < count;
+                       i++) {
+
+                      final AppInfo app =
+                              apps.get(i);
+
+                      TextView tile =
+                              buttonText(
+                                      app.name);
+
+                      tile.setTextSize(11);
+
+                      tile.setMaxLines(2);
+
+                      tile.setOnClickListener(
+                              v ->
+                                      launchProjection(
+                                              app.component));
+
+                      LinearLayout.LayoutParams
+                              params =
+                                      new LinearLayout.LayoutParams(
+                                              0,
+                                              dp(58),
+                                              1f);
+
+                      params.setMargins(
+                              dp(3),
+                              0,
+                              dp(3),
+                              0);
+
+                      dock.addView(
+                              tile,
+                              params);
+                  }
+              }
+
+              // ======================================================
+              // APP TILE
+              // ======================================================
+
+              private LinearLayout appTile(
+                      AppInfo app) {
+
+                  LinearLayout tile =
+                          new LinearLayout(this);
+
+                  tile.setOrientation(
+                          LinearLayout.VERTICAL);
+
+                  tile.setGravity(
+                          Gravity.CENTER);
+
+                  GradientDrawable bg =
+                          new GradientDrawable();
+
+                  bg.setColor(
+                          Color.rgb(
+                                  22,
+                                  27,
+                                  33));
+
+                  bg.setCornerRadius(
+                          dp(16));
+
+                  tile.setBackground(bg);
+
+                  TextView icon =
+                          text(
+                                  initial(app.name),
+                                  27,
+                                  Color.WHITE);
+
+                  icon.setGravity(
+                          Gravity.CENTER);
+
+                  tile.addView(
+                          icon,
+                          new LinearLayout.LayoutParams(
+                                  -1,
+                                  dp(52)));
+
+                  TextView name =
+                          text(
+                                  app.name,
+                                  12,
+                                  Color.WHITE);
+
+                  name.setGravity(
+                          Gravity.CENTER);
+
+                  name.setMaxLines(2);
+
+                  tile.addView(
+                          name,
+                          new LinearLayout.LayoutParams(
+                                  -1,
+                                  dp(42)));
+
+                  tile.setOnClickListener(
+                          v -> {
+
+                              hideApps();
+
+                              launchProjection(
+                                      app.component);
+                          });
+
+                  return tile;
+              }
+
+              // ======================================================
+              // PROJECTION
+              // ======================================================
+
+              private void attachProjection() {
+
+                  textureView =
+                          new TextureView(this);
+
+                  projectionLayer.addView(
+                          textureView,
+                          new FrameLayout.LayoutParams(
+                                  -1,
+                                  -1));
+
+                  session =
+                          new V10ProjectionSession(
+                                  this);
+
+                  session.attachTextureView(
+                          textureView);
+
+                  V10InputController
+                          inputController =
+                                  new V10InputController(
+                                          session);
+
+                  textureView
+                          .setOnTouchListener(
+                                  inputController
+                                          .createListener());
+              }
+
+              private void launchProjection(
+                      ComponentName component) {
+
+                  if (component == null
+                          || session == null) {
+
+                      return;
+                  }
+
+                  activeTarget =
+                          component;
+
+                  V10SessionStore
+                          .setTarget(
+                                  this,
+                                  component);
+
+                  session.setTarget(
+                          component);
+
+                  launcherLayer
+                          .setVisibility(
+                                  View.GONE);
+
+                  projectionLayer
+                          .setVisibility(
+                                  View.VISIBLE);
+              }
+
+              // ======================================================
+              // RETURN TO LAUNCHER
+              // ======================================================
+
+              private void returnToLauncher() {
+
+                  activeTarget = null;
+
+                  V10SessionStore
+                          .clearTarget(this);
+
+                  if (session != null) {
+
+                      session.release();
+                  }
+
+                  projectionLayer
+                          .setVisibility(
+                                  View.GONE);
+
+                  launcherLayer
+                          .setVisibility(
+                                  View.VISIBLE);
+
+                  dashboard
+                          .setVisibility(
+                                  View.VISIBLE);
+
+                  appPanel
+                          .setVisibility(
+                                  View.GONE);
+              }
+
+              // ======================================================
+              // APPS
+              // ======================================================
+
+              private void showApps() {
+
+                  dashboard
+                          .setVisibility(
+                                  View.GONE);
+
+                  appPanel
+                          .setVisibility(
+                                  View.VISIBLE);
+              }
+
+              private void hideApps() {
+
+                  appPanel
+                          .setVisibility(
+                                  View.GONE);
+
+                  dashboard
+                          .setVisibility(
+                                  View.VISIBLE);
+              }
+
+              // ======================================================
+              // CONTROL RECEIVER API
+              // ======================================================
+
+              public void handleControlBack() {
+
+                  if (appPanel != null
+                          && appPanel
+                                  .getVisibility()
+                          == View.VISIBLE) {
+
+                      hideApps();
+
+                      return;
+                  }
+
+                  if (session != null
+                          && session.isActive()) {
+
+                      session.back();
+                  }
+              }
+
+              public void handleControlHome() {
+
+                  returnToLauncher();
+              }
+
+              public void handleControlRecents() {
+
+                  showApps();
+              }
+
+              public void handleControlApps() {
+
+                  showApps();
+              }
+
+              // ======================================================
+              // BACK
+              // ======================================================
+
+              @Override
+              public void onBackPressed() {
+
+                  if (appPanel != null
+                          && appPanel
+                                  .getVisibility()
+                          == View.VISIBLE) {
+
+                      hideApps();
+
+                      return;
+                  }
+
+                  if (session != null
+                          && session.isActive()) {
+
+                      session.back();
+
+                      return;
+                  }
+
+                  super.onBackPressed();
+              }
+
+              // ======================================================
+              // PAUSE
+              // ======================================================
+
+              @Override
+              public void onPause() {
+
+                  resumed = false;
+
+                  handler.removeCallbacks(
+                          clockTicker);
+
+                  handler.removeCallbacks(
+                          targetPoller);
+
+                  super.onPause();
+              }
+
+              // ======================================================
+              // STOP
+              // ======================================================
+
+              @Override
+              public void onStop() {
+
+                  resumed = false;
+
+                  handler.removeCallbacks(
+                          clockTicker);
+
+                  handler.removeCallbacks(
+                          targetPoller);
+
+                  if (session != null) {
+
+                      session.release();
+                  }
+
+                  super.onStop();
+              }
+
+              // ======================================================
+              // DESTROY
+              // ======================================================
+
+              @Override
+              public void onDestroy() {
+
+                  resumed = false;
+
+                  handler.removeCallbacks(
+                          clockTicker);
+
+                  handler.removeCallbacks(
+                          targetPoller);
+
+                  if (session != null) {
+
+                      session.destroy();
+
+                      session = null;
+                  }
+
+                  V10SessionStore
+                          .clearCurrentActivity(
+                                  this);
+
+                  root = null;
+
+                  textureView = null;
+
+                  projectionLayer = null;
+
+                  launcherLayer = null;
+
+                  dashboard = null;
+
+                  appPanel = null;
+
+                  dock = null;
+
+                  super.onDestroy();
+              }
+
+              // ======================================================
+              // WINDOW FOCUS
+              // ======================================================
+
+              @Override
+              public void onWindowFocusChanged(
+                      boolean hasFocus,
+                      boolean touchMode) {
+
+                  super.onWindowFocusChanged(
+                          hasFocus,
+                          touchMode);
+
+                  if (hasFocus) {
+
+                      applyChrome();
+                  }
+              }
+
+              // ======================================================
+              // CLOCK
+              // ======================================================
+
+              private void updateClock() {
+
+                  if (clock == null
+                          || date == null) {
+
+                      return;
+                  }
+
+                  Date now =
+                          new Date();
+
+                  clock.setText(
+                          new SimpleDateFormat(
+                                  "HH:mm",
+                                  Locale.getDefault())
+                                  .format(now));
+
+                  date.setText(
+                          new SimpleDateFormat(
+                                  "EEEE, dd MMMM",
+                                  Locale.getDefault())
+                                  .format(now));
+              }
+
+              // ======================================================
+              // CARD
+              // ======================================================
+
+              private LinearLayout card() {
+
+                  LinearLayout box =
+                          new LinearLayout(this);
+
+                  box.setOrientation(
+                          LinearLayout.VERTICAL);
+
+                  box.setPadding(
+                          dp(14),
+                          dp(10),
+                          dp(14),
+                          dp(10));
+
+                  GradientDrawable bg =
+                          new GradientDrawable();
+
+                  bg.setColor(
+                          Color.rgb(
+                                  22,
+                                  27,
+                                  33));
+
+                  bg.setCornerRadius(
+                          dp(18));
+
+                  box.setBackground(bg);
+
+                  LinearLayout.LayoutParams p =
+                          new LinearLayout.LayoutParams(
+                                  -1,
+                                  -1);
+
+                  p.setMargins(
+                          dp(4),
+                          dp(4),
+                          dp(4),
+                          dp(4));
+
+                  box.setLayoutParams(p);
+
+                  return box;
+              }
+
+              // ======================================================
+              // INFO CARD
+              // ======================================================
+
+              private LinearLayout infoCard(
+                      String title,
+                      String value) {
+
+                  LinearLayout box =
+                          card();
+
+                  box.addView(
+                          text(
+                                  title,
+                                  11,
+                                  Color.LTGRAY));
+
+                  TextView valueView =
+                          text(
+                                  value,
+                                  21,
+                                  Color.WHITE);
+
+                  valueView.setGravity(
+                          Gravity.CENTER);
+
+                  box.addView(
+                          valueView,
+                          new LinearLayout.LayoutParams(
+                                  -1,
+                                  0,
+                                  1));
+
+                  return box;
+              }
+
+              // ======================================================
+              // BUTTON
+              // ======================================================
+
+              private TextView buttonText(
+                      String value) {
+
+                  TextView view =
+                          text(
+                                  value,
+                                  13,
+                                  Color.WHITE);
+
+                  view.setGravity(
+                          Gravity.CENTER);
+
+                  GradientDrawable bg =
+                          new GradientDrawable();
+
+                  bg.setColor(
+                          Color.rgb(
+                                  29,
+                                  35,
+                                  42));
+
+                  bg.setCornerRadius(
+                          dp(16));
+
+                  view.setBackground(bg);
+
+                  return view;
+              }
+
+              // ======================================================
+              // TEXT
+              // ======================================================
+
+              private TextView text(
+                      String value,
+                      float size,
+                      int color) {
+
+                  TextView view =
+                          new TextView(this);
+
+                  view.setText(value);
+
+                  view.setTextSize(size);
+
+                  view.setTextColor(color);
+
+                  return view;
+              }
+
+              // ======================================================
+              // WEIGHT
+              // ======================================================
+
+              private LinearLayout.LayoutParams
+                      weightParams() {
+
+                  return new LinearLayout.LayoutParams(
+                          0,
+                          -1,
+                          1f);
+              }
+
+              // ======================================================
+              // INITIAL
+              // ======================================================
+
+              private String initial(
+                      String value) {
+
+                  if (value == null
+                          || value.isEmpty()) {
+
+                      return "?";
+                  }
+
+                  return value
+                          .substring(
+                                  0,
+                                  1)
+                          .toUpperCase(
+                                  Locale.getDefault());
+              }
+
+              // ======================================================
+              // DP
+              // ======================================================
+
+              private int dp(
+                      float value) {
+
+                  return Math.round(
+                          value *
+                          getResources()
+                                  .getDisplayMetrics()
+                                  .density);
+              }
+
+              // ======================================================
+              // APP DATA
+              // ======================================================
+
+              private static final class AppInfo {
+
+                  final ComponentName component;
+
+                  final String name;
+
+                  AppInfo(
+                          ComponentName component,
+                          String name) {
+
+                      this.component =
+                              component;
+
+                      this.name =
+                              name;
+                  }
+              }
+          }
+
+          EOF
+
+          echo
+          echo "========================================"
+          echo " V10.4 FEMTO LAUNCHER V2 WRITTEN"
+          echo "========================================"
+
+      # ============================================================
+      # VERIFY V10.4
+      # ============================================================
+
+      - name: Verify V10.4 source
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          ACTIVITY="v10-source/app/src/main/java/com/hieptran/aacast/doudou/V10CarActivity.java"
+
+          SESSION="v10-source/app/src/main/java/com/hieptran/aacast/doudou/V10ProjectionSession.java"
+
+          RECEIVER="v10-source/app/src/main/java/com/hieptran/aacast/doudou/V10ControlReceiver.java"
+
+          test -f "$ACTIVITY"
+
+          test -f "$SESSION"
+
+          test -f "$RECEIVER"
+
+          # --------------------------------------------------------
+          # FEMTO STYLE UI
+          # --------------------------------------------------------
+
+          grep -q \
+            "CAR ASSISTANT" \
+            "$ACTIVITY"
+
+          grep -q \
+            "APPLICATIONS" \
+            "$ACTIVITY"
+
+          grep -q \
+            "MAP" \
+            "$ACTIVITY"
+
+          grep -q \
+            "SPEED" \
+            "$ACTIVITY"
+
+          grep -q \
+            "WEATHER" \
+            "$ACTIVITY"
+
+          grep -q \
+            "MEDIA" \
+            "$ACTIVITY"
+
+          # --------------------------------------------------------
+          # APP DISCOVERY
+          # --------------------------------------------------------
+
+          grep -q \
+            "ACTION_MAIN" \
+            "$ACTIVITY"
+
+          grep -q \
+            "CATEGORY_LAUNCHER" \
+            "$ACTIVITY"
+
+          # --------------------------------------------------------
+          # SESSION
+          # --------------------------------------------------------
+
+          grep -q \
+            "V10SessionStore.setTarget" \
+            "$ACTIVITY"
+
+          grep -q \
+            "session.setTarget" \
+            "$ACTIVITY"
+
+          grep -q \
+            "session.back" \
+            "$ACTIVITY"
+
+          grep -q \
+            "returnToLauncher" \
+            "$ACTIVITY"
+
+          # --------------------------------------------------------
+          # CONTROL RECEIVER HANDLERS
+          # --------------------------------------------------------
+
+          grep -q \
+            "handleControlBack" \
+            "$ACTIVITY"
+
+          grep -q \
+            "handleControlHome" \
+            "$ACTIVITY"
+
+          grep -q \
+            "handleControlRecents" \
+            "$ACTIVITY"
+
+          grep -q \
+            "handleControlApps" \
+            "$ACTIVITY"
+
+          # --------------------------------------------------------
+          # IMPORTANT: DO NOT USE WRONG ACTIVITY API
+          # --------------------------------------------------------
+
+          if grep -q \
+            "getWindow()" \
+            "$ACTIVITY"; then
+
+            echo \
+              "ERROR: getWindow() must not be used"
+
+            exit 1
+          fi
+
+          if grep -q \
+            "session.resume()" \
+            "$ACTIVITY"; then
+
+            echo \
+              "ERROR: unsupported session.resume()"
+
+            exit 1
+          fi
+
+          if grep -q \
+            "session.pause()" \
+            "$ACTIVITY"; then
+
+            echo \
+              "ERROR: unsupported session.pause()"
+
+            exit 1
+          fi
+
+          # --------------------------------------------------------
+          # RECEIVER MUST MATCH ACTIVITY API
+          # --------------------------------------------------------
+
+          grep -q \
+            "handleControlBack" \
+            "$RECEIVER"
+
+          grep -q \
+            "handleControlHome" \
+            "$RECEIVER"
+
+          grep -q \
+            "handleControlRecents" \
+            "$RECEIVER"
+
+          grep -q \
+            "handleControlApps" \
+            "$RECEIVER"
+
+          # --------------------------------------------------------
+          # PROJECTION
+          # --------------------------------------------------------
+
+          grep -q \
+            "createVirtualDisplay" \
+            "$SESSION"
+
+          grep -q \
+            "/system/bin/am start" \
+            "$SESSION"
+
+          grep -q \
+            "/system/bin/input -d" \
+            "$SESSION"
+
+          grep -q \
+            "SurfaceTexture" \
+            "$SESSION"
+
+          echo
+          echo "========================================"
+          echo " V10.4 SOURCE VERIFY PASSED"
+          echo "========================================"
+
+      # ============================================================
+      # VERIFY NO GEARHEAD CONTROL BAR
+      # ============================================================
+
+      - name: Verify no Gearhead control bar
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          if find \
+            v10-source/app/src/main/java \
+            -type f \
+            -name "GearheadControlBar.java" \
+            | grep -q .; then
+
+            echo \
+              "ERROR: GearheadControlBar.java remains"
+
+            exit 1
+          fi
+
+          if grep -R \
+            -q \
+            "GearheadControlBar" \
+            v10-source/app/src/main/java \
+            --include="*.java"; then
+
+            echo \
+              "ERROR: GearheadControlBar reference remains"
+
+            exit 1
+          fi
+
+          echo "GEARHEAD CONTROL BAR CLEAN"
+
+      # ============================================================
+      # VERIFY ANDROID 12
+      # ============================================================
+
+      - name: Verify Android 12 compatibility
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          if grep -R \
+            -E \
+            "VERSION_CODES\.TIRAMISU|VERSION_CODES\.UPSIDE_DOWN_CAKE|VERSION_CODES\.VANILLA_ICE_CREAM" \
+            v10-source/app/src/main/java \
+            --include="*.java"; then
+
+            echo \
+              "ERROR: Android 13+ API reference found"
+
+            exit 1
+          fi
+
+          echo "ANDROID 12 COMPATIBILITY OK"
+
+      # ============================================================
+      # VERIFY XPOSED BRIDGE
+      # ============================================================
+
+      - name: Verify Xposed bridge
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          BRIDGE="$(
+            find v10-source/app/src/main/java \
+              -type f \
+              -name "AACastBridge.java" \
+              | head -1
+          )"
+
+          test -n "$BRIDGE"
+
+          grep -q \
+            "com.google.android.projection.gearhead" \
+            "$BRIDGE"
+
+          grep -Eq \
+            'InputHooks[[:space:]]*\.[[:space:]]*install' \
+            "$BRIDGE"
+
+          grep -Eq \
+            'DisplayHooks[[:space:]]*\.[[:space:]]*installDisplayFlags' \
+            "$BRIDGE"
+
+          if grep -q \
+            "GearheadControlBar" \
+            "$BRIDGE"; then
+
+            echo \
+              "ERROR: GearheadControlBar still referenced"
+
+            exit 1
+          fi
+
+          echo "XPOSED BRIDGE OK"
+
+      # ============================================================
+      # VERIFY SWIPE
+      # ============================================================
+
+      - name: Verify swipe input
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          INPUT="$(
+            find v10-source/app/src/main/java \
+              -type f \
+              -name "V10InputController.java" \
+              | head -1
+          )"
+
+          test -n "$INPUT"
+
+          grep -q \
+            "ACTION_MOVE" \
+            "$INPUT"
+
+          grep -q \
+            "session.swipe" \
+            "$INPUT"
+
+          echo "SWIPE INPUT OK"
+
+      # ============================================================
+      # VERIFY PROJECTION ENGINE
+      # ============================================================
+
+      - name: Verify projection engine
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          SESSION="$(
+            find v10-source/app/src/main/java \
+              -type f \
+              -name "V10ProjectionSession.java" \
+              | head -1
+          )"
+
+          test -n "$SESSION"
+
+          grep -q \
+            "createVirtualDisplay" \
+            "$SESSION"
+
+          grep -q \
+            "/system/bin/am start" \
+            "$SESSION"
+
+          grep -q \
+            "/system/bin/input -d" \
+            "$SESSION"
+
+          grep -q \
+            "SurfaceTexture" \
+            "$SESSION"
+
+          echo "PROJECTION ENGINE OK"
+
+      # ============================================================
+      # GRADLE CLEAN
+      # ============================================================
+
+      - name: Gradle clean
+        working-directory: v10-source
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          ./gradlew \
+            clean \
+            --no-daemon
+
+      # ============================================================
+      # BUILD
+      # ============================================================
+
+      - name: Build V10.4 debug
+        working-directory: v10-source
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          ./gradlew \
+            assembleDebug \
+            --no-daemon \
+            --stacktrace
+
+      # ============================================================
+      # VERIFY APK
+      # ============================================================
+
+      - name: Verify APK
+        working-directory: v10-source
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          APK="app/build/outputs/apk/debug/app-debug.apk"
+
+          test -f "$APK"
+
+          echo
+          echo "APK:"
+          ls -lh "$APK"
+
+          echo
+          echo "SHA256:"
+          sha256sum "$APK"
+
+          echo
+          echo "========================================"
+          echo " CAR ASSISTANT V10.4 BUILD PASSED"
+          echo "========================================"
+
+      # ============================================================
+      # UPLOAD APK
+      # ============================================================
+
+      - name: Upload V10.4 APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: CarAssistant-V10.4-Femto-Launcher-V2-debug
+          path: v10-source/app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error
+          retention-days: 30
+
+      # ============================================================
+      # COMMIT
+      # ============================================================
+
+      - name: Commit V10.4
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          git config \
+            user.name \
+            "github-actions[bot]"
+
+          git config \
+            user.email \
+            "41898282+github-actions[bot]@users.noreply.github.com"
+
+          git add v10-source
+
+          if git diff --cached --quiet; then
+
+            echo "No V10.4 source changes."
+
+          else
+
+            git commit \
+              -m \
+              "Build V10.4 Femto style launcher V2"
+
+            git push
+
+          fi
+
+          echo
+          echo "========================================"
+          echo " V10.4 V2 COMMITTED"
+          echo "========================================"
