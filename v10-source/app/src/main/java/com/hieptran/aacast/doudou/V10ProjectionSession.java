@@ -202,63 +202,64 @@ public final class V10ProjectionSession
 
     private void launchTarget() {
 
-        if (display == null
-                || target == null) {
-            return;
-        }
+    if (display == null
+            || target == null) {
+        return;
+    }
 
-        final int displayId =
-                display.getDisplayId();
+    final int displayId =
+            display.getDisplayId();
 
-        final int userId =
-                Process.myUid() / 100000;
+    final int userId =
+            Process.myUid() / 100000;
 
-        final String packageName =
-                target.getPackageName()
-                        .replace(
-                                "'",
-                                "'\"'\"'");
+    final String flat =
+            target.flattenToString()
+                    .replace(
+                            "'",
+                            "'\"'\"'");
 
-        final String flat =
-                target.flattenToString()
-                        .replace(
-                                "'",
-                                "'\"'\"'");
+    /*
+     * IMPORTANT:
+     *
+     * Do NOT force-stop the target application here.
+     *
+     * V10 releases/recreates its VirtualDisplay when the
+     * car activity stops/resumes, but the Android application
+     * task itself should remain alive.
+     *
+     * --activity-reorder-to-front tells ActivityManager to
+     * bring the existing task/activity to the foreground
+     * instead of intentionally killing and recreating it.
+     */
+    final String command =
+            "/system/bin/am start"
+                    + " --user "
+                    + userId
+                    + " --display "
+                    + displayId
+                    + " --activity-reorder-to-front"
+                    + " -n '"
+                    + flat
+                    + "'";
 
-        final String command =
-                "/system/bin/am force-stop '"
-                        + packageName
-                        + "'; "
-                        + "/system/bin/am start"
-                        + " --user "
-                        + userId
-                        + " --display "
-                        + displayId
-                        + " --windowingMode 1"
-                        + " -a android.intent.action.MAIN"
-                        + " -c android.intent.category.LAUNCHER"
-                        + " -f 0x18000000"
-                        + " -n '"
-                        + flat
-                        + "'";
+    RootShellSession.EXEC.execute(
+            () -> {
 
-        RootShellSession.EXEC.execute(
-                () -> {
+                try {
 
-                    try {
+                    rootShell.run(
+                            10,
+                            command);
 
-                        rootShell.run(
-                                10,
-                                command);
+                } catch (Throwable t) {
 
-                    } catch (Throwable t) {
-
-                        Log.w(
-                                TAG,
-                                "Launch failed",
-                                t);
-                    }
-                });
+                    Log.w(
+                            TAG,
+                            "Launch existing task failed",
+                            t);
+                }
+            });
     }
 
     private float mapX(float x) {
