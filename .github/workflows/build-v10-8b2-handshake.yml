@@ -41,9 +41,8 @@ jobs:
           grep -q 'package com.carassistant.v10;' "$ACTIVITY"
 
           echo "Existing V10 source confirmed."
-          echo "No V10 recreation will be performed."
 
-      - name: Patch V10ProjectionService - startup handshake
+      - name: Patch V10ProjectionService - handshake
         shell: bash
         run: |
           set -euo pipefail
@@ -51,879 +50,325 @@ jobs:
           FILE="v10-source/app/src/main/java/com/hieptran/aacast/doudou/V10ProjectionService.java"
 
           python3 - "$FILE" <<'PY'
+          import pathlib
+          import re
           import sys
-          from pathlib import Path
 
-          path = Path(sys.argv[1])
-
+          path = pathlib.Path(sys.argv[1])
           text = path.read_text()
 
-          start = text.index("package com.carassistant.v10;")
-
-          replacement = r'''package com.carassistant.v10;
-
-          import android.app.Notification;
-          import android.app.NotificationChannel;
-          import android.app.NotificationManager;
-          import android.app.Service;
-          import android.content.ComponentName;
-          import android.content.Context;
-          import android.content.Intent;
-          import android.hardware.display.DisplayManager;
-          import android.hardware.display.VirtualDisplay;
-          import android.os.Build;
-          import android.os.IBinder;
-          import android.os.Process;
-          import android.util.Log;
-          import android.view.Display;
-          import android.view.Surface;
-
-          public final class V10ProjectionService extends Service {
-
-              private static final String TAG =
-                      "CarAssistantV10Service";
-
-              private static final String CHANNEL_ID =
-                      "v10_projection";
-
-              private static final int NOTIFICATION_ID =
-                      10010;
-
-              private static volatile V10ProjectionService instance;
-
-              /*
-               * Startup handshake.
-               *
-               * Activity/TextureView can call the static API
-               * before Android has finished creating this Service.
-               *
-               * These pending values bridge that asynchronous gap.
-               */
-              private static final Object START_LOCK =
-                      new Object();
-
-              private static ComponentName pendingTarget;
-
-              private static Surface pendingSurface;
-
-              private static int pendingWidth;
-
-              private static int pendingHeight;
-
-              private final Object lock =
-                      new Object();
-
-              private ComponentName target;
-
-              private VirtualDisplay virtualDisplay;
-
-              private Display display;
-
-              private Surface surface;
-
-              private int width;
-
-              private int height;
-
-              private boolean destroyed;
-
-
-              public static void ensureStarted(
-                      Context context) {
-
-                  if (getInstance() != null) {
-                      return;
-                  }
-
-                  Intent intent =
-                          new Intent(
-                                  context.getApplicationContext(),
-                                  V10ProjectionService.class);
-
-                  try {
-
-                      if (Build.VERSION.SDK_INT >= 26) {
-
-                          context.getApplicationContext()
-                                  .startForegroundService(intent);
-
-                      } else {
-
-                          context.getApplicationContext()
-                                  .startService(intent);
-                      }
-
-                  } catch (Throwable error) {
-
-                      /*
-                       * Never allow service-start failure to
-                       * crash V10CarActivity.
-                       */
-                      Log.w(
-                              TAG,
-                              "Unable to start projection service",
-                              error);
-                  }
-              }
-
-
-              private static V10ProjectionService getInstance() {
-                  return instance;
-              }
-
-
-              public static void setTarget(
-                      Context context,
-                      ComponentName component) {
-
-                  if (component == null) {
-                      clearTarget();
-                      return;
-                  }
-
-                  synchronized (START_LOCK) {
-
-                      V10ProjectionService service =
-                              getInstance();
-
-                      if (service == null) {
-
-                          pendingTarget = component;
-
-                          ensureStarted(context);
-
-                          return;
-                      }
-
-                      service.setTargetInternal(
-                              component);
-                  }
-              }
-
-
-              public static void attachSurface(
-                      Context context,
-                      Surface newSurface,
-                      int newWidth,
-                      int newHeight) {
-
-                  if (newSurface == null
-                          || newWidth < 1
-                          || newHeight < 1) {
-                      return;
-                  }
-
-                  synchronized (START_LOCK) {
-
-                      V10ProjectionService service =
-                              getInstance();
-
-                      if (service == null) {
-
-                          /*
-                           * Keep the Surface until the service
-                           * is ready. Do not release it here.
-                           */
-                          if (pendingSurface != null
-                                  && pendingSurface != newSurface) {
-
-                              try {
-                                  pendingSurface.release();
-                              } catch (Throwable ignored) {
-                              }
-                          }
-
-                          pendingSurface = newSurface;
-                          pendingWidth = newWidth;
-                          pendingHeight = newHeight;
-
-                          ensureStarted(context);
-
-                          return;
-                      }
-
-                      service.attachSurfaceInternal(
-                              newSurface,
-                              newWidth,
-                              newHeight);
-                  }
-              }
-
-
-              public static void detachSurface() {
-
-                  synchronized (START_LOCK) {
-
-                      if (pendingSurface != null) {
-
-                          try {
-                              pendingSurface.release();
-                          } catch (Throwable ignored) {
-                          }
-
-                          pendingSurface = null;
-                          pendingWidth = 0;
-                          pendingHeight = 0;
-                      }
-
-                      V10ProjectionService service =
-                              getInstance();
-
-                      if (service != null) {
-                          service.detachSurfaceInternal();
-                      }
-                  }
-              }
-
-
-              public static int getDisplayId() {
-
-                  V10ProjectionService service =
-                          getInstance();
-
-                  if (service == null) {
-                      return -1;
-                  }
-
-                  return service.getDisplayIdInternal();
-              }
-
-
-              public static boolean isActive() {
-
-                  V10ProjectionService service =
-                          getInstance();
-
-                  return service != null
-                          && service.isActiveInternal();
-              }
-
-
-              public static void clearTarget() {
-
-                  synchronized (START_LOCK) {
-
-                      pendingTarget = null;
-
-                      V10ProjectionService service =
-                              getInstance();
-
-                      if (service != null) {
-                          service.clearTargetInternal();
-                      }
-                  }
-              }
-
-
-              public static void tap(
-                      int x,
-                      int y) {
-
-                  V10ProjectionService service =
-                          getInstance();
-
-                  if (service != null) {
-
-                      service.inputInternal(
-                              "tap "
-                                      + x
-                                      + " "
-                                      + y);
-                  }
-              }
-
-
-              public static void swipe(
-                      int x1,
-                      int y1,
-                      int x2,
-                      int y2,
-                      long duration) {
-
-                  V10ProjectionService service =
-                          getInstance();
-
-                  if (service != null) {
-
-                      long d =
-                              Math.max(
-                                      80L,
-                                      Math.min(
-                                              800L,
-                                              duration));
-
-                      service.inputInternal(
-                              "swipe "
-                                      + x1
-                                      + " "
-                                      + y1
-                                      + " "
-                                      + x2
-                                      + " "
-                                      + y2
-                                      + " "
-                                      + d);
-                  }
-              }
-
-
-              public static void back() {
-
-                  V10ProjectionService service =
-                          getInstance();
-
-                  if (service != null) {
-
-                      service.inputInternal(
-                              "keyevent 4");
-                  }
-              }
-
-
-              @Override
-              public void onCreate() {
-
-                  super.onCreate();
-
-                  instance = this;
-
-                  createNotificationChannel();
-
-                  Notification.Builder builder;
-
-                  if (Build.VERSION.SDK_INT >= 26) {
-
-                      builder =
-                              new Notification.Builder(
-                                      this,
-                                      CHANNEL_ID);
-
-                  } else {
-
-                      builder =
-                              new Notification.Builder(
-                                      this);
-                  }
-
-                  Notification notification =
-                          builder
-                                  .setSmallIcon(
-                                          android.R.drawable
-                                                  .ic_menu_view)
-                                  .setContentTitle(
-                                          "Car Assistant V10")
-                                  .setContentText(
-                                          "Projection engine running")
-                                  .setOngoing(true)
-                                  .build();
-
-                  try {
-
-                      startForeground(
-                              NOTIFICATION_ID,
-                              notification);
-
-                  } catch (Throwable error) {
-
-                      Log.e(
-                              TAG,
-                              "startForeground failed",
-                              error);
-
-                      instance = null;
-
-                      stopSelf();
-
-                      return;
-                  }
-
-                  flushPendingState();
-              }
-
-
-              @Override
-              public int onStartCommand(
-                      Intent intent,
-                      int flags,
-                      int startId) {
-
-                  /*
-                   * onCreate normally flushes the state,
-                   * but onStartCommand is also a safe retry point.
-                   */
-                  flushPendingState();
-
-                  return START_STICKY;
-              }
-
-
-              private void flushPendingState() {
-
-                  synchronized (START_LOCK) {
-
-                      if (instance != this
-                              || destroyed) {
-                          return;
-                      }
-
-                      ComponentName nextTarget =
-                              pendingTarget;
-
-                      Surface nextSurface =
-                              pendingSurface;
-
-                      int nextWidth =
-                              pendingWidth;
-
-                      int nextHeight =
-                              pendingHeight;
-
-                      pendingTarget = null;
-                      pendingSurface = null;
-                      pendingWidth = 0;
-                      pendingHeight = 0;
-
-                      try {
-
-                          if (nextTarget != null) {
-
-                              setTargetInternal(
-                                      nextTarget);
-                          }
-
-                          if (nextSurface != null) {
-
-                              attachSurfaceInternal(
-                                      nextSurface,
-                                      nextWidth,
-                                      nextHeight);
-
-                          }
-
-                      } catch (Throwable error) {
-
-                          Log.e(
-                                  TAG,
-                                  "Pending projection state failed",
-                                  error);
-
-                          if (nextSurface != null
-                                  && surface != nextSurface) {
-
-                              try {
-                                  nextSurface.release();
-                              } catch (Throwable ignored) {
-                              }
-                          }
-                      }
-                  }
-              }
-
-
-              private void setTargetInternal(
-                      ComponentName component) {
-
-                  synchronized (lock) {
-
-                      if (destroyed) {
-                          return;
-                      }
-
-                      if (component == null) {
-
-                          clearTargetLocked();
-
-                          return;
-                      }
-
-                      if (component.equals(target)) {
-                          return;
-                      }
-
-                      target = component;
-
-                      releaseDisplayLocked();
-
-                      ensureDisplayLocked();
-                  }
-              }
-
-
-              private void attachSurfaceInternal(
-                      Surface newSurface,
-                      int newWidth,
-                      int newHeight) {
-
-                  synchronized (lock) {
-
-                      if (destroyed
-                              || newSurface == null
-                              || newWidth < 1
-                              || newHeight < 1) {
-
-                          return;
-                      }
-
-                      width = newWidth;
-                      height = newHeight;
-
-                      if (surface != null
-                              && surface != newSurface) {
-
-                          try {
-                              surface.release();
-                          } catch (Throwable ignored) {
-                          }
-                      }
-
-                      surface = newSurface;
-
-                      if (virtualDisplay == null) {
-
-                          ensureDisplayLocked();
-
-                          return;
-                      }
-
-                      try {
-
-                          virtualDisplay.setSurface(
-                                  newSurface);
-
-                      } catch (Throwable error) {
-
-                          Log.w(
-                                  TAG,
-                                  "VirtualDisplay.setSurface failed",
-                                  error);
-
-                          releaseDisplayLocked();
-
-                          ensureDisplayLocked();
-                      }
-                  }
-              }
-
-
-              private void detachSurfaceInternal() {
-
-                  synchronized (lock) {
-
-                      if (virtualDisplay != null) {
-
-                          try {
-
-                              virtualDisplay.setSurface(
-                                      null);
-
-                          } catch (Throwable error) {
-
-                              Log.w(
-                                      TAG,
-                                      "VirtualDisplay surface detach failed",
-                                      error);
-                          }
-                      }
-
-                      if (surface != null) {
-
-                          try {
-                              surface.release();
-                          } catch (Throwable ignored) {
-                          }
-
-                          surface = null;
-                      }
-                  }
-              }
-
-
-              private void ensureDisplayLocked() {
-
-                  if (destroyed
-                          || target == null
-                          || surface == null
-                          || width < 1
-                          || height < 1
-                          || virtualDisplay != null) {
-
-                      return;
-                  }
-
-                  try {
-
-                      DisplayManager manager =
-                              (DisplayManager)
-                                      getSystemService(
-                                              DISPLAY_SERVICE);
-
-                      if (manager == null) {
-
-                          throw new IllegalStateException(
-                                  "DisplayManager unavailable");
-                      }
-
-                      VirtualDisplay vd =
-                              manager.createVirtualDisplay(
-                                      V10Display.nameFor(0),
-                                      width,
-                                      height,
-                                      160,
-                                      surface,
-                                      10);
-
-                      if (vd == null) {
-
-                          throw new IllegalStateException(
-                                  "Cannot create virtual display");
-                      }
-
-                      Display d =
-                              vd.getDisplay();
-
-                      if (d == null) {
-
-                          vd.release();
-
-                          throw new IllegalStateException(
-                                  "Virtual display has no Display");
-                      }
-
-                      virtualDisplay = vd;
-                      display = d;
-
-                      launchTargetLocked();
-
-                  } catch (Throwable error) {
-
-                      Log.e(
-                              TAG,
-                              "Display creation failed",
-                              error);
-
-                      releaseDisplayLocked();
-                  }
-              }
-
-
-              private void launchTargetLocked() {
-
-                  if (display == null
-                          || target == null) {
-                      return;
-                  }
-
-                  final int displayId =
-                          display.getDisplayId();
-
-                  final int userId =
-                          Process.myUid() / 100000;
-
-                  final String flat =
-                          target
-                                  .flattenToString()
-                                  .replace(
-                                          "'",
-                                          "'\"'\"'");
-
-                  final String command =
-                          "/system/bin/am start"
-                                  + " --user "
-                                  + userId
-                                  + " --display "
-                                  + displayId
-                                  + " --activity-reorder-to-front"
-                                  + " -n '"
-                                  + flat
-                                  + "'";
-
-                  RootShellSession.EXEC.execute(
-                          () -> {
-
-                              RootShellSession shell =
-                                      new RootShellSession();
-
-                              try {
-
-                                  shell.run(
-                                          10,
-                                          command);
-
-                              } catch (Throwable error) {
-
-                                  Log.w(
-                                          TAG,
-                                          "Launch target failed",
-                                          error);
-                              }
-                          });
-              }
-
-
-              private void inputInternal(
-                      String arguments) {
-
-                  final int displayId =
-                          getDisplayIdInternal();
-
-                  if (displayId < 0) {
-                      return;
-                  }
-
-                  final String command =
-                          "/system/bin/input -d "
-                                  + displayId
-                                  + " "
-                                  + arguments;
-
-                  RootShellSession.EXEC.execute(
-                          () -> {
-
-                              RootShellSession shell =
-                                      new RootShellSession();
-
-                              try {
-
-                                  shell.run(
-                                          5,
-                                          command);
-
-                              } catch (Throwable error) {
-
-                                  Log.w(
-                                          TAG,
-                                          "Input failed",
-                                          error);
-                              }
-                          });
-              }
-
-
-              private int getDisplayIdInternal() {
-
-                  synchronized (lock) {
-
-                      if (display == null) {
-                          return -1;
-                      }
-
-                      return display.getDisplayId();
-                  }
-              }
-
-
-              private boolean isActiveInternal() {
-
-                  synchronized (lock) {
-
-                      return !destroyed
-                              && target != null
-                              && virtualDisplay != null
-                              && display != null;
-                  }
-              }
-
-
-              private void clearTargetInternal() {
-
-                  synchronized (lock) {
-                      clearTargetLocked();
-                  }
-              }
-
-
-              private void clearTargetLocked() {
-
-                  target = null;
-
-                  releaseDisplayLocked();
-              }
-
-
-              private void releaseDisplayLocked() {
-
-                  if (virtualDisplay != null) {
-
-                      try {
-                          virtualDisplay.release();
-                      } catch (Throwable ignored) {
-                      }
-                  }
-
-                  virtualDisplay = null;
-                  display = null;
-
-                  if (surface != null) {
-
-                      try {
-                          surface.release();
-                      } catch (Throwable ignored) {
-                      }
-
-                      surface = null;
-                  }
-              }
-
-
-              @Override
-              public void onDestroy() {
-
-                  synchronized (lock) {
-
-                      destroyed = true;
-
-                      target = null;
-
-                      releaseDisplayLocked();
-                  }
-
-                  if (instance == this) {
-                      instance = null;
-                  }
-
-                  super.onDestroy();
-              }
-
-
-              @Override
-              public IBinder onBind(
-                      Intent intent) {
-
-                  return null;
-              }
-
-
-              private void createNotificationChannel() {
-
-                  if (Build.VERSION.SDK_INT < 26) {
-                      return;
-                  }
-
-                  NotificationManager manager =
-                          (NotificationManager)
-                                  getSystemService(
-                                          NOTIFICATION_SERVICE);
-
-                  if (manager != null) {
-
-                      NotificationChannel channel =
-                              new NotificationChannel(
-                                      CHANNEL_ID,
-                                      "Car Assistant V10 Projection",
-                                      NotificationManager
-                                              .IMPORTANCE_LOW);
-
-                      manager.createNotificationChannel(
-                              channel);
-                  }
-              }
-          }
-          '''
-
-          path.write_text(replacement)
+          def replace_method(source, signature_regex, new_method, label):
+              pattern = re.compile(
+                  signature_regex +
+                  r'\s*\{.*?\n\s*\}',
+                  re.S
+              )
+
+              matches = list(pattern.finditer(source))
+
+              if len(matches) != 1:
+                  raise SystemExit(
+                      f"{label}: expected 1 method, found {len(matches)}"
+                  )
+
+              return (
+                  source[:matches[0].start()]
+                  + new_method
+                  + source[matches[0].end():]
+              )
+
+          anchor = "    private static volatile V10ProjectionService instance;"
+
+          if "private static final Object START_LOCK" not in text:
+              if anchor not in text:
+                  raise SystemExit("START_LOCK anchor not found")
+
+              fields = """\
+    private static final Object START_LOCK =
+            new Object();
+
+    private static ComponentName pendingTarget;
+
+    private static Surface pendingSurface;
+
+    private static int pendingWidth;
+
+    private static int pendingHeight;
+"""
+              text = text.replace(
+                  anchor,
+                  anchor + "\n\n" + fields,
+                  1
+              )
+
+          text = replace_method(
+              text,
+              r'public\s+static\s+void\s+ensureStarted\s*\(\s*android\.content\.Context\s+context\s*\)',
+              """\
+    public static void ensureStarted(
+            android.content.Context context) {
+
+        if (getInstance() != null) {
+            return;
+        }
+
+        android.content.Context appContext =
+                context.getApplicationContext();
+
+        Intent intent =
+                new Intent(
+                        appContext,
+                        V10ProjectionService.class);
+
+        try {
+            if (Build.VERSION.SDK_INT >= 26) {
+                appContext.startForegroundService(intent);
+            } else {
+                appContext.startService(intent);
+            }
+        } catch (Throwable error) {
+            Log.w(
+                    TAG,
+                    "Unable to start projection service",
+                    error);
+        }
+    }""",
+              "ensureStarted"
+          )
+
+          text = replace_method(
+              text,
+              r'public\s+static\s+void\s+setTarget\s*\(\s*android\.content\.Context\s+context\s*,\s*ComponentName\s+component\s*\)',
+              """\
+    public static void setTarget(
+            android.content.Context context,
+            ComponentName component) {
+
+        if (component == null) {
+            clearTarget();
+            return;
+        }
+
+        synchronized (START_LOCK) {
+
+            V10ProjectionService service =
+                    getInstance();
+
+            if (service == null) {
+                pendingTarget = component;
+                ensureStarted(context);
+                return;
+            }
+
+            service.setTargetInternal(component);
+        }
+    }""",
+              "setTarget"
+          )
+
+          text = replace_method(
+              text,
+              r'public\s+static\s+void\s+attachSurface\s*\(\s*android\.content\.Context\s+context\s*,\s*Surface\s+newSurface\s*,\s*int\s+newWidth\s*,\s*int\s+newHeight\s*\)',
+              """\
+    public static void attachSurface(
+            android.content.Context context,
+            Surface newSurface,
+            int newWidth,
+            int newHeight) {
+
+        if (newSurface == null
+                || newWidth < 1
+                || newHeight < 1) {
+            return;
+        }
+
+        synchronized (START_LOCK) {
+
+            V10ProjectionService service =
+                    getInstance();
+
+            if (service == null) {
+
+                if (pendingSurface != null
+                        && pendingSurface != newSurface) {
+
+                    try {
+                        pendingSurface.release();
+                    } catch (Throwable ignored) {
+                    }
+                }
+
+                pendingSurface = newSurface;
+                pendingWidth = newWidth;
+                pendingHeight = newHeight;
+
+                ensureStarted(context);
+                return;
+            }
+
+            service.attachSurfaceInternal(
+                    newSurface,
+                    newWidth,
+                    newHeight);
+        }
+    }""",
+              "attachSurface"
+          )
+
+          text = replace_method(
+              text,
+              r'public\s+static\s+void\s+detachSurface\s*\(\s*\)',
+              """\
+    public static void detachSurface() {
+
+        synchronized (START_LOCK) {
+
+            if (pendingSurface != null) {
+
+                try {
+                    pendingSurface.release();
+                } catch (Throwable ignored) {
+                }
+
+                pendingSurface = null;
+                pendingWidth = 0;
+                pendingHeight = 0;
+            }
+
+            V10ProjectionService service =
+                    getInstance();
+
+            if (service != null) {
+                service.detachSurfaceInternal();
+            }
+        }
+    }""",
+              "detachSurface"
+          )
+
+          text = replace_method(
+              text,
+              r'public\s+static\s+void\s+clearTarget\s*\(\s*\)',
+              """\
+    public static void clearTarget() {
+
+        synchronized (START_LOCK) {
+
+            pendingTarget = null;
+
+            V10ProjectionService service =
+                    getInstance();
+
+            if (service != null) {
+                service.clearTargetInternal();
+            }
+        }
+    }""",
+              "clearTarget"
+          )
+
+          flush_method = """\
+    private void flushPendingState() {
+
+        synchronized (START_LOCK) {
+
+            if (instance != this || destroyed) {
+                return;
+            }
+
+            ComponentName nextTarget =
+                    pendingTarget;
+
+            Surface nextSurface =
+                    pendingSurface;
+
+            int nextWidth =
+                    pendingWidth;
+
+            int nextHeight =
+                    pendingHeight;
+
+            pendingTarget = null;
+            pendingSurface = null;
+            pendingWidth = 0;
+            pendingHeight = 0;
+
+            try {
+
+                if (nextTarget != null) {
+                    setTargetInternal(nextTarget);
+                }
+
+                if (nextSurface != null) {
+                    attachSurfaceInternal(
+                            nextSurface,
+                            nextWidth,
+                            nextHeight);
+                }
+
+            } catch (Throwable error) {
+
+                Log.e(
+                        TAG,
+                        "Pending projection state failed",
+                        error);
+
+                if (nextSurface != null
+                        && surface != nextSurface) {
+
+                    try {
+                        nextSurface.release();
+                    } catch (Throwable ignored) {
+                    }
+                }
+            }
+        }
+    }
+
+"""
+
+          if "private void flushPendingState()" not in text:
+              marker = "    @Override\n    public void onCreate()"
+              if marker not in text:
+                  raise SystemExit("onCreate marker not found")
+
+              text = text.replace(
+                  marker,
+                  flush_method + marker,
+                  1
+              )
+
+          oncreate_pattern = re.compile(
+              r'(@Override\s+public\s+void\s+onCreate\s*\(\s*\)\s*\{)'
+              r'(.*?)'
+              r'(\n\s*\n\s*@Override\s+public\s+int\s+onStartCommand)',
+              re.S
+          )
+
+          m = oncreate_pattern.search(text)
+
+          if not m:
+              raise SystemExit("onCreate block not found")
+
+          body = m.group(2)
+
+          if "flushPendingState();" not in body:
+              body = body.rstrip() + """
+
+        flushPendingState();
+"""
+              text = (
+                  text[:m.start(2)]
+                  + body
+                  + text[m.end(2):]
+              )
+
+          path.write_text(text)
+
+          print("V10ProjectionService patched surgically.")
           PY
 
-      - name: Patch V10ProjectionSession startup safety
+      - name: Patch V10ProjectionSession - remove eager service start
         shell: bash
         run: |
           set -euo pipefail
@@ -931,89 +376,116 @@ jobs:
           FILE="v10-source/app/src/main/java/com/hieptran/aacast/doudou/V10ProjectionSession.java"
 
           python3 - "$FILE" <<'PY'
+          import pathlib
+          import re
           import sys
-          from pathlib import Path
 
-          path = Path(sys.argv[1])
+          path = pathlib.Path(sys.argv[1])
           text = path.read_text()
 
-          old = """    public V10ProjectionSession(
-              Context context) {
+          pattern = re.compile(
+              r'public\s+V10ProjectionSession\s*\(\s*Context\s+context\s*\)'
+              r'\s*\{.*?\n\s*\}',
+              re.S
+          )
 
-          this.context =
-                  context.getApplicationContext();
+          matches = list(pattern.finditer(text))
 
-          /*
-           * Start the projection owner independently
-           * from V10CarActivity.
-           */
-          V10ProjectionService.ensureStarted(
-                  this.context);
-      }
-      """
+          if len(matches) != 1:
+              raise SystemExit(
+                  "Expected exactly one V10ProjectionSession constructor"
+              )
 
-          new = """    public V10ProjectionSession(
-              Context context) {
+          new_constructor = """\
+public V10ProjectionSession(
+            Context context) {
 
-          this.context =
-                  context.getApplicationContext();
+        this.context =
+                context.getApplicationContext();
+    }"""
 
-          /*
-           * Service startup is asynchronous.
-           *
-           * V10ProjectionService now keeps pending
-           * target/surface state until it is ready.
-           */
-          V10ProjectionService.ensureStarted(
-                  this.context);
-      }
-      """
+          text = (
+              text[:matches[0].start()]
+              + new_constructor
+              + text[matches[0].end():]
+          )
 
-          if old in text:
-              text = text.replace(old, new)
+          if "V10ProjectionService.ensureStarted" in text:
+              raise SystemExit(
+                  "Eager V10ProjectionService.ensureStarted still exists"
+              )
 
           path.write_text(text)
+
+          print("V10ProjectionSession patched.")
           PY
 
-      - name: Verify handshake patch
+      - name: Verify source patch
         shell: bash
         run: |
           set -euo pipefail
 
           SERVICE="v10-source/app/src/main/java/com/hieptran/aacast/doudou/V10ProjectionService.java"
+          SESSION="v10-source/app/src/main/java/com/hieptran/aacast/doudou/V10ProjectionSession.java"
 
           grep -q "START_LOCK" "$SERVICE"
           grep -q "pendingTarget" "$SERVICE"
           grep -q "pendingSurface" "$SERVICE"
           grep -q "flushPendingState" "$SERVICE"
+
           grep -q "startForegroundService" "$SERVICE"
 
-          # Reject only an actual force-stop command,
-          # not comments containing the words "force-stop".
           if grep -nE '(^|[[:space:];&|])(/system/bin/)?am[[:space:]]+force-stop([[:space:]]|$)' "$SERVICE"; then
             echo "ERROR: actual force-stop command detected"
             exit 1
           fi
 
-          echo "Startup handshake verification passed."
+          if grep -q "V10ProjectionService.ensureStarted" "$SESSION"; then
+            echo "ERROR: Session still eagerly starts service"
+            exit 1
+          fi
 
-      - name: Verify V10 source integrity
+          grep -q 'package com.carassistant.v10;' "$SERVICE"
+          grep -q 'package com.carassistant.v10;' "$SESSION"
+
+          echo "Handshake patch verified."
+
+      - name: Verify existing V10 components
         shell: bash
         run: |
           set -euo pipefail
 
-          ROOT="v10-source"
+          ROOT="v10-source/app/src/main/java/com/hieptran/aacast/doudou"
 
-          test -f "$ROOT/app/src/main/java/com/hieptran/aacast/doudou/V10SessionStore.java"
-          test -f "$ROOT/app/src/main/java/com/hieptran/aacast/doudou/CarSystemUI.java"
-          test -f "$ROOT/app/src/main/java/com/hieptran/aacast/doudou/CarRecents.java"
-          test -f "$ROOT/app/src/main/java/com/hieptran/aacast/doudou/V10InputController.java"
-          test -f "$ROOT/app/src/main/java/com/hieptran/aacast/doudou/RootShellSession.java"
+          test -f "$ROOT/V10CarActivity.java"
+          test -f "$ROOT/V10SessionStore.java"
+          test -f "$ROOT/V10InputController.java"
+          test -f "$ROOT/RootShellSession.java"
+          test -f "$ROOT/CarSystemUI.java"
+          test -f "$ROOT/CarRecents.java"
 
-          grep -q 'MAX_RECENTS = 4' \
-            "$ROOT/app/src/main/java/com/hieptran/aacast/doudou/V10SessionStore.java"
+          grep -q "MAX_RECENTS = 4" \
+            "$ROOT/V10SessionStore.java"
 
-          echo "Existing V10 components preserved."
+          echo "Existing V10 architecture preserved."
+
+      - name: Check patch diff
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          git diff --check
+
+          echo "Changed V10 source files:"
+          git diff --name-only
+
+          echo "V10ProjectionService diff:"
+          git diff -- \
+            v10-source/app/src/main/java/com/hieptran/aacast/doudou/V10ProjectionService.java
+
+          echo "V10ProjectionSession diff:"
+          git diff -- \
+            v10-source/app/src/main/java/com/hieptran/aacast/doudou/V10ProjectionSession.java
 
       - name: Make Gradle executable
         shell: bash
