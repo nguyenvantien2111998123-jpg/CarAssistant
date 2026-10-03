@@ -26,7 +26,7 @@ jobs:
           gradle-version: "8.13"
 
       # ============================================================
-      # VERIFY V10.4 V4 BASE
+      # VERIFY V4 BASE
       # ============================================================
 
       - name: Verify V10.4 V4 base
@@ -46,7 +46,7 @@ jobs:
           grep -q "ACTION_MAIN" "$FILE"
           grep -q "CATEGORY_LAUNCHER" "$FILE"
 
-          echo "V10.4 V4 BASE VERIFIED"
+          echo "V4 BASE VERIFIED"
 
       # ============================================================
       # BACKUP
@@ -61,13 +61,8 @@ jobs:
             v10-source/app/src/main/java/com/hieptran/aacast/doudou/V10CarActivity.java \
             /tmp/V10CarActivity.v4.java
 
-          echo "Backup created."
-
       # ============================================================
-      # RESTORE V10.3 CONTROL BAR INTO V4
-      #
-      # Keep the V4 application selector.
-      # Add back the exact V10.3 in-app control bar architecture.
+      # MERGE V10.3 CONTROL BAR
       # ============================================================
 
       - name: Merge V10.3 control bar with V4 selector
@@ -84,60 +79,40 @@ jobs:
           path = Path(sys.argv[1])
           s = path.read_text()
 
-          # --------------------------------------------------------
-          # 1. Add Button import
-          # --------------------------------------------------------
+          # ========================================================
+          # ROBUST JAVA METHOD FINDER
+          # ========================================================
 
-          if "import android.widget.Button;" not in s:
-              marker = "import android.widget.FrameLayout;"
-              if marker not in s:
-                  raise SystemExit("FrameLayout import not found")
+          def find_method(text, name):
+              pos = 0
 
-              s = s.replace(
-                  marker,
-                  "import android.widget.Button;\n" + marker,
-                  1
-              )
+              while True:
+                  pos = text.find(name + "(", pos)
 
-          # --------------------------------------------------------
-          # 2. Add controlBar field
-          # --------------------------------------------------------
+                  if pos < 0:
+                      raise SystemExit(
+                          f"Method not found: {name}"
+                      )
 
-          if "private LinearLayout controlBar;" not in s:
-              marker = "private LinearLayout dock;"
-              if marker not in s:
-                  raise SystemExit("dock field not found")
+                  # Make sure this is not part of another identifier.
+                  if pos == 0 or not (
+                      text[pos - 1].isalnum()
+                      or text[pos - 1] == "_"
+                  ):
+                      break
 
-              s = s.replace(
-                  marker,
-                  marker + "\n    private LinearLayout controlBar;",
-                  1
-              )
+                  pos += len(name) + 1
 
-          # --------------------------------------------------------
-          # Helper: find method by name and balanced braces.
-          # Handles comments and Java strings.
-          # --------------------------------------------------------
-
-          def find_method(text, method_name):
-              needle = method_name + "("
-              start = text.find(needle)
-
-              if start < 0:
-                  raise SystemExit(
-                      f"Method not found: {method_name}"
-                  )
-
-              # Find opening brace after signature.
-              brace = text.find("{", start)
+              brace = text.find("{", pos)
 
               if brace < 0:
                   raise SystemExit(
-                      f"Opening brace not found: {method_name}"
+                      f"Opening brace not found: {name}"
                   )
 
               depth = 0
               i = brace
+
               in_string = False
               in_char = False
               in_line_comment = False
@@ -145,6 +120,7 @@ jobs:
               escaped = False
 
               while i < len(text):
+
                   c = text[i]
                   n = text[i + 1] if i + 1 < len(text) else ""
 
@@ -209,28 +185,74 @@ jobs:
                       depth -= 1
 
                       if depth == 0:
-                          return start, i + 1
+                          return pos, i + 1
 
                   i += 1
 
               raise SystemExit(
-                  f"Unbalanced method: {method_name}"
+                  f"Unbalanced method: {name}"
               )
 
-          def replace_method(text, method_name, replacement):
-              a, b = find_method(text, method_name)
+          def replace_method(text, name, replacement):
+              a, b = find_method(text, name)
               return text[:a] + replacement + text[b:]
 
-          # --------------------------------------------------------
-          # 3. Add exact V10.3 control-bar builder.
-          # --------------------------------------------------------
+          # ========================================================
+          # IMPORTS
+          # ========================================================
 
-          if "private void addControlButton(" not in s:
-              marker = "    private void buildDashboard()"
+          if "import android.widget.Button;" not in s:
+
+              marker = "import android.widget.FrameLayout;"
+
               if marker not in s:
                   raise SystemExit(
-                      "buildDashboard marker not found"
+                      "FrameLayout import not found"
                   )
+
+              s = s.replace(
+                  marker,
+                  "import android.widget.Button;\n"
+                  + marker,
+                  1
+              )
+
+          # ========================================================
+          # FIELD
+          # ========================================================
+
+          if "private LinearLayout controlBar;" not in s:
+
+              candidates = [
+                  "private LinearLayout dock;",
+                  "private LinearLayout launcherLayer;",
+                  "private LinearLayout dashboard;"
+              ]
+
+              marker = None
+
+              for candidate in candidates:
+                  if candidate in s:
+                      marker = candidate
+                      break
+
+              if marker is None:
+                  raise SystemExit(
+                      "Could not find UI field for controlBar insertion"
+                  )
+
+              s = s.replace(
+                  marker,
+                  marker
+                  + "\n    private LinearLayout controlBar;",
+                  1
+              )
+
+          # ========================================================
+          # CONTROL BUTTON HELPER
+          # ========================================================
+
+          if "private void addControlButton(" not in s:
 
               helper = r'''
               private void addControlButton(
@@ -272,39 +294,46 @@ jobs:
 
               '''
 
-              s = s.replace(
-                  marker,
-                  helper + marker,
-                  1
+              # Put helper immediately before buildUi().
+              build_start, _ = find_method(
+                  s,
+                  "private void buildUi"
               )
 
-          # --------------------------------------------------------
-          # 4. Patch buildUi().
-          #
-          # Existing V4 dashboard + app selector stays untouched.
-          # Control bar is added LAST so it remains above everything.
-          # --------------------------------------------------------
+              s = (
+                  s[:build_start]
+                  + helper
+                  + s[build_start:]
+              )
 
-          build_ui_start, build_ui_end = find_method(
+          # ========================================================
+          # BUILD UI
+          #
+          # Add the control bar as the FINAL root child.
+          # Therefore it stays above projection/app selector.
+          # ========================================================
+
+          build_start, build_end = find_method(
               s,
               "private void buildUi"
           )
 
-          build_ui = s[build_ui_start:build_ui_end]
+          build = s[build_start:build_end]
 
-          if "controlBar =" not in build_ui:
+          if "controlBar =" not in build:
 
-              marker = "        buildAppPanel();"
+              # Find the end of setContentView(root).
+              marker = "setContentView(root);"
 
-              if marker not in build_ui:
+              if marker not in build:
                   raise SystemExit(
-                      "buildAppPanel call not found in buildUi"
+                      "setContentView(root) not found in buildUi"
                   )
 
               control = r'''
 
                   // ==================================================
-                  // V10.3 CONTROL BAR
+                  // V10.3 PROVEN CONTROL BAR
                   // ==================================================
 
                   controlBar =
@@ -326,17 +355,17 @@ jobs:
                           Color.rgb(24, 24, 24));
 
                   FrameLayout.LayoutParams
-                          barParams =
+                          controlParams =
                           new FrameLayout.LayoutParams(
                                   FrameLayout.LayoutParams.MATCH_PARENT,
                                   dp(58));
 
-                  barParams.gravity =
+                  controlParams.gravity =
                           Gravity.BOTTOM;
 
                   root.addView(
                           controlBar,
-                          barParams);
+                          controlParams);
 
                   addControlButton(
                           "BACK",
@@ -357,71 +386,38 @@ jobs:
                   controlBar.bringToFront();
               '''
 
-              build_ui = build_ui.replace(
+              # IMPORTANT:
+              # Insert BEFORE setContentView().
+              build = build.replace(
                   marker,
-                  marker + control,
+                  control
+                  + "\n\n        "
+                  + marker,
                   1
               )
 
               s = (
-                  s[:build_ui_start]
-                  + build_ui
-                  + s[build_ui_end:]
+                  s[:build_start]
+                  + build
+                  + s[build_end:]
               )
 
-          # --------------------------------------------------------
-          # 5. launchProjection()
+          # ========================================================
+          # launchProjection()
           #
-          # Keep V4 selector logic.
-          # Control bar stays visible.
-          # --------------------------------------------------------
+          # DO NOT REWRITE V4 LOGIC.
+          # Just guarantee the control bar remains visible.
+          # ========================================================
 
           start, end = find_method(
               s,
               "private void launchProjection"
           )
 
-          launch = s[start:end]
-
-          if "controlBar.bringToFront();" not in launch:
-              marker = "        session.setTarget(\n                component);"
-
-              if marker not in launch:
-                  marker = "        session.setTarget(component);"
-
-              if marker not in launch:
-                  raise SystemExit(
-                      "session.setTarget marker not found"
-                  )
-
-              launch = launch.replace(
-                  marker,
-                  marker
-                  + "\n\n        if (controlBar != null) {\n"
-                  + "            controlBar.setVisibility(View.VISIBLE);\n"
-                  + "            controlBar.bringToFront();\n"
-                  + "        }",
-                  1
-              )
-
-              s = (
-                  s[:start]
-                  + launch
-                  + s[end:]
-              )
-
-          # --------------------------------------------------------
-          # 6. returnToLauncher()
-          # --------------------------------------------------------
-
-          start, end = find_method(
-              s,
-              "private void returnToLauncher"
-          )
-
           method = s[start:end]
 
           if "controlBar.bringToFront();" not in method:
+
               method += r'''
 
                   if (controlBar != null) {
@@ -433,9 +429,9 @@ jobs:
 
               s = s[:start] + method + s[end:]
 
-          # --------------------------------------------------------
-          # 7. showApps()
-          # --------------------------------------------------------
+          # ========================================================
+          # showApps()
+          # ========================================================
 
           start, end = find_method(
               s,
@@ -445,6 +441,7 @@ jobs:
           method = s[start:end]
 
           if "controlBar.bringToFront();" not in method:
+
               method += r'''
 
                   if (controlBar != null) {
@@ -456,9 +453,9 @@ jobs:
 
               s = s[:start] + method + s[end:]
 
-          # --------------------------------------------------------
-          # 8. hideApps()
-          # --------------------------------------------------------
+          # ========================================================
+          # hideApps()
+          # ========================================================
 
           start, end = find_method(
               s,
@@ -468,6 +465,7 @@ jobs:
           method = s[start:end]
 
           if "controlBar.bringToFront();" not in method:
+
               method += r'''
 
                   if (controlBar != null) {
@@ -479,30 +477,40 @@ jobs:
 
               s = s[:start] + method + s[end:]
 
-          # --------------------------------------------------------
-          # 9. Control handlers.
-          #
-          # BACK:
-          #   - close Applications
-          #   - otherwise send Back to projected app
-          #   - otherwise return launcher
-          #
-          # HOME:
-          #   - dashboard
-          #
-          # APPS:
-          #   - toggle Applications
-          #
-          # RECENTS:
-          #   - keep existing placeholder behavior
-          # --------------------------------------------------------
+          # ========================================================
+          # RETURN TO LAUNCHER
+          # ========================================================
+
+          start, end = find_method(
+              s,
+              "private void returnToLauncher"
+          )
+
+          method = s[start:end]
+
+          if "controlBar.bringToFront();" not in method:
+
+              method += r'''
+
+                  if (controlBar != null) {
+                      controlBar.setVisibility(
+                              View.VISIBLE);
+                      controlBar.bringToFront();
+                  }
+              '''
+
+              s = s[:start] + method + s[end:]
+
+          # ========================================================
+          # BACK
+          # ========================================================
 
           start, end = find_method(
               s,
               "public void handleControlBack"
           )
 
-          replacement = r'''public void handleControlBack() {
+          back_method = r'''public void handleControlBack() {
 
               if (appPanel != null
                       && appPanel.getVisibility()
@@ -524,40 +532,34 @@ jobs:
               returnToLauncher();
           }'''
 
-          s = s[:start] + replacement + s[end:]
+          s = s[:start] + back_method + s[end:]
+
+          # ========================================================
+          # HOME
+          # ========================================================
 
           start, end = find_method(
               s,
               "public void handleControlHome"
           )
 
-          replacement = r'''public void handleControlHome() {
+          home_method = r'''public void handleControlHome() {
 
               returnToLauncher();
           }'''
 
-          s = s[:start] + replacement + s[end:]
+          s = s[:start] + home_method + s[end:]
 
-          start, end = find_method(
-              s,
-              "public void handleControlRecents"
-          )
-
-          replacement = r'''public void handleControlRecents() {
-
-              showInfo(
-                      "RECENTS",
-                      "Session manager sẽ được thêm ở bước tiếp theo.");
-          }'''
-
-          s = s[:start] + replacement + s[end:]
+          # ========================================================
+          # APPS
+          # ========================================================
 
           start, end = find_method(
               s,
               "public void handleControlApps"
           )
 
-          replacement = r'''public void handleControlApps() {
+          apps_method = r'''public void handleControlApps() {
 
               if (appPanel != null
                       && appPanel.getVisibility()
@@ -571,25 +573,29 @@ jobs:
               }
           }'''
 
-          s = s[:start] + replacement + s[end:]
+          s = s[:start] + apps_method + s[end:]
 
-          # --------------------------------------------------------
-          # 10. onDestroy cleanup
-          # --------------------------------------------------------
+          # ========================================================
+          # RECENTS
+          # ========================================================
 
-          marker = "        dock = null;"
+          start, end = find_method(
+              s,
+              "public void handleControlRecents"
+          )
 
-          if marker in s and "controlBar = null;" not in s:
-              s = s.replace(
-                  marker,
-                  marker
-                  + "\n        controlBar = null;",
-                  1
-              )
+          recents_method = r'''public void handleControlRecents() {
+
+              showInfo(
+                      "RECENTS",
+                      "Session manager sẽ được thêm ở bước tiếp theo.");
+          }'''
+
+          s = s[:start] + recents_method + s[end:]
 
           path.write_text(s)
 
-          print("V10.3 CONTROL BAR MERGED INTO V10.4 V4")
+          print("CONTROL BAR MERGE COMPLETE")
           PY
 
       # ============================================================
@@ -620,13 +626,13 @@ jobs:
 
           grep -q "controlBar.bringToFront" "$FILE"
 
-          echo "V10.3 CONTROL BAR VERIFIED"
+          echo "CONTROL BAR VERIFIED"
 
       # ============================================================
-      # VERIFY V4 APP SELECTOR
+      # VERIFY V4 SELECTOR
       # ============================================================
 
-      - name: Verify V4 app selector
+      - name: Verify V4 application selector
         shell: bash
         run: |
           set -euo pipefail
@@ -642,13 +648,13 @@ jobs:
           grep -q "launchProjection" "$FILE"
           grep -q "V10SessionStore" "$FILE"
 
-          echo "V4 APP SELECTOR VERIFIED"
+          echo "V4 SELECTOR VERIFIED"
 
       # ============================================================
       # VERIFY CONTROL FLOW
       # ============================================================
 
-      - name: Verify V10 control flow
+      - name: Verify control flow
         shell: bash
         run: |
           set -euo pipefail
@@ -713,17 +719,17 @@ jobs:
             v10-source/app/src/main \
             >/dev/null 2>&1; then
 
-            echo "Unexpected Android 13/Femto-only dependency found."
+            echo "Android 13/Femto-only dependency detected."
             exit 1
           fi
 
-          echo "ANDROID 12 COMPATIBILITY VERIFIED"
+          echo "ANDROID 12 VERIFIED"
 
       # ============================================================
-      # VERIFY NO GEARHEAD CONTROL BAR
+      # NO GEARHEAD CONTROL BAR
       # ============================================================
 
-      - name: Verify no Gearhead control bar dependency
+      - name: Verify no Gearhead control bar
         shell: bash
         run: |
           set -euo pipefail
@@ -733,14 +739,14 @@ jobs:
             v10-source/app/src/main/java \
             >/dev/null 2>&1; then
 
-            echo "GearheadControlBar dependency still exists."
+            echo "GearheadControlBar dependency found."
             exit 1
           fi
 
-          echo "NO GEARHEAD CONTROL BAR DEPENDENCY"
+          echo "NO GEARHEAD CONTROL BAR"
 
       # ============================================================
-      # VERIFY JAVA BRACES
+      # JAVA SANITY
       # ============================================================
 
       - name: Java source sanity check
@@ -849,7 +855,7 @@ jobs:
           PY
 
       # ============================================================
-      # GRADLE CLEAN
+      # BUILD
       # ============================================================
 
       - name: Gradle clean
@@ -858,13 +864,7 @@ jobs:
         run: |
           set -euo pipefail
 
-          ./gradlew \
-            clean \
-            --no-daemon
-
-      # ============================================================
-      # BUILD
-      # ============================================================
+          ./gradlew clean --no-daemon
 
       - name: Build Car Assistant V10.4 V4.2.1
         working-directory: v10-source
@@ -892,11 +892,10 @@ jobs:
           test -f "$APK"
 
           echo "APK OK"
-
           sha256sum "$APK"
 
       # ============================================================
-      # UPLOAD APK
+      # ARTIFACT
       # ============================================================
 
       - name: Upload V10.4 V4.2.1 APK
@@ -925,20 +924,15 @@ jobs:
           git add v10-source
 
           if git diff --cached --quiet; then
-
             echo "No source changes."
-
           else
-
             git commit \
               -m "Fix V10.4 V4.2.1 control bar"
-
             git push
-
           fi
 
       # ============================================================
-      # COMPLETE
+      # DONE
       # ============================================================
 
       - name: Complete
@@ -948,9 +942,8 @@ jobs:
           echo "=============================================="
           echo " CAR ASSISTANT V10.4 V4.2.1 BUILD PASSED"
           echo "=============================================="
-          echo
           echo "V10.3 CONTROL BAR: BACK / APPS / RECENTS / HOME"
           echo "V4 APP SELECTOR: APPLICATIONS"
           echo "V10 PROJECTION ENGINE: PRESERVED"
           echo "ANDROID 12: SUPPORTED"
-          echo
+          echo "=============================================="
