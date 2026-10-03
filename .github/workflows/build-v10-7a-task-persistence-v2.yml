@@ -1,0 +1,858 @@
+name: Build Car Assistant V10-7A Task Persistence v2
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      # ============================================================
+      # PATCH V10CarActivity
+      # ============================================================
+      - name: Patch V10CarActivity
+        working-directory: v10-source
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          FILE="app/src/main/java/com/hieptran/aacast/doudou/V10CarActivity.java"
+
+          test -f "$FILE"
+
+          python3 <<'PY'
+          from pathlib import Path
+
+          path = Path(
+              "app/src/main/java/com/hieptran/aacast/doudou/V10CarActivity.java"
+          )
+
+          text = path.read_text(encoding="utf-8")
+
+          # ----------------------------------------------------------
+          # Imports
+          # ----------------------------------------------------------
+
+          marker = "import android.content.pm.ResolveInfo;"
+
+          required_imports = [
+              "import android.content.SharedPreferences;",
+              "import android.os.SystemClock;",
+              "import android.view.MotionEvent;",
+              "import android.view.ViewConfiguration;",
+              "import android.view.ViewGroup;",
+          ]
+
+          if marker not in text:
+              raise SystemExit(
+                  "Cannot find ResolveInfo import marker"
+              )
+
+          for imp in required_imports:
+              if imp not in text:
+                  text = text.replace(
+                      marker,
+                      marker + "\n" + imp,
+                      1
+                  )
+
+          # ----------------------------------------------------------
+          # Fields
+          # ----------------------------------------------------------
+
+          field_marker = (
+              "    private V10ProjectionSession session;"
+          )
+
+          fields = """
+              private TextView floatingTouchKey;
+              private LinearLayout floatingMenu;
+              private long floatingLastTap;
+              private boolean floatingDragging;
+              private float floatingDownRawX;
+              private float floatingDownRawY;
+              private float floatingStartX;
+              private float floatingStartY;
+          """
+
+          if "private TextView floatingTouchKey;" not in text:
+
+              if field_marker not in text:
+                  raise SystemExit(
+                      "Cannot find V10ProjectionSession field"
+                  )
+
+              text = text.replace(
+                  field_marker,
+                  field_marker + fields,
+                  1
+              )
+
+          # ----------------------------------------------------------
+          # Remove old V10-5 controls if they exist
+          # ----------------------------------------------------------
+
+          if "V10-5 projection controls" in text:
+
+              start = text.find(
+                  "        // V10-5 projection controls"
+              )
+
+              if start >= 0:
+
+                  end_marker = (
+                      "                controlParams);"
+                  )
+
+                  end = text.find(
+                      end_marker,
+                      start
+                  )
+
+                  if end >= 0:
+
+                      end += len(end_marker)
+
+                      text = (
+                          text[:start]
+                          + text[end:]
+                      )
+
+          # ----------------------------------------------------------
+          # Add floating key to attachProjection()
+          # ----------------------------------------------------------
+
+          if "createFloatingTouchKey();" not in text:
+
+              attach_start = text.find(
+                  "    private void attachProjection()"
+              )
+
+              if attach_start < 0:
+                  raise SystemExit(
+                      "attachProjection() not found"
+                  )
+
+              attach_end = text.find(
+                  "\n    }",
+                  attach_start
+              )
+
+              if attach_end < 0:
+                  raise SystemExit(
+                      "attachProjection() end not found"
+                  )
+
+              insert = """
+          
+                  // V10-6 floating touch key
+                  createFloatingTouchKey();
+          """
+
+              text = (
+                  text[:attach_end]
+                  + insert
+                  + text[attach_end:]
+              )
+
+          # ----------------------------------------------------------
+          # Floating key implementation
+          # ----------------------------------------------------------
+
+          if "private void createFloatingTouchKey()" not in text:
+
+              marker = (
+                  "    public void handleControlBack()"
+              )
+
+              if marker not in text:
+                  raise SystemExit(
+                      "handleControlBack() not found"
+                  )
+
+              methods = r'''
+          
+              private void createFloatingTouchKey() {
+
+                  if (floatingTouchKey != null) {
+                      return;
+                  }
+
+                  floatingTouchKey = new TextView(this);
+
+                  floatingTouchKey.setText("●");
+                  floatingTouchKey.setTextColor(Color.WHITE);
+                  floatingTouchKey.setTextSize(22);
+                  floatingTouchKey.setGravity(Gravity.CENTER);
+
+                  GradientDrawable bg =
+                          new GradientDrawable();
+
+                  bg.setShape(
+                          GradientDrawable.OVAL);
+
+                  bg.setColor(
+                          Color.rgb(25, 35, 45));
+
+                  bg.setStroke(
+                          dp(2),
+                          Color.rgb(80, 170, 230));
+
+                  floatingTouchKey.setBackground(bg);
+
+                  floatingTouchKey.setElevation(
+                          dp(12));
+
+                  SharedPreferences prefs =
+                          getSharedPreferences(
+                                  "v10_floating_key",
+                                  MODE_PRIVATE);
+
+                  FrameLayout.LayoutParams params =
+                          new FrameLayout.LayoutParams(
+                                  dp(58),
+                                  dp(58),
+                                  Gravity.TOP | Gravity.END);
+
+                  int savedX =
+                          prefs.getInt(
+                                  "x",
+                                  dp(18));
+
+                  int savedY =
+                          prefs.getInt(
+                                  "y",
+                                  dp(120));
+
+                  params.setMargins(
+                          0,
+                          savedY,
+                          savedX,
+                          0);
+
+                  projectionLayer.addView(
+                          floatingTouchKey,
+                          params);
+
+                  floatingTouchKey.setOnTouchListener(
+                          (view, event) -> {
+
+                              switch (
+                                      event.getActionMasked()) {
+
+                                  case MotionEvent.ACTION_DOWN:
+
+                                      floatingDragging = false;
+
+                                      floatingDownRawX =
+                                              event.getRawX();
+
+                                      floatingDownRawY =
+                                              event.getRawY();
+
+                                      ViewGroup.LayoutParams lp =
+                                              view.getLayoutParams();
+
+                                      if (lp instanceof
+                                              FrameLayout.LayoutParams) {
+
+                                          FrameLayout.LayoutParams fp =
+                                                  (FrameLayout.LayoutParams) lp;
+
+                                          floatingStartX =
+                                                  fp.rightMargin;
+
+                                          floatingStartY =
+                                                  fp.topMargin;
+                                      }
+
+                                      return true;
+
+                                  case MotionEvent.ACTION_MOVE:
+
+                                      float dx =
+                                              event.getRawX()
+                                                      - floatingDownRawX;
+
+                                      float dy =
+                                              event.getRawY()
+                                                      - floatingDownRawY;
+
+                                      if (!floatingDragging
+                                              && Math.hypot(
+                                                      dx,
+                                                      dy)
+                                              > ViewConfiguration
+                                                      .get(this)
+                                                      .getScaledTouchSlop()) {
+
+                                          floatingDragging = true;
+                                      }
+
+                                      if (floatingDragging) {
+
+                                          int width =
+                                                  projectionLayer
+                                                          .getWidth();
+
+                                          int height =
+                                                  projectionLayer
+                                                          .getHeight();
+
+                                          int keySize =
+                                                  dp(58);
+
+                                          int right =
+                                                  Math.round(
+                                                          floatingStartX
+                                                                  - dx);
+
+                                          int top =
+                                                  Math.round(
+                                                          floatingStartY
+                                                                  + dy);
+
+                                          right =
+                                                  Math.max(
+                                                          0,
+                                                          Math.min(
+                                                                  Math.max(
+                                                                          0,
+                                                                          width
+                                                                                  - keySize),
+                                                                  right));
+
+                                          top =
+                                                  Math.max(
+                                                          0,
+                                                          Math.min(
+                                                                  Math.max(
+                                                                          0,
+                                                                          height
+                                                                                  - keySize),
+                                                                  top));
+
+                                          FrameLayout.LayoutParams fp =
+                                                  (FrameLayout.LayoutParams)
+                                                          view.getLayoutParams();
+
+                                          fp.rightMargin =
+                                                  right;
+
+                                          fp.topMargin =
+                                                  top;
+
+                                          view.setLayoutParams(fp);
+                                      }
+
+                                      return true;
+
+                                  case MotionEvent.ACTION_UP:
+
+                                      if (floatingDragging) {
+
+                                          FrameLayout.LayoutParams fp =
+                                                  (FrameLayout.LayoutParams)
+                                                          view.getLayoutParams();
+
+                                          prefs.edit()
+                                                  .putInt(
+                                                          "x",
+                                                          fp.rightMargin)
+                                                  .putInt(
+                                                          "y",
+                                                          fp.topMargin)
+                                                  .apply();
+
+                                          floatingDragging = false;
+
+                                          return true;
+                                      }
+
+                                      long now =
+                                              SystemClock.uptimeMillis();
+
+                                      long delta =
+                                              now - floatingLastTap;
+
+                                      floatingLastTap = now;
+
+                                      if (delta > 0
+                                              && delta < 320) {
+
+                                          handleControlHome();
+
+                                          hideFloatingMenu();
+
+                                      } else {
+
+                                          showFloatingMenu();
+                                      }
+
+                                      view.performClick();
+
+                                      return true;
+
+                                  case MotionEvent.ACTION_CANCEL:
+
+                                      floatingDragging = false;
+
+                                      return true;
+
+                                  default:
+                                      return true;
+                              }
+                          });
+
+                  floatingTouchKey.bringToFront();
+              }
+
+              private void showFloatingMenu() {
+
+                  if (floatingMenu != null) {
+                      hideFloatingMenu();
+                      return;
+                  }
+
+                  floatingMenu =
+                          new LinearLayout(this);
+
+                  floatingMenu.setOrientation(
+                          LinearLayout.VERTICAL);
+
+                  floatingMenu.setPadding(
+                          dp(8),
+                          dp(8),
+                          dp(8),
+                          dp(8));
+
+                  GradientDrawable menuBg =
+                          new GradientDrawable();
+
+                  menuBg.setColor(
+                          Color.rgb(15, 20, 26));
+
+                  menuBg.setCornerRadius(
+                          dp(16));
+
+                  menuBg.setStroke(
+                          dp(1),
+                          Color.rgb(65, 85, 105));
+
+                  floatingMenu.setBackground(
+                          menuBg);
+
+                  floatingMenu.setElevation(
+                          dp(14));
+
+                  addFloatingMenuButton(
+                          "BACK",
+                          () -> {
+                              handleControlBack();
+                              hideFloatingMenu();
+                          });
+
+                  addFloatingMenuButton(
+                          "RECENTS",
+                          () -> {
+                              openSystemRecents();
+                              hideFloatingMenu();
+                          });
+
+                  addFloatingMenuButton(
+                          "2 SCREEN",
+                          () -> {
+                              switchToTwoScreen();
+                              hideFloatingMenu();
+                          });
+
+                  addFloatingMenuButton(
+                          "3 SCREEN",
+                          () -> {
+                              switchToThreeScreen();
+                              hideFloatingMenu();
+                          });
+
+                  FrameLayout.LayoutParams params =
+                          new FrameLayout.LayoutParams(
+                                  dp(170),
+                                  -2,
+                                  Gravity.TOP | Gravity.END);
+
+                  params.setMargins(
+                          0,
+                          dp(70),
+                          dp(18),
+                          0);
+
+                  projectionLayer.addView(
+                          floatingMenu,
+                          params);
+
+                  floatingMenu.bringToFront();
+                  floatingTouchKey.bringToFront();
+              }
+
+              private void addFloatingMenuButton(
+                      String label,
+                      Runnable action) {
+
+                  TextView button =
+                          new TextView(this);
+
+                  button.setText(label);
+                  button.setTextColor(Color.WHITE);
+                  button.setTextSize(14);
+                  button.setGravity(
+                          Gravity.CENTER_VERTICAL);
+
+                  GradientDrawable bg =
+                          new GradientDrawable();
+
+                  bg.setColor(
+                          Color.rgb(28, 38, 48));
+
+                  bg.setCornerRadius(
+                          dp(10));
+
+                  button.setBackground(bg);
+
+                  button.setPadding(
+                          dp(16),
+                          0,
+                          dp(16),
+                          0);
+
+                  button.setOnClickListener(
+                          v -> action.run());
+
+                  LinearLayout.LayoutParams params =
+                          new LinearLayout.LayoutParams(
+                                  -1,
+                                  dp(48));
+
+                  params.setMargins(
+                          0,
+                          dp(3),
+                          0,
+                          dp(3));
+
+                  floatingMenu.addView(
+                          button,
+                          params);
+              }
+
+              private void hideFloatingMenu() {
+
+                  if (floatingMenu == null) {
+                      return;
+                  }
+
+                  projectionLayer.removeView(
+                          floatingMenu);
+
+                  floatingMenu = null;
+              }
+
+              private void openSystemRecents() {
+
+                  RootShellSession.EXEC.execute(
+                          () -> {
+
+                              RootShellSession shell =
+                                      new RootShellSession();
+
+                              try {
+
+                                  shell.run(
+                                          8,
+                                          "/system/bin/input keyevent 187");
+
+                              } catch (Exception ignored) {
+
+                              } finally {
+
+                                  shell.destroy();
+                              }
+                          });
+              }
+
+              private void switchToTwoScreen() {
+
+                  RootView rootView =
+                          RootView.getCurrent();
+
+                  if (rootView != null) {
+
+                      rootView.setLayoutModeExternal(
+                              0);
+                  }
+              }
+
+              private void switchToThreeScreen() {
+
+                  RootView rootView =
+                          RootView.getCurrent();
+
+                  if (rootView != null) {
+
+                      rootView.setLayoutModeExternal(
+                              2);
+                  }
+              }
+          '''
+
+              text = text.replace(
+                  marker,
+                  methods + "\n" + marker,
+                  1
+              )
+
+          path.write_text(
+              text,
+              encoding="utf-8"
+          )
+
+          print(
+              "V10-6 V10CarActivity patch applied."
+          )
+          PY
+
+      # ============================================================
+      # PATCH ROOTVIEW
+      # ============================================================
+      - name: Patch RootView
+        working-directory: v10-source
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          FILE="app/src/main/java/com/hieptran/aacast/doudou/RootView.java"
+
+          test -f "$FILE"
+
+          python3 <<'PY'
+          from pathlib import Path
+
+          path = Path(
+              "app/src/main/java/com/hieptran/aacast/doudou/RootView.java"
+          )
+
+          text = path.read_text(encoding="utf-8")
+
+          if "public void setLayoutModeExternal(" not in text:
+
+              marker = (
+                  "    public void reloadSettings()"
+              )
+
+              if marker not in text:
+                  raise SystemExit(
+                      "RootView insertion marker not found"
+                  )
+
+              method = r'''
+          
+              /**
+               * V10-6 external layout control.
+               *
+               * 0/1 = two panes.
+               * 2..5 = three panes.
+               */
+              public void setLayoutModeExternal(int mode) {
+
+                  final int targetMode =
+                          clamp(mode, 0, 5);
+
+                  handler.post(() -> {
+
+                      if (destroyed) {
+                          return;
+                      }
+
+                      layoutMode =
+                              targetMode;
+
+                      loadRatios();
+
+                      prefs.edit()
+                              .putInt(
+                                      "layout_mode_v3",
+                                      layoutMode)
+                              .apply();
+
+                      applyVisibility();
+
+                      container.requestLayout();
+
+                      container.resizeAll();
+                  });
+              }
+
+          '''
+
+              text = text.replace(
+                  marker,
+                  method + "\n" + marker,
+                  1
+              )
+
+          path.write_text(
+              text,
+              encoding="utf-8"
+          )
+
+          print(
+              "V10-6 RootView patch applied."
+          )
+          PY
+
+      # ============================================================
+      # V10-7A TASK PERSISTENCE
+      # ============================================================
+      - name: Patch V10ProjectionSession task persistence
+        working-directory: v10-source
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          FILE="app/src/main/java/com/hieptran/aacast/doudou/V10ProjectionSession.java"
+
+          test -f "$FILE"
+
+          python3 <<'PY'
+          from pathlib import Path
+
+          path = Path(
+              "app/src/main/java/com/hieptran/aacast/doudou/V10ProjectionSession.java"
+          )
+
+          text = path.read_text(encoding="utf-8")
+
+          old = """            final String command =
+                    "/system/bin/am force-stop '" + packageName + "'; "
+                            + "/system/bin/am start"
+                            + " --user " + userId
+                            + " --display " + displayId
+                            + " --windowingMode 1"
+                            + " -a android.intent.action.MAIN"
+                            + " -c android.intent.category.LAUNCHER"
+                            + " -f 0x18000000"
+                            + " -n '" + flat + "'";"""
+
+          new = """            // V10-7A: reuse the existing application task.
+            // Do not force-stop the target and do not use MULTIPLE_TASK.
+            final String command =
+                    "/system/bin/am start"
+                            + " --user " + userId
+                            + " --display " + displayId
+                            + " --windowingMode 1"
+                            + " -a android.intent.action.MAIN"
+                            + " -c android.intent.category.LAUNCHER"
+                            + " -f 0x10000000"
+                            + " -n '" + flat + "'";"""
+
+          if old not in text:
+              raise SystemExit(
+                  "Expected original V10ProjectionSession launch command not found."
+              )
+
+          text = text.replace(
+              old,
+              new,
+              1
+          )
+
+          path.write_text(
+              text,
+              encoding="utf-8"
+          )
+
+          print(
+              "V10-7A task persistence patch applied."
+          )
+          PY
+
+      # ============================================================
+      # STATIC VALIDATION
+      # ============================================================
+      - name: Verify V10-7A patch
+        working-directory: v10-source
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          V10="app/src/main/java/com/hieptran/aacast/doudou/V10CarActivity.java"
+          ROOT="app/src/main/java/com/hieptran/aacast/doudou/RootView.java"
+          PROJECTION="app/src/main/java/com/hieptran/aacast/doudou/V10ProjectionSession.java"
+
+          test -f "$V10"
+          test -f "$ROOT"
+          test -f "$PROJECTION"
+
+          # V10-6 floating key
+          grep -q "import android.view.ViewGroup;" "$V10"
+          grep -q "createFloatingTouchKey" "$V10"
+          grep -q "showFloatingMenu" "$V10"
+          grep -q "openSystemRecents" "$V10"
+          grep -q "switchToTwoScreen" "$V10"
+          grep -q "switchToThreeScreen" "$V10"
+
+          # V10-6 RootView external control
+          grep -q "public void setLayoutModeExternal" "$ROOT"
+
+          # V10-7A task persistence
+          if grep -q "/system/bin/am force-stop" "$PROJECTION"; then
+            echo "ERROR: force-stop still exists."
+            exit 1
+          fi
+
+          if grep -q "0x18000000" "$PROJECTION"; then
+            echo "ERROR: MULTIPLE_TASK flag still exists."
+            exit 1
+          fi
+
+          grep -q "/system/bin/am start" "$PROJECTION"
+          grep -q "0x10000000" "$PROJECTION"
+
+          echo "========================================"
+          echo "V10-6 floating key: PASSED"
+          echo "V10-7A task persistence: PASSED"
+          echo "========================================"
+
+      # ============================================================
+      # BUILD
+      # ============================================================
+      - name: Build V10-7A Debug APK
+        working-directory: v10-source
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          chmod +x ./gradlew
+
+          ./gradlew \
+            --no-daemon \
+            --stacktrace \
+            assembleDebug
+
+      # ============================================================
+      # UPLOAD APK
+      # ============================================================
+      - name: Upload V10-7A APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: CarAssistant-V10-7A-Task-Persistence
+          path: v10-source/app/build/outputs/apk/debug/*.apk
+          if-no-files-found: error
+          retention-days: 30
