@@ -39,7 +39,7 @@ jobs:
           cache-disabled: true
 
       # ============================================================
-      # LOCATE V10 SOURCE
+      # VERIFY CURRENT V10 SOURCE
       # ============================================================
 
       - name: Verify current V10 source
@@ -64,27 +64,7 @@ jobs:
           echo "CURRENT V10 SOURCE OK"
 
       # ============================================================
-      # VERIFY V10.3 CONTROL BAR BASE
-      # ============================================================
-
-      - name: Verify V10.3 control bar base
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          FILE="v10-source/app/src/main/java/com/hieptran/aacast/doudou/V10CarActivity.java"
-
-          grep -q "handleControlBack" "$FILE"
-          grep -q "handleControlHome" "$FILE"
-          grep -q "handleControlApps" "$FILE"
-          grep -q "handleControlRecents" "$FILE"
-
-          grep -q "controlBar" "$FILE"
-
-          echo "V10.3 CONTROL BAR VERIFIED"
-
-      # ============================================================
-      # BACKUP ACTIVITY
+      # BACKUP
       # ============================================================
 
       - name: Backup V10CarActivity
@@ -104,8 +84,6 @@ jobs:
       # - V10ProjectionSession
       # - V10InputController
       # - RootShellSession
-      #
-      # Only restore/merge UI behavior.
       # ============================================================
 
       - name: Patch V10CarActivity
@@ -122,100 +100,225 @@ jobs:
           path = Path(sys.argv[1])
           s = path.read_text()
 
-          # --------------------------------------------------------
-          # Helper: find Java method by name and replace complete body
-          # --------------------------------------------------------
+          # ========================================================
+          # FIND / REPLACE JAVA METHOD
+          # ========================================================
 
-          def replace_method(src, method_name, new_method):
-              marker = method_name + "("
+          def replace_method(src, marker, new_method):
               pos = src.find(marker)
 
               if pos < 0:
                   raise SystemExit(
-                      f"Method not found: {method_name}"
+                      f"Method not found: {marker}"
                   )
 
               brace = src.find("{", pos)
 
               if brace < 0:
                   raise SystemExit(
-                      f"Opening brace not found: {method_name}"
+                      f"Opening brace not found: {marker}"
                   )
 
               depth = 0
               end = None
 
-              for i in range(brace, len(src)):
+              in_string = False
+              escape = False
+              in_line_comment = False
+              in_block_comment = False
+
+              i = brace
+
+              while i < len(src):
+
                   c = src[i]
+                  n = src[i + 1] if i + 1 < len(src) else ""
 
-                  if c == "{":
-                      depth += 1
+                  if in_line_comment:
 
-                  elif c == "}":
-                      depth -= 1
+                      if c == "\n":
+                          in_line_comment = False
 
-                      if depth == 0:
-                          end = i + 1
-                          break
+                  elif in_block_comment:
+
+                      if c == "*" and n == "/":
+                          in_block_comment = False
+                          i += 1
+
+                  elif in_string:
+
+                      if escape:
+                          escape = False
+
+                      elif c == "\\":
+                          escape = True
+
+                      elif c == '"':
+                          in_string = False
+
+                  else:
+
+                      if c == "/" and n == "/":
+                          in_line_comment = True
+                          i += 1
+
+                      elif c == "/" and n == "*":
+                          in_block_comment = True
+                          i += 1
+
+                      elif c == '"':
+                          in_string = True
+
+                      elif c == "{":
+                          depth += 1
+
+                      elif c == "}":
+
+                          depth -= 1
+
+                          if depth == 0:
+                              end = i + 1
+                              break
+
+                  i += 1
 
               if end is None:
                   raise SystemExit(
-                      f"Closing brace not found: {method_name}"
+                      f"Closing brace not found: {marker}"
                   )
 
-              return src[:pos] + new_method.rstrip() + src[end:]
+              return (
+                  src[:pos]
+                  + new_method.rstrip()
+                  + src[end:]
+              )
 
-          # --------------------------------------------------------
-          # Ensure imports
-          # --------------------------------------------------------
+          # ========================================================
+          # IMPORTS
+          # ========================================================
 
-          imports = [
+          required_imports = [
+              "import android.widget.Button;",
               "import android.graphics.Color;",
               "import android.view.Gravity;",
               "import android.widget.LinearLayout;",
           ]
 
-          for imp in imports:
+          anchor = "import android.os.Bundle;"
+
+          for imp in required_imports:
+
               if imp not in s:
-                  anchor = "import android.os.Bundle;"
-                  if anchor in s:
-                      s = s.replace(
-                          anchor,
-                          anchor + "\n" + imp,
-                          1
+
+                  if anchor not in s:
+                      raise SystemExit(
+                          "Import anchor not found"
                       )
 
-          # --------------------------------------------------------
-          # Ensure controlBar field
-          # --------------------------------------------------------
-
-          if "private LinearLayout controlBar;" not in s:
-              marker = "private boolean resumed;"
-
-              if marker in s:
                   s = s.replace(
-                      marker,
-                      marker + "\n    private LinearLayout controlBar;",
+                      anchor,
+                      anchor + "\n" + imp,
                       1
                   )
-              else:
+
+          # ========================================================
+          # CONTROL BAR FIELD
+          # ========================================================
+
+          if "private LinearLayout controlBar;" not in s:
+
+              marker = "private boolean resumed;"
+
+              if marker not in s:
                   raise SystemExit(
                       "Could not find resumed field"
                   )
 
-          # --------------------------------------------------------
-          # Replace buildUi()
-          # --------------------------------------------------------
+              s = s.replace(
+                  marker,
+                  marker
+                  + "\n    private LinearLayout controlBar;",
+                  1
+              )
+
+          # ========================================================
+          # CONTROL BUTTON HELPER
+          # ========================================================
+
+          if "private void addControlButton(" not in s:
+
+              marker = "private void buildUi()"
+
+              pos = s.find(marker)
+
+              if pos < 0:
+                  raise SystemExit(
+                      "Could not find buildUi"
+                  )
+
+              helper = r'''
+          private void addControlButton(
+                  String label,
+                  View.OnClickListener listener) {
+
+              Button button = new Button(this);
+
+              button.setText(label);
+              button.setTextSize(12);
+              button.setTextColor(Color.WHITE);
+              button.setAllCaps(false);
+
+              LinearLayout.LayoutParams params =
+                      new LinearLayout.LayoutParams(
+                              0,
+                              -1,
+                              1f);
+
+              params.setMargins(
+                      dp(2),
+                      0,
+                      dp(2),
+                      0);
+
+              controlBar.addView(
+                      button,
+                      params);
+
+              button.setOnClickListener(listener);
+          }
+
+          '''
+
+              s = (
+                  s[:pos]
+                  + helper
+                  + s[pos:]
+              )
+
+          # ========================================================
+          # BUILD UI
+          # ========================================================
 
           build_ui = r'''
           private void buildUi() {
-              FrameLayout root = new FrameLayout(this);
 
-              root.setBackgroundColor(Color.BLACK);
+              root = new FrameLayout(this);
 
-              projectionLayer = new FrameLayout(this);
+              root.setBackgroundColor(
+                      Color.BLACK);
 
-              textureView = new TextureView(this);
+              // --------------------------------------------------
+              // PROJECTION LAYER
+              // --------------------------------------------------
+
+              projectionLayer =
+                      new FrameLayout(this);
+
+              projectionLayer.setVisibility(
+                      View.GONE);
+
+              textureView =
+                      new TextureView(this);
 
               projectionLayer.addView(
                       textureView,
@@ -229,7 +332,12 @@ jobs:
                               -1,
                               -1));
 
-              launcherLayer = new FrameLayout(this);
+              // --------------------------------------------------
+              // LAUNCHER LAYER
+              // --------------------------------------------------
+
+              launcherLayer =
+                      new FrameLayout(this);
 
               buildDashboard();
               buildAppPanel();
@@ -240,9 +348,15 @@ jobs:
                               -1,
                               -1));
 
-              launcherLayer.setVisibility(View.VISIBLE);
+              launcherLayer.setVisibility(
+                      View.VISIBLE);
 
-              controlBar = new LinearLayout(this);
+              // --------------------------------------------------
+              // PERSISTENT CONTROL BAR
+              // --------------------------------------------------
+
+              controlBar =
+                      new LinearLayout(this);
 
               controlBar.setOrientation(
                       LinearLayout.HORIZONTAL);
@@ -271,6 +385,10 @@ jobs:
                       controlBar,
                       barParams);
 
+              // --------------------------------------------------
+              // BUTTONS
+              // --------------------------------------------------
+
               addControlButton(
                       "BACK",
                       this::handleControlBack);
@@ -287,6 +405,8 @@ jobs:
                       "HOME",
                       this::handleControlHome);
 
+              controlBar.bringToFront();
+
               setContentView(root);
           }
           '''
@@ -297,9 +417,9 @@ jobs:
               build_ui
           )
 
-          # --------------------------------------------------------
-          # Replace launchProjection()
-          # --------------------------------------------------------
+          # ========================================================
+          # LAUNCH PROJECTION
+          # ========================================================
 
           launch_projection = r'''
           private void launchProjection(
@@ -348,6 +468,8 @@ jobs:
               if (controlBar != null) {
                   controlBar.setVisibility(
                           View.VISIBLE);
+
+                  controlBar.bringToFront();
               }
 
               session.setTarget(component);
@@ -360,9 +482,9 @@ jobs:
               launch_projection
           )
 
-          # --------------------------------------------------------
-          # Replace showApps()
-          # --------------------------------------------------------
+          # ========================================================
+          # SHOW APPS
+          # ========================================================
 
           show_apps = r'''
           private void showApps() {
@@ -390,6 +512,8 @@ jobs:
               if (controlBar != null) {
                   controlBar.setVisibility(
                           View.VISIBLE);
+
+                  controlBar.bringToFront();
               }
 
               loadApps();
@@ -402,9 +526,9 @@ jobs:
               show_apps
           )
 
-          # --------------------------------------------------------
-          # Replace hideApps()
-          # --------------------------------------------------------
+          # ========================================================
+          # HIDE APPS
+          # ========================================================
 
           hide_apps = r'''
           private void hideApps() {
@@ -432,6 +556,8 @@ jobs:
               if (controlBar != null) {
                   controlBar.setVisibility(
                           View.VISIBLE);
+
+                  controlBar.bringToFront();
               }
           }
           '''
@@ -442,9 +568,9 @@ jobs:
               hide_apps
           )
 
-          # --------------------------------------------------------
-          # Replace returnToLauncher()
-          # --------------------------------------------------------
+          # ========================================================
+          # RETURN HOME
+          # ========================================================
 
           return_launcher = r'''
           private void returnToLauncher() {
@@ -481,6 +607,8 @@ jobs:
               if (controlBar != null) {
                   controlBar.setVisibility(
                           View.VISIBLE);
+
+                  controlBar.bringToFront();
               }
           }
           '''
@@ -491,9 +619,9 @@ jobs:
               return_launcher
           )
 
-          # --------------------------------------------------------
-          # Replace BACK
-          # --------------------------------------------------------
+          # ========================================================
+          # BACK
+          # ========================================================
 
           back_method = r'''
           public void handleControlBack() {
@@ -513,7 +641,7 @@ jobs:
                   return;
               }
 
-              super.onBackPressed();
+              returnToLauncher();
           }
           '''
 
@@ -523,9 +651,9 @@ jobs:
               back_method
           )
 
-          # --------------------------------------------------------
-          # Replace HOME
-          # --------------------------------------------------------
+          # ========================================================
+          # HOME
+          # ========================================================
 
           home_method = r'''
           public void handleControlHome() {
@@ -539,9 +667,9 @@ jobs:
               home_method
           )
 
-          # --------------------------------------------------------
-          # Replace APPS
-          # --------------------------------------------------------
+          # ========================================================
+          # APPS
+          # ========================================================
 
           apps_method = r'''
           public void handleControlApps() {
@@ -565,9 +693,9 @@ jobs:
               apps_method
           )
 
-          # --------------------------------------------------------
-          # Keep RECENTS non-destructive for now.
-          # --------------------------------------------------------
+          # ========================================================
+          # RECENTS
+          # ========================================================
 
           recents_method = r'''
           public void handleControlRecents() {
@@ -586,7 +714,9 @@ jobs:
 
           path.write_text(s)
 
-          print("V10CarActivity patched successfully.")
+          print(
+              "V10CarActivity patched successfully."
+          )
           PY
 
       # ============================================================
@@ -601,8 +731,7 @@ jobs:
           FILE="v10-source/app/src/main/java/com/hieptran/aacast/doudou/V10CarActivity.java"
 
           grep -q "private LinearLayout controlBar" "$FILE"
-
-          grep -q "addControlButton" "$FILE"
+          grep -q "private void addControlButton" "$FILE"
 
           grep -q '"BACK"' "$FILE"
           grep -q '"APPS"' "$FILE"
@@ -613,6 +742,8 @@ jobs:
           grep -q "handleControlHome" "$FILE"
           grep -q "handleControlApps" "$FILE"
           grep -q "handleControlRecents" "$FILE"
+
+          grep -q "controlBar.bringToFront" "$FILE"
 
           echo "CONTROL BAR VERIFIED"
 
@@ -674,7 +805,7 @@ jobs:
 
           grep -q "V10Display.nameFor" "$SESSION"
 
-          grep -q "V10Display" "$DISPLAY"
+          grep -q "Car Assistant V10" "$DISPLAY"
 
           echo "PROJECTION ENGINE VERIFIED"
 
@@ -729,7 +860,6 @@ jobs:
             v10-source/app/src/main/java; then
 
             echo "ERROR: GearheadControlBar still exists."
-
             exit 1
           fi
 
@@ -755,7 +885,7 @@ jobs:
           echo "ANDROID 12 COMPATIBILITY CHECK COMPLETE"
 
       # ============================================================
-      # VERIFY JAVA BRACES
+      # VERIFY JAVA STRUCTURE
       # ============================================================
 
       - name: Verify Java structure
@@ -779,6 +909,7 @@ jobs:
           ]
 
           for p in files:
+
               s = p.read_text()
 
               depth = 0
@@ -790,38 +921,50 @@ jobs:
               i = 0
 
               while i < len(s):
+
                   c = s[i]
                   n = s[i + 1] if i + 1 < len(s) else ""
 
                   if in_line_comment:
+
                       if c == "\n":
                           in_line_comment = False
 
                   elif in_block_comment:
+
                       if c == "*" and n == "/":
                           in_block_comment = False
                           i += 1
 
                   elif in_string:
+
                       if escape:
                           escape = False
+
                       elif c == "\\":
                           escape = True
+
                       elif c == '"':
                           in_string = False
 
                   else:
+
                       if c == "/" and n == "/":
                           in_line_comment = True
                           i += 1
+
                       elif c == "/" and n == "*":
                           in_block_comment = True
                           i += 1
+
                       elif c == '"':
                           in_string = True
+
                       elif c == "{":
                           depth += 1
+
                       elif c == "}":
+
                           depth -= 1
 
                           if depth < 0:
@@ -836,7 +979,9 @@ jobs:
                       f"Unbalanced braces: {p} depth={depth}"
                   )
 
-              print(f"JAVA STRUCTURE OK: {p}")
+              print(
+                  f"JAVA STRUCTURE OK: {p}"
+              )
 
           PY
 
@@ -909,7 +1054,7 @@ jobs:
           retention-days: 30
 
       # ============================================================
-      # COMMIT
+      # COMMIT SOURCE
       # ============================================================
 
       - name: Commit V4.2.1 source
@@ -926,10 +1071,14 @@ jobs:
           git add v10-source
 
           if git diff --cached --quiet; then
+
             echo "No source changes."
+
           else
+
             git commit \
               -m "Fix V10.4 V4.2.1 control bar"
 
             git push
+
           fi
