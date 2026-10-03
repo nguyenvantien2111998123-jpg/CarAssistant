@@ -1,4 +1,4 @@
-name: Build Car Assistant V10 - 8B2 Startup Handshake
+name: Build Car Assistant V10 - 8B2 Startup Handshake Fixed
 
 on:
   workflow_dispatch:
@@ -27,10 +27,18 @@ jobs:
 
           ROOT="v10-source/app/src/main/java/com/hieptran/aacast/doudou"
 
-          test -f "$ROOT/V10ProjectionService.java"
-          test -f "$ROOT/V10ProjectionSession.java"
-          test -f "$ROOT/V10CarActivity.java"
-          test -f "$ROOT/V10SessionStore.java"
+          for f in \
+            V10ProjectionService.java \
+            V10ProjectionSession.java \
+            V10CarActivity.java \
+            V10SessionStore.java \
+            V10InputController.java \
+            RootShellSession.java \
+            CarSystemUI.java \
+            CarRecents.java
+          do
+            test -f "$ROOT/$f"
+          done
 
           grep -q 'package com.carassistant.v10;' \
             "$ROOT/V10ProjectionService.java"
@@ -40,7 +48,7 @@ jobs:
 
           echo "Existing V10 source confirmed."
 
-      - name: Patch V10ProjectionService
+      - name: Patch V10ProjectionService - brace safe
         shell: bash
         run: |
           set -euo pipefail
@@ -55,220 +63,445 @@ jobs:
           p = Path(sys.argv[1])
           s = p.read_text()
 
-          anchor = "    private static volatile V10ProjectionService instance;"
+          def method_span(src, name):
+              pat = re.compile(
+                  r'(?m)^\s*public\s+static\s+void\s+'
+                  + re.escape(name)
+                  + r'\s*\('
+              )
 
-          if "START_LOCK" not in s:
-              if anchor not in s:
-                  raise SystemExit("START_LOCK anchor not found")
-
-              add = "\n".join([
-                  "",
-                  "    private static final Object START_LOCK = new Object();",
-                  "    private static ComponentName pendingTarget;",
-                  "    private static Surface pendingSurface;",
-                  "    private static int pendingWidth;",
-                  "    private static int pendingHeight;",
-                  ""
-              ])
-
-              s = s.replace(anchor, anchor + add, 1)
-
-          def replace_method(name, pattern, lines):
-              global s
-
-              matches = list(re.finditer(pattern, s, re.S))
+              matches = list(pat.finditer(src))
 
               if len(matches) != 1:
                   raise SystemExit(
-                      name + ": expected 1 match, found "
-                      + str(len(matches))
+                      f"{name}: expected 1 method, found {len(matches)}"
                   )
 
-              replacement = "\n".join(lines)
-              m = matches[0]
+              start = matches[0].start()
 
-              s = (
-                  s[:m.start()]
-                  + replacement
-                  + s[m.end():]
+              brace = src.find(
+                  '{',
+                  matches[0].end()
               )
 
-          replace_method(
+              if brace < 0:
+                  raise SystemExit(
+                      f"{name}: opening brace not found"
+                  )
+
+              depth = 0
+              i = brace
+              state = "code"
+
+              while i < len(src):
+                  c = src[i]
+                  n = src[i + 1] if i + 1 < len(src) else ""
+
+                  if state == "code":
+
+                      if c == '/' and n == '/':
+                          state = "line"
+                          i += 2
+                          continue
+
+                      if c == '/' and n == '*':
+                          state = "block"
+                          i += 2
+                          continue
+
+                      if c == '"':
+                          state = "string"
+
+                      elif c == "'":
+                          state = "char"
+
+                      elif c == '{':
+                          depth += 1
+
+                      elif c == '}':
+                          depth -= 1
+
+                          if depth == 0:
+                              return start, i + 1
+
+                  elif state == "line":
+
+                      if c == '\n':
+                          state = "code"
+
+                  elif state == "block":
+
+                      if c == '*' and n == '/':
+                          state = "code"
+                          i += 2
+                          continue
+
+                  elif state == "string":
+
+                      if c == '\\':
+                          i += 2
+                          continue
+
+                      if c == '"':
+                          state = "code"
+
+                  elif state == "char":
+
+                      if c == '\\':
+                          i += 2
+                          continue
+
+                      if c == "'":
+                          state = "code"
+
+                  i += 1
+
+              raise SystemExit(
+                  f"{name}: unmatched braces"
+              )
+
+          def replace_method(src, name, replacement):
+
+              start, end = method_span(
+                  src,
+                  name
+              )
+
+              return (
+                  src[:start]
+                  + replacement
+                  + src[end:]
+              )
+
+          anchor = (
+              "    private static volatile "
+              "V10ProjectionService instance;"
+          )
+
+          if "START_LOCK" not in s:
+
+              if anchor not in s:
+                  raise SystemExit(
+                      "START_LOCK anchor not found"
+                  )
+
+              fields = """\
+              private static final Object START_LOCK =
+                      new Object();
+
+              private static ComponentName pendingTarget;
+
+              private static Surface pendingSurface;
+
+              private static int pendingWidth;
+
+              private static int pendingHeight;
+              """
+
+              fields = "\n".join(
+                  line[14:] if line.startswith("              ")
+                  else line
+                  for line in fields.splitlines()
+              )
+
+              s = s.replace(
+                  anchor,
+                  anchor
+                  + "\n\n"
+                  + fields
+                  + "\n",
+                  1
+              )
+
+          ensure_started = """\
+              public static void ensureStarted(
+                      android.content.Context context) {
+
+                  if (getInstance() != null) {
+                      return;
+                  }
+
+                  android.content.Context app =
+                          context.getApplicationContext();
+
+                  Intent intent =
+                          new Intent(
+                                  app,
+                                  V10ProjectionService.class);
+
+                  try {
+
+                      if (Build.VERSION.SDK_INT >= 26) {
+
+                          app.startForegroundService(
+                                  intent);
+
+                      } else {
+
+                          app.startService(
+                                  intent);
+                      }
+
+                  } catch (Throwable error) {
+
+                      Log.w(
+                              TAG,
+                              "Unable to start projection service",
+                              error);
+                  }
+              }
+              """
+
+          ensure_started = "\n".join(
+              line[14:] if line.startswith("              ")
+              else line
+              for line in ensure_started.splitlines()
+          )
+
+          s = replace_method(
+              s,
               "ensureStarted",
-              r"public\s+static\s+void\s+ensureStarted\s*\(\s*android\.content\.Context\s+context\s*\)\s*\{.*?\n\s*\}",
-              [
-                  "    public static void ensureStarted(",
-                  "            android.content.Context context) {",
-                  "",
-                  "        if (getInstance() != null) {",
-                  "            return;",
-                  "        }",
-                  "",
-                  "        android.content.Context app =",
-                  "                context.getApplicationContext();",
-                  "",
-                  "        Intent intent = new Intent(",
-                  "                app,",
-                  "                V10ProjectionService.class);",
-                  "",
-                  "        try {",
-                  "            if (Build.VERSION.SDK_INT >= 26) {",
-                  "                app.startForegroundService(intent);",
-                  "            } else {",
-                  "                app.startService(intent);",
-                  "            }",
-                  "        } catch (Throwable error) {",
-                  "            Log.w(TAG,",
-                  "                    \"Unable to start projection service\",",
-                  "                    error);",
-                  "        }",
-                  "    }"
-              ]
+              ensure_started
           )
 
-          replace_method(
+          set_target = """\
+              public static void setTarget(
+                      android.content.Context context,
+                      ComponentName component) {
+
+                  if (component == null) {
+                      clearTarget();
+                      return;
+                  }
+
+                  synchronized (START_LOCK) {
+
+                      V10ProjectionService service =
+                              getInstance();
+
+                      if (service == null) {
+
+                          pendingTarget =
+                                  component;
+
+                          ensureStarted(
+                                  context);
+
+                          return;
+                      }
+
+                      service.setTargetInternal(
+                              component);
+                  }
+              }
+              """
+
+          set_target = "\n".join(
+              line[14:] if line.startswith("              ")
+              else line
+              for line in set_target.splitlines()
+          )
+
+          s = replace_method(
+              s,
               "setTarget",
-              r"public\s+static\s+void\s+setTarget\s*\(\s*android\.content\.Context\s+context\s*,\s*ComponentName\s+component\s*\)\s*\{.*?\n\s*\}",
-              [
-                  "    public static void setTarget(",
-                  "            android.content.Context context,",
-                  "            ComponentName component) {",
-                  "",
-                  "        if (component == null) {",
-                  "            clearTarget();",
-                  "            return;",
-                  "        }",
-                  "",
-                  "        synchronized (START_LOCK) {",
-                  "            V10ProjectionService service = getInstance();",
-                  "",
-                  "            if (service == null) {",
-                  "                pendingTarget = component;",
-                  "                ensureStarted(context);",
-                  "                return;",
-                  "            }",
-                  "",
-                  "            service.setTargetInternal(component);",
-                  "        }",
-                  "    }"
-              ]
+              set_target
           )
 
-          replace_method(
+          attach_surface = """\
+              public static void attachSurface(
+                      android.content.Context context,
+                      Surface newSurface,
+                      int newWidth,
+                      int newHeight) {
+
+                  if (newSurface == null
+                          || newWidth < 1
+                          || newHeight < 1) {
+
+                      return;
+                  }
+
+                  synchronized (START_LOCK) {
+
+                      V10ProjectionService service =
+                              getInstance();
+
+                      if (service == null) {
+
+                          if (pendingSurface != null
+                                  && pendingSurface
+                                          != newSurface) {
+
+                              try {
+
+                                  pendingSurface.release();
+
+                              } catch (Throwable ignored) {
+                              }
+                          }
+
+                          pendingSurface =
+                                  newSurface;
+
+                          pendingWidth =
+                                  newWidth;
+
+                          pendingHeight =
+                                  newHeight;
+
+                          ensureStarted(
+                                  context);
+
+                          return;
+                      }
+
+                      service.attachSurfaceInternal(
+                              newSurface,
+                              newWidth,
+                              newHeight);
+                  }
+              }
+              """
+
+          attach_surface = "\n".join(
+              line[14:] if line.startswith("              ")
+              else line
+              for line in attach_surface.splitlines()
+          )
+
+          s = replace_method(
+              s,
               "attachSurface",
-              r"public\s+static\s+void\s+attachSurface\s*\(\s*android\.content\.Context\s+context\s*,\s*Surface\s+newSurface\s*,\s*int\s+newWidth\s*,\s*int\s+newHeight\s*\)\s*\{.*?\n\s*\}",
-              [
-                  "    public static void attachSurface(",
-                  "            android.content.Context context,",
-                  "            Surface newSurface,",
-                  "            int newWidth,",
-                  "            int newHeight) {",
-                  "",
-                  "        if (newSurface == null ||",
-                  "                newWidth < 1 || newHeight < 1) {",
-                  "            return;",
-                  "        }",
-                  "",
-                  "        synchronized (START_LOCK) {",
-                  "            V10ProjectionService service = getInstance();",
-                  "",
-                  "            if (service == null) {",
-                  "                if (pendingSurface != null &&",
-                  "                        pendingSurface != newSurface) {",
-                  "                    try {",
-                  "                        pendingSurface.release();",
-                  "                    } catch (Throwable ignored) {",
-                  "                    }",
-                  "                }",
-                  "",
-                  "                pendingSurface = newSurface;",
-                  "                pendingWidth = newWidth;",
-                  "                pendingHeight = newHeight;",
-                  "                ensureStarted(context);",
-                  "                return;",
-                  "            }",
-                  "",
-                  "            service.attachSurfaceInternal(",
-                  "                    newSurface, newWidth, newHeight);",
-                  "        }",
-                  "    }"
-              ]
+              attach_surface
           )
-
-          marker = "    @Override\n    public void onCreate()"
 
           if "private void flushPendingState()" not in s:
+
+              marker = (
+                  "    @Override\n"
+                  "    public void onCreate()"
+              )
+
               if marker not in s:
-                  raise SystemExit("onCreate marker not found")
+                  raise SystemExit(
+                      "onCreate marker not found"
+                  )
 
-              flush = "\n".join([
-                  "    private void flushPendingState() {",
-                  "",
-                  "        synchronized (START_LOCK) {",
-                  "            if (instance != this || destroyed) {",
-                  "                return;",
-                  "            }",
-                  "",
-                  "            ComponentName t = pendingTarget;",
-                  "            Surface sf = pendingSurface;",
-                  "            int w = pendingWidth;",
-                  "            int h = pendingHeight;",
-                  "",
-                  "            pendingTarget = null;",
-                  "            pendingSurface = null;",
-                  "            pendingWidth = 0;",
-                  "            pendingHeight = 0;",
-                  "",
-                  "            try {",
-                  "                if (t != null) {",
-                  "                    setTargetInternal(t);",
-                  "                }",
-                  "                if (sf != null) {",
-                  "                    attachSurfaceInternal(sf, w, h);",
-                  "                }",
-                  "            } catch (Throwable error) {",
-                  "                Log.e(TAG,",
-                  "                        \"Pending projection state failed\",",
-                  "                        error);",
-                  "            }",
-                  "        }",
-                  "    }",
-                  ""
-              ])
+              flush = """\
+              private void flushPendingState() {
 
-              s = s.replace(marker, flush + marker, 1)
+                  synchronized (START_LOCK) {
+
+                      if (instance != this
+                              || destroyed) {
+
+                          return;
+                      }
+
+                      ComponentName t =
+                              pendingTarget;
+
+                      Surface sf =
+                              pendingSurface;
+
+                      int w =
+                              pendingWidth;
+
+                      int h =
+                              pendingHeight;
+
+                      pendingTarget = null;
+
+                      pendingSurface = null;
+
+                      pendingWidth = 0;
+
+                      pendingHeight = 0;
+
+                      try {
+
+                          if (t != null) {
+
+                              setTargetInternal(t);
+                          }
+
+                          if (sf != null) {
+
+                              attachSurfaceInternal(
+                                      sf,
+                                      w,
+                                      h);
+                          }
+
+                      } catch (Throwable error) {
+
+                          Log.e(
+                                  TAG,
+                                  "Pending projection state failed",
+                                  error);
+                      }
+                  }
+              }
+
+              """
+
+              flush = "\n".join(
+                  line[14:] if line.startswith("              ")
+                  else line
+                  for line in flush.splitlines()
+              )
+
+              s = s.replace(
+                  marker,
+                  flush + marker,
+                  1
+              )
 
           if "flushPendingState();" not in s:
-              fg = "                notification);"
 
-              pos = s.find(fg)
+              marker = """\
+                  startForeground(
+                          NOTIFICATION_ID,
+                          notification);
+              """
 
-              if pos < 0:
-                  raise SystemExit("startForeground marker not found")
+              marker = "\n".join(
+                  line[14:] if line.startswith("              ")
+                  else line
+                  for line in marker.splitlines()
+              )
 
-              end = pos + len(fg)
+              if marker not in s:
+                  raise SystemExit(
+                      "startForeground marker not found"
+                  )
 
-              s = (
-                  s[:end]
-                  + "\n\n        flushPendingState();"
-                  + s[end:]
+              s = s.replace(
+                  marker,
+                  marker
+                  + "\n        flushPendingState();",
+                  1
               )
 
           p.write_text(s)
 
-          print("ProjectionService patched successfully.")
+          print(
+              "ProjectionService patched with "
+              "brace-safe method replacement."
+          )
           PY
 
           python3 /tmp/patch_service.py "$FILE"
 
-      - name: Patch V10ProjectionSession
+      - name: Patch V10ProjectionSession - constructor only
         shell: bash
         run: |
           set -euo pipefail
 
           FILE="v10-source/app/src/main/java/com/hieptran/aacast/doudou/V10ProjectionSession.java"
 
-          cat > /tmp/patch_session.py <<'PY'
+          python3 - "$FILE" <<'PY'
           import re
           import sys
           from pathlib import Path
@@ -276,44 +509,94 @@ jobs:
           p = Path(sys.argv[1])
           s = p.read_text()
 
-          pattern = (
-              r"public\s+V10ProjectionSession\s*"
-              r"\(\s*Context\s+context\s*\)\s*\{"
-              r".*?\n\s*\}"
+          pattern = re.compile(
+              r'(?m)^\s*public\s+V10ProjectionSession\s*'
+              r'\(\s*Context\s+context\s*\)\s*\{'
           )
 
-          matches = list(re.finditer(pattern, s, re.S))
+          matches = list(
+              pattern.finditer(s)
+          )
 
           if len(matches) != 1:
               raise SystemExit(
-                  "Expected one V10ProjectionSession constructor, found "
+                  "Expected one V10ProjectionSession "
+                  "constructor, found "
                   + str(len(matches))
               )
 
-          new = "\n".join([
-              "public V10ProjectionSession(Context context) {",
-              "        this.context =",
-              "                context.getApplicationContext();",
-              "    }"
-          ])
+          start = matches[0].start()
 
-          m = matches[0]
+          brace = s.find(
+              '{',
+              matches[0].end()
+          )
 
-          s = s[:m.start()] + new + s[m.end():]
-
-          if "V10ProjectionService.ensureStarted" in s:
+          if brace < 0:
               raise SystemExit(
-                  "Session still contains eager service startup"
+                  "Constructor opening brace not found"
+              )
+
+          depth = 0
+          i = brace
+
+          while i < len(s):
+
+              if s[i] == '{':
+                  depth += 1
+
+              elif s[i] == '}':
+                  depth -= 1
+
+                  if depth == 0:
+                      end = i + 1
+                      break
+
+              i += 1
+
+          else:
+              raise SystemExit(
+                  "Constructor unmatched braces"
+              )
+
+          new = """\
+              public V10ProjectionSession(
+                      Context context) {
+
+                  this.context =
+                          context.getApplicationContext();
+              }
+              """
+
+          new = "\n".join(
+              line[14:] if line.startswith("              ")
+              else line
+              for line in new.splitlines()
+          )
+
+          s = (
+              s[:start]
+              + new
+              + s[end:]
+          )
+
+          if (
+              "V10ProjectionService.ensureStarted"
+              in s
+          ):
+              raise SystemExit(
+                  "Session still contains eager "
+                  "service startup"
               )
 
           p.write_text(s)
 
-          print("ProjectionSession patched successfully.")
+          print(
+              "ProjectionSession constructor patched."
+          )
           PY
 
-          python3 /tmp/patch_session.py "$FILE"
-
-      - name: Verify patch
+      - name: Verify 8B2 source
         shell: bash
         run: |
           set -euo pipefail
@@ -321,27 +604,43 @@ jobs:
           SERVICE="v10-source/app/src/main/java/com/hieptran/aacast/doudou/V10ProjectionService.java"
           SESSION="v10-source/app/src/main/java/com/hieptran/aacast/doudou/V10ProjectionSession.java"
 
-          grep -q "START_LOCK" "$SERVICE"
-          grep -q "pendingTarget" "$SERVICE"
-          grep -q "pendingSurface" "$SERVICE"
-          grep -q "flushPendingState" "$SERVICE"
+          grep -q \
+            'private static final Object START_LOCK' \
+            "$SERVICE"
 
-          grep -q "startForegroundService" "$SERVICE"
+          grep -q \
+            'pendingTarget' \
+            "$SERVICE"
 
-          if grep -nE '(^|[[:space:];&|])(/system/bin/)?am[[:space:]]+force-stop([[:space:]]|$)' "$SERVICE"; then
+          grep -q \
+            'pendingSurface' \
+            "$SERVICE"
+
+          grep -q \
+            'flushPendingState' \
+            "$SERVICE"
+
+          grep -q \
+            'startForegroundService' \
+            "$SERVICE"
+
+          if grep -nE \
+            '(^|[[:space:];&|])(/system/bin/)?am[[:space:]]+force-stop([[:space:]]|$)' \
+            "$SERVICE"
+          then
             echo "ERROR: force-stop command detected"
             exit 1
           fi
 
-          if grep -q "V10ProjectionService.ensureStarted" "$SESSION"; then
+          if grep -q \
+            'V10ProjectionService.ensureStarted' \
+            "$SESSION"
+          then
             echo "ERROR: eager service startup remains"
             exit 1
           fi
 
-          grep -q 'package com.carassistant.v10;' "$SERVICE"
-          grep -q 'package com.carassistant.v10;' "$SESSION"
-
-          echo "V10-8B.2 handshake verified."
+          echo "V10-8B.2 source verification passed."
 
       - name: Verify V10 components preserved
         shell: bash
@@ -357,12 +656,127 @@ jobs:
           test -f "$ROOT/CarSystemUI.java"
           test -f "$ROOT/CarRecents.java"
 
-          # Accept formatting such as:
-          # private static final int MAX_RECENTS = 4;
-          grep -Eq 'MAX_RECENTS[[:space:]]*=[[:space:]]*4' \
+          grep -Fq \
+            'private static final int MAX_RECENTS = 4;' \
             "$ROOT/V10SessionStore.java"
 
           echo "Existing V10 components preserved."
+
+      - name: Validate Java structure
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          python3 - \
+            v10-source/app/src/main/java/com/hieptran/aacast/doudou/V10ProjectionService.java \
+            v10-source/app/src/main/java/com/hieptran/aacast/doudou/V10ProjectionSession.java <<'PY'
+          import sys
+
+          def check(path):
+
+              s = open(
+                  path,
+                  encoding="utf-8"
+              ).read()
+
+              depth = 0
+              i = 0
+              state = "code"
+
+              while i < len(s):
+
+                  c = s[i]
+
+                  n = (
+                      s[i + 1]
+                      if i + 1 < len(s)
+                      else ""
+                  )
+
+                  if state == "code":
+
+                      if c == '/' and n == '/':
+
+                          state = "line"
+                          i += 2
+                          continue
+
+                      if c == '/' and n == '*':
+
+                          state = "block"
+                          i += 2
+                          continue
+
+                      if c == '"':
+
+                          state = "string"
+
+                      elif c == "'":
+
+                          state = "char"
+
+                      elif c == '{':
+
+                          depth += 1
+
+                      elif c == '}':
+
+                          depth -= 1
+
+                          if depth < 0:
+                              raise SystemExit(
+                                  f"{path}: negative depth"
+                              )
+
+                  elif state == "line":
+
+                      if c == '\n':
+                          state = "code"
+
+                  elif state == "block":
+
+                      if c == '*' and n == '/':
+
+                          state = "code"
+                          i += 2
+                          continue
+
+                  elif state == "string":
+
+                      if c == '\\':
+
+                          i += 2
+                          continue
+
+                      if c == '"':
+                          state = "code"
+
+                  elif state == "char":
+
+                      if c == '\\':
+
+                          i += 2
+                          continue
+
+                      if c == "'":
+                          state = "code"
+
+                  i += 1
+
+              if depth != 0 or state != "code":
+
+                  raise SystemExit(
+                      f"{path}: unbalanced structure "
+                      f"depth={depth}, state={state}"
+                  )
+
+              print(
+                  f"Java structure OK: {path}"
+              )
+
+          for path in sys.argv[1:]:
+              check(path)
+          PY
 
       - name: Check source diff
         shell: bash
@@ -371,8 +785,11 @@ jobs:
 
           git diff --check
 
-          echo "Modified files:"
+          echo "Changed files:"
           git diff --name-only
+
+          echo "Diff statistics:"
+          git diff --stat
 
       - name: Build V10
         working-directory: v10-source
@@ -395,13 +812,16 @@ jobs:
 
           test -f "$APK"
 
+          echo "APK:"
           ls -lh "$APK"
+
+          echo "SHA256:"
           sha256sum "$APK"
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: CarAssistant-V10-8B2-StartupHandshake
+          name: CarAssistant-V10-8B2-StartupHandshake-Fixed
           path: v10-source/app/build/outputs/apk/debug/app-debug.apk
           if-no-files-found: error
           retention-days: 14
