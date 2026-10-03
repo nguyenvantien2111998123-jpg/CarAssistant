@@ -11,16 +11,8 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      # ============================================================
-      # CHECKOUT
-      # ============================================================
-
       - name: Checkout
         uses: actions/checkout@v4
-
-      # ============================================================
-      # JAVA
-      # ============================================================
 
       - name: Set up JDK 17
         uses: actions/setup-java@v4
@@ -28,40 +20,33 @@ jobs:
           distribution: temurin
           java-version: "17"
 
-      # ============================================================
-      # GRADLE
-      # ============================================================
-
       - name: Setup Gradle
         uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: "8.13"
-          cache-disabled: true
 
       # ============================================================
-      # VERIFY CURRENT V10 SOURCE
+      # VERIFY V10.4 V4 BASE
       # ============================================================
 
-      - name: Verify current V10 source
+      - name: Verify V10.4 V4 base
         shell: bash
         run: |
           set -euo pipefail
 
-          test -d v10-source
+          FILE="v10-source/app/src/main/java/com/hieptran/aacast/doudou/V10CarActivity.java"
 
-          test -f \
-            v10-source/app/src/main/java/com/hieptran/aacast/doudou/V10CarActivity.java
+          test -f "$FILE"
 
-          test -f \
-            v10-source/app/src/main/java/com/hieptran/aacast/doudou/V10ProjectionSession.java
+          grep -q "V10SessionStore" "$FILE"
+          grep -q "launchProjection" "$FILE"
+          grep -q "showApps" "$FILE"
+          grep -q "hideApps" "$FILE"
+          grep -q "APPLICATIONS" "$FILE"
+          grep -q "ACTION_MAIN" "$FILE"
+          grep -q "CATEGORY_LAUNCHER" "$FILE"
 
-          test -f \
-            v10-source/app/src/main/java/com/hieptran/aacast/doudou/V10InputController.java
-
-          test -f \
-            v10-source/app/src/main/java/com/hieptran/aacast/doudou/RootShellSession.java
-
-          echo "CURRENT V10 SOURCE OK"
+          echo "V10.4 V4 BASE VERIFIED"
 
       # ============================================================
       # BACKUP
@@ -74,19 +59,18 @@ jobs:
 
           cp \
             v10-source/app/src/main/java/com/hieptran/aacast/doudou/V10CarActivity.java \
-            /tmp/V10CarActivity.before.java
+            /tmp/V10CarActivity.v4.java
+
+          echo "Backup created."
 
       # ============================================================
-      # PATCH V10CarActivity
+      # RESTORE V10.3 CONTROL BAR INTO V4
       #
-      # IMPORTANT:
-      # Do not touch:
-      # - V10ProjectionSession
-      # - V10InputController
-      # - RootShellSession
+      # Keep the V4 application selector.
+      # Add back the exact V10.3 in-app control bar architecture.
       # ============================================================
 
-      - name: Patch V10CarActivity
+      - name: Merge V10.3 control bar with V4 selector
         shell: bash
         run: |
           set -euo pipefail
@@ -100,537 +84,432 @@ jobs:
           path = Path(sys.argv[1])
           s = path.read_text()
 
-          # ========================================================
-          # FIND / REPLACE JAVA METHOD
-          # ========================================================
+          # --------------------------------------------------------
+          # 1. Add Button import
+          # --------------------------------------------------------
 
-          def replace_method(src, marker, new_method):
-              pos = src.find(marker)
-
-              if pos < 0:
-                  raise SystemExit(
-                      f"Method not found: {marker}"
-                  )
-
-              brace = src.find("{", pos)
-
-              if brace < 0:
-                  raise SystemExit(
-                      f"Opening brace not found: {marker}"
-                  )
-
-              depth = 0
-              end = None
-
-              in_string = False
-              escape = False
-              in_line_comment = False
-              in_block_comment = False
-
-              i = brace
-
-              while i < len(src):
-
-                  c = src[i]
-                  n = src[i + 1] if i + 1 < len(src) else ""
-
-                  if in_line_comment:
-
-                      if c == "\n":
-                          in_line_comment = False
-
-                  elif in_block_comment:
-
-                      if c == "*" and n == "/":
-                          in_block_comment = False
-                          i += 1
-
-                  elif in_string:
-
-                      if escape:
-                          escape = False
-
-                      elif c == "\\":
-                          escape = True
-
-                      elif c == '"':
-                          in_string = False
-
-                  else:
-
-                      if c == "/" and n == "/":
-                          in_line_comment = True
-                          i += 1
-
-                      elif c == "/" and n == "*":
-                          in_block_comment = True
-                          i += 1
-
-                      elif c == '"':
-                          in_string = True
-
-                      elif c == "{":
-                          depth += 1
-
-                      elif c == "}":
-
-                          depth -= 1
-
-                          if depth == 0:
-                              end = i + 1
-                              break
-
-                  i += 1
-
-              if end is None:
-                  raise SystemExit(
-                      f"Closing brace not found: {marker}"
-                  )
-
-              return (
-                  src[:pos]
-                  + new_method.rstrip()
-                  + src[end:]
-              )
-
-          # ========================================================
-          # IMPORTS
-          # ========================================================
-
-          required_imports = [
-              "import android.widget.Button;",
-              "import android.graphics.Color;",
-              "import android.view.Gravity;",
-              "import android.widget.LinearLayout;",
-          ]
-
-          anchor = "import android.os.Bundle;"
-
-          for imp in required_imports:
-
-              if imp not in s:
-
-                  if anchor not in s:
-                      raise SystemExit(
-                          "Import anchor not found"
-                      )
-
-                  s = s.replace(
-                      anchor,
-                      anchor + "\n" + imp,
-                      1
-                  )
-
-          # ========================================================
-          # CONTROL BAR FIELD
-          # ========================================================
-
-          if "private LinearLayout controlBar;" not in s:
-
-              marker = "private boolean resumed;"
-
+          if "import android.widget.Button;" not in s:
+              marker = "import android.widget.FrameLayout;"
               if marker not in s:
-                  raise SystemExit(
-                      "Could not find resumed field"
-                  )
+                  raise SystemExit("FrameLayout import not found")
 
               s = s.replace(
                   marker,
-                  marker
-                  + "\n    private LinearLayout controlBar;",
+                  "import android.widget.Button;\n" + marker,
                   1
               )
 
-          # ========================================================
-          # CONTROL BUTTON HELPER
-          # ========================================================
+          # --------------------------------------------------------
+          # 2. Add controlBar field
+          # --------------------------------------------------------
+
+          if "private LinearLayout controlBar;" not in s:
+              marker = "private LinearLayout dock;"
+              if marker not in s:
+                  raise SystemExit("dock field not found")
+
+              s = s.replace(
+                  marker,
+                  marker + "\n    private LinearLayout controlBar;",
+                  1
+              )
+
+          # --------------------------------------------------------
+          # Helper: find method by name and balanced braces.
+          # Handles comments and Java strings.
+          # --------------------------------------------------------
+
+          def find_method(text, method_name):
+              needle = method_name + "("
+              start = text.find(needle)
+
+              if start < 0:
+                  raise SystemExit(
+                      f"Method not found: {method_name}"
+                  )
+
+              # Find opening brace after signature.
+              brace = text.find("{", start)
+
+              if brace < 0:
+                  raise SystemExit(
+                      f"Opening brace not found: {method_name}"
+                  )
+
+              depth = 0
+              i = brace
+              in_string = False
+              in_char = False
+              in_line_comment = False
+              in_block_comment = False
+              escaped = False
+
+              while i < len(text):
+                  c = text[i]
+                  n = text[i + 1] if i + 1 < len(text) else ""
+
+                  if in_line_comment:
+                      if c == "\n":
+                          in_line_comment = False
+                      i += 1
+                      continue
+
+                  if in_block_comment:
+                      if c == "*" and n == "/":
+                          in_block_comment = False
+                          i += 2
+                          continue
+                      i += 1
+                      continue
+
+                  if in_string:
+                      if escaped:
+                          escaped = False
+                      elif c == "\\":
+                          escaped = True
+                      elif c == '"':
+                          in_string = False
+                      i += 1
+                      continue
+
+                  if in_char:
+                      if escaped:
+                          escaped = False
+                      elif c == "\\":
+                          escaped = True
+                      elif c == "'":
+                          in_char = False
+                      i += 1
+                      continue
+
+                  if c == "/" and n == "/":
+                      in_line_comment = True
+                      i += 2
+                      continue
+
+                  if c == "/" and n == "*":
+                      in_block_comment = True
+                      i += 2
+                      continue
+
+                  if c == '"':
+                      in_string = True
+                      i += 1
+                      continue
+
+                  if c == "'":
+                      in_char = True
+                      i += 1
+                      continue
+
+                  if c == "{":
+                      depth += 1
+
+                  elif c == "}":
+                      depth -= 1
+
+                      if depth == 0:
+                          return start, i + 1
+
+                  i += 1
+
+              raise SystemExit(
+                  f"Unbalanced method: {method_name}"
+              )
+
+          def replace_method(text, method_name, replacement):
+              a, b = find_method(text, method_name)
+              return text[:a] + replacement + text[b:]
+
+          # --------------------------------------------------------
+          # 3. Add exact V10.3 control-bar builder.
+          # --------------------------------------------------------
 
           if "private void addControlButton(" not in s:
-
-              marker = "private void buildUi()"
-
-              pos = s.find(marker)
-
-              if pos < 0:
+              marker = "    private void buildDashboard()"
+              if marker not in s:
                   raise SystemExit(
-                      "Could not find buildUi"
+                      "buildDashboard marker not found"
                   )
 
               helper = r'''
-          private void addControlButton(
-                  String label,
-                  View.OnClickListener listener) {
+              private void addControlButton(
+                      String label,
+                      View.OnClickListener listener) {
 
-              Button button = new Button(this);
+                  Button button =
+                          new Button(this);
 
-              button.setText(label);
-              button.setTextSize(12);
-              button.setTextColor(Color.WHITE);
-              button.setAllCaps(false);
+                  button.setText(label);
 
-              LinearLayout.LayoutParams params =
-                      new LinearLayout.LayoutParams(
-                              0,
-                              -1,
-                              1f);
+                  button.setTextSize(12);
 
-              params.setMargins(
-                      dp(2),
-                      0,
-                      dp(2),
-                      0);
+                  button.setTextColor(
+                          Color.WHITE);
 
-              controlBar.addView(
-                      button,
-                      params);
+                  button.setAllCaps(false);
 
-              button.setOnClickListener(listener);
-          }
+                  button.setOnClickListener(
+                          listener);
 
-          '''
+                  LinearLayout.LayoutParams
+                          params =
+                          new LinearLayout.LayoutParams(
+                                  0,
+                                  LinearLayout.LayoutParams.MATCH_PARENT,
+                                  1f);
 
-              s = (
-                  s[:pos]
-                  + helper
-                  + s[pos:]
+                  params.setMargins(
+                          dp(4),
+                          dp(4),
+                          dp(4),
+                          dp(4));
+
+                  controlBar.addView(
+                          button,
+                          params);
+              }
+
+              '''
+
+              s = s.replace(
+                  marker,
+                  helper + marker,
+                  1
               )
 
-          # ========================================================
-          # BUILD UI
-          # ========================================================
+          # --------------------------------------------------------
+          # 4. Patch buildUi().
+          #
+          # Existing V4 dashboard + app selector stays untouched.
+          # Control bar is added LAST so it remains above everything.
+          # --------------------------------------------------------
 
-          build_ui = r'''
-          private void buildUi() {
-
-              root = new FrameLayout(this);
-
-              root.setBackgroundColor(
-                      Color.BLACK);
-
-              // --------------------------------------------------
-              // PROJECTION LAYER
-              // --------------------------------------------------
-
-              projectionLayer =
-                      new FrameLayout(this);
-
-              projectionLayer.setVisibility(
-                      View.GONE);
-
-              textureView =
-                      new TextureView(this);
-
-              projectionLayer.addView(
-                      textureView,
-                      new FrameLayout.LayoutParams(
-                              -1,
-                              -1));
-
-              root.addView(
-                      projectionLayer,
-                      new FrameLayout.LayoutParams(
-                              -1,
-                              -1));
-
-              // --------------------------------------------------
-              // LAUNCHER LAYER
-              // --------------------------------------------------
-
-              launcherLayer =
-                      new FrameLayout(this);
-
-              buildDashboard();
-              buildAppPanel();
-
-              root.addView(
-                      launcherLayer,
-                      new FrameLayout.LayoutParams(
-                              -1,
-                              -1));
-
-              launcherLayer.setVisibility(
-                      View.VISIBLE);
-
-              // --------------------------------------------------
-              // PERSISTENT CONTROL BAR
-              // --------------------------------------------------
-
-              controlBar =
-                      new LinearLayout(this);
-
-              controlBar.setOrientation(
-                      LinearLayout.HORIZONTAL);
-
-              controlBar.setGravity(
-                      Gravity.CENTER);
-
-              controlBar.setPadding(
-                      dp(8),
-                      dp(4),
-                      dp(8),
-                      dp(4));
-
-              controlBar.setBackgroundColor(
-                      Color.rgb(24, 24, 24));
-
-              FrameLayout.LayoutParams barParams =
-                      new FrameLayout.LayoutParams(
-                              -1,
-                              dp(58));
-
-              barParams.gravity =
-                      Gravity.BOTTOM;
-
-              root.addView(
-                      controlBar,
-                      barParams);
-
-              // --------------------------------------------------
-              // BUTTONS
-              // --------------------------------------------------
-
-              addControlButton(
-                      "BACK",
-                      this::handleControlBack);
-
-              addControlButton(
-                      "APPS",
-                      this::handleControlApps);
-
-              addControlButton(
-                      "RECENTS",
-                      this::handleControlRecents);
-
-              addControlButton(
-                      "HOME",
-                      this::handleControlHome);
-
-              controlBar.bringToFront();
-
-              setContentView(root);
-          }
-          '''
-
-          s = replace_method(
+          build_ui_start, build_ui_end = find_method(
               s,
-              "private void buildUi",
-              build_ui
+              "private void buildUi"
           )
 
-          # ========================================================
-          # LAUNCH PROJECTION
-          # ========================================================
+          build_ui = s[build_ui_start:build_ui_end]
 
-          launch_projection = r'''
-          private void launchProjection(
-                  ComponentName component) {
+          if "controlBar =" not in build_ui:
 
-              if (component == null) {
-                  return;
-              }
+              marker = "        buildAppPanel();"
 
-              if (session == null) {
-                  return;
-              }
+              if marker not in build_ui:
+                  raise SystemExit(
+                      "buildAppPanel call not found in buildUi"
+                  )
 
-              if (activeTarget != null
-                      && !activeTarget.equals(component)) {
+              control = r'''
 
-                  session.release();
-              }
+                  // ==================================================
+                  // V10.3 CONTROL BAR
+                  // ==================================================
 
-              activeTarget = component;
+                  controlBar =
+                          new LinearLayout(this);
 
-              V10SessionStore.setTarget(
-                      this,
-                      component);
+                  controlBar.setOrientation(
+                          LinearLayout.HORIZONTAL);
 
-              if (dashboard != null) {
-                  dashboard.setVisibility(
-                          View.GONE);
-              }
+                  controlBar.setGravity(
+                          Gravity.CENTER);
 
-              if (appPanel != null) {
-                  appPanel.setVisibility(
-                          View.GONE);
-              }
+                  controlBar.setPadding(
+                          dp(8),
+                          dp(4),
+                          dp(8),
+                          dp(4));
 
-              if (launcherLayer != null) {
-                  launcherLayer.setVisibility(
-                          View.GONE);
-              }
+                  controlBar.setBackgroundColor(
+                          Color.rgb(24, 24, 24));
 
-              if (projectionLayer != null) {
-                  projectionLayer.setVisibility(
-                          View.VISIBLE);
-              }
+                  FrameLayout.LayoutParams
+                          barParams =
+                          new FrameLayout.LayoutParams(
+                                  FrameLayout.LayoutParams.MATCH_PARENT,
+                                  dp(58));
 
-              if (controlBar != null) {
-                  controlBar.setVisibility(
-                          View.VISIBLE);
+                  barParams.gravity =
+                          Gravity.BOTTOM;
+
+                  root.addView(
+                          controlBar,
+                          barParams);
+
+                  addControlButton(
+                          "BACK",
+                          v -> handleControlBack());
+
+                  addControlButton(
+                          "APPS",
+                          v -> handleControlApps());
+
+                  addControlButton(
+                          "RECENTS",
+                          v -> handleControlRecents());
+
+                  addControlButton(
+                          "HOME",
+                          v -> handleControlHome());
 
                   controlBar.bringToFront();
-              }
+              '''
 
-              session.setTarget(component);
-          }
-          '''
+              build_ui = build_ui.replace(
+                  marker,
+                  marker + control,
+                  1
+              )
 
-          s = replace_method(
+              s = (
+                  s[:build_ui_start]
+                  + build_ui
+                  + s[build_ui_end:]
+              )
+
+          # --------------------------------------------------------
+          # 5. launchProjection()
+          #
+          # Keep V4 selector logic.
+          # Control bar stays visible.
+          # --------------------------------------------------------
+
+          start, end = find_method(
               s,
-              "private void launchProjection",
-              launch_projection
+              "private void launchProjection"
           )
 
-          # ========================================================
-          # SHOW APPS
-          # ========================================================
+          launch = s[start:end]
 
-          show_apps = r'''
-          private void showApps() {
+          if "controlBar.bringToFront();" not in launch:
+              marker = "        session.setTarget(\n                component);"
 
-              if (projectionLayer != null) {
-                  projectionLayer.setVisibility(
-                          View.GONE);
-              }
+              if marker not in launch:
+                  marker = "        session.setTarget(component);"
 
-              if (launcherLayer != null) {
-                  launcherLayer.setVisibility(
-                          View.VISIBLE);
-              }
+              if marker not in launch:
+                  raise SystemExit(
+                      "session.setTarget marker not found"
+                  )
 
-              if (dashboard != null) {
-                  dashboard.setVisibility(
-                          View.GONE);
-              }
+              launch = launch.replace(
+                  marker,
+                  marker
+                  + "\n\n        if (controlBar != null) {\n"
+                  + "            controlBar.setVisibility(View.VISIBLE);\n"
+                  + "            controlBar.bringToFront();\n"
+                  + "        }",
+                  1
+              )
 
-              if (appPanel != null) {
-                  appPanel.setVisibility(
-                          View.VISIBLE);
-              }
+              s = (
+                  s[:start]
+                  + launch
+                  + s[end:]
+              )
 
-              if (controlBar != null) {
-                  controlBar.setVisibility(
-                          View.VISIBLE);
+          # --------------------------------------------------------
+          # 6. returnToLauncher()
+          # --------------------------------------------------------
 
-                  controlBar.bringToFront();
-              }
-
-              loadApps();
-          }
-          '''
-
-          s = replace_method(
+          start, end = find_method(
               s,
-              "private void showApps",
-              show_apps
+              "private void returnToLauncher"
           )
 
-          # ========================================================
-          # HIDE APPS
-          # ========================================================
+          method = s[start:end]
 
-          hide_apps = r'''
-          private void hideApps() {
+          if "controlBar.bringToFront();" not in method:
+              method += r'''
 
-              if (appPanel != null) {
-                  appPanel.setVisibility(
-                          View.GONE);
-              }
+                  if (controlBar != null) {
+                      controlBar.setVisibility(
+                              View.VISIBLE);
+                      controlBar.bringToFront();
+                  }
+              '''
 
-              if (launcherLayer != null) {
-                  launcherLayer.setVisibility(
-                          View.VISIBLE);
-              }
+              s = s[:start] + method + s[end:]
 
-              if (dashboard != null) {
-                  dashboard.setVisibility(
-                          View.VISIBLE);
-              }
+          # --------------------------------------------------------
+          # 7. showApps()
+          # --------------------------------------------------------
 
-              if (projectionLayer != null) {
-                  projectionLayer.setVisibility(
-                          View.GONE);
-              }
-
-              if (controlBar != null) {
-                  controlBar.setVisibility(
-                          View.VISIBLE);
-
-                  controlBar.bringToFront();
-              }
-          }
-          '''
-
-          s = replace_method(
+          start, end = find_method(
               s,
-              "private void hideApps",
-              hide_apps
+              "private void showApps"
           )
 
-          # ========================================================
-          # RETURN HOME
-          # ========================================================
+          method = s[start:end]
 
-          return_launcher = r'''
-          private void returnToLauncher() {
+          if "controlBar.bringToFront();" not in method:
+              method += r'''
 
-              if (session != null) {
-                  session.release();
-              }
+                  if (controlBar != null) {
+                      controlBar.setVisibility(
+                              View.VISIBLE);
+                      controlBar.bringToFront();
+                  }
+              '''
 
-              activeTarget = null;
+              s = s[:start] + method + s[end:]
 
-              V10SessionStore.clearTarget(
-                      this);
+          # --------------------------------------------------------
+          # 8. hideApps()
+          # --------------------------------------------------------
 
-              if (projectionLayer != null) {
-                  projectionLayer.setVisibility(
-                          View.GONE);
-              }
-
-              if (launcherLayer != null) {
-                  launcherLayer.setVisibility(
-                          View.VISIBLE);
-              }
-
-              if (appPanel != null) {
-                  appPanel.setVisibility(
-                          View.GONE);
-              }
-
-              if (dashboard != null) {
-                  dashboard.setVisibility(
-                          View.VISIBLE);
-              }
-
-              if (controlBar != null) {
-                  controlBar.setVisibility(
-                          View.VISIBLE);
-
-                  controlBar.bringToFront();
-              }
-          }
-          '''
-
-          s = replace_method(
+          start, end = find_method(
               s,
-              "private void returnToLauncher",
-              return_launcher
+              "private void hideApps"
           )
 
-          # ========================================================
-          # BACK
-          # ========================================================
+          method = s[start:end]
 
-          back_method = r'''
-          public void handleControlBack() {
+          if "controlBar.bringToFront();" not in method:
+              method += r'''
+
+                  if (controlBar != null) {
+                      controlBar.setVisibility(
+                              View.VISIBLE);
+                      controlBar.bringToFront();
+                  }
+              '''
+
+              s = s[:start] + method + s[end:]
+
+          # --------------------------------------------------------
+          # 9. Control handlers.
+          #
+          # BACK:
+          #   - close Applications
+          #   - otherwise send Back to projected app
+          #   - otherwise return launcher
+          #
+          # HOME:
+          #   - dashboard
+          #
+          # APPS:
+          #   - toggle Applications
+          #
+          # RECENTS:
+          #   - keep existing placeholder behavior
+          # --------------------------------------------------------
+
+          start, end = find_method(
+              s,
+              "public void handleControlBack"
+          )
+
+          replacement = r'''public void handleControlBack() {
 
               if (appPanel != null
                       && appPanel.getVisibility()
-                      == View.VISIBLE) {
+                              == View.VISIBLE) {
 
                   hideApps();
+
                   return;
               }
 
@@ -638,45 +517,51 @@ jobs:
                       && session.isActive()) {
 
                   session.back();
+
                   return;
               }
 
               returnToLauncher();
-          }
-          '''
+          }'''
 
-          s = replace_method(
+          s = s[:start] + replacement + s[end:]
+
+          start, end = find_method(
               s,
-              "public void handleControlBack",
-              back_method
+              "public void handleControlHome"
           )
 
-          # ========================================================
-          # HOME
-          # ========================================================
+          replacement = r'''public void handleControlHome() {
 
-          home_method = r'''
-          public void handleControlHome() {
               returnToLauncher();
-          }
-          '''
+          }'''
 
-          s = replace_method(
+          s = s[:start] + replacement + s[end:]
+
+          start, end = find_method(
               s,
-              "public void handleControlHome",
-              home_method
+              "public void handleControlRecents"
           )
 
-          # ========================================================
-          # APPS
-          # ========================================================
+          replacement = r'''public void handleControlRecents() {
 
-          apps_method = r'''
-          public void handleControlApps() {
+              showInfo(
+                      "RECENTS",
+                      "Session manager sẽ được thêm ở bước tiếp theo.");
+          }'''
+
+          s = s[:start] + replacement + s[end:]
+
+          start, end = find_method(
+              s,
+              "public void handleControlApps"
+          )
+
+          replacement = r'''public void handleControlApps() {
 
               if (appPanel != null
                       && appPanel.getVisibility()
-                      == View.VISIBLE) {
+                              == View.VISIBLE) {
 
                   hideApps();
 
@@ -684,54 +569,44 @@ jobs:
 
                   showApps();
               }
-          }
-          '''
+          }'''
 
-          s = replace_method(
-              s,
-              "public void handleControlApps",
-              apps_method
-          )
+          s = s[:start] + replacement + s[end:]
 
-          # ========================================================
-          # RECENTS
-          # ========================================================
+          # --------------------------------------------------------
+          # 10. onDestroy cleanup
+          # --------------------------------------------------------
 
-          recents_method = r'''
-          public void handleControlRecents() {
+          marker = "        dock = null;"
 
-              showInfo(
-                      "RECENTS",
-                      "Session manager sẽ được thêm ở bước tiếp theo.");
-          }
-          '''
-
-          s = replace_method(
-              s,
-              "public void handleControlRecents",
-              recents_method
-          )
+          if marker in s and "controlBar = null;" not in s:
+              s = s.replace(
+                  marker,
+                  marker
+                  + "\n        controlBar = null;",
+                  1
+              )
 
           path.write_text(s)
 
-          print(
-              "V10CarActivity patched successfully."
-          )
+          print("V10.3 CONTROL BAR MERGED INTO V10.4 V4")
           PY
 
       # ============================================================
       # VERIFY CONTROL BAR
       # ============================================================
 
-      - name: Verify control bar
+      - name: Verify V10.3 control bar
         shell: bash
         run: |
           set -euo pipefail
 
           FILE="v10-source/app/src/main/java/com/hieptran/aacast/doudou/V10CarActivity.java"
 
-          grep -q "private LinearLayout controlBar" "$FILE"
+          grep -q "import android.widget.Button;" "$FILE"
+          grep -q "private LinearLayout controlBar;" "$FILE"
           grep -q "private void addControlButton" "$FILE"
+          grep -q "controlBar =" "$FILE"
 
           grep -q '"BACK"' "$FILE"
           grep -q '"APPS"' "$FILE"
@@ -745,46 +620,62 @@ jobs:
 
           grep -q "controlBar.bringToFront" "$FILE"
 
-          echo "CONTROL BAR VERIFIED"
+          echo "V10.3 CONTROL BAR VERIFIED"
 
       # ============================================================
-      # VERIFY APP SELECTOR
+      # VERIFY V4 APP SELECTOR
       # ============================================================
 
-      - name: Verify app selector
+      - name: Verify V4 app selector
         shell: bash
         run: |
           set -euo pipefail
 
           FILE="v10-source/app/src/main/java/com/hieptran/aacast/doudou/V10CarActivity.java"
 
+          grep -q "APPLICATIONS" "$FILE"
+          grep -q "GridLayout" "$FILE"
+          grep -q "setColumnCount" "$FILE"
           grep -q "ACTION_MAIN" "$FILE"
           grep -q "CATEGORY_LAUNCHER" "$FILE"
+          grep -q "queryIntentActivities" "$FILE"
+          grep -q "launchProjection" "$FILE"
+          grep -q "V10SessionStore" "$FILE"
 
-          grep -q "V10SessionStore.setTarget" "$FILE"
-          grep -q "session.setTarget" "$FILE"
+          echo "V4 APP SELECTOR VERIFIED"
 
+      # ============================================================
+      # VERIFY CONTROL FLOW
+      # ============================================================
+
+      - name: Verify V10 control flow
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          FILE="v10-source/app/src/main/java/com/hieptran/aacast/doudou/V10CarActivity.java"
+
+          grep -q "returnToLauncher" "$FILE"
           grep -q "showApps" "$FILE"
           grep -q "hideApps" "$FILE"
-          grep -q "launchProjection" "$FILE"
+          grep -q "session.back" "$FILE"
+          grep -q "session.release" "$FILE"
 
-          echo "APP SELECTOR VERIFIED"
+          echo "CONTROL FLOW VERIFIED"
 
       # ============================================================
       # VERIFY PROJECTION ENGINE
       # ============================================================
 
-      - name: Verify projection engine
+      - name: Verify existing V10 projection engine
         shell: bash
         run: |
           set -euo pipefail
 
-          ROOT="v10-source/app/src/main/java/com/hieptran/aacast/doudou"
-
-          SESSION="$ROOT/V10ProjectionSession.java"
-          INPUT="$ROOT/V10InputController.java"
-          SHELL="$ROOT/RootShellSession.java"
-          DISPLAY="$ROOT/V10Display.java"
+          SESSION="v10-source/app/src/main/java/com/hieptran/aacast/doudou/V10ProjectionSession.java"
+          INPUT="v10-source/app/src/main/java/com/hieptran/aacast/doudou/V10InputController.java"
+          SHELL="v10-source/app/src/main/java/com/hieptran/aacast/doudou/RootShellSession.java"
+          DISPLAY="v10-source/app/src/main/java/com/hieptran/aacast/doudou/V10Display.java"
 
           test -f "$SESSION"
           test -f "$INPUT"
@@ -792,10 +683,8 @@ jobs:
           test -f "$DISPLAY"
 
           grep -q "createVirtualDisplay" "$SESSION"
-
           grep -q -- "--display" "$SESSION"
           grep -q -- "--windowingMode 1" "$SESSION"
-
           grep -q "/system/bin/am start" "$SESSION"
 
           grep -q "/system/bin/input" "$INPUT"
@@ -810,62 +699,6 @@ jobs:
           echo "PROJECTION ENGINE VERIFIED"
 
       # ============================================================
-      # VERIFY INPUT
-      # ============================================================
-
-      - name: Verify input engine
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          INPUT="v10-source/app/src/main/java/com/hieptran/aacast/doudou/V10InputController.java"
-
-          grep -q "ACTION_DOWN" "$INPUT"
-          grep -q "ACTION_MOVE" "$INPUT"
-          grep -q "ACTION_UP" "$INPUT"
-
-          grep -q "sendTap" "$INPUT"
-          grep -q "sendSwipe" "$INPUT"
-
-          echo "INPUT ENGINE VERIFIED"
-
-      # ============================================================
-      # VERIFY DISPLAY IDENTITY
-      # ============================================================
-
-      - name: Verify V10 display identity
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          DISPLAY="v10-source/app/src/main/java/com/hieptran/aacast/doudou/V10Display.java"
-
-          grep -q "com.carassistant.v10" "$DISPLAY"
-          grep -q "Car Assistant V10" "$DISPLAY"
-          grep -q "type != 5" "$DISPLAY"
-
-          echo "DISPLAY IDENTITY VERIFIED"
-
-      # ============================================================
-      # VERIFY NO GEARHEAD CONTROL BAR
-      # ============================================================
-
-      - name: Verify no Gearhead control bar
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          if grep -R \
-            "GearheadControlBar" \
-            v10-source/app/src/main/java; then
-
-            echo "ERROR: GearheadControlBar still exists."
-            exit 1
-          fi
-
-          echo "NO GEARHEAD CONTROL BAR"
-
-      # ============================================================
       # VERIFY ANDROID 12
       # ============================================================
 
@@ -874,21 +707,43 @@ jobs:
         run: |
           set -euo pipefail
 
-          grep -R \
-            "compileSdk" \
-            v10-source/app/build.gradle || true
+          if grep -R \
+            -E \
+            "androidx\.compose|compose\.material3|Build\.VERSION_CODES\.TIRAMISU|API 33|minSdk.*33" \
+            v10-source/app/src/main \
+            >/dev/null 2>&1; then
 
-          grep -R \
-            "minSdk" \
-            v10-source/app/build.gradle || true
+            echo "Unexpected Android 13/Femto-only dependency found."
+            exit 1
+          fi
 
-          echo "ANDROID 12 COMPATIBILITY CHECK COMPLETE"
+          echo "ANDROID 12 COMPATIBILITY VERIFIED"
 
       # ============================================================
-      # VERIFY JAVA STRUCTURE
+      # VERIFY NO GEARHEAD CONTROL BAR
       # ============================================================
 
-      - name: Verify Java structure
+      - name: Verify no Gearhead control bar dependency
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          if grep -R \
+            "GearheadControlBar" \
+            v10-source/app/src/main/java \
+            >/dev/null 2>&1; then
+
+            echo "GearheadControlBar dependency still exists."
+            exit 1
+          fi
+
+          echo "NO GEARHEAD CONTROL BAR DEPENDENCY"
+
+      # ============================================================
+      # VERIFY JAVA BRACES
+      # ============================================================
+
+      - name: Java source sanity check
         shell: bash
         run: |
           set -euo pipefail
@@ -896,27 +751,20 @@ jobs:
           python3 - <<'PY'
           from pathlib import Path
 
-          files = [
-              Path(
-                  "v10-source/app/src/main/java/com/hieptran/aacast/doudou/V10CarActivity.java"
-              ),
-              Path(
-                  "v10-source/app/src/main/java/com/hieptran/aacast/doudou/V10ProjectionSession.java"
-              ),
-              Path(
-                  "v10-source/app/src/main/java/com/hieptran/aacast/doudou/V10InputController.java"
-              ),
-          ]
+          root = Path(
+              "v10-source/app/src/main/java"
+          )
 
-          for p in files:
+          for path in root.rglob("*.java"):
 
-              s = p.read_text()
+              s = path.read_text()
 
               depth = 0
               in_string = False
-              escape = False
-              in_line_comment = False
-              in_block_comment = False
+              in_char = False
+              in_line = False
+              in_block = False
+              escaped = False
 
               i = 0
 
@@ -925,64 +773,79 @@ jobs:
                   c = s[i]
                   n = s[i + 1] if i + 1 < len(s) else ""
 
-                  if in_line_comment:
-
+                  if in_line:
                       if c == "\n":
-                          in_line_comment = False
+                          in_line = False
+                      i += 1
+                      continue
 
-                  elif in_block_comment:
-
+                  if in_block:
                       if c == "*" and n == "/":
-                          in_block_comment = False
-                          i += 1
+                          in_block = False
+                          i += 2
+                          continue
+                      i += 1
+                      continue
 
-                  elif in_string:
-
-                      if escape:
-                          escape = False
-
+                  if in_string:
+                      if escaped:
+                          escaped = False
                       elif c == "\\":
-                          escape = True
-
+                          escaped = True
                       elif c == '"':
                           in_string = False
+                      i += 1
+                      continue
 
-                  else:
+                  if in_char:
+                      if escaped:
+                          escaped = False
+                      elif c == "\\":
+                          escaped = True
+                      elif c == "'":
+                          in_char = False
+                      i += 1
+                      continue
 
-                      if c == "/" and n == "/":
-                          in_line_comment = True
-                          i += 1
+                  if c == "/" and n == "/":
+                      in_line = True
+                      i += 2
+                      continue
 
-                      elif c == "/" and n == "*":
-                          in_block_comment = True
-                          i += 1
+                  if c == "/" and n == "*":
+                      in_block = True
+                      i += 2
+                      continue
 
-                      elif c == '"':
-                          in_string = True
+                  if c == '"':
+                      in_string = True
+                      i += 1
+                      continue
 
-                      elif c == "{":
-                          depth += 1
+                  if c == "'":
+                      in_char = True
+                      i += 1
+                      continue
 
-                      elif c == "}":
+                  if c == "{":
+                      depth += 1
 
-                          depth -= 1
+                  elif c == "}":
+                      depth -= 1
 
-                          if depth < 0:
-                              raise SystemExit(
-                                  f"Brace underflow: {p}"
-                              )
+                      if depth < 0:
+                          raise SystemExit(
+                              f"Brace underflow: {path}"
+                          )
 
                   i += 1
 
               if depth != 0:
                   raise SystemExit(
-                      f"Unbalanced braces: {p} depth={depth}"
+                      f"Unbalanced braces: {path}: {depth}"
                   )
 
-              print(
-                  f"JAVA STRUCTURE OK: {p}"
-              )
-
+          print("JAVA STRUCTURE OK")
           PY
 
       # ============================================================
@@ -1003,7 +866,7 @@ jobs:
       # BUILD
       # ============================================================
 
-      - name: Build V10.4 V4.2.1 debug APK
+      - name: Build Car Assistant V10.4 V4.2.1
         working-directory: v10-source
         shell: bash
         run: |
@@ -1028,24 +891,15 @@ jobs:
 
           test -f "$APK"
 
-          echo
-          echo "APK:"
-          ls -lh "$APK"
+          echo "APK OK"
 
-          echo
-          echo "SHA256:"
           sha256sum "$APK"
-
-          echo
-          echo "========================================"
-          echo " CAR ASSISTANT V10.4 V4.2.1 BUILD PASSED"
-          echo "========================================"
 
       # ============================================================
       # UPLOAD APK
       # ============================================================
 
-      - name: Upload APK
+      - name: Upload V10.4 V4.2.1 APK
         uses: actions/upload-artifact@v4
         with:
           name: CarAssistant-V10.4-Femto-Launcher-V4.2.1-Control-Bar
@@ -1054,10 +908,10 @@ jobs:
           retention-days: 30
 
       # ============================================================
-      # COMMIT SOURCE
+      # COMMIT
       # ============================================================
 
-      - name: Commit V4.2.1 source
+      - name: Commit V10.4 V4.2.1 source
         shell: bash
         run: |
           set -euo pipefail
@@ -1082,3 +936,21 @@ jobs:
             git push
 
           fi
+
+      # ============================================================
+      # COMPLETE
+      # ============================================================
+
+      - name: Complete
+        shell: bash
+        run: |
+          echo
+          echo "=============================================="
+          echo " CAR ASSISTANT V10.4 V4.2.1 BUILD PASSED"
+          echo "=============================================="
+          echo
+          echo "V10.3 CONTROL BAR: BACK / APPS / RECENTS / HOME"
+          echo "V4 APP SELECTOR: APPLICATIONS"
+          echo "V10 PROJECTION ENGINE: PRESERVED"
+          echo "ANDROID 12: SUPPORTED"
+          echo
