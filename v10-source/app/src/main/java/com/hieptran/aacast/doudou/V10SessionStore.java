@@ -11,40 +11,22 @@ public final class V10SessionStore {
 
     private static final String PREFS = "v10_session";
 
-    private static final String KEY_TARGET = "target_component";
+    private static final String KEY_TARGET =
+            "target_component";
 
-    private static final String KEY_RECENT_PREFIX = "recent_";
+    private static final String KEY_RECENT_PREFIX =
+            "recent_";
 
     private static final int MAX_RECENTS = 4;
 
-    private static volatile V10CarActivity currentActivity;
-
     private V10SessionStore() {
-    }
-
-    public static void setCurrentActivity(
-            V10CarActivity activity) {
-
-        currentActivity = activity;
-    }
-
-    public static V10CarActivity getCurrentActivity() {
-        return currentActivity;
-    }
-
-    public static void clearCurrentActivity(
-            V10CarActivity activity) {
-
-        if (currentActivity == activity) {
-            currentActivity = null;
-        }
     }
 
     public static void setTarget(
             Context context,
             ComponentName component) {
 
-        if (component == null) {
+        if (context == null || component == null) {
             return;
         }
 
@@ -59,11 +41,17 @@ public final class V10SessionStore {
                         component.flattenToString())
                 .apply();
 
-        touchRecent(context, component);
+        touchRecent(
+                context,
+                component);
     }
 
     public static ComponentName getTarget(
             Context context) {
+
+        if (context == null) {
+            return null;
+        }
 
         SharedPreferences prefs =
                 context.getSharedPreferences(
@@ -79,11 +67,16 @@ public final class V10SessionStore {
             return null;
         }
 
-        return ComponentName.unflattenFromString(value);
+        return ComponentName.unflattenFromString(
+                value);
     }
 
     public static void clearTarget(
             Context context) {
+
+        if (context == null) {
+            return;
+        }
 
         context.getSharedPreferences(
                         PREFS,
@@ -97,7 +90,7 @@ public final class V10SessionStore {
             Context context,
             ComponentName component) {
 
-        if (component == null) {
+        if (context == null || component == null) {
             return;
         }
 
@@ -111,7 +104,8 @@ public final class V10SessionStore {
         current.add(0, value);
 
         while (current.size() > MAX_RECENTS) {
-            current.remove(current.size() - 1);
+            current.remove(
+                    current.size() - 1);
         }
 
         SharedPreferences.Editor editor =
@@ -120,7 +114,10 @@ public final class V10SessionStore {
                         Context.MODE_PRIVATE)
                         .edit();
 
-        for (int i = 0; i < MAX_RECENTS; i++) {
+        for (int i = 0;
+                i < MAX_RECENTS;
+                i++) {
+
             String key =
                     KEY_RECENT_PREFIX + i;
 
@@ -142,6 +139,10 @@ public final class V10SessionStore {
         List<ComponentName> result =
                 new ArrayList<>();
 
+        if (context == null) {
+            return result;
+        }
+
         for (String value :
                 readRecentStrings(context)) {
 
@@ -157,8 +158,27 @@ public final class V10SessionStore {
         return result;
     }
 
+    public static boolean isRecent(
+            Context context,
+            ComponentName component) {
+
+        if (context == null || component == null) {
+            return false;
+        }
+
+        String value =
+                component.flattenToString();
+
+        return readRecentStrings(context)
+                .contains(value);
+    }
+
     public static void clearRecents(
             Context context) {
+
+        if (context == null) {
+            return;
+        }
 
         SharedPreferences.Editor editor =
                 context.getSharedPreferences(
@@ -166,7 +186,10 @@ public final class V10SessionStore {
                         Context.MODE_PRIVATE)
                         .edit();
 
-        for (int i = 0; i < MAX_RECENTS; i++) {
+        for (int i = 0;
+                i < MAX_RECENTS;
+                i++) {
+
             editor.remove(
                     KEY_RECENT_PREFIX + i);
         }
@@ -177,15 +200,22 @@ public final class V10SessionStore {
     private static List<String> readRecentStrings(
             Context context) {
 
+        List<String> result =
+                new ArrayList<>();
+
+        if (context == null) {
+            return result;
+        }
+
         SharedPreferences prefs =
                 context.getSharedPreferences(
                         PREFS,
                         Context.MODE_PRIVATE);
 
-        List<String> result =
-                new ArrayList<>();
+        for (int i = 0;
+                i < MAX_RECENTS;
+                i++) {
 
-        for (int i = 0; i < MAX_RECENTS; i++) {
             String value =
                     prefs.getString(
                             KEY_RECENT_PREFIX + i,
