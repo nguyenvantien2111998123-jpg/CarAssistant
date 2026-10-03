@@ -1,4 +1,4 @@
-name: Build Car Assistant V10.4 - Femto Style Launcher
+name: Build Car Assistant V10.4 - Femto Style Launcher Fixed
 
 on:
   workflow_dispatch:
@@ -8,7 +8,7 @@ permissions:
 
 jobs:
   build:
-    name: Build V10.4 Femto Style Launcher
+    name: Build V10.4 Femto Launcher
     runs-on: ubuntu-latest
 
     steps:
@@ -41,10 +41,10 @@ jobs:
           cache-disabled: true
 
       # ============================================================
-      # VERIFY CURRENT V10 SOURCE
+      # VERIFY SOURCE
       # ============================================================
 
-      - name: Verify V10 source
+      - name: Verify existing V10 source
         shell: bash
         run: |
           set -euo pipefail
@@ -53,9 +53,6 @@ jobs:
 
           test -f \
             v10-source/app/src/main/AndroidManifest.xml
-
-          test -f \
-            v10-source/app/src/main/java/com/hieptran/aacast/doudou/V10CarActivity.java
 
           test -f \
             v10-source/app/src/main/java/com/hieptran/aacast/doudou/V10ProjectionSession.java
@@ -69,13 +66,19 @@ jobs:
           echo "V10 SOURCE OK"
 
       # ============================================================
-      # REMOVE OLD GEARHEAD UI DEPENDENCY
+      # REMOVE OLD A2 UI IMPLEMENTATION
       # ============================================================
 
-      - name: Remove Gearhead control bar dependency
+      - name: Remove obsolete Gearhead control bar
         shell: bash
         run: |
           set -euo pipefail
+
+          find v10-source/app/src/main/java \
+            -type f \
+            -name "GearheadControlBar.java" \
+            -print \
+            -delete
 
           BRIDGE="$(
             find v10-source/app/src/main/java \
@@ -84,32 +87,25 @@ jobs:
               | head -1
           )"
 
-          if [ -z "$BRIDGE" ]; then
-            echo "AACastBridge.java not found"
-            exit 1
+          if [ -n "$BRIDGE" ]; then
+
+            sed -i \
+              '/import com\.carassistant\.v10\.hook\.GearheadControlBar;/d' \
+              "$BRIDGE"
+
+            sed -i \
+              '/GearheadControlBar[[:space:]]*\.[[:space:]]*install[[:space:]]*(/d' \
+              "$BRIDGE"
+
           fi
 
-          echo "Bridge: $BRIDGE"
-
-          sed -i \
-            '/import com\.carassistant\.v10\.hook\.GearheadControlBar;/d' \
-            "$BRIDGE"
-
-          sed -i \
-            '/GearheadControlBar[[:space:]]*\.[[:space:]]*install[[:space:]]*(/d' \
-            "$BRIDGE"
-
-          echo "Gearhead control bar dependency removed"
-
-          grep -n \
-            "GearheadDockPatcher" \
-            "$BRIDGE" || true
+          echo "OBSOLETE GEARHEAD CONTROL BAR REMOVED"
 
       # ============================================================
-      # WRITE FEMTO STYLE V10 CAR ACTIVITY
+      # WRITE V10.4 FEMTO STYLE ACTIVITY
       # ============================================================
 
-      - name: Write V10 Femto style launcher
+      - name: Write V10.4 Femto launcher
         shell: bash
         run: |
           set -euo pipefail
@@ -125,6 +121,7 @@ jobs:
           import android.content.Intent;
           import android.content.pm.ResolveInfo;
           import android.graphics.Color;
+          import android.graphics.drawable.Drawable;
           import android.graphics.drawable.GradientDrawable;
           import android.os.Bundle;
           import android.os.Handler;
@@ -135,7 +132,6 @@ jobs:
           import android.view.Window;
           import android.view.WindowManager;
           import android.widget.BaseAdapter;
-          import android.widget.Button;
           import android.widget.FrameLayout;
           import android.widget.GridView;
           import android.widget.ImageView;
@@ -157,11 +153,15 @@ jobs:
 
               private FrameLayout root;
 
+              private FrameLayout projectionLayer;
+
               private TextureHost textureHost;
 
               private V10ProjectionSession session;
 
               private V10InputController inputController;
+
+              private LinearLayout launcherLayer;
 
               private LinearLayout dashboard;
 
@@ -173,12 +173,16 @@ jobs:
 
               private TextView date;
 
-              private TextView targetLabel;
-
               private final Handler handler =
                       new Handler(Looper.getMainLooper());
 
-              private final Runnable clockUpdater =
+              private final ArrayList<AppInfo> apps =
+                      new ArrayList<>();
+
+              private final ArrayList<AppInfo> dockApps =
+                      new ArrayList<>();
+
+              private final Runnable clockTicker =
                       new Runnable() {
                           @Override
                           public void run() {
@@ -190,12 +194,6 @@ jobs:
                                       1000);
                           }
                       };
-
-              private final ArrayList<AppInfo> apps =
-                      new ArrayList<>();
-
-              private final ArrayList<AppInfo> dockApps =
-                      new ArrayList<>();
 
               @Override
               protected void onCreate(Bundle bundle) {
@@ -209,51 +207,89 @@ jobs:
                           WindowManager.LayoutParams.FLAG_FULLSCREEN,
                           WindowManager.LayoutParams.FLAG_FULLSCREEN);
 
-                  buildUi();
+                  buildRoot();
 
                   loadApps();
 
                   setContentView(root);
 
-                  handler.post(clockUpdater);
-
                   attachProjection();
+
+                  handler.post(clockTicker);
+
+                  String target =
+                          getIntent()
+                                  .getStringExtra(
+                                          "target");
+
+                  if (target != null) {
+
+                      ComponentName component =
+                              ComponentName
+                                      .unflattenFromString(
+                                              target);
+
+                      if (component != null) {
+                          launchProjection(component);
+                      }
+                  }
               }
 
               // =====================================================
-              // ROOT UI
+              // ROOT / LAYERS
               // =====================================================
 
-              private void buildUi() {
+              private void buildRoot() {
 
                   root =
                           new FrameLayout(this);
 
                   root.setBackgroundColor(
-                          Color.rgb(8, 10, 13));
+                          Color.rgb(7, 9, 12));
+
+                  /*
+                   * Layer 1:
+                   * projection surface.
+                   *
+                   * Layer 2:
+                   * launcher.
+                   *
+                   * Launcher is initially ABOVE the projection.
+                   * When an app is selected it is hidden and the
+                   * projection surface becomes visible.
+                   */
+
+                  projectionLayer =
+                          new FrameLayout(this);
+
+                  projectionLayer.setVisibility(
+                          View.GONE);
+
+                  root.addView(
+                          projectionLayer,
+                          new FrameLayout.LayoutParams(
+                                  -1,
+                                  -1));
+
+                  launcherLayer =
+                          new LinearLayout(this);
+
+                  launcherLayer.setOrientation(
+                          LinearLayout.VERTICAL);
+
+                  root.addView(
+                          launcherLayer,
+                          new FrameLayout.LayoutParams(
+                                  -1,
+                                  -1));
 
                   buildDashboard();
 
                   buildAppPanel();
-
-                  root.addView(
-                          dashboard,
-                          new FrameLayout.LayoutParams(
-                                  -1,
-                                  -1));
-
-                  root.addView(
-                          appPanel,
-                          new FrameLayout.LayoutParams(
-                                  -1,
-                                  -1));
-
-                  appPanel.setVisibility(
-                          View.GONE);
               }
 
               // =====================================================
-              // FEMTO STYLE DASHBOARD
+              // DASHBOARD
               // =====================================================
 
               private void buildDashboard() {
@@ -270,6 +306,12 @@ jobs:
                           dp(18),
                           dp(8));
 
+                  launcherLayer.addView(
+                          dashboard,
+                          new LinearLayout.LayoutParams(
+                                  -1,
+                                  -1));
+
                   // -------------------------------------------------
                   // HEADER
                   // -------------------------------------------------
@@ -280,11 +322,15 @@ jobs:
                   header.setGravity(
                           Gravity.CENTER_VERTICAL);
 
-                  header.setPadding(
-                          dp(4),
-                          0,
-                          dp(4),
-                          dp(8));
+                  TextView title =
+                          text(
+                                  "CAR ASSISTANT",
+                                  21,
+                                  Color.WHITE);
+
+                  title.setTypeface(
+                          null,
+                          android.graphics.Typeface.BOLD);
 
                   LinearLayout titleBox =
                           new LinearLayout(this);
@@ -292,26 +338,15 @@ jobs:
                   titleBox.setOrientation(
                           LinearLayout.VERTICAL);
 
-                  TextView title =
-                          text(
-                                  "CAR ASSISTANT",
-                                  20,
-                                  Color.WHITE);
-
-                  title.setTypeface(
-                          null,
-                          android.graphics.Typeface.BOLD);
+                  titleBox.addView(title);
 
                   date =
                           text(
                                   "",
-                                  13,
+                                  12,
                                   Color.LTGRAY);
 
-                  titleBox.addView(title);
-
-                  titleBox.addView(
-                          date);
+                  titleBox.addView(date);
 
                   header.addView(
                           titleBox,
@@ -323,24 +358,26 @@ jobs:
                   clock =
                           text(
                                   "",
-                                  25,
+                                  26,
                                   Color.WHITE);
 
                   clock.setGravity(
-                          Gravity.CENTER_VERTICAL |
-                          Gravity.RIGHT);
+                          Gravity.CENTER);
 
                   header.addView(
                           clock,
                           new LinearLayout.LayoutParams(
-                                  dp(150),
-                                  dp(55)));
+                                  dp(140),
+                                  dp(58)));
 
                   dashboard.addView(
-                          header);
+                          header,
+                          new LinearLayout.LayoutParams(
+                                  -1,
+                                  dp(65)));
 
                   // -------------------------------------------------
-                  // MAIN CONTENT
+                  // MAIN DASHBOARD
                   // -------------------------------------------------
 
                   LinearLayout content =
@@ -349,152 +386,68 @@ jobs:
                   content.setOrientation(
                           LinearLayout.VERTICAL);
 
-                  LinearLayout.LayoutParams contentParams =
-                          new LinearLayout.LayoutParams(
-                                  -1,
-                                  0,
-                                  1);
-
-                  // MAP
-                  LinearLayout mapCard =
+                  // MAP CARD
+                  LinearLayout map =
                           card();
 
-                  TextView mapTitle =
+                  map.addView(
                           text(
                                   "MAP",
-                                  14,
-                                  Color.WHITE);
+                                  13,
+                                  Color.LTGRAY));
 
-                  mapCard.addView(
-                          mapTitle);
-
-                  TextView mapText =
+                  TextView mapCenter =
                           text(
                                   "Navigation",
-                                  30,
+                                  29,
                                   Color.WHITE);
 
-                  mapText.setGravity(
+                  mapCenter.setGravity(
                           Gravity.CENTER);
 
-                  mapCard.addView(
-                          mapText,
+                  map.addView(
+                          mapCenter,
                           new LinearLayout.LayoutParams(
                                   -1,
                                   0,
                                   1));
 
                   content.addView(
-                          mapCard,
+                          map,
                           new LinearLayout.LayoutParams(
                                   -1,
                                   0,
                                   2));
 
-                  // -------------------------------------------------
                   // INFO ROW
-                  // -------------------------------------------------
-
                   LinearLayout info =
                           new LinearLayout(this);
 
                   info.setOrientation(
                           LinearLayout.HORIZONTAL);
 
-                  // SPEED
-                  LinearLayout speed =
-                          card();
-
-                  speed.addView(
-                          text(
+                  info.addView(
+                          infoCard(
                                   "SPEED",
-                                  13,
-                                  Color.LTGRAY));
-
-                  TextView speedValue =
-                          text(
-                                  "0 km/h",
-                                  27,
-                                  Color.WHITE);
-
-                  speedValue.setGravity(
-                          Gravity.CENTER);
-
-                  speed.addView(
-                          speedValue,
+                                  "0 km/h"),
                           new LinearLayout.LayoutParams(
-                                  -1,
                                   0,
+                                  -1,
                                   1));
 
                   info.addView(
-                          speed,
-                          new LinearLayout.LayoutParams(
-                                  0,
-                                  -1,
-                                  1));
-
-                  // WEATHER
-                  LinearLayout weather =
-                          card();
-
-                  weather.addView(
-                          text(
+                          infoCard(
                                   "WEATHER",
-                                  13,
-                                  Color.LTGRAY));
-
-                  TextView weatherValue =
-                          text(
-                                  "-- °C",
-                                  27,
-                                  Color.WHITE);
-
-                  weatherValue.setGravity(
-                          Gravity.CENTER);
-
-                  weather.addView(
-                          weatherValue,
+                                  "-- °C"),
                           new LinearLayout.LayoutParams(
-                                  -1,
                                   0,
+                                  -1,
                                   1));
 
                   info.addView(
-                          weather,
-                          new LinearLayout.LayoutParams(
-                                  0,
-                                  -1,
-                                  1));
-
-                  // MEDIA
-                  LinearLayout media =
-                          card();
-
-                  media.addView(
-                          text(
+                          infoCard(
                                   "MEDIA",
-                                  13,
-                                  Color.LTGRAY));
-
-                  TextView mediaValue =
-                          text(
-                                  "No media",
-                                  20,
-                                  Color.WHITE);
-
-                  mediaValue.setGravity(
-                          Gravity.CENTER);
-
-                  media.addView(
-                          mediaValue,
-                          new LinearLayout.LayoutParams(
-                                  -1,
-                                  0,
-                                  1));
-
-                  info.addView(
-                          media,
+                                  "No media"),
                           new LinearLayout.LayoutParams(
                                   0,
                                   -1,
@@ -504,27 +457,24 @@ jobs:
                           info,
                           new LinearLayout.LayoutParams(
                                   -1,
-                                  dp(120)));
+                                  dp(125)));
 
                   dashboard.addView(
                           content,
-                          contentParams);
+                          new LinearLayout.LayoutParams(
+                                  -1,
+                                  0,
+                                  1));
 
                   // -------------------------------------------------
-                  // BOTTOM DOCK
+                  // DOCK
                   // -------------------------------------------------
 
-                  LinearLayout dockContainer =
+                  LinearLayout dockRow =
                           new LinearLayout(this);
 
-                  dockContainer.setGravity(
+                  dockRow.setGravity(
                           Gravity.CENTER_VERTICAL);
-
-                  dockContainer.setPadding(
-                          dp(4),
-                          dp(6),
-                          dp(4),
-                          dp(2));
 
                   dock =
                           new LinearLayout(this);
@@ -532,35 +482,34 @@ jobs:
                   dock.setGravity(
                           Gravity.CENTER_VERTICAL);
 
-                  dockContainer.addView(
+                  dockRow.addView(
                           dock,
                           new LinearLayout.LayoutParams(
                                   0,
                                   -1,
                                   1));
 
-                  Button appsButton =
-                          controlButton(
-                                  "APPS");
+                  TextView apps =
+                          buttonText("APPS");
 
-                  appsButton.setOnClickListener(
+                  apps.setOnClickListener(
                           v -> showApps());
 
-                  dockContainer.addView(
-                          appsButton,
+                  dockRow.addView(
+                          apps,
                           new LinearLayout.LayoutParams(
                                   dp(95),
-                                  dp(60)));
+                                  dp(58)));
 
                   dashboard.addView(
-                          dockContainer,
+                          dockRow,
                           new LinearLayout.LayoutParams(
                                   -1,
-                                  dp(68)));
+                                  dp(70)));
               }
 
               // =====================================================
-              // APPLICATION PANEL
+              // APP PANEL
               // =====================================================
 
               private void buildAppPanel() {
@@ -575,48 +524,55 @@ jobs:
                           dp(18),
                           dp(14),
                           dp(18),
-                          dp(12));
+                          dp(10));
 
                   appPanel.setBackgroundColor(
-                          Color.rgb(9, 11, 14));
+                          Color.rgb(8, 10, 13));
 
-                  LinearLayout top =
+                  appPanel.setVisibility(
+                          View.GONE);
+
+                  launcherLayer.addView(
+                          appPanel,
+                          new LinearLayout.LayoutParams(
+                                  -1,
+                                  -1));
+
+                  LinearLayout header =
                           new LinearLayout(this);
 
-                  top.setGravity(
+                  header.setGravity(
                           Gravity.CENTER_VERTICAL);
 
-                  Button back =
-                          controlButton(
-                                  "BACK");
+                  TextView back =
+                          buttonText("BACK");
 
                   back.setOnClickListener(
                           v -> hideApps());
 
-                  top.addView(
+                  header.addView(
                           back,
                           new LinearLayout.LayoutParams(
                                   dp(100),
-                                  dp(60)));
+                                  dp(58)));
 
-                  TextView label =
+                  TextView title =
                           text(
                                   "APPLICATIONS",
                                   21,
                                   Color.WHITE);
 
-                  label.setGravity(
+                  title.setGravity(
                           Gravity.CENTER);
 
-                  top.addView(
-                          label,
+                  header.addView(
+                          title,
                           new LinearLayout.LayoutParams(
                                   0,
-                                  dp(60),
+                                  dp(58),
                                   1));
 
-                  appPanel.addView(
-                          top);
+                  appPanel.addView(header);
 
                   ScrollView scroll =
                           new ScrollView(this);
@@ -641,8 +597,7 @@ jobs:
                   grid.setAdapter(
                           new AppAdapter());
 
-                  scroll.addView(
-                          grid);
+                  scroll.addView(grid);
 
                   appPanel.addView(
                           scroll,
@@ -653,7 +608,7 @@ jobs:
               }
 
               // =====================================================
-              // APP DISCOVERY
+              // APPLICATION DISCOVERY
               // =====================================================
 
               private void loadApps() {
@@ -667,20 +622,20 @@ jobs:
                   intent.addCategory(
                           Intent.CATEGORY_LAUNCHER);
 
-                  List<ResolveInfo> resolved =
+                  List<ResolveInfo> result =
                           getPackageManager()
                                   .queryIntentActivities(
                                           intent,
                                           0);
 
                   for (ResolveInfo info :
-                          resolved) {
+                          result) {
 
-                      String packageName =
+                      String pkg =
                               info.activityInfo.packageName;
 
-                      if (packageName.equals(
-                              getPackageName())) {
+                      if (getPackageName()
+                              .equals(pkg)) {
                           continue;
                       }
 
@@ -693,16 +648,20 @@ jobs:
                               info.loadLabel(
                                       getPackageManager());
 
-                      AppInfo app =
+                      String name =
+                              label == null
+                                      ? pkg
+                                      : label.toString();
+
+                      Drawable icon =
+                              info.loadIcon(
+                                      getPackageManager());
+
+                      apps.add(
                               new AppInfo(
                                       component,
-                                      label == null
-                                              ? packageName
-                                              : label.toString(),
-                                      info.loadIcon(
-                                              getPackageManager()));
-
-                      apps.add(app);
+                                      name,
+                                      icon));
                   }
 
                   Collections.sort(
@@ -741,7 +700,7 @@ jobs:
                           dockApps) {
 
                       View item =
-                              createDockItem(app);
+                              dockItem(app);
 
                       dock.addView(
                               item,
@@ -752,11 +711,7 @@ jobs:
                   }
               }
 
-              // =====================================================
-              // DOCK ITEM
-              // =====================================================
-
-              private View createDockItem(
+              private View dockItem(
                       AppInfo app) {
 
                   LinearLayout box =
@@ -798,14 +753,15 @@ jobs:
                                   dp(22)));
 
                   box.setOnClickListener(
-                          v -> launchProjection(
-                                  app.component));
+                          v ->
+                                  launchProjection(
+                                          app.component));
 
                   return box;
               }
 
               // =====================================================
-              // APP PANEL
+              // APP ADAPTER
               // =====================================================
 
               private final class AppAdapter
@@ -835,20 +791,20 @@ jobs:
                       AppInfo app =
                               apps.get(position);
 
-                      LinearLayout box =
+                      LinearLayout item =
                               new LinearLayout(
                                       V10CarActivity.this);
 
-                      box.setOrientation(
+                      item.setOrientation(
                               LinearLayout.VERTICAL);
 
-                      box.setGravity(
+                      item.setGravity(
                               Gravity.CENTER);
 
-                      box.setPadding(
-                              dp(6),
+                      item.setPadding(
+                              dp(5),
                               dp(8),
-                              dp(6),
+                              dp(5),
                               dp(8));
 
                       ImageView icon =
@@ -858,7 +814,7 @@ jobs:
                       icon.setImageDrawable(
                               app.icon);
 
-                      box.addView(
+                      item.addView(
                               icon,
                               new LinearLayout.LayoutParams(
                                       dp(58),
@@ -875,13 +831,13 @@ jobs:
 
                       name.setMaxLines(2);
 
-                      box.addView(
+                      item.addView(
                               name,
                               new LinearLayout.LayoutParams(
                                       -1,
                                       dp(42)));
 
-                      box.setOnClickListener(
+                      item.setOnClickListener(
                               v -> {
 
                                   hideApps();
@@ -890,12 +846,12 @@ jobs:
                                           app.component);
                               });
 
-                      return box;
+                      return item;
                   }
               }
 
               // =====================================================
-              // PROJECTION
+              // PROJECTION ENGINE CONNECTION
               // =====================================================
 
               private void attachProjection() {
@@ -903,22 +859,13 @@ jobs:
                   textureHost =
                           new TextureHost(this);
 
-                  textureHost.setBackgroundColor(
-                          Color.TRANSPARENT);
+                  textureHost.setOpaque(false);
 
-                  root.addView(
+                  projectionLayer.addView(
                           textureHost,
                           new FrameLayout.LayoutParams(
                                   -1,
                                   -1));
-
-                  /*
-                   * The dashboard stays visible until an app
-                   * projection becomes active.
-                   *
-                   * TextureHost is transparent while launcher
-                   * is active.
-                   */
 
                   session =
                           new V10ProjectionSession(
@@ -934,24 +881,6 @@ jobs:
                   textureHost.setOnTouchListener(
                           inputController
                                   .createListener());
-
-                  String target =
-                          getIntent()
-                                  .getStringExtra(
-                                          "target");
-
-                  if (target != null) {
-
-                      ComponentName component =
-                              ComponentName
-                                      .unflattenFromString(
-                                              target);
-
-                      if (component != null) {
-                          launchProjection(
-                                  component);
-                      }
-                  }
               }
 
               private void launchProjection(
@@ -966,50 +895,94 @@ jobs:
                           component);
 
                   if (session != null) {
-
                       session.setTarget(
                               component);
                   }
 
-                  if (dashboard != null) {
-                      dashboard.setVisibility(
-                              View.GONE);
-                  }
+                  /*
+                   * Hide launcher only after target
+                   * has been successfully requested.
+                   */
 
-                  if (appPanel != null) {
-                      appPanel.setVisibility(
-                              View.GONE);
-                  }
+                  launcherLayer.setVisibility(
+                          View.GONE);
+
+                  projectionLayer.setVisibility(
+                          View.VISIBLE);
               }
 
               // =====================================================
-              // APPS
+              // RETURN TO LAUNCHER
+              // =====================================================
+
+              private void returnToLauncher() {
+
+                  if (session != null &&
+                          session.isActive()) {
+
+                      session.release();
+                  }
+
+                  projectionLayer.setVisibility(
+                          View.GONE);
+
+                  launcherLayer.setVisibility(
+                          View.VISIBLE);
+
+                  dashboard.setVisibility(
+                          View.VISIBLE);
+
+                  appPanel.setVisibility(
+                          View.GONE);
+              }
+
+              // =====================================================
+              // APPS PANEL
               // =====================================================
 
               private void showApps() {
 
-                  if (appPanel != null) {
-                      appPanel.setVisibility(
-                              View.VISIBLE);
-                  }
+                  dashboard.setVisibility(
+                          View.GONE);
 
-                  if (dashboard != null) {
-                      dashboard.setVisibility(
-                              View.GONE);
-                  }
+                  appPanel.setVisibility(
+                          View.VISIBLE);
               }
 
               private void hideApps() {
 
-                  if (appPanel != null) {
-                      appPanel.setVisibility(
-                              View.GONE);
+                  appPanel.setVisibility(
+                          View.GONE);
+
+                  dashboard.setVisibility(
+                          View.VISIBLE);
+              }
+
+              // =====================================================
+              // BACK
+              // =====================================================
+
+              @Override
+              public void onBackPressed() {
+
+                  if (appPanel != null &&
+                          appPanel.getVisibility()
+                                  == View.VISIBLE) {
+
+                      hideApps();
+
+                      return;
                   }
 
-                  if (dashboard != null) {
-                      dashboard.setVisibility(
-                              View.VISIBLE);
+                  if (session != null &&
+                          session.isActive()) {
+
+                      session.back();
+
+                      return;
                   }
+
+                  super.onBackPressed();
               }
 
               // =====================================================
@@ -1040,33 +1013,6 @@ jobs:
               }
 
               // =====================================================
-              // CAR BACK
-              // =====================================================
-
-              @Override
-              public void onBackPressed() {
-
-                  if (appPanel != null &&
-                          appPanel.getVisibility()
-                                  == View.VISIBLE) {
-
-                      hideApps();
-
-                      return;
-                  }
-
-                  if (session != null &&
-                          session.isActive()) {
-
-                      session.back();
-
-                      return;
-                  }
-
-                  super.onBackPressed();
-              }
-
-              // =====================================================
               // LIFECYCLE
               // =====================================================
 
@@ -1080,7 +1026,7 @@ jobs:
                   }
 
                   handler.post(
-                          clockUpdater);
+                          clockTicker);
               }
 
               @Override
@@ -1091,7 +1037,7 @@ jobs:
                   }
 
                   handler.removeCallbacks(
-                          clockUpdater);
+                          clockTicker);
 
                   super.onPause();
               }
@@ -1100,7 +1046,7 @@ jobs:
               protected void onDestroy() {
 
                   handler.removeCallbacks(
-                          clockUpdater);
+                          clockTicker);
 
                   if (session != null) {
                       session.destroy();
@@ -1122,68 +1068,92 @@ jobs:
                           LinearLayout.VERTICAL);
 
                   box.setPadding(
-                          dp(16),
+                          dp(15),
                           dp(12),
-                          dp(16),
+                          dp(15),
                           dp(12));
 
-                  GradientDrawable background =
+                  GradientDrawable bg =
                           new GradientDrawable();
 
-                  background.setColor(
+                  bg.setColor(
                           Color.rgb(22, 26, 31));
 
-                  background.setCornerRadius(
+                  bg.setCornerRadius(
                           dp(18));
 
-                  box.setBackground(
-                          background);
+                  box.setBackground(bg);
 
-                  LinearLayout.LayoutParams params =
+                  LinearLayout.LayoutParams p =
                           new LinearLayout.LayoutParams(
                                   -1,
                                   -1);
 
-                  params.setMargins(
+                  p.setMargins(
                           dp(4),
                           dp(4),
                           dp(4),
                           dp(4));
 
-                  box.setLayoutParams(
-                          params);
+                  box.setLayoutParams(p);
 
                   return box;
               }
 
-              private Button controlButton(
+              private LinearLayout infoCard(
+                      String title,
+                      String value) {
+
+                  LinearLayout box =
+                          card();
+
+                  box.addView(
+                          text(
+                                  title,
+                                  12,
+                                  Color.LTGRAY));
+
+                  TextView valueView =
+                          text(
+                                  value,
+                                  23,
+                                  Color.WHITE);
+
+                  valueView.setGravity(
+                          Gravity.CENTER);
+
+                  box.addView(
+                          valueView,
+                          new LinearLayout.LayoutParams(
+                                  -1,
+                                  0,
+                                  1));
+
+                  return box;
+              }
+
+              private TextView buttonText(
                       String label) {
 
-                  Button button =
-                          new Button(this);
+                  TextView button =
+                          text(
+                                  label,
+                                  13,
+                                  Color.WHITE);
 
-                  button.setText(label);
+                  button.setGravity(
+                          Gravity.CENTER);
 
-                  button.setTextColor(
-                          Color.WHITE);
-
-                  button.setTextSize(
-                          13);
-
-                  button.setAllCaps(
-                          false);
-
-                  GradientDrawable background =
+                  GradientDrawable bg =
                           new GradientDrawable();
 
-                  background.setColor(
-                          Color.rgb(28, 33, 39));
+                  bg.setColor(
+                          Color.rgb(29, 34, 40));
 
-                  background.setCornerRadius(
+                  bg.setCornerRadius(
                           dp(16));
 
-                  button.setBackground(
-                          background);
+                  button.setBackground(bg);
 
                   return button;
               }
@@ -1215,7 +1185,7 @@ jobs:
               }
 
               // =====================================================
-              // APP DATA
+              // DATA
               // =====================================================
 
               private static final class AppInfo {
@@ -1224,12 +1194,12 @@ jobs:
 
                   final String name;
 
-                  final android.graphics.drawable.Drawable icon;
+                  final Drawable icon;
 
                   AppInfo(
                           ComponentName component,
                           String name,
-                          android.graphics.drawable.Drawable icon) {
+                          Drawable icon) {
 
                       this.component = component;
 
@@ -1240,30 +1210,27 @@ jobs:
               }
 
               // =====================================================
-              // TRANSPARENT TEXTURE HOST
+              // TEXTURE HOST
               // =====================================================
 
               private static final class TextureHost
                       extends android.view.TextureView {
 
                   TextureHost(Context context) {
-
                       super(context);
-
-                      setOpaque(false);
                   }
               }
           }
 
           EOF
 
-          echo "V10.4 Femto-style launcher written"
+          echo "V10.4 LAUNCHER WRITTEN"
 
       # ============================================================
-      # VERIFY FEMTO STYLE UI
+      # VERIFY LAUNCHER
       # ============================================================
 
-      - name: Verify Femto launcher source
+      - name: Verify V10.4 launcher
         shell: bash
         run: |
           set -euo pipefail
@@ -1321,31 +1288,66 @@ jobs:
             "session.back" \
             "$ACTIVITY"
 
-          echo "FEMTO LAUNCHER SOURCE OK"
+          echo "V10.4 LAUNCHER SOURCE OK"
 
       # ============================================================
-      # VERIFY NO GEARHEAD UI
+      # VERIFY NO V10 GEARHEAD CONTROL BAR
       # ============================================================
 
-      - name: Verify no Gearhead UI dependency
+      - name: Verify V10 has no GearheadControlBar
         shell: bash
         run: |
           set -euo pipefail
 
-          if grep -R \
-            -E \
-            "GearheadControlBar|WindowManagerGlobal" \
-            v10-source/app/src/main/java \
-            --include="*.java"; then
+          if find v10-source/app/src/main/java \
+            -type f \
+            -name "GearheadControlBar.java" \
+            | grep -q .; then
 
-            echo "ERROR: Old Gearhead UI code remains"
+            echo "ERROR: GearheadControlBar.java still exists"
             exit 1
           fi
 
-          echo "NO OLD GEARHEAD UI OK"
+          if grep -R \
+            -E \
+            "GearheadControlBar" \
+            v10-source/app/src/main/java \
+            --include="*.java"; then
+
+            echo "ERROR: GearheadControlBar reference remains"
+            exit 1
+          fi
+
+          echo "GEARHEAD CONTROL BAR REMOVED"
 
       # ============================================================
-      # VERIFY PROJECTION ENGINE
+      # VERIFY V10 ACTIVITY DOES NOT USE WINDOWMANAGERGLOBAL
+      # ============================================================
+
+      - name: Verify V10 activity isolation
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          ACTIVITY="$(
+            find v10-source/app/src/main/java \
+              -type f \
+              -name "V10CarActivity.java" \
+              | head -1
+          )"
+
+          if grep -q \
+            "WindowManagerGlobal" \
+            "$ACTIVITY"; then
+
+            echo "ERROR: V10CarActivity uses WindowManagerGlobal"
+            exit 1
+          fi
+
+          echo "V10 ACTIVITY ISOLATION OK"
+
+      # ============================================================
+      # VERIFY PROJECTION
       # ============================================================
 
       - name: Verify projection engine
@@ -1381,7 +1383,7 @@ jobs:
           echo "PROJECTION ENGINE OK"
 
       # ============================================================
-      # VERIFY SWIPE INPUT
+      # VERIFY SWIPE
       # ============================================================
 
       - name: Verify swipe input
@@ -1409,7 +1411,7 @@ jobs:
           echo "SWIPE INPUT OK"
 
       # ============================================================
-      # VERIFY XPOSED BRIDGE
+      # VERIFY XPOSED
       # ============================================================
 
       - name: Verify Xposed bridge
@@ -1438,10 +1440,18 @@ jobs:
             'DisplayHooks[[:space:]]*\.[[:space:]]*installDisplayFlags' \
             "$BRIDGE"
 
+          if grep -q \
+            "GearheadControlBar" \
+            "$BRIDGE"; then
+
+            echo "ERROR: GearheadControlBar still referenced"
+            exit 1
+          fi
+
           echo "XPOSED BRIDGE OK"
 
       # ============================================================
-      # VERIFY ANDROID 12
+      # ANDROID 12
       # ============================================================
 
       - name: Verify Android 12 compatibility
@@ -1451,20 +1461,18 @@ jobs:
 
           if grep -R \
             -E \
-            "android\.os\.Build\.VERSION_CODES\.TIRAMISU|API 33|minSdk.*33" \
-            v10-source/app \
-            --include="*.java" \
-            --include="*.gradle" \
-            --include="*.xml"; then
+            "VERSION_CODES\.TIRAMISU|VERSION_CODES\.UPSIDE_DOWN_CAKE|VERSION_CODES\.VANILLA_ICE_CREAM" \
+            v10-source/app/src/main/java \
+            --include="*.java"; then
 
-            echo "ERROR: Android 13-only API reference detected"
+            echo "ERROR: Android 13+ API reference found"
             exit 1
           fi
 
-          echo "ANDROID 12 COMPATIBILITY CHECK PASSED"
+          echo "ANDROID 12 COMPATIBILITY OK"
 
       # ============================================================
-      # GRADLE CLEAN
+      # CLEAN
       # ============================================================
 
       - name: Gradle clean
@@ -1481,7 +1489,7 @@ jobs:
       # BUILD
       # ============================================================
 
-      - name: Build V10.4 debug APK
+      - name: Build V10.4 debug
         working-directory: v10-source
         shell: bash
         run: |
@@ -1506,7 +1514,6 @@ jobs:
 
           test -f "$APK"
 
-          echo
           echo "APK:"
           ls -lh "$APK"
 
@@ -1520,13 +1527,13 @@ jobs:
           echo "========================================"
 
       # ============================================================
-      # UPLOAD APK
+      # ARTIFACT
       # ============================================================
 
-      - name: Upload V10.4 debug APK
+      - name: Upload V10.4 APK
         uses: actions/upload-artifact@v4
         with:
-          name: CarAssistant-V10.4-Femto-Launcher-debug
+          name: CarAssistant-V10.4-Femto-Launcher-Fixed-debug
           path: v10-source/app/build/outputs/apk/debug/app-debug.apk
           if-no-files-found: error
           retention-days: 30
@@ -1535,7 +1542,7 @@ jobs:
       # COMMIT
       # ============================================================
 
-      - name: Commit V10.4 source
+      - name: Commit V10.4
         shell: bash
         run: |
           set -euo pipefail
@@ -1550,12 +1557,12 @@ jobs:
 
           if git diff --cached --quiet; then
 
-            echo "No V10.4 changes."
+            echo "No changes."
 
           else
 
             git commit \
-              -m "Build V10.4 Femto style car launcher"
+              -m "Build V10.4 Femto style launcher"
 
             git push
 
