@@ -21,7 +21,7 @@ jobs:
         uses: actions/checkout@v4
 
       # ============================================================
-      # JAVA
+      # JDK
       # ============================================================
 
       - name: Set up JDK 17
@@ -40,28 +40,24 @@ jobs:
           gradle-version: "8.13"
 
       # ============================================================
-      # VERIFY V4 BASE
+      # VERIFY BASE
       # ============================================================
 
-      - name: Verify V4 base
+      - name: Verify V10.4 V4 base
         shell: bash
         run: |
           set -euo pipefail
 
-          test -f \
-            v10-source/app/src/main/java/com/hieptran/aacast/doudou/V10CarActivity.java
+          JAVA=\
+          v10-source/app/src/main/java/com/hieptran/aacast/doudou
 
-          test -f \
-            v10-source/app/src/main/java/com/hieptran/aacast/doudou/V10ProjectionSession.java
-
-          test -f \
-            v10-source/app/src/main/java/com/hieptran/aacast/doudou/V10InputController.java
-
-          test -f \
-            v10-source/app/src/main/java/com/hieptran/aacast/doudou/V10SessionStore.java
-
-          test -f \
-            v10-source/app/src/main/java/com/hieptran/aacast/doudou/V10ControlReceiver.java
+          test -f "$JAVA/V10CarActivity.java"
+          test -f "$JAVA/V10ProjectionSession.java"
+          test -f "$JAVA/V10InputController.java"
+          test -f "$JAVA/V10SessionStore.java"
+          test -f "$JAVA/V10ControlReceiver.java"
+          test -f "$JAVA/V10Display.java"
+          test -f "$JAVA/RootShellSession.java"
 
           echo "V10.4 V4 BASE OK"
 
@@ -76,7 +72,7 @@ jobs:
 
           cp \
             v10-source/app/src/main/java/com/hieptran/aacast/doudou/V10CarActivity.java \
-            /tmp/V10CarActivity.java.v4.1.backup
+            /tmp/V10CarActivity.v4.1.backup
 
       # ============================================================
       # PATCH V10CarActivity
@@ -94,55 +90,125 @@ jobs:
               "v10-source/app/src/main/java/com/hieptran/aacast/doudou/V10CarActivity.java"
           )
 
-          text = path.read_text()
+          source = path.read_text()
 
-          # --------------------------------------------------------
-          # Add control bar field
-          # --------------------------------------------------------
+          # ========================================================
+          # METHOD FINDER
+          #
+          # Finds a Java method by its declaration name and replaces
+          # the complete method using balanced braces.
+          #
+          # This deliberately does NOT depend on formatting.
+          # ========================================================
 
-          old_field = """    private LinearLayout dock;
-          """
+          def find_method_start(text, method_name):
+              candidates = [
+                  "private void " + method_name + "(",
+                  "public void " + method_name + "(",
+                  "protected void " + method_name + "(",
+              ]
 
-          new_field = """    private LinearLayout dock;
-              private LinearLayout controlBar;
-          """
+              positions = []
 
-          if "private LinearLayout controlBar;" not in text:
-              if old_field not in text:
+              for candidate in candidates:
+                  pos = text.find(candidate)
+                  if pos >= 0:
+                      positions.append(pos)
+
+              if not positions:
                   raise SystemExit(
-                      "Cannot find dock field"
+                      "Method not found: " + method_name
                   )
 
-              text = text.replace(
-                  old_field,
-                  new_field,
-                  1
+              return min(positions)
+
+          def replace_method(text, method_name, replacement):
+              start = find_method_start(
+                  text,
+                  method_name
               )
 
-          # --------------------------------------------------------
-          # Helper: replace complete Java method
-          # --------------------------------------------------------
-
-          def replace_method(source, signature, replacement):
-              start = source.find(signature)
-
-              if start < 0:
-                  raise SystemExit(
-                      "Method not found: " + signature
-                  )
-
-              brace = source.find("{", start)
+              brace = text.find("{", start)
 
               if brace < 0:
                   raise SystemExit(
-                      "Opening brace not found: " + signature
+                      "Opening brace not found: "
+                      + method_name
                   )
 
               depth = 0
-              end = None
+              in_string = False
+              in_char = False
+              escape = False
+              line_comment = False
+              block_comment = False
 
-              for i in range(brace, len(source)):
-                  ch = source[i]
+              end = None
+              i = brace
+
+              while i < len(text):
+
+                  ch = text[i]
+
+                  if line_comment:
+                      if ch == "\n":
+                          line_comment = False
+                      i += 1
+                      continue
+
+                  if block_comment:
+                      if ch == "*" and i + 1 < len(text):
+                          if text[i + 1] == "/":
+                              block_comment = False
+                              i += 2
+                              continue
+
+                      i += 1
+                      continue
+
+                  if in_string:
+                      if escape:
+                          escape = False
+                      elif ch == "\\":
+                          escape = True
+                      elif ch == '"':
+                          in_string = False
+
+                      i += 1
+                      continue
+
+                  if in_char:
+                      if escape:
+                          escape = False
+                      elif ch == "\\":
+                          escape = True
+                      elif ch == "'":
+                          in_char = False
+
+                      i += 1
+                      continue
+
+                  if ch == "/" and i + 1 < len(text):
+
+                      if text[i + 1] == "/":
+                          line_comment = True
+                          i += 2
+                          continue
+
+                      if text[i + 1] == "*":
+                          block_comment = True
+                          i += 2
+                          continue
+
+                  if ch == '"':
+                      in_string = True
+                      i += 1
+                      continue
+
+                  if ch == "'":
+                      in_char = True
+                      i += 1
+                      continue
 
                   if ch == "{":
                       depth += 1
@@ -154,426 +220,474 @@ jobs:
                           end = i + 1
                           break
 
+                  i += 1
+
               if end is None:
                   raise SystemExit(
-                      "Could not find method end: " + signature
+                      "Could not find end of method: "
+                      + method_name
                   )
 
               return (
-                  source[:start]
+                  text[:start]
                   + replacement.rstrip()
                   + "\n"
-                  + source[end:]
+                  + text[end:]
               )
 
-          # --------------------------------------------------------
-          # buildUi()
+          # ========================================================
+          # 1. ADD CONTROL BAR FIELD
+          # ========================================================
+
+          if "private LinearLayout controlBar;" not in source:
+
+              marker = """    private LinearLayout dock;
+          """
+
+              if marker not in source:
+                  raise SystemExit(
+                      "Cannot find dock field"
+                  )
+
+              source = source.replace(
+                  marker,
+                  """    private LinearLayout dock;
+              private LinearLayout controlBar;
+          """,
+                  1
+              )
+
+          # ========================================================
+          # 2. PATCH buildUi()
           #
-          # Adds control bar AFTER launcher/projection layers.
-          # Because FrameLayout uses later children on top,
-          # controlBar remains visible above projection.
-          # --------------------------------------------------------
+          # Control bar is created AFTER launcher/projection layers.
+          # FrameLayout draws later children on top.
+          # ========================================================
 
           build_ui = r'''    private void buildUi() {
 
-                  root =
-                          new FrameLayout(this);
+              root =
+                      new FrameLayout(this);
 
-                  root.setBackgroundColor(
-                          Color.rgb(
-                                  7,
-                                  9,
-                                  12));
+              root.setBackgroundColor(
+                      Color.rgb(
+                              7,
+                              9,
+                              12));
 
-                  projectionLayer =
-                          new FrameLayout(this);
+              projectionLayer =
+                      new FrameLayout(this);
 
-                  projectionLayer.setVisibility(
-                          View.GONE);
+              projectionLayer.setVisibility(
+                      View.GONE);
 
-                  root.addView(
-                          projectionLayer,
-                          new FrameLayout.LayoutParams(
-                                  -1,
-                                  -1));
+              root.addView(
+                      projectionLayer,
+                      new FrameLayout.LayoutParams(
+                              -1,
+                              -1));
 
-                  launcherLayer =
-                          new LinearLayout(this);
+              launcherLayer =
+                      new LinearLayout(this);
 
-                  launcherLayer.setOrientation(
-                          LinearLayout.VERTICAL);
+              launcherLayer.setOrientation(
+                      LinearLayout.VERTICAL);
 
-                  launcherLayer.setPadding(
-                          dp(18),
-                          dp(12),
-                          dp(18),
-                          dp(8));
+              launcherLayer.setPadding(
+                      dp(18),
+                      dp(12),
+                      dp(18),
+                      dp(8));
 
-                  root.addView(
-                          launcherLayer,
-                          new FrameLayout.LayoutParams(
-                                  -1,
-                                  -1));
+              root.addView(
+                      launcherLayer,
+                      new FrameLayout.LayoutParams(
+                              -1,
+                              -1));
 
-                  buildDashboard();
-                  buildAppPanel();
+              buildDashboard();
 
-                  buildPersistentControlBar();
+              buildAppPanel();
 
-                  setContentView(root);
-              }
+              /*
+               * IMPORTANT:
+               *
+               * The control bar is added LAST.
+               *
+               * Therefore it remains above both:
+               *
+               * projectionLayer
+               * launcherLayer
+               */
+              buildPersistentControlBar();
 
-              private void buildPersistentControlBar() {
-
-                  controlBar =
-                          new LinearLayout(this);
-
-                  controlBar.setOrientation(
-                          LinearLayout.HORIZONTAL);
-
-                  controlBar.setGravity(
-                          Gravity.CENTER);
-
-                  controlBar.setPadding(
-                          dp(8),
-                          dp(5),
-                          dp(8),
-                          dp(5));
-
-                  GradientDrawable background =
-                          new GradientDrawable();
-
-                  background.setColor(
-                          Color.rgb(
-                                  15,
-                                  18,
-                                  22));
-
-                  background.setCornerRadius(
-                          dp(18));
-
-                  controlBar.setBackground(
-                          background);
-
-                  FrameLayout.LayoutParams
-                          barParams =
-                                  new FrameLayout.LayoutParams(
-                                          -1,
-                                          dp(64),
-                                          Gravity.BOTTOM);
-
-                  barParams.setMargins(
-                          dp(12),
-                          0,
-                          dp(12),
-                          dp(8));
-
-                  TextView back =
-                          buttonText("BACK");
-
-                  back.setTextSize(13);
-
-                  back.setOnClickListener(
-                          v -> handleControlBack());
-
-                  controlBar.addView(
-                          back,
-                          new LinearLayout.LayoutParams(
-                                  0,
-                                  -1,
-                                  1f));
-
-                  TextView home =
-                          buttonText("HOME");
-
-                  home.setTextSize(13);
-
-                  home.setOnClickListener(
-                          v -> handleControlHome());
-
-                  LinearLayout.LayoutParams
-                          homeParams =
-                                  new LinearLayout.LayoutParams(
-                                          0,
-                                          -1,
-                                          1f);
-
-                  homeParams.setMargins(
-                          dp(6),
-                          0,
-                          dp(6),
-                          0);
-
-                  controlBar.addView(
-                          home,
-                          homeParams);
-
-                  TextView apps =
-                          buttonText("APPS");
-
-                  apps.setTextSize(13);
-
-                  apps.setOnClickListener(
-                          v -> handleControlApps());
-
-                  controlBar.addView(
-                          apps,
-                          new LinearLayout.LayoutParams(
-                                  0,
-                                  -1,
-                                  1f));
-
-                  root.addView(
-                          controlBar,
-                          barParams);
-              }
+              setContentView(root);
+          }
           '''
 
-          text = replace_method(
-              text,
-              "    private void buildUi()",
+          source = replace_method(
+              source,
+              "buildUi",
               build_ui
           )
 
-          # --------------------------------------------------------
-          # launchProjection()
-          #
-          # Keep control bar visible.
-          # --------------------------------------------------------
+          # ========================================================
+          # 3. INSERT PERSISTENT CONTROL BAR
+          # ========================================================
 
-          launch_projection = r'''    private void launchProjection(
-                      ComponentName component) {
+          if "private void buildPersistentControlBar()" in source:
+              raise SystemExit(
+                  "Control bar already exists unexpectedly"
+              )
 
-                  if (component == null
-                          || session == null) {
+          marker = "    private void buildDashboard()"
 
-                      return;
-                  }
+          if marker not in source:
+              raise SystemExit(
+                  "Cannot find buildDashboard()"
+              )
 
-                  if (activeTarget != null
-                          && !activeTarget.equals(component)) {
+          control_bar = r'''    private void buildPersistentControlBar() {
 
-                      session.release();
-                  }
+              controlBar =
+                      new LinearLayout(this);
 
-                  activeTarget =
-                          component;
+              controlBar.setOrientation(
+                      LinearLayout.HORIZONTAL);
 
-                  V10SessionStore
-                          .setTarget(
-                                  this,
-                                  component);
+              controlBar.setGravity(
+                      Gravity.CENTER);
 
-                  launcherLayer
-                          .setVisibility(
-                                  View.GONE);
+              controlBar.setPadding(
+                      dp(8),
+                      dp(5),
+                      dp(8),
+                      dp(5));
 
-                  appPanel
-                          .setVisibility(
-                                  View.GONE);
+              GradientDrawable background =
+                      new GradientDrawable();
 
-                  dashboard
-                          .setVisibility(
-                                  View.GONE);
+              background.setColor(
+                      Color.rgb(
+                              15,
+                              18,
+                              22));
 
-                  projectionLayer
-                          .setVisibility(
-                                  View.VISIBLE);
+              background.setCornerRadius(
+                      dp(18));
 
-                  /*
-                   * controlBar intentionally remains visible.
-                   */
+              controlBar.setBackground(
+                      background);
 
-                  if (controlBar != null) {
-                      controlBar.setVisibility(
-                              View.VISIBLE);
-                  }
+              TextView back =
+                      buttonText("BACK");
 
-                  session.setTarget(
-                          component);
-              }
+              back.setOnClickListener(
+                      v -> handleControlBack());
+
+              controlBar.addView(
+                      back,
+                      new LinearLayout.LayoutParams(
+                              0,
+                              -1,
+                              1f));
+
+              TextView home =
+                      buttonText("HOME");
+
+              home.setOnClickListener(
+                      v -> handleControlHome());
+
+              LinearLayout.LayoutParams
+                      homeParams =
+                              new LinearLayout.LayoutParams(
+                                      0,
+                                      -1,
+                                      1f);
+
+              homeParams.setMargins(
+                      dp(6),
+                      0,
+                      dp(6),
+                      0);
+
+              controlBar.addView(
+                      home,
+                      homeParams);
+
+              TextView apps =
+                      buttonText("APPS");
+
+              apps.setOnClickListener(
+                      v -> handleControlApps());
+
+              controlBar.addView(
+                      apps,
+                      new LinearLayout.LayoutParams(
+                              0,
+                              -1,
+                              1f));
+
+              FrameLayout.LayoutParams
+                      barParams =
+                              new FrameLayout.LayoutParams(
+                                      -1,
+                                      dp(64),
+                                      Gravity.BOTTOM);
+
+              barParams.setMargins(
+                      dp(12),
+                      0,
+                      dp(12),
+                      dp(8));
+
+              root.addView(
+                      controlBar,
+                      barParams);
+          }
+
           '''
 
-          text = replace_method(
-              text,
-              "    private void launchProjection(",
+          source = source.replace(
+              marker,
+              control_bar + marker,
+              1
+          )
+
+          # ========================================================
+          # 4. PATCH launchProjection()
+          #
+          # Control bar is NEVER hidden.
+          # ========================================================
+
+          launch_projection = r'''    private void launchProjection(
+              ComponentName component) {
+
+              if (component == null
+                      || session == null) {
+
+                  return;
+              }
+
+              if (activeTarget != null
+                      && !activeTarget.equals(component)) {
+
+                  session.release();
+              }
+
+              activeTarget =
+                      component;
+
+              V10SessionStore
+                      .setTarget(
+                              this,
+                              component);
+
+              launcherLayer
+                      .setVisibility(
+                              View.GONE);
+
+              appPanel
+                      .setVisibility(
+                              View.GONE);
+
+              dashboard
+                      .setVisibility(
+                              View.GONE);
+
+              projectionLayer
+                      .setVisibility(
+                              View.VISIBLE);
+
+              /*
+               * NEVER hide controlBar.
+               *
+               * BACK / HOME / APPS must remain
+               * available while an application
+               * is projected.
+               */
+              if (controlBar != null) {
+                  controlBar.setVisibility(
+                          View.VISIBLE);
+              }
+
+              session.setTarget(
+                      component);
+          }
+          '''
+
+          source = replace_method(
+              source,
+              "launchProjection",
               launch_projection
           )
 
-          # --------------------------------------------------------
-          # returnToLauncher()
-          # --------------------------------------------------------
+          # ========================================================
+          # 5. PATCH returnToLauncher()
+          # ========================================================
 
           return_launcher = r'''    private void returnToLauncher() {
 
-                  activeTarget = null;
+              activeTarget = null;
 
-                  V10SessionStore
-                          .clearTarget(this);
+              V10SessionStore
+                      .clearTarget(this);
 
-                  if (session != null) {
-                      session.release();
-                  }
-
-                  projectionLayer
-                          .setVisibility(
-                                  View.GONE);
-
-                  launcherLayer
-                          .setVisibility(
-                                  View.VISIBLE);
-
-                  dashboard
-                          .setVisibility(
-                                  View.VISIBLE);
-
-                  appPanel
-                          .setVisibility(
-                                  View.GONE);
-
-                  if (controlBar != null) {
-                      controlBar.setVisibility(
-                              View.VISIBLE);
-                  }
+              if (session != null) {
+                  session.release();
               }
+
+              projectionLayer
+                      .setVisibility(
+                              View.GONE);
+
+              launcherLayer
+                      .setVisibility(
+                              View.VISIBLE);
+
+              dashboard
+                      .setVisibility(
+                              View.VISIBLE);
+
+              appPanel
+                      .setVisibility(
+                              View.GONE);
+
+              if (controlBar != null) {
+                  controlBar.setVisibility(
+                          View.VISIBLE);
+              }
+          }
           '''
 
-          text = replace_method(
-              text,
-              "    private void returnToLauncher()",
+          source = replace_method(
+              source,
+              "returnToLauncher",
               return_launcher
           )
 
-          # --------------------------------------------------------
-          # showApps()
+          # ========================================================
+          # 6. PATCH showApps()
           #
-          # When APPS is pressed during projection:
-          # - projection is hidden
-          # - launcher appears
-          # - application panel appears
-          # - control bar stays visible
-          # --------------------------------------------------------
+          # Works from both dashboard and projection.
+          # ========================================================
 
           show_apps = r'''    private void showApps() {
 
-                  if (launcherLayer == null
-                          || appPanel == null
-                          || dashboard == null) {
+              if (launcherLayer == null
+                      || appPanel == null
+                      || dashboard == null) {
 
-                      return;
-                  }
-
-                  projectionLayer
-                          .setVisibility(
-                                  View.GONE);
-
-                  launcherLayer
-                          .setVisibility(
-                                  View.VISIBLE);
-
-                  dashboard
-                          .setVisibility(
-                                  View.GONE);
-
-                  appPanel
-                          .setVisibility(
-                                  View.VISIBLE);
-
-                  if (controlBar != null) {
-                      controlBar.setVisibility(
-                              View.VISIBLE);
-                  }
-
-                  loadApps();
+                  return;
               }
+
+              projectionLayer
+                      .setVisibility(
+                              View.GONE);
+
+              launcherLayer
+                      .setVisibility(
+                              View.VISIBLE);
+
+              dashboard
+                      .setVisibility(
+                              View.GONE);
+
+              appPanel
+                      .setVisibility(
+                              View.VISIBLE);
+
+              if (controlBar != null) {
+                  controlBar.setVisibility(
+                          View.VISIBLE);
+              }
+
+              loadApps();
+          }
           '''
 
-          text = replace_method(
-              text,
-              "    private void showApps()",
+          source = replace_method(
+              source,
+              "showApps",
               show_apps
           )
 
-          # --------------------------------------------------------
-          # hideApps()
-          # --------------------------------------------------------
+          # ========================================================
+          # 7. PATCH hideApps()
+          # ========================================================
 
           hide_apps = r'''    private void hideApps() {
 
-                  if (appPanel == null
-                          || dashboard == null
-                          || launcherLayer == null) {
+              if (appPanel == null
+                      || dashboard == null
+                      || launcherLayer == null) {
 
-                      return;
-                  }
-
-                  appPanel
-                          .setVisibility(
-                                  View.GONE);
-
-                  dashboard
-                          .setVisibility(
-                                  View.VISIBLE);
-
-                  launcherLayer
-                          .setVisibility(
-                                  View.VISIBLE);
-
-                  projectionLayer
-                          .setVisibility(
-                                  View.GONE);
-
-                  if (controlBar != null) {
-                      controlBar.setVisibility(
-                              View.VISIBLE);
-                  }
+                  return;
               }
+
+              appPanel
+                      .setVisibility(
+                              View.GONE);
+
+              dashboard
+                      .setVisibility(
+                              View.VISIBLE);
+
+              launcherLayer
+                      .setVisibility(
+                              View.VISIBLE);
+
+              projectionLayer
+                      .setVisibility(
+                              View.GONE);
+
+              if (controlBar != null) {
+                  controlBar.setVisibility(
+                          View.VISIBLE);
+              }
+          }
           '''
 
-          text = replace_method(
-              text,
-              "    private void hideApps()",
+          source = replace_method(
+              source,
+              "hideApps",
               hide_apps
           )
 
-          # --------------------------------------------------------
-          # onDestroy cleanup
-          # --------------------------------------------------------
+          # ========================================================
+          # 8. CLEANUP
+          # ========================================================
 
-          old_cleanup = """        dock = null;
+          if "controlBar = null;" not in source:
 
-                  super.onDestroy();
+              marker = """        dock = null;
           """
 
-          new_cleanup = """        dock = null;
+              if marker not in source:
+                  raise SystemExit(
+                      "Cannot find onDestroy dock cleanup"
+                  )
+
+              source = source.replace(
+                  marker,
+                  """        dock = null;
                   controlBar = null;
-
-                  super.onDestroy();
-          """
-
-          if old_cleanup in text:
-              text = text.replace(
-                  old_cleanup,
-                  new_cleanup,
+          """,
                   1
               )
-          elif "controlBar = null;" not in text:
-              raise SystemExit(
-                  "Could not patch onDestroy cleanup"
-              )
 
-          path.write_text(text)
+          path.write_text(source)
 
           print(
-              "V10CarActivity V4.1 patched successfully."
+              "V10CarActivity V4.1 patch completed."
           )
           PY
 
       # ============================================================
-      # VERIFY CONTROL BAR
+      # VERIFY SOURCE PATCH
       # ============================================================
 
-      - name: Verify V4.1 control bar
+      - name: Verify V4.1 source
         shell: bash
         run: |
           set -euo pipefail
@@ -581,14 +695,14 @@ jobs:
           FILE=\
           v10-source/app/src/main/java/com/hieptran/aacast/doudou/V10CarActivity.java
 
-          echo "=== CONTROL BAR ==="
+          echo "=== VERIFY CONTROL BAR ==="
 
           grep -q \
-            "private LinearLayout controlBar" \
+            "private LinearLayout controlBar;" \
             "$FILE"
 
           grep -q \
-            "buildPersistentControlBar" \
+            "buildPersistentControlBar()" \
             "$FILE"
 
           grep -q \
@@ -603,6 +717,10 @@ jobs:
             'buttonText("APPS")' \
             "$FILE"
 
+          echo "CONTROL BAR OK"
+
+          echo "=== VERIFY CONTROL HANDLERS ==="
+
           grep -q \
             "handleControlBack()" \
             "$FILE"
@@ -615,19 +733,9 @@ jobs:
             "handleControlApps()" \
             "$FILE"
 
-          echo "CONTROL BAR OK"
+          echo "CONTROL HANDLERS OK"
 
-      # ============================================================
-      # VERIFY DIRECT APP SELECTOR
-      # ============================================================
-
-      - name: Verify Android Auto app selector
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          FILE=\
-          v10-source/app/src/main/java/com/hieptran/aacast/doudou/V10CarActivity.java
+          echo "=== VERIFY APP SELECTOR ==="
 
           grep -q \
             "APPLICATIONS" \
@@ -642,17 +750,13 @@ jobs:
             "$FILE"
 
           grep -q \
-            "launchProjection(" \
+            "launchProjection" \
             "$FILE"
 
-          grep -q \
-            "V10SessionStore" \
-            "$FILE"
-
-          echo "DIRECT APP SELECTOR OK"
+          echo "APP SELECTOR OK"
 
       # ============================================================
-      # VERIFY PROJECTION ENGINE UNTOUCHED
+      # VERIFY PROJECTION ENGINE
       # ============================================================
 
       - name: Verify V10 projection engine
@@ -690,24 +794,6 @@ jobs:
           echo "PROJECTION ENGINE OK"
 
       # ============================================================
-      # VERIFY ROOT SHELL
-      # ============================================================
-
-      - name: Verify root shell
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          FILE=\
-          v10-source/app/src/main/java/com/hieptran/aacast/doudou/RootShellSession.java
-
-          grep -q \
-            'ProcessBuilder("su")' \
-            "$FILE"
-
-          echo "ROOT SHELL OK"
-
-      # ============================================================
       # VERIFY INPUT
       # ============================================================
 
@@ -734,7 +820,25 @@ jobs:
           echo "INPUT CONTROLLER OK"
 
       # ============================================================
-      # VERIFY DISPLAY IDENTITY
+      # VERIFY ROOT
+      # ============================================================
+
+      - name: Verify root shell
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          FILE=\
+          v10-source/app/src/main/java/com/hieptran/aacast/doudou/RootShellSession.java
+
+          grep -q \
+            'ProcessBuilder("su")' \
+            "$FILE"
+
+          echo "ROOT SHELL OK"
+
+      # ============================================================
+      # VERIFY DISPLAY
       # ============================================================
 
       - name: Verify V10 display identity
@@ -757,7 +861,7 @@ jobs:
             'type != 5' \
             "$FILE"
 
-          echo "V10 DISPLAY IDENTITY OK"
+          echo "DISPLAY IDENTITY OK"
 
       # ============================================================
       # VERIFY CONTROL RECEIVER
@@ -790,10 +894,10 @@ jobs:
           echo "CONTROL RECEIVER OK"
 
       # ============================================================
-      # VERIFY ANDROID 12 / NO GEARHEAD
+      # VERIFY NO GEARHEAD
       # ============================================================
 
-      - name: Verify Android 12 architecture
+      - name: Verify architecture
         shell: bash
         run: |
           set -euo pipefail
@@ -804,6 +908,7 @@ jobs:
             >/dev/null 2>&1; then
 
             echo "ERROR: GearheadControlBar still exists."
+
             exit 1
           fi
 
@@ -813,13 +918,14 @@ jobs:
             >/dev/null 2>&1; then
 
             echo "ERROR: V9 package reference remains."
+
             exit 1
           fi
 
-          echo "ANDROID 12 ARCHITECTURE OK"
+          echo "ARCHITECTURE OK"
 
       # ============================================================
-      # JAVA SANITY
+      # JAVA BRACE CHECK
       # ============================================================
 
       - name: Java source sanity
@@ -827,69 +933,115 @@ jobs:
         run: |
           set -euo pipefail
 
-          FILE=\
-          v10-source/app/src/main/java/com/hieptran/aacast/doudou/V10CarActivity.java
-
-          python3 - <<'PY'
+          python3 <<'PY'
           from pathlib import Path
 
-          p = Path(
+          path = Path(
               "v10-source/app/src/main/java/com/hieptran/aacast/doudou/V10CarActivity.java"
           )
 
-          s = p.read_text()
+          text = path.read_text()
 
           depth = 0
           in_string = False
+          in_char = False
           escape = False
-          in_line_comment = False
-          in_block_comment = False
+          line_comment = False
+          block_comment = False
 
-          for i, ch in enumerate(s):
+          i = 0
 
-              if in_line_comment:
+          while i < len(text):
+
+              ch = text[i]
+
+              if line_comment:
                   if ch == "\n":
-                      in_line_comment = False
+                      line_comment = False
+                  i += 1
                   continue
 
-              if in_block_comment:
-                  if ch == "*" and i + 1 < len(s) and s[i + 1] == "/":
-                      in_block_comment = False
+              if block_comment:
+                  if ch == "*" and i + 1 < len(text):
+                      if text[i + 1] == "/":
+                          block_comment = False
+                          i += 2
+                          continue
+
+                  i += 1
                   continue
-
-              if not in_string and ch == "/" and i + 1 < len(s):
-                  if s[i + 1] == "/":
-                      in_line_comment = True
-                      continue
-                  if s[i + 1] == "*":
-                      in_block_comment = True
-                      continue
-
-              if ch == '"' and not escape:
-                  in_string = not in_string
 
               if in_string:
-                  escape = (ch == "\\" and not escape)
+
+                  if escape:
+                      escape = False
+
+                  elif ch == "\\":
+                      escape = True
+
+                  elif ch == '"':
+                      in_string = False
+
+                  i += 1
                   continue
 
-              escape = False
+              if in_char:
+
+                  if escape:
+                      escape = False
+
+                  elif ch == "\\":
+                      escape = True
+
+                  elif ch == "'":
+                      in_char = False
+
+                  i += 1
+                  continue
+
+              if ch == "/" and i + 1 < len(text):
+
+                  if text[i + 1] == "/":
+                      line_comment = True
+                      i += 2
+                      continue
+
+                  if text[i + 1] == "*":
+                      block_comment = True
+                      i += 2
+                      continue
+
+              if ch == '"':
+                  in_string = True
+                  i += 1
+                  continue
+
+              if ch == "'":
+                  in_char = True
+                  i += 1
+                  continue
 
               if ch == "{":
                   depth += 1
+
               elif ch == "}":
                   depth -= 1
 
-              if depth < 0:
-                  raise SystemExit(
-                      "Brace balance became negative"
-                  )
+                  if depth < 0:
+                      raise SystemExit(
+                          "Brace balance became negative"
+                      )
+
+              i += 1
 
           if depth != 0:
               raise SystemExit(
                   f"Brace balance failed: {depth}"
               )
 
-          print("JAVA SOURCE BALANCE OK")
+          print(
+              "V10CarActivity JAVA BALANCE OK"
+          )
           PY
 
       # ============================================================
@@ -925,18 +1077,18 @@ jobs:
 
           echo
           echo "========================================"
-          echo " V10.4 V4.1 BUILD SUCCESSFUL"
+          echo " CAR ASSISTANT V10.4 V4.1"
+          echo " BUILD SUCCESSFUL"
           echo "========================================"
 
           ls -lh "$APK"
 
           echo
           echo "SHA256:"
-
           sha256sum "$APK"
 
       # ============================================================
-      # UPLOAD APK
+      # UPLOAD
       # ============================================================
 
       - name: Upload V4.1 APK
@@ -990,10 +1142,10 @@ jobs:
           echo " CAR ASSISTANT V10.4 V4.1 COMPLETE"
           echo "========================================"
           echo
-          echo "BACK  : persistent"
-          echo "HOME  : persistent"
-          echo "APPS  : persistent"
-          echo "APP SELECTOR : enabled"
-          echo "PROJECTION ENGINE : preserved"
-          echo "ANDROID 12 : preserved"
+          echo "Persistent BACK : OK"
+          echo "Persistent HOME : OK"
+          echo "Persistent APPS : OK"
+          echo "Direct app selector : OK"
+          echo "Projection engine : preserved"
+          echo "Android 12 : preserved"
           echo
