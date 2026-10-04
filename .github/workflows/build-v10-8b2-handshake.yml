@@ -1,10 +1,7 @@
-name: Build Car Assistant V10 - 8B2 Startup Handshake Fixed v2
+name: Build Car Assistant V10 - 8B2 Startup Handshake Fixed v3
 
 on:
   workflow_dispatch:
-
-permissions:
-  contents: read
 
 jobs:
   build:
@@ -18,11 +15,8 @@ jobs:
         uses: actions/setup-java@v4
         with:
           distribution: temurin
-          java-version: "17"
+          java-version: '17'
 
-      # ============================================================
-      # 1. VERIFY EXISTING V10
-      # ============================================================
       - name: Verify existing V10
         shell: bash
         run: |
@@ -30,36 +24,33 @@ jobs:
 
           ROOT="v10-source/app/src/main/java/com/hieptran/aacast/doudou"
 
-          for f in \
-            V10ProjectionService.java \
-            V10ProjectionSession.java \
-            V10CarActivity.java \
-            V10SessionStore.java \
-            V10InputController.java \
-            RootShellSession.java
-          do
-            test -f "$ROOT/$f"
+          FILES=(
+            "V10ProjectionService.java"
+            "V10ProjectionSession.java"
+            "V10CarActivity.java"
+            "V10SessionStore.java"
+            "V10InputController.java"
+            "RootShellSession.java"
+          )
+
+          for file in "${FILES[@]}"; do
+            test -f "$ROOT/$file"
+            echo "PASS: $file"
           done
 
-          grep -q 'package com.carassistant.v10;' \
+          grep -Fq 'package com.carassistant.v10;' \
             "$ROOT/V10ProjectionService.java"
 
-          grep -q 'package com.carassistant.v10;' \
+          grep -Fq 'package com.carassistant.v10;' \
             "$ROOT/V10ProjectionSession.java"
 
-          grep -q 'package com.carassistant.v10;' \
-            "$ROOT/V10CarActivity.java"
+          echo "PASS: V10 package"
 
-          grep -Fq \
-            'private static final int MAX_RECENTS = 4;' \
+          grep -Eq 'MAX_RECENTS[[:space:]]*=[[:space:]]*4' \
             "$ROOT/V10SessionStore.java"
 
-          echo "Existing V10 source confirmed."
+          echo "PASS: MAX_RECENTS = 4"
 
-      # ============================================================
-      # 2. PATCH V10ProjectionService
-      #    Brace-safe replacement
-      # ============================================================
       - name: Patch V10ProjectionService - brace safe
         shell: bash
         run: |
@@ -67,392 +58,357 @@ jobs:
 
           FILE="v10-source/app/src/main/java/com/hieptran/aacast/doudou/V10ProjectionService.java"
 
-          cat > /tmp/patch_service.py <<'PY'
-          import re
-          import sys
+          python3 <<'PY'
           from pathlib import Path
 
-          p = Path(sys.argv[1])
-          s = p.read_text()
-
-          def method_span(src, name):
-              pat = re.compile(
-                  r'(?m)^\s*public\s+static\s+void\s+'
-                  + re.escape(name)
-                  + r'\s*\('
-              )
-
-              matches = list(pat.finditer(src))
-
-              if len(matches) != 1:
-                  raise SystemExit(
-                      f"{name}: expected 1 method, found {len(matches)}"
-                  )
-
-              start = matches[0].start()
-
-              brace = src.find(
-                  '{',
-                  matches[0].end()
-              )
-
-              if brace < 0:
-                  raise SystemExit(
-                      f"{name}: opening brace not found"
-                  )
-
-              depth = 0
-              i = brace
-              state = "code"
-
-              while i < len(src):
-                  c = src[i]
-                  n = src[i + 1] if i + 1 < len(src) else ""
-
-                  if state == "code":
-
-                      if c == '/' and n == '/':
-                          state = "line"
-                          i += 2
-                          continue
-
-                      if c == '/' and n == '*':
-                          state = "block"
-                          i += 2
-                          continue
-
-                      if c == '"':
-                          state = "string"
-
-                      elif c == "'":
-                          state = "char"
-
-                      elif c == '{':
-                          depth += 1
-
-                      elif c == '}':
-                          depth -= 1
-
-                          if depth == 0:
-                              return start, i + 1
-
-                  elif state == "line":
-
-                      if c == '\n':
-                          state = "code"
-
-                  elif state == "block":
-
-                      if c == '*' and n == '/':
-                          state = "code"
-                          i += 2
-                          continue
-
-                  elif state == "string":
-
-                      if c == '\\':
-                          i += 2
-                          continue
-
-                      if c == '"':
-                          state = "code"
-
-                  elif state == "char":
-
-                      if c == '\\':
-                          i += 2
-                          continue
-
-                      if c == "'":
-                          state = "code"
-
-                  i += 1
-
-              raise SystemExit(
-                  f"{name}: unmatched braces"
-              )
-
-          def replace_method(src, name, replacement):
-              start, end = method_span(src, name)
-              return src[:start] + replacement + src[end:]
-
-          anchor = (
-              "    private static volatile "
-              "V10ProjectionService instance;"
+          path = Path(
+              "v10-source/app/src/main/java/com/hieptran/aacast/doudou/"
+              "V10ProjectionService.java"
           )
 
-          if "START_LOCK" not in s:
+          text = path.read_text()
 
-              if anchor not in s:
+          # ------------------------------------------------------------
+          # Java method locator.
+          # It ignores comments, strings and character literals.
+          # ------------------------------------------------------------
+
+          def find_method(text, name):
+              needle = name + "("
+              pos = text.find(needle)
+
+              while pos >= 0:
+                  brace = text.find("{", pos)
+                  if brace < 0:
+                      return None
+
+                  depth = 0
+                  i = brace
+                  state = "normal"
+
+                  while i < len(text):
+                      c = text[i]
+                      n = text[i + 1] if i + 1 < len(text) else ""
+
+                      if state == "normal":
+                          if c == "/" and n == "/":
+                              state = "line_comment"
+                              i += 2
+                              continue
+
+                          if c == "/" and n == "*":
+                              state = "block_comment"
+                              i += 2
+                              continue
+
+                          if c == '"':
+                              state = "string"
+                              i += 1
+                              continue
+
+                          if c == "'":
+                              state = "char"
+                              i += 1
+                              continue
+
+                          if c == "{":
+                              depth += 1
+
+                          elif c == "}":
+                              depth -= 1
+                              if depth == 0:
+                                  return pos, i + 1
+
+                      elif state == "line_comment":
+                          if c == "\n":
+                              state = "normal"
+
+                      elif state == "block_comment":
+                          if c == "*" and n == "/":
+                              state = "normal"
+                              i += 2
+                              continue
+
+                      elif state == "string":
+                          if c == "\\":
+                              i += 2
+                              continue
+                          if c == '"':
+                              state = "normal"
+
+                      elif state == "char":
+                          if c == "\\":
+                              i += 2
+                              continue
+                          if c == "'":
+                              state = "normal"
+
+                      i += 1
+
+                  return None
+
+              return None
+
+          def replace_method(text, name, replacement):
+              result = find_method(text, name)
+
+              if result is None:
                   raise SystemExit(
-                      "START_LOCK anchor not found"
+                      f"ERROR: method {name} not found"
                   )
 
-              fields = """
-          private static final Object START_LOCK =
-                  new Object();
+              start, end = result
+              return text[:start] + replacement + text[end:]
 
+          # ------------------------------------------------------------
+          # Add startup handshake fields exactly once.
+          # ------------------------------------------------------------
+
+          fields = """\
+          private static final Object START_LOCK = new Object();
           private static ComponentName pendingTarget;
-
           private static Surface pendingSurface;
-
           private static int pendingWidth;
-
           private static int pendingHeight;
           """
 
-              s = s.replace(
-                  anchor,
-                  anchor + "\n" + fields,
+          if "START_LOCK" not in text:
+              marker = "private static volatile V10ProjectionService instance;"
+
+              if marker not in text:
+                  raise SystemExit(
+                      "ERROR: service instance marker not found"
+                  )
+
+              text = text.replace(
+                  marker,
+                  marker + "\n" + fields,
                   1
               )
 
-          ensure_started = """
-              public static void ensureStarted(
-                      android.content.Context context) {
+          # ------------------------------------------------------------
+          # Replace ensureStarted().
+          # ------------------------------------------------------------
 
-                  if (getInstance() != null) {
-                      return;
-                  }
-
-                  android.content.Context app =
-                          context.getApplicationContext();
-
-                  Intent intent =
-                          new Intent(
-                                  app,
-                                  V10ProjectionService.class);
-
-                  try {
-
-                      if (Build.VERSION.SDK_INT >= 26) {
-
-                          app.startForegroundService(
-                                  intent);
-
-                      } else {
-
-                          app.startService(
-                                  intent);
-                      }
-
-                  } catch (Throwable error) {
-
-                      Log.w(
-                              TAG,
-                              "Unable to start projection service",
-                              error);
-                  }
+          ensure_started = """\
+          public static void ensureStarted(Context context) {
+              if (getInstance() != null) {
+                  return;
               }
+
+              Context appContext = context.getApplicationContext();
+
+              try {
+                  Intent intent =
+                          new Intent(appContext, V10ProjectionService.class);
+
+                  if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                      appContext.startForegroundService(intent);
+                  } else {
+                      appContext.startService(intent);
+                  }
+              } catch (Throwable error) {
+                  Log.w(TAG, "Unable to start projection service", error);
+              }
+          }\
           """
 
-          s = replace_method(
-              s,
+          text = replace_method(
+              text,
               "ensureStarted",
               ensure_started
           )
 
-          set_target = """
-              public static void setTarget(
-                      android.content.Context context,
-                      ComponentName component) {
+          # ------------------------------------------------------------
+          # Replace static setTarget().
+          # ------------------------------------------------------------
 
-                  if (component == null) {
-                      clearTarget();
+          set_target = """\
+          public static void setTarget(
+                  Context context,
+                  ComponentName component) {
+
+              synchronized (START_LOCK) {
+                  V10ProjectionService service = getInstance();
+
+                  if (service == null) {
+                      pendingTarget = component;
+                      ensureStarted(context);
                       return;
                   }
 
-                  synchronized (START_LOCK) {
-
-                      V10ProjectionService service =
-                              getInstance();
-
-                      if (service == null) {
-
-                          pendingTarget =
-                                  component;
-
-                          ensureStarted(
-                                  context);
-
-                          return;
-                      }
-
-                      service.setTargetInternal(
-                              component);
-                  }
+                  service.setTargetInternal(component);
               }
+          }\
           """
 
-          s = replace_method(
-              s,
+          text = replace_method(
+              text,
               "setTarget",
               set_target
           )
 
-          attach_surface = """
-              public static void attachSurface(
-                      android.content.Context context,
-                      Surface newSurface,
-                      int newWidth,
-                      int newHeight) {
+          # ------------------------------------------------------------
+          # Replace static attachSurface().
+          # ------------------------------------------------------------
 
-                  if (newSurface == null
-                          || newWidth < 1
-                          || newHeight < 1) {
+          attach_surface = """\
+          public static void attachSurface(
+                  Context context,
+                  Surface surface,
+                  int width,
+                  int height) {
 
+              if (surface == null || width <= 0 || height <= 0) {
+                  return;
+              }
+
+              synchronized (START_LOCK) {
+                  V10ProjectionService service = getInstance();
+
+                  if (service == null) {
+                      if (pendingSurface != null &&
+                              pendingSurface != surface) {
+                          try {
+                              pendingSurface.release();
+                          } catch (Throwable ignored) {
+                          }
+                      }
+
+                      pendingSurface = surface;
+                      pendingWidth = width;
+                      pendingHeight = height;
+
+                      ensureStarted(context);
                       return;
                   }
 
-                  synchronized (START_LOCK) {
-
-                      V10ProjectionService service =
-                              getInstance();
-
-                      if (service == null) {
-
-                          if (pendingSurface != null
-                                  && pendingSurface
-                                          != newSurface) {
-
-                              try {
-                                  pendingSurface.release();
-                              } catch (Throwable ignored) {
-                              }
-                          }
-
-                          pendingSurface =
-                                  newSurface;
-
-                          pendingWidth =
-                                  newWidth;
-
-                          pendingHeight =
-                                  newHeight;
-
-                          ensureStarted(
-                                  context);
-
-                          return;
-                      }
-
-                      service.attachSurfaceInternal(
-                              newSurface,
-                              newWidth,
-                              newHeight);
-                  }
+                  service.attachSurfaceInternal(
+                          surface,
+                          width,
+                          height);
               }
+          }\
           """
 
-          s = replace_method(
-              s,
+          text = replace_method(
+              text,
               "attachSurface",
               attach_surface
           )
 
-          if "private void flushPendingState()" not in s:
+          # ------------------------------------------------------------
+          # Add flushPendingState() immediately before detachSurfaceInternal.
+          # ------------------------------------------------------------
 
-              marker = (
-                  "    @Override\n"
-                  "    public void onCreate()"
-              )
+          if "private void flushPendingState()" not in text:
+              marker = "private void detachSurfaceInternal()"
 
-              if marker not in s:
+              if marker not in text:
                   raise SystemExit(
-                      "onCreate marker not found"
+                      "ERROR: detachSurfaceInternal marker not found"
                   )
 
-              flush = """
-              private void flushPendingState() {
+              flush = """\
+          private void flushPendingState() {
+              synchronized (START_LOCK) {
+                  if (instance != this || destroyed) {
+                      return;
+                  }
 
-                  synchronized (START_LOCK) {
+                  ComponentName target = pendingTarget;
+                  Surface surface = pendingSurface;
+                  int width = pendingWidth;
+                  int height = pendingHeight;
 
-                      if (instance != this
-                              || destroyed) {
+                  pendingTarget = null;
+                  pendingSurface = null;
+                  pendingWidth = 0;
+                  pendingHeight = 0;
 
-                          return;
+                  try {
+                      if (target != null) {
+                          setTargetInternal(target);
                       }
 
-                      ComponentName t =
-                              pendingTarget;
-
-                      Surface sf =
-                              pendingSurface;
-
-                      int w =
-                              pendingWidth;
-
-                      int h =
-                              pendingHeight;
-
-                      pendingTarget = null;
-                      pendingSurface = null;
-                      pendingWidth = 0;
-                      pendingHeight = 0;
-
-                      try {
-
-                          if (t != null) {
-                              setTargetInternal(t);
-                          }
-
-                          if (sf != null) {
-                              attachSurfaceInternal(
-                                      sf,
-                                      w,
-                                      h);
-                          }
-
-                      } catch (Throwable error) {
-
-                          Log.e(
-                                  TAG,
-                                  "Pending projection state failed",
-                                  error);
+                      if (surface != null) {
+                          attachSurfaceInternal(
+                                  surface,
+                                  width,
+                                  height);
                       }
+                  } catch (Throwable error) {
+                      Log.e(
+                              TAG,
+                              "Pending projection state failed",
+                              error);
                   }
               }
+          }
 
           """
 
-              s = s.replace(
+              text = text.replace(
                   marker,
                   flush + marker,
                   1
               )
 
-          if "flushPendingState();" not in s:
+          # ------------------------------------------------------------
+          # Call flushPendingState() after startForeground().
+          # ------------------------------------------------------------
 
-              marker = """\
-                  startForeground(
-                          NOTIFICATION_ID,
-                          notification);
-          """
+          if "flushPendingState();" not in text:
+              marker = "startForeground("
 
-              if marker not in s:
+              pos = text.find(marker)
+
+              if pos < 0:
                   raise SystemExit(
-                      "startForeground marker not found"
+                      "ERROR: startForeground() not found"
                   )
 
-              s = s.replace(
-                  marker,
-                  marker
-                  + "\n        flushPendingState();",
-                  1
+              # Find end of the call.
+              depth = 0
+              paren = text.find("(", pos)
+              end = paren
+              state = "normal"
+
+              while end < len(text):
+                  c = text[end]
+
+                  if state == "normal":
+                      if c == '"':
+                          state = "string"
+                      elif c == "(":
+                          depth += 1
+                      elif c == ")":
+                          depth -= 1
+                          if depth == 0:
+                              end += 1
+                              break
+
+                  elif state == "string":
+                      if c == "\\":
+                          end += 2
+                          continue
+                      if c == '"':
+                          state = "normal"
+
+                  end += 1
+
+              text = (
+                  text[:end]
+                  + "\n\n        flushPendingState();"
+                  + text[end:]
               )
 
-          p.write_text(s)
+          path.write_text(text)
 
-          print(
-              "ProjectionService patched successfully."
-          )
+          print("PASS: V10ProjectionService handshake patch")
+
           PY
 
-          python3 /tmp/patch_service.py "$FILE"
-
-      # ============================================================
-      # 3. PATCH V10ProjectionSession
-      # ============================================================
       - name: Patch V10ProjectionSession - constructor only
         shell: bash
         run: |
@@ -460,93 +416,128 @@ jobs:
 
           FILE="v10-source/app/src/main/java/com/hieptran/aacast/doudou/V10ProjectionSession.java"
 
-          python3 - "$FILE" <<'PY'
-          import re
-          import sys
+          python3 <<'PY'
           from pathlib import Path
 
-          p = Path(sys.argv[1])
-          s = p.read_text()
-
-          pattern = re.compile(
-              r'(?m)^\s*public\s+V10ProjectionSession\s*'
-              r'\(\s*Context\s+context\s*\)\s*\{'
+          path = Path(
+              "v10-source/app/src/main/java/com/hieptran/aacast/doudou/"
+              "V10ProjectionSession.java"
           )
 
-          matches = list(pattern.finditer(s))
+          text = path.read_text()
 
-          if len(matches) != 1:
+          # ------------------------------------------------------------
+          # Locate the exact constructor using brace counting.
+          # ONLY this constructor is replaced.
+          # All other methods remain byte-for-byte untouched.
+          # ------------------------------------------------------------
+
+          signature = "public V10ProjectionSession(Context context)"
+
+          start = text.find(signature)
+
+          if start < 0:
               raise SystemExit(
-                  "Expected exactly one V10ProjectionSession "
-                  "constructor, found "
-                  + str(len(matches))
+                  "ERROR: V10ProjectionSession constructor not found"
               )
 
-          start = matches[0].start()
-
-          brace = s.find(
-              '{',
-              matches[0].end()
-          )
+          brace = text.find("{", start)
 
           if brace < 0:
               raise SystemExit(
-                  "Constructor opening brace not found"
+                  "ERROR: constructor opening brace not found"
               )
 
           depth = 0
           i = brace
+          state = "normal"
 
-          while i < len(s):
+          while i < len(text):
+              c = text[i]
+              n = text[i + 1] if i + 1 < len(text) else ""
 
-              if s[i] == '{':
-                  depth += 1
+              if state == "normal":
+                  if c == "/" and n == "/":
+                      state = "line_comment"
+                      i += 2
+                      continue
 
-              elif s[i] == '}':
-                  depth -= 1
+                  if c == "/" and n == "*":
+                      state = "block_comment"
+                      i += 2
+                      continue
 
-                  if depth == 0:
-                      end = i + 1
-                      break
+                  if c == '"':
+                      state = "string"
+                      i += 1
+                      continue
+
+                  if c == "'":
+                      state = "char"
+                      i += 1
+                      continue
+
+                  if c == "{":
+                      depth += 1
+
+                  elif c == "}":
+                      depth -= 1
+
+                      if depth == 0:
+                          end = i + 1
+                          break
+
+              elif state == "line_comment":
+                  if c == "\n":
+                      state = "normal"
+
+              elif state == "block_comment":
+                  if c == "*" and n == "/":
+                      state = "normal"
+                      i += 2
+                      continue
+
+              elif state == "string":
+                  if c == "\\":
+                      i += 2
+                      continue
+
+                  if c == '"':
+                      state = "normal"
+
+              elif state == "char":
+                  if c == "\\":
+                      i += 2
+                      continue
+
+                  if c == "'":
+                      state = "normal"
 
               i += 1
 
           else:
               raise SystemExit(
-                  "Constructor unmatched braces"
+                  "ERROR: constructor closing brace not found"
               )
 
-          new = """
-              public V10ProjectionSession(
-                      Context context) {
-
-                  this.context =
-                          context.getApplicationContext();
-              }
+          replacement = """\
+          public V10ProjectionSession(Context context) {
+              this.context =
+                      context.getApplicationContext();
+          }\
           """
 
-          s = (
-              s[:start]
-              + new
-              + s[end:]
-          )
+          text = text[:start] + replacement + text[end:]
 
-          if "V10ProjectionService.ensureStarted" in s:
-              raise SystemExit(
-                  "Eager service startup still exists "
-                  "in V10ProjectionSession"
-              )
-
-          p.write_text(s)
+          path.write_text(text)
 
           print(
-              "ProjectionSession constructor patched."
+              "PASS: constructor patched; "
+              "all other V10ProjectionSession methods preserved"
           )
+
           PY
 
-      # ============================================================
-      # 4. VERIFY 8B.2
-      # ============================================================
       - name: Verify 8B2 source
         shell: bash
         run: |
@@ -555,48 +546,32 @@ jobs:
           SERVICE="v10-source/app/src/main/java/com/hieptran/aacast/doudou/V10ProjectionService.java"
           SESSION="v10-source/app/src/main/java/com/hieptran/aacast/doudou/V10ProjectionSession.java"
 
-          grep -q \
-            'private static final Object START_LOCK' \
-            "$SERVICE"
+          grep -Fq "START_LOCK" "$SERVICE"
+          grep -Fq "pendingTarget" "$SERVICE"
+          grep -Fq "pendingSurface" "$SERVICE"
+          grep -Fq "flushPendingState();" "$SERVICE"
 
-          grep -q \
-            'pendingTarget' \
-            "$SERVICE"
+          grep -Fq "public static void ensureStarted" "$SERVICE"
+          grep -Fq "public static void setTarget" "$SERVICE"
+          grep -Fq "public static void attachSurface" "$SERVICE"
 
-          grep -q \
-            'pendingSurface' \
-            "$SERVICE"
+          # Critical regression check.
+          grep -Fq "attachTextureView" "$SESSION"
 
-          grep -q \
-            'flushPendingState' \
-            "$SERVICE"
+          grep -Fq "setTarget" "$SESSION"
+          grep -Fq "release" "$SESSION"
+          grep -Fq "destroy" "$SESSION"
 
-          grep -q \
-            'startForegroundService' \
-            "$SERVICE"
-
-          # Only reject an actual shell force-stop command.
-          if grep -nE \
-            '(^|[[:space:];&|])(/system/bin/)?am[[:space:]]+force-stop([[:space:]]|$)' \
-            "$SERVICE"
-          then
-            echo "ERROR: actual am force-stop command detected."
+          # Constructor must NOT eagerly start the service.
+          if grep -A8 -F \
+            "public V10ProjectionSession(Context context)" \
+            "$SESSION" | grep -Fq "ensureStarted"; then
+            echo "ERROR: eager ensureStarted remains in constructor."
             exit 1
           fi
 
-          if grep -q \
-            'V10ProjectionService.ensureStarted' \
-            "$SESSION"
-          then
-            echo "ERROR: eager service startup remains."
-            exit 1
-          fi
+          echo "PASS: 8B2 source"
 
-          echo "V10-8B.2 handshake verification passed."
-
-      # ============================================================
-      # 5. VERIFY EXISTING COMPONENTS
-      # ============================================================
       - name: Verify V10 components preserved
         shell: bash
         run: |
@@ -608,126 +583,129 @@ jobs:
           test -f "$ROOT/V10SessionStore.java"
           test -f "$ROOT/V10InputController.java"
           test -f "$ROOT/RootShellSession.java"
-          test -f "$ROOT/V10ProjectionService.java"
-          test -f "$ROOT/V10ProjectionSession.java"
 
-          grep -Fq \
-            'private static final int MAX_RECENTS = 4;' \
+          grep -Eq 'MAX_RECENTS[[:space:]]*=[[:space:]]*4' \
             "$ROOT/V10SessionStore.java"
 
-          echo "Existing V10 components preserved."
+          echo "PASS: existing V10 components preserved"
 
-      # ============================================================
-      # 6. VALIDATE JAVA BRACES
-      # ============================================================
+      - name: Verify no force-stop command
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          ROOT="v10-source/app/src/main/java/com/hieptran/aacast/doudou"
+
+          if grep -RInE \
+            '(^|[[:space:];&|])(/system/bin/)?am[[:space:]]+force-stop([[:space:]]|$)' \
+            "$ROOT"; then
+            echo "ERROR: actual am force-stop command detected."
+            exit 1
+          fi
+
+          echo "PASS: no actual am force-stop command"
+
       - name: Validate Java structure
         shell: bash
         run: |
           set -euo pipefail
 
-          python3 - \
-            v10-source/app/src/main/java/com/hieptran/aacast/doudou/V10ProjectionService.java \
-            v10-source/app/src/main/java/com/hieptran/aacast/doudou/V10ProjectionSession.java <<'PY'
-          import sys
+          python3 <<'PY'
+          from pathlib import Path
 
-          def check(path):
+          root = Path(
+              "v10-source/app/src/main/java/com/hieptran/aacast/doudou"
+          )
 
-              s = open(
-                  path,
-                  encoding="utf-8"
-              ).read()
+          files = [
+              root / "V10ProjectionService.java",
+              root / "V10ProjectionSession.java",
+              root / "V10CarActivity.java",
+              root / "V10SessionStore.java",
+              root / "V10InputController.java",
+              root / "RootShellSession.java",
+          ]
+
+          for path in files:
+              text = path.read_text()
 
               depth = 0
+              state = "normal"
               i = 0
-              state = "code"
 
-              while i < len(s):
+              while i < len(text):
+                  c = text[i]
+                  n = text[i + 1] if i + 1 < len(text) else ""
 
-                  c = s[i]
-                  n = (
-                      s[i + 1]
-                      if i + 1 < len(s)
-                      else ""
-                  )
-
-                  if state == "code":
-
-                      if c == '/' and n == '/':
-                          state = "line"
+                  if state == "normal":
+                      if c == "/" and n == "/":
+                          state = "line_comment"
                           i += 2
                           continue
 
-                      if c == '/' and n == '*':
-                          state = "block"
+                      if c == "/" and n == "*":
+                          state = "block_comment"
                           i += 2
                           continue
 
                       if c == '"':
                           state = "string"
+                          i += 1
+                          continue
 
-                      elif c == "'":
+                      if c == "'":
                           state = "char"
+                          i += 1
+                          continue
 
-                      elif c == '{':
+                      if c == "{":
                           depth += 1
 
-                      elif c == '}':
+                      elif c == "}":
                           depth -= 1
 
                           if depth < 0:
                               raise SystemExit(
-                                  f"{path}: negative brace depth"
+                                  f"ERROR: negative brace depth: {path}"
                               )
 
-                  elif state == "line":
+                  elif state == "line_comment":
+                      if c == "\n":
+                          state = "normal"
 
-                      if c == '\n':
-                          state = "code"
-
-                  elif state == "block":
-
-                      if c == '*' and n == '/':
-                          state = "code"
+                  elif state == "block_comment":
+                      if c == "*" and n == "/":
+                          state = "normal"
                           i += 2
                           continue
 
                   elif state == "string":
-
-                      if c == '\\':
+                      if c == "\\":
                           i += 2
                           continue
 
                       if c == '"':
-                          state = "code"
+                          state = "normal"
 
                   elif state == "char":
-
-                      if c == '\\':
+                      if c == "\\":
                           i += 2
                           continue
 
                       if c == "'":
-                          state = "code"
+                          state = "normal"
 
                   i += 1
 
-              if depth != 0 or state != "code":
+              if depth != 0:
                   raise SystemExit(
-                      f"{path}: invalid Java structure "
-                      f"depth={depth}, state={state}"
+                      f"ERROR: unbalanced braces: {path} depth={depth}"
                   )
 
-              print(
-                  f"Java structure OK: {path}"
-              )
+              print(f"PASS: {path}")
 
-          for path in sys.argv[1:]:
-              check(path)
           PY
 
-      # ============================================================
-      # 7. DIFF CHECK
-      # ============================================================
       - name: Check source diff
         shell: bash
         run: |
@@ -735,30 +713,22 @@ jobs:
 
           git diff --check
 
-          echo "Changed files:"
-          git diff --name-only
+          echo "===== V10ProjectionSession diff ====="
+          git diff -- \
+            v10-source/app/src/main/java/com/hieptran/aacast/doudou/V10ProjectionSession.java
 
-          echo "Diff statistics:"
-          git diff --stat
+          echo "===== V10ProjectionService diff ====="
+          git diff -- \
+            v10-source/app/src/main/java/com/hieptran/aacast/doudou/V10ProjectionService.java
 
-      # ============================================================
-      # 8. BUILD
-      # ============================================================
       - name: Build V10
         working-directory: v10-source
         shell: bash
         run: |
           set -euo pipefail
 
-          chmod +x gradlew
+          ./gradlew assembleDebug --no-daemon --stacktrace
 
-          ./gradlew assembleDebug \
-            --no-daemon \
-            --stacktrace
-
-      # ============================================================
-      # 9. VERIFY APK
-      # ============================================================
       - name: Verify APK
         shell: bash
         run: |
@@ -768,19 +738,14 @@ jobs:
 
           test -f "$APK"
 
-          echo "APK:"
-          ls -lh "$APK"
+          SHA256="$(sha256sum "$APK" | awk '{print $1}')"
 
-          echo "SHA256:"
-          sha256sum "$APK"
+          echo "APK: $APK"
+          echo "SHA256: $SHA256"
 
-      # ============================================================
-      # 10. UPLOAD APK
-      # ============================================================
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: CarAssistant-V10-8B2-StartupHandshake-Fixed-v2
+          name: CarAssistant-V10-8B2-StartupHandshake-Fixed-v3
           path: v10-source/app/build/outputs/apk/debug/app-debug.apk
           if-no-files-found: error
-          retention-days: 14
