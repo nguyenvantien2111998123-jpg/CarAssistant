@@ -1,3 +1,739 @@
+name: Build Car Assistant V10 - Home V1 Phone UI V3.5
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  home-v1-phone-ui-v35:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+
+    steps:
+      - name: Checkout exact Home V1 baseline
+        uses: actions/checkout@v4
+        with:
+          ref: 0634e1f5ced143fdd931022b32bf9a19cbf6e2bd
+          fetch-depth: 1
+
+      - name: Setup JDK 17
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Verify exact source baseline
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          FILE="v10-source/app/src/main/java/com/hieptran/aacast/doudou/V10LauncherActivity.java"
+
+          test -f "$FILE"
+
+          COMMIT="$(git rev-parse HEAD)"
+          test "$COMMIT" = "0634e1f5ced143fdd931022b32bf9a19cbf6e2bd"
+
+          BLOB_SHA="$(git hash-object "$FILE")"
+          test "$BLOB_SHA" = "84d970adbfacc39270838d12ed0a73bc7fa0d645"
+
+          grep -Fq 'package com.carassistant.v10;' "$FILE"
+          grep -Fq 'class V10LauncherActivity' "$FILE"
+          grep -Fq 'private void buildDashboard()' "$FILE"
+          grep -Fq 'private void buildAppPanel()' "$FILE"
+          grep -Fq 'private void loadApps()' "$FILE"
+          grep -Fq 'private void rebuildGridFromPanel()' "$FILE"
+          grep -Fq 'private void rebuildAppGrid(' "$FILE"
+          grep -Fq 'private LinearLayout appTile(' "$FILE"
+          grep -Fq 'V10SessionStore.setTarget' "$FILE"
+          grep -Fq 'initial(app.name)' "$FILE"
+          grep -Fq 'private static final class AppInfo' "$FILE"
+
+          echo "========================================"
+          echo "BASELINE VERIFIED"
+          echo "========================================"
+          echo "Commit: $COMMIT"
+          echo "Git blob SHA: $BLOB_SHA"
+          echo "Source: $FILE"
+
+      - name: Patch Home V1 V3.5
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          FILE="v10-source/app/src/main/java/com/hieptran/aacast/doudou/V10LauncherActivity.java"
+
+          python3 - "$FILE" <<'PY'
+          import sys
+          from pathlib import Path
+
+          path = Path(sys.argv[1])
+          source = path.read_text(encoding="utf-8")
+          original = source
+
+          def find_block_end(text, start):
+              brace = text.find("{", start)
+
+              if brace < 0:
+                  raise RuntimeError(
+                      "Opening brace not found"
+                  )
+
+              depth = 0
+              quote = None
+              escaped = False
+              line_comment = False
+              block_comment = False
+
+              i = brace
+
+              while i < len(text):
+                  c = text[i]
+                  n = text[i + 1] if i + 1 < len(text) else ""
+
+                  if line_comment:
+                      if c == "\n":
+                          line_comment = False
+
+                  elif block_comment:
+                      if c == "*" and n == "/":
+                          block_comment = False
+                          i += 1
+
+                  elif quote is not None:
+                      if escaped:
+                          escaped = False
+                      elif c == "\\":
+                          escaped = True
+                      elif c == quote:
+                          quote = None
+
+                  elif c == "/" and n == "/":
+                      line_comment = True
+                      i += 1
+
+                  elif c == "/" and n == "*":
+                      block_comment = True
+                      i += 1
+
+                  elif c == '"' or c == "'":
+                      quote = c
+
+                  elif c == "{":
+                      depth += 1
+
+                  elif c == "}":
+                      depth -= 1
+
+                      if depth == 0:
+                          return i + 1
+
+                  i += 1
+
+              raise RuntimeError(
+                  "Closing brace not found"
+              )
+
+          def replace_method(text, signature, replacement):
+              start = text.find(signature)
+
+              if start < 0:
+                  raise RuntimeError(
+                      "Method/class not found: "
+                      + signature
+                  )
+
+              end = find_block_end(text, start)
+
+              return (
+                  text[:start]
+                  + replacement.strip()
+                  + text[end:]
+              )
+
+          def replace_once(text, old, new, label):
+              count = text.count(old)
+
+              if count != 1:
+                  raise RuntimeError(
+                      f"{label}: expected 1 match, found {count}"
+                  )
+
+              return text.replace(old, new, 1)
+
+          # ==================================================
+          # IMPORTS
+          # ==================================================
+
+          source = replace_once(
+              source,
+              "import android.graphics.Color;\n",
+              "import android.graphics.Canvas;\n"
+              "import android.graphics.Color;\n"
+              "import android.graphics.Paint;\n"
+              "import android.graphics.Path;\n",
+              "graphics imports"
+          )
+
+          source = replace_once(
+              source,
+              "import android.graphics.drawable.GradientDrawable;\n",
+              "import android.graphics.drawable.Drawable;\n"
+              "import android.graphics.drawable.GradientDrawable;\n",
+              "drawable import"
+          )
+
+          source = replace_once(
+              source,
+              "import android.view.Gravity;\n",
+              "import android.view.Gravity;\n"
+              "import android.widget.FrameLayout;\n"
+              "import android.widget.ImageView;\n",
+              "widget imports"
+          )
+
+          # ==================================================
+          # DASHBOARD
+          # ==================================================
+
+          dashboard_method = r'''
+          private void buildDashboard() {
+
+              dashboard.removeAllViews();
+
+              LinearLayout top =
+                      new LinearLayout(this);
+
+              top.setGravity(
+                      Gravity.CENTER_VERTICAL);
+
+              top.setPadding(
+                      dp(10),
+                      dp(6),
+                      dp(10),
+                      dp(6));
+
+              top.setBackground(
+                      roundBg(
+                              Color.rgb(18, 24, 32),
+                              dp(14)));
+
+              LinearLayout titleBox =
+                      new LinearLayout(this);
+
+              titleBox.setOrientation(
+                      LinearLayout.VERTICAL);
+
+              TextView title =
+                      text(
+                              "CAR ASSISTANT",
+                              18,
+                              Color.WHITE);
+
+              title.setTypeface(
+                      Typeface.DEFAULT,
+                      Typeface.BOLD);
+
+              titleBox.addView(title);
+
+              date =
+                      text(
+                              "",
+                              11,
+                              Color.LTGRAY);
+
+              titleBox.addView(date);
+
+              top.addView(
+                      titleBox,
+                      new LinearLayout.LayoutParams(
+                              0,
+                              -2,
+                              1f));
+
+              clock =
+                      text(
+                              "",
+                              20,
+                              Color.WHITE);
+
+              clock.setGravity(
+                      Gravity.CENTER);
+
+              top.addView(
+                      clock,
+                      new LinearLayout.LayoutParams(
+                              dp(100),
+                              dp(55)));
+
+              dashboard.addView(
+                      top,
+                      new LinearLayout.LayoutParams(
+                              -1,
+                              dp(66)));
+
+              LinearLayout main =
+                      new LinearLayout(this);
+
+              main.setOrientation(
+                      LinearLayout.HORIZONTAL);
+
+              main.setPadding(
+                      0,
+                      dp(8),
+                      0,
+                      dp(8));
+
+              main.addView(
+                      buildSidebar(),
+                      new LinearLayout.LayoutParams(
+                              dp(82),
+                              -1));
+
+              LinearLayout content =
+                      new LinearLayout(this);
+
+              content.setOrientation(
+                      LinearLayout.VERTICAL);
+
+              content.setPadding(
+                      dp(8),
+                      0,
+                      0,
+                      0);
+
+              FrameLayout map =
+                      new FrameLayout(this);
+
+              map.setBackground(
+                      roundBg(
+                              Color.rgb(9, 17, 23),
+                              dp(16)));
+
+              map.addView(
+                      new MapBackground(this),
+                      new FrameLayout.LayoutParams(
+                              -1,
+                              -1));
+
+              TextView mapTitle =
+                      text(
+                              "MAP",
+                              12,
+                              Color.WHITE);
+
+              mapTitle.setGravity(
+                      Gravity.CENTER);
+
+              mapTitle.setBackground(
+                      roundBg(
+                              Color.rgb(24, 32, 42),
+                              dp(10)));
+
+              FrameLayout.LayoutParams mapParams =
+                      new FrameLayout.LayoutParams(
+                              dp(70),
+                              dp(38));
+
+              mapParams.gravity =
+                      Gravity.TOP | Gravity.LEFT;
+
+              mapParams.setMargins(
+                      dp(10),
+                      dp(10),
+                      0,
+                      0);
+
+              map.addView(
+                      mapTitle,
+                      mapParams);
+
+              TextView navigation =
+                      text(
+                              "Navigation\nReady",
+                              12,
+                              Color.LTGRAY);
+
+              navigation.setGravity(
+                      Gravity.CENTER);
+
+              navigation.setBackground(
+                      roundBg(
+                              Color.rgb(18, 25, 33),
+                              dp(10)));
+
+              FrameLayout.LayoutParams navParams =
+                      new FrameLayout.LayoutParams(
+                              dp(120),
+                              dp(58));
+
+              navParams.gravity =
+                      Gravity.BOTTOM | Gravity.LEFT;
+
+              navParams.setMargins(
+                      dp(10),
+                      0,
+                      0,
+                      dp(10));
+
+              map.addView(
+                      navigation,
+                      navParams);
+
+              content.addView(
+                      map,
+                      new LinearLayout.LayoutParams(
+                              -1,
+                              0,
+                              1f));
+
+              LinearLayout warning =
+                      new LinearLayout(this);
+
+              warning.setOrientation(
+                      LinearLayout.VERTICAL);
+
+              warning.setGravity(
+                      Gravity.CENTER_VERTICAL);
+
+              warning.setPadding(
+                      dp(14),
+                      dp(7),
+                      dp(14),
+                      dp(7));
+
+              warning.setBackground(
+                      roundBg(
+                              Color.rgb(30, 34, 39),
+                              dp(12)));
+
+              TextView warningTitle =
+                      text(
+                              "⚠ WYN",
+                              14,
+                              Color.WHITE);
+
+              warningTitle.setTypeface(
+                      Typeface.DEFAULT,
+                      Typeface.BOLD);
+
+              TextView warningText =
+                      text(
+                              "CHƯA CÓ CẢNH BÁO",
+                              12,
+                              Color.LTGRAY);
+
+              TextView warningSource =
+                      text(
+                              "Nguồn cảnh báo: WYN",
+                              10,
+                              Color.GRAY);
+
+              warning.addView(warningTitle);
+              warning.addView(warningText);
+              warning.addView(warningSource);
+
+              LinearLayout.LayoutParams warningParams =
+                      new LinearLayout.LayoutParams(
+                              -1,
+                              dp(72));
+
+              warningParams.setMargins(
+                      0,
+                      dp(6),
+                      0,
+                      0);
+
+              content.addView(
+                      warning,
+                      warningParams);
+
+              main.addView(
+                      content,
+                      new LinearLayout.LayoutParams(
+                              0,
+                              -1,
+                              1f));
+
+              dashboard.addView(
+                      main,
+                      new LinearLayout.LayoutParams(
+                              -1,
+                              0,
+                              1f));
+
+              LinearLayout bottom =
+                      new LinearLayout(this);
+
+              bottom.setGravity(
+                      Gravity.CENTER_VERTICAL);
+
+              bottom.setPadding(
+                      dp(6),
+                      dp(5),
+                      dp(6),
+                      dp(5));
+
+              bottom.setBackground(
+                      roundBg(
+                              Color.rgb(18, 24, 32),
+                              dp(14)));
+
+              TextView previous =
+                      buttonText(
+                              "◀  LÙI");
+
+              TextView media =
+                      buttonText(
+                              "♫  MEDIA\nNo media");
+
+              TextView next =
+                      buttonText(
+                              "TỚI  ▶");
+
+              previous.setOnClickListener(
+                      v -> {
+                          if (status != null) {
+                              status.setText(
+                                      "LÙI");
+                          }
+                      });
+
+              next.setOnClickListener(
+                      v -> {
+                          if (status != null) {
+                              status.setText(
+                                      "TỚI");
+                          }
+                      });
+
+              bottom.addView(
+                      previous,
+                      new LinearLayout.LayoutParams(
+                              0,
+                              dp(50),
+                              1f));
+
+              bottom.addView(
+                      media,
+                      new LinearLayout.LayoutParams(
+                              0,
+                              dp(50),
+                              2f));
+
+              bottom.addView(
+                      next,
+                      new LinearLayout.LayoutParams(
+                              0,
+                              dp(50),
+                              1f));
+
+              dashboard.addView(
+                      bottom,
+                      new LinearLayout.LayoutParams(
+                              -1,
+                              dp(62)));
+          }
+          '''
+
+          source = replace_method(
+              source,
+              "private void buildDashboard()",
+              dashboard_method
+          )
+
+          # ==================================================
+          # APPLICATION PANEL
+          # ==================================================
+
+          panel_method = r'''
+          private void buildAppPanel() {
+
+              appPanel =
+                      new LinearLayout(this);
+
+              appPanel.setOrientation(
+                      LinearLayout.VERTICAL);
+
+              appPanel.setBackgroundColor(
+                      Color.rgb(
+                              7,
+                              9,
+                              12));
+
+              appPanel.setVisibility(
+                      View.GONE);
+
+              root.addView(
+                      appPanel,
+                      new LinearLayout.LayoutParams(
+                              -1,
+                              -1));
+
+              LinearLayout header =
+                      new LinearLayout(this);
+
+              header.setGravity(
+                      Gravity.CENTER_VERTICAL);
+
+              TextView back =
+                      buttonText(
+                              "BACK");
+
+              back.setOnClickListener(
+                      v -> hideApps());
+
+              header.addView(
+                      back,
+                      new LinearLayout.LayoutParams(
+                              dp(90),
+                              dp(58)));
+
+              TextView title =
+                      text(
+                              "APPLICATIONS",
+                              21,
+                              Color.WHITE);
+
+              title.setGravity(
+                      Gravity.CENTER);
+
+              header.addView(
+                      title,
+                      new LinearLayout.LayoutParams(
+                              0,
+                              dp(58),
+                              1f));
+
+              appPanel.addView(header);
+
+              status =
+                      text(
+                              "Select an application",
+                              12,
+                              Color.LTGRAY);
+
+              status.setGravity(
+                      Gravity.CENTER_VERTICAL);
+
+              appPanel.addView(
+                      status,
+                      new LinearLayout.LayoutParams(
+                              -1,
+                              dp(38)));
+
+              ScrollView scroll =
+                      new ScrollView(this);
+
+              GridLayout grid =
+                      new GridLayout(this);
+
+              grid.setColumnCount(4);
+
+              grid.setUseDefaultMargins(
+                      false);
+
+              scroll.addView(grid);
+
+              appPanel.addView(
+                      scroll,
+                      new LinearLayout.LayoutParams(
+                              -1,
+                              0,
+                              1f));
+
+              rebuildAppGrid(grid);
+          }
+          '''
+
+          source = replace_method(
+              source,
+              "private void buildAppPanel()",
+              panel_method
+          )
+
+          # ==================================================
+          # LOAD APPS
+          # ==================================================
+
+          load_apps_method = r'''
+          private void loadApps() {
+
+              apps.clear();
+
+              Intent intent =
+                      new Intent(
+                              Intent.ACTION_MAIN);
+
+              intent.addCategory(
+                      Intent.CATEGORY_LAUNCHER);
+
+              List<ResolveInfo> result =
+                      getPackageManager()
+                              .queryIntentActivities(
+                                      intent,
+                                      0);
+
+              for (ResolveInfo info : result) {
+
+                  if (info == null ||
+                          info.activityInfo == null) {
+                      continue;
+                  }
+
+                  String packageName =
+                          info.activityInfo.packageName;
+
+                  if (getPackageName()
+                          .equals(packageName)) {
+                      continue;
+                  }
+
+                  ComponentName component =
+                          new ComponentName(
+                                  packageName,
+                                  info.activityInfo.name);
+
+                  CharSequence label =
+                          info.loadLabel(
+                                  getPackageManager());
+
+                  String name =
+                          label == null
+                                  ? packageName
+                                  : label.toString();
+
+                  Drawable icon =
+                          info.loadIcon(
+                                  getPackageManager());
+
+                  apps.add(
+                          new AppInfo(
+                                  component,
+                                  name,
+                                  icon));
+              }
+
+              Collections.sort(
+                      apps,
+                      (a, b) ->
+                              a.name.compareToIgnoreCase(
+                                      b.name));
+
+              rebuildDock();
+
+              rebuildGridFromPanel();
+          }
+          '''
+
+          source = replace_method(
+              source,
+              "private void loadApps()",
+              load_apps_method
+          )
+
           # ==================================================
           # APP GRID
           # ==================================================
@@ -5,7 +741,31 @@
           grid_method = r'''
           private void rebuildGridFromPanel() {
 
-              rebuildAppGrid(appGrid);
+              if (appPanel == null) {
+                  return;
+              }
+
+              if (appPanel.getChildCount() < 3) {
+                  return;
+              }
+
+              View child =
+                      appPanel.getChildAt(2);
+
+              if (!(child instanceof ScrollView)) {
+                  return;
+              }
+
+              View inside =
+                      ((ScrollView) child)
+                              .getChildAt(0);
+
+              if (!(inside instanceof GridLayout)) {
+                  return;
+              }
+
+              rebuildAppGrid(
+                      (GridLayout) inside);
           }
           '''
 
@@ -17,7 +777,6 @@
 
           # ==================================================
           # SAFETY CHECK 1
-          # Baseline appTile() must still exist exactly once.
           # ==================================================
 
           if source.count(
@@ -26,12 +785,10 @@
 
               raise RuntimeError(
                   "SAFETY CHECK 1 FAILED: "
-                  "expected exactly one baseline appTile()."
+                  "baseline appTile() count is not 1."
               )
 
-          print(
-              "SAFETY CHECK 1: PASS"
-          )
+          print("SAFETY CHECK 1: PASS")
 
           # ==================================================
           # REBUILD APP GRID
@@ -84,7 +841,6 @@
 
           # ==================================================
           # SAFETY CHECK 2
-          # rebuildAppGrid() and appTile() must each exist once.
           # ==================================================
 
           if source.count(
@@ -102,16 +858,13 @@
 
               raise RuntimeError(
                   "SAFETY CHECK 2 FAILED: "
-                  "appTile() count changed unexpectedly."
+                  "appTile() count changed."
               )
 
-          print(
-              "SAFETY CHECK 2: PASS"
-          )
+          print("SAFETY CHECK 2: PASS")
 
           # ==================================================
-          # APP TILE
-          # Use real Drawable icon from AppInfo.
+          # APP TILE - REAL ICON
           # ==================================================
 
           app_tile_method = r'''
@@ -135,7 +888,10 @@
 
               tile.setBackground(
                       roundBg(
-                              Color.rgb(22, 28, 35),
+                              Color.rgb(
+                                      22,
+                                      28,
+                                      35),
                               dp(14)));
 
               ImageView icon =
@@ -194,7 +950,6 @@
 
           # ==================================================
           # SAFETY CHECK 3
-          # Old fake initial-letter icon implementation must be gone.
           # ==================================================
 
           if "initial(app.name)" in source:
@@ -208,7 +963,7 @@
 
               raise RuntimeError(
                   "SAFETY CHECK 3 FAILED: "
-                  "old initial() method remains."
+                  "old initial() remains."
               )
 
           if source.count(
@@ -220,6 +975,599 @@
                   "appTile() count is not 1."
               )
 
-          print(
-              "SAFETY CHECK 3: PASS"
+          print("SAFETY CHECK 3: PASS")
+
+          # ==================================================
+          # REMOVE OLD INITIAL METHOD
+          # ==================================================
+
+          if "private String initial(" in source:
+              source = replace_method(
+                  source,
+                  "private String initial(",
+                  ""
+              )
+
+          # ==================================================
+          # APP MODEL
+          # ==================================================
+
+          app_model = r'''
+          private static final class AppInfo {
+
+              final ComponentName component;
+
+              final String name;
+
+              final Drawable icon;
+
+              AppInfo(
+                      ComponentName component,
+                      String name,
+                      Drawable icon) {
+
+                  this.component =
+                          component;
+
+                  this.name =
+                          name;
+
+                  this.icon =
+                          icon;
+              }
+          }
+          '''
+
+          source = replace_method(
+              source,
+              "private static final class AppInfo",
+              app_model
           )
+
+          # ==================================================
+          # SIDEBAR + MAP BACKGROUND
+          # ==================================================
+
+          marker = (
+              "    // ====================================================\n"
+              "    // UI HELPERS\n"
+          )
+
+          if source.count(marker) != 1:
+              raise RuntimeError(
+                  "UI HELPERS marker not found exactly once"
+              )
+
+          helpers = r'''
+          private LinearLayout buildSidebar() {
+
+              LinearLayout side =
+                      new LinearLayout(this);
+
+              side.setOrientation(
+                      LinearLayout.VERTICAL);
+
+              side.setGravity(
+                      Gravity.CENTER_HORIZONTAL);
+
+              side.setPadding(
+                      0,
+                      dp(4),
+                      0,
+                      dp(4));
+
+              side.setBackground(
+                      roundBg(
+                              Color.rgb(
+                                      15,
+                                      21,
+                                      29),
+                              dp(14)));
+
+              side.addView(
+                      sideButton(
+                              "APPS",
+                              "Apps"));
+
+              side.addView(
+                      sideButton(
+                              "RECENT 1",
+                              "Recent 1"));
+
+              side.addView(
+                      sideButton(
+                              "RECENT 2",
+                              "Recent 2"));
+
+              side.addView(
+                      sideButton(
+                              "RECENT 3",
+                              "Recent 3"));
+
+              side.addView(
+                      sideButton(
+                              "TASKS",
+                              "Tasks"));
+
+              return side;
+          }
+
+          private TextView sideButton(
+                  String title,
+                  String action) {
+
+              TextView view =
+                      text(
+                              title,
+                              10,
+                              Color.WHITE);
+
+              view.setGravity(
+                      Gravity.CENTER);
+
+              view.setPadding(
+                      dp(2),
+                      dp(3),
+                      dp(2),
+                      dp(3));
+
+              view.setBackground(
+                      roundBg(
+                              Color.TRANSPARENT,
+                              dp(10)));
+
+              view.setOnClickListener(
+                      v -> {
+
+                          if ("Apps".equals(action)) {
+
+                              showApps();
+
+                          } else if ("Tasks".equals(action)) {
+
+                              showTasks();
+
+                          } else if (
+                                  action.startsWith(
+                                          "Recent")) {
+
+                              showRecentTask(action);
+
+                          }
+                      });
+
+              view.setLayoutParams(
+                      new LinearLayout.LayoutParams(
+                              -1,
+                              dp(58)));
+
+              return view;
+          }
+
+          private void showTasks() {
+
+              showApps();
+
+              if (status != null) {
+
+                  status.setText(
+                          "TASKS - Recent apps: "
+                                  + V10SessionStore
+                                          .getRecents(this)
+                                          .size());
+              }
+          }
+
+          private void showRecentTask(
+                  String action) {
+
+              List<ComponentName> recents =
+                      V10SessionStore
+                              .getRecents(this);
+
+              int index;
+
+              if ("Recent 1".equals(action)) {
+                  index = 0;
+              } else if ("Recent 2".equals(action)) {
+                  index = 1;
+              } else {
+                  index = 2;
+              }
+
+              if (index >= recents.size()) {
+
+                  showApps();
+
+                  if (status != null) {
+                      status.setText(
+                              "No recent task");
+                  }
+
+                  return;
+              }
+
+              ComponentName component =
+                      recents.get(index);
+
+              Intent intent =
+                      new Intent();
+
+              intent.setComponent(component);
+
+              V10SessionStore.setTarget(
+                      this,
+                      component);
+
+              showApps();
+
+              if (status != null) {
+                  status.setText(
+                          "Recent: "
+                                  + component
+                                          .getPackageName());
+              }
+          }
+
+          private GradientDrawable roundBg(
+                  int color,
+                  float radius) {
+
+              GradientDrawable bg =
+                      new GradientDrawable();
+
+              bg.setColor(color);
+
+              bg.setCornerRadius(radius);
+
+              return bg;
+          }
+
+          private final class MapBackground
+                  extends View {
+
+              private final Paint grid =
+                      new Paint(
+                              Paint.ANTI_ALIAS_FLAG);
+
+              private final Paint road =
+                      new Paint(
+                              Paint.ANTI_ALIAS_FLAG);
+
+              MapBackground(
+                      android.content.Context context) {
+
+                  super(context);
+
+                  grid.setColor(
+                          Color.rgb(
+                                  27,
+                                  40,
+                                  47));
+
+                  grid.setStrokeWidth(
+                          dp(1));
+
+                  road.setColor(
+                          Color.rgb(
+                                  55,
+                                  70,
+                                  78));
+
+                  road.setStyle(
+                          Paint.Style.STROKE);
+
+                  road.setStrokeWidth(
+                          dp(12));
+
+                  road.setStrokeCap(
+                          Paint.Cap.ROUND);
+              }
+
+              @Override
+              protected void onDraw(
+                      Canvas canvas) {
+
+                  super.onDraw(canvas);
+
+                  canvas.drawColor(
+                          Color.rgb(
+                                  9,
+                                  17,
+                                  23));
+
+                  int width =
+                          getWidth();
+
+                  int height =
+                          getHeight();
+
+                  int step =
+                          dp(36);
+
+                  for (
+                          int x = 0;
+                          x < width;
+                          x += step) {
+
+                      canvas.drawLine(
+                              x,
+                              0,
+                              x,
+                              height,
+                              grid);
+                  }
+
+                  for (
+                          int y = 0;
+                          y < height;
+                          y += step) {
+
+                      canvas.drawLine(
+                              0,
+                              y,
+                              width,
+                              y,
+                              grid);
+                  }
+
+                  Path roadPath =
+                          new Path();
+
+                  roadPath.moveTo(
+                          0,
+                          height * 0.72f);
+
+                  roadPath.cubicTo(
+                          width * 0.25f,
+                          height * 0.55f,
+                          width * 0.55f,
+                          height * 0.78f,
+                          width,
+                          height * 0.32f);
+
+                  canvas.drawPath(
+                          roadPath,
+                          road);
+
+                  Paint marker =
+                          new Paint(
+                                  Paint.ANTI_ALIAS_FLAG);
+
+                  marker.setColor(
+                          Color.WHITE);
+
+                  canvas.drawCircle(
+                          width * 0.52f,
+                          height * 0.57f,
+                          dp(7),
+                          marker);
+              }
+          }
+
+          '''
+
+          source = source.replace(
+              marker,
+              helpers + marker,
+              1
+          )
+
+          if source == original:
+              raise RuntimeError(
+                  "Patch produced no changes"
+              )
+
+          path.write_text(
+              source,
+              encoding="utf-8"
+          )
+
+          print(
+              "Home V1 V3.5 patch completed."
+          )
+          PY
+
+          sed -i 's/[[:space:]]\+$//' "$FILE"
+
+          echo "Trailing whitespace cleaned."
+
+      - name: Static Safety Check
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          FILE="v10-source/app/src/main/java/com/hieptran/aacast/doudou/V10LauncherActivity.java"
+
+          test -f "$FILE"
+
+          grep -Fq 'package com.carassistant.v10;' "$FILE"
+
+          grep -Fq 'private LinearLayout buildSidebar()' "$FILE"
+          grep -Fq 'private final class MapBackground' "$FILE"
+
+          grep -Fq '"APPS"' "$FILE"
+          grep -Fq '"RECENT 1"' "$FILE"
+          grep -Fq '"RECENT 2"' "$FILE"
+          grep -Fq '"RECENT 3"' "$FILE"
+          grep -Fq '"TASKS"' "$FILE"
+
+          grep -Fq 'V10SessionStore.getRecents' "$FILE"
+          grep -Fq 'private void showTasks()' "$FILE"
+
+          grep -Fq '"WYN"' "$FILE"
+          grep -Fq '"CHƯA CÓ CẢNH BÁO"' "$FILE"
+          grep -Fq '"Nguồn cảnh báo: WYN"' "$FILE"
+
+          grep -Fq '"◀  LÙI"' "$FILE"
+          grep -Fq '"TỚI  ▶"' "$FILE"
+          grep -Fq '"♫  MEDIA' "$FILE"
+
+          grep -Fq 'info.loadIcon(' "$FILE"
+          grep -Fq 'ImageView icon' "$FILE"
+          grep -Fq 'final Drawable icon' "$FILE"
+
+          if grep -Fq '"SPEED"' "$FILE"; then
+              echo "ERROR: old SPEED card remains"
+              exit 1
+          fi
+
+          if grep -Fq '"WEATHER"' "$FILE"; then
+              echo "ERROR: old WEATHER card remains"
+              exit 1
+          fi
+
+          if grep -Fq 'initial(app.name)' "$FILE"; then
+              echo "ERROR: old initial(app.name) remains"
+              exit 1
+          fi
+
+          if grep -Fq 'private String initial(' "$FILE"; then
+              echo "ERROR: old initial() remains"
+              exit 1
+          fi
+
+          BUILD_DASHBOARD_COUNT="$(
+            grep -c 'private void buildDashboard()' "$FILE"
+          )"
+
+          test "$BUILD_DASHBOARD_COUNT" = "1"
+
+          BUILD_PANEL_COUNT="$(
+            grep -c 'private void buildAppPanel()' "$FILE"
+          )"
+
+          test "$BUILD_PANEL_COUNT" = "1"
+
+          LOAD_APPS_COUNT="$(
+            grep -c 'private void loadApps()' "$FILE"
+          )"
+
+          test "$LOAD_APPS_COUNT" = "1"
+
+          GRID_FROM_PANEL_COUNT="$(
+            grep -c 'private void rebuildGridFromPanel()' "$FILE"
+          )"
+
+          test "$GRID_FROM_PANEL_COUNT" = "1"
+
+          GRID_COUNT="$(
+            grep -c 'private void rebuildAppGrid(' "$FILE"
+          )"
+
+          test "$GRID_COUNT" = "1"
+
+          APP_TILE_COUNT="$(
+            grep -c 'private LinearLayout appTile(' "$FILE"
+          )"
+
+          test "$APP_TILE_COUNT" = "1"
+
+          APPINFO_COUNT="$(
+            grep -c 'private static final class AppInfo' "$FILE"
+          )"
+
+          test "$APPINFO_COUNT" = "1"
+
+          SHOW_TASKS_COUNT="$(
+            grep -c 'private void showTasks()' "$FILE"
+          )"
+
+          test "$SHOW_TASKS_COUNT" = "1"
+
+          echo "========================================"
+          echo "STATIC CHECK: PASS"
+          echo "========================================"
+
+      - name: Verify protected files untouched
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          git diff --name-only > changed-files.txt
+
+          echo "Changed files:"
+          cat changed-files.txt
+
+          COUNT="$(wc -l < changed-files.txt)"
+
+          test "$COUNT" = "1"
+
+          grep -Fxq \
+            "v10-source/app/src/main/java/com/hieptran/aacast/doudou/V10LauncherActivity.java" \
+            changed-files.txt
+
+          if grep -Eq \
+            'V10CarActivity.java|V10ProjectionService.java|V10ProjectionSession.java|RootView.java|V10SessionStore.java' \
+            changed-files.txt; then
+
+              echo "ERROR: protected Core/Persistence file changed"
+              exit 1
+          fi
+
+          git diff --check
+
+          echo "========================================"
+          echo "PROTECTED FILE CHECK: PASS"
+          echo "========================================"
+
+      - name: Compile Java
+        working-directory: v10-source
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          chmod +x gradlew
+
+          ./gradlew \
+            :app:compileDebugJavaWithJavac \
+            --no-daemon \
+            --stacktrace
+
+      - name: Assemble debug APK
+        working-directory: v10-source
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          ./gradlew \
+            :app:assembleDebug \
+            --no-daemon \
+            --stacktrace
+
+      - name: Locate APK
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          APK="$(
+            find \
+              v10-source/app/build/outputs/apk \
+              -type f \
+              -name '*.apk' \
+              -path '*/debug/*' \
+              | head -n 1
+          )"
+
+          test -n "$APK"
+          test -f "$APK"
+
+          mkdir -p release-apk
+
+          cp \
+            "$APK" \
+            release-apk/CarAssistant-V10-Home-V1-Phone-UI-V3.5-debug.apk
+
+          sha256sum \
+            release-apk/CarAssistant-V10-Home-V1-Phone-UI-V3.5-debug.apk
+
+          ls -lh \
+            release-apk/CarAssistant-V10-Home-V1-Phone-UI-V3.5-debug.apk
+
+      - name: Upload V3.5 APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: CarAssistant-V10-Home-V1-Phone-UI-V3.5-debug
+          path: release-apk/CarAssistant-V10-Home-V1-Phone-UI-V3.5-debug.apk
+          if-no-files-found: error
+          retention-days: 14
