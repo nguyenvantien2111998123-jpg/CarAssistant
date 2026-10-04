@@ -1,0 +1,573 @@
+name: Build Car Assistant V10 UI Shell V1 - Core Isolated
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Restore exact V10-6A baseline
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          BASELINE="9075636a7d5947c1b0eee49c2bd3fd0e1b6b0cf1"
+
+          git fetch origin "$BASELINE" --depth=1
+
+          rm -rf v10-source
+          git checkout "$BASELINE" -- v10-source
+
+          SRC="v10-source/app/src/main/java/com/hieptran/aacast/doudou"
+
+          test -f "$SRC/V10ProjectionSession.java"
+          test -f "$SRC/V10CarActivity.java"
+          test -f "$SRC/V10SessionStore.java"
+
+          if [ -f "$SRC/V10ProjectionService.java" ]; then
+            echo "ERROR: V10ProjectionService.java exists."
+            exit 1
+          fi
+
+          echo "Exact V10-6A baseline restored."
+
+      - name: Verify approved Core V1 workflow is unchanged
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          WF=".github/workflows/build-v10-display-core-v1.yml"
+          EXPECTED="3fda31142ef1be0249523b0af3666bcf171f7489"
+
+          test -f "$WF"
+
+          ACTUAL="$(git hash-object "$WF")"
+
+          echo "Expected workflow blob: $EXPECTED"
+          echo "Actual workflow blob:   $ACTUAL"
+
+          if [ "$ACTUAL" != "$EXPECTED" ]; then
+            echo "ERROR: Approved Core V1 workflow has changed."
+            exit 1
+          fi
+
+          echo "Core V1 workflow is unchanged."
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Reproduce approved Display Core V1
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          WF=".github/workflows/build-v10-display-core-v1.yml"
+
+          python3 -m pip install --quiet pyyaml
+
+          python3 - "$WF" <<'PY'
+          from pathlib import Path
+          import subprocess
+          import sys
+          import yaml
+
+          workflow_path = Path(sys.argv[1])
+          data = yaml.safe_load(workflow_path.read_text(encoding="utf-8"))
+
+          allowed = {
+              "Create V10 Display Core classes",
+              "Replace V10ProjectionSession with Core V1 bridge",
+              "Patch V10CarActivity lifecycle and HOME",
+          }
+
+          steps = data["jobs"]["build"]["steps"]
+
+          found = set()
+
+          for step in steps:
+              name = step.get("name")
+              if name not in allowed:
+                  continue
+
+              found.add(name)
+
+              command = step.get("run")
+              if not command:
+                  raise SystemExit(
+                      f"ERROR: approved step has no run command: {name}"
+                  )
+
+              print()
+              print("=" * 70)
+              print(f"EXECUTING APPROVED CORE STEP: {name}")
+              print("=" * 70)
+
+              subprocess.run(
+                  ["bash", "-euo", "pipefail", "-c", command],
+                  check=True,
+              )
+
+          missing = allowed - found
+
+          if missing:
+              raise SystemExit(
+                  "ERROR: approved Core V1 steps missing: "
+                  + ", ".join(sorted(missing))
+              )
+
+          print()
+          print("Approved Display Core V1 source steps completed.")
+          PY
+
+      - name: Verify Display Core V1 before UI changes
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          SRC="v10-source/app/src/main/java/com/hieptran/aacast/doudou"
+
+          test -f "$SRC/V10TaskSession.java"
+          test -f "$SRC/V10DisplayController.java"
+          test -f "$SRC/V10SurfaceManager.java"
+          test -f "$SRC/V10ProjectionSession.java"
+
+          grep -Fq "createVirtualDisplay" \
+            "$SRC/V10DisplayController.java"
+
+          grep -Fq -- "--activity-reorder-to-front" \
+            "$SRC/V10DisplayController.java"
+
+          grep -Fq "DisplayManager" \
+            "$SRC/V10ProjectionSession.java"
+
+          grep -Fq "RootShellSession" \
+            "$SRC/V10ProjectionSession.java"
+
+          grep -Fq "am force-stop" \
+            "$SRC/V10ProjectionSession.java"
+
+          echo "Display Core V1 recreated from approved workflow."
+
+      - name: Save Core V1 checksums
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          SRC="v10-source/app/src/main/java/com/hieptran/aacast/doudou"
+
+          sha256sum \
+            "$SRC/V10ProjectionSession.java" \
+            "$SRC/V10DisplayController.java" \
+            "$SRC/V10SurfaceManager.java" \
+            "$SRC/V10TaskSession.java" \
+            > /tmp/core-before.sha256
+
+          cat /tmp/core-before.sha256
+
+      - name: Patch UI Shell V1 only
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          FILE="v10-source/app/src/main/java/com/hieptran/aacast/doudou/V10CarActivity.java"
+
+          python3 - "$FILE" <<'PY'
+          from pathlib import Path
+          import sys
+
+          path = Path(sys.argv[1])
+          source = path.read_text(encoding="utf-8")
+
+          marker = "private void buildDashboard()"
+          start = source.find(marker)
+
+          if start < 0:
+              raise SystemExit("ERROR: buildDashboard() not found.")
+
+          opening = source.find("{", start)
+
+          if opening < 0:
+              raise SystemExit(
+                  "ERROR: buildDashboard() opening brace not found."
+              )
+
+          depth = 0
+          in_string = False
+          escaped = False
+          line_comment = False
+          block_comment = False
+
+          closing = -1
+          i = opening
+
+          while i < len(source):
+              c = source[i]
+              n = source[i + 1] if i + 1 < len(source) else ""
+
+              if line_comment:
+                  if c == "\n":
+                      line_comment = False
+
+              elif block_comment:
+                  if c == "*" and n == "/":
+                      block_comment = False
+                      i += 1
+
+              elif in_string:
+                  if escaped:
+                      escaped = False
+                  elif c == "\\":
+                      escaped = True
+                  elif c == '"':
+                      in_string = False
+
+              else:
+                  if c == "/" and n == "/":
+                      line_comment = True
+                      i += 1
+
+                  elif c == "/" and n == "*":
+                      block_comment = True
+                      i += 1
+
+                  elif c == '"':
+                      in_string = True
+
+                  elif c == "{":
+                      depth += 1
+
+                  elif c == "}":
+                      depth -= 1
+
+                      if depth == 0:
+                          closing = i
+                          break
+
+              i += 1
+
+          if closing < 0:
+              raise SystemExit(
+                  "ERROR: buildDashboard() closing brace not found."
+              )
+
+          new_method = r'''private void buildDashboard() {
+
+        dashboard = new LinearLayout(this);
+        dashboard.setOrientation(LinearLayout.VERTICAL);
+        dashboard.setPadding(dp(10), dp(8), dp(10), dp(8));
+
+        GradientDrawable background = new GradientDrawable();
+        background.setColor(Color.rgb(9, 12, 16));
+        background.setCornerRadius(dp(22));
+        dashboard.setBackground(background);
+
+        LinearLayout header = new LinearLayout(this);
+        header.setGravity(Gravity.CENTER_VERTICAL);
+
+        LinearLayout brandBox = new LinearLayout(this);
+        brandBox.setOrientation(LinearLayout.VERTICAL);
+
+        TextView brand = text("CAR ASSISTANT", 20, Color.WHITE);
+        brand.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
+
+        TextView subtitle =
+                text("DRIVE • CONNECT • CONTROL", 10, Color.LTGRAY);
+
+        brandBox.addView(brand);
+        brandBox.addView(subtitle);
+
+        header.addView(
+                brandBox,
+                new LinearLayout.LayoutParams(0, -1, 1f));
+
+        clock = text("", 26, Color.WHITE);
+        clock.setGravity(Gravity.CENTER);
+
+        header.addView(
+                clock,
+                new LinearLayout.LayoutParams(dp(110), dp(54)));
+
+        dashboard.addView(
+                header,
+                new LinearLayout.LayoutParams(-1, dp(58)));
+
+        LinearLayout body = new LinearLayout(this);
+        body.setOrientation(LinearLayout.HORIZONTAL);
+
+        LinearLayout side = new LinearLayout(this);
+        side.setOrientation(LinearLayout.VERTICAL);
+        side.setGravity(Gravity.CENTER_HORIZONTAL);
+        side.setPadding(dp(4), dp(4), dp(4), dp(4));
+
+        TextView apps = buttonText("APPS");
+        apps.setTextSize(12);
+        apps.setOnClickListener(v -> showApps());
+
+        side.addView(
+                apps,
+                new LinearLayout.LayoutParams(dp(88), dp(54)));
+
+        TextView voice = buttonText("VOICE");
+        voice.setTextSize(11);
+
+        side.addView(
+                voice,
+                new LinearLayout.LayoutParams(dp(88), dp(54)));
+
+        TextView tasks = buttonText("TASKS");
+        tasks.setTextSize(11);
+
+        side.addView(
+                tasks,
+                new LinearLayout.LayoutParams(dp(88), dp(54)));
+
+        body.addView(
+                side,
+                new LinearLayout.LayoutParams(dp(96), -1));
+
+        LinearLayout center = new LinearLayout(this);
+        center.setOrientation(LinearLayout.VERTICAL);
+
+        LinearLayout map = card();
+        map.setPadding(dp(18), dp(12), dp(18), dp(12));
+
+        TextView mapTitle =
+                text("MAP", 11, Color.LTGRAY);
+
+        map.addView(mapTitle);
+
+        TextView mapText =
+                text("NAVIGATION", 25, Color.WHITE);
+
+        mapText.setGravity(Gravity.CENTER);
+
+        map.addView(
+                mapText,
+                new LinearLayout.LayoutParams(-1, 0, 1f));
+
+        center.addView(
+                map,
+                new LinearLayout.LayoutParams(-1, 0, 1.8f));
+
+        LinearLayout stats = new LinearLayout(this);
+        stats.setOrientation(LinearLayout.HORIZONTAL);
+
+        stats.addView(
+                infoCard("SPEED", "0 km/h"),
+                weightParams());
+
+        stats.addView(
+                infoCard("WEATHER", "-- °C"),
+                weightParams());
+
+        stats.addView(
+                infoCard("MEDIA", "No media"),
+                weightParams());
+
+        center.addView(
+                stats,
+                new LinearLayout.LayoutParams(-1, dp(105)));
+
+        LinearLayout media = card();
+        media.setGravity(Gravity.CENTER_VERTICAL);
+
+        media.addView(
+                text("MEDIA", 11, Color.LTGRAY),
+                new LinearLayout.LayoutParams(dp(70), -2));
+
+        TextView mediaInfo =
+                text("No media", 14, Color.WHITE);
+
+        media.addView(
+                mediaInfo,
+                new LinearLayout.LayoutParams(0, -1, 1f));
+
+        TextView play = buttonText("PLAY");
+        play.setTextSize(10);
+
+        media.addView(
+                play,
+                new LinearLayout.LayoutParams(dp(72), dp(48)));
+
+        center.addView(
+                media,
+                new LinearLayout.LayoutParams(-1, dp(72)));
+
+        body.addView(
+                center,
+                new LinearLayout.LayoutParams(0, -1, 1f));
+
+        dashboard.addView(
+                body,
+                new LinearLayout.LayoutParams(-1, 0, 1f));
+
+        LinearLayout bottom = new LinearLayout(this);
+        bottom.setGravity(Gravity.CENTER_VERTICAL);
+
+        TextView status =
+                text("READY  •  DISPLAY CORE V1", 10, Color.LTGRAY);
+
+        bottom.addView(
+                status,
+                new LinearLayout.LayoutParams(0, dp(42), 1f));
+
+        TextView allApps = buttonText("ALL APPS");
+        allApps.setTextSize(10);
+        allApps.setOnClickListener(v -> showApps());
+
+        bottom.addView(
+                allApps,
+                new LinearLayout.LayoutParams(dp(100), dp(48)));
+
+        dashboard.addView(
+                bottom,
+                new LinearLayout.LayoutParams(-1, dp(54)));
+
+        launcherLayer.addView(
+                dashboard,
+                new LinearLayout.LayoutParams(-1, -1));
+    }'''
+
+          patched = (
+              source[:start]
+              + new_method
+              + source[closing + 1:]
+          )
+
+          path.write_text(patched, encoding="utf-8")
+
+          print("UI Shell V1 patched.")
+          print("Only buildDashboard() was replaced.")
+          PY
+
+      - name: Verify Core V1 files are untouched
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          SRC="v10-source/app/src/main/java/com/hieptran/aacast/doudou"
+
+          sha256sum \
+            "$SRC/V10ProjectionSession.java" \
+            "$SRC/V10DisplayController.java" \
+            "$SRC/V10SurfaceManager.java" \
+            "$SRC/V10TaskSession.java" \
+            > /tmp/core-after.sha256
+
+          if ! diff -u /tmp/core-before.sha256 /tmp/core-after.sha256; then
+            echo "ERROR: Display Core V1 files changed."
+            exit 1
+          fi
+
+          echo "PASS: Display Core V1 files are unchanged."
+
+      - name: Verify UI Shell markers
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          ACTIVITY="v10-source/app/src/main/java/com/hieptran/aacast/doudou/V10CarActivity.java"
+
+          grep -Fq "CAR ASSISTANT" "$ACTIVITY"
+          grep -Fq "DRIVE • CONNECT • CONTROL" "$ACTIVITY"
+          grep -Fq '"APPS"' "$ACTIVITY"
+          grep -Fq '"VOICE"' "$ACTIVITY"
+          grep -Fq '"TASKS"' "$ACTIVITY"
+          grep -Fq '"NAVIGATION"' "$ACTIVITY"
+          grep -Fq '"SPEED"' "$ACTIVITY"
+          grep -Fq '"WEATHER"' "$ACTIVITY"
+          grep -Fq '"MEDIA"' "$ACTIVITY"
+          grep -Fq '"ALL APPS"' "$ACTIVITY"
+          grep -Fq "DISPLAY CORE V1" "$ACTIVITY"
+
+          echo "PASS: UI Shell V1 markers found."
+
+      - name: Verify forbidden changes
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          SRC="v10-source/app/src/main/java/com/hieptran/aacast/doudou"
+
+          if grep -Fq "am force-stop" \
+            "$SRC/V10DisplayController.java"; then
+            echo "ERROR: force-stop detected in Display Core."
+            exit 1
+          fi
+
+          if grep -Fq "V10ProjectionService" \
+            "$SRC/V10ProjectionSession.java"; then
+            echo "ERROR: V10ProjectionService detected."
+            exit 1
+          fi
+
+          if [ -f "$SRC/V10ProjectionService.java" ]; then
+            echo "ERROR: forbidden V10ProjectionService.java exists."
+            exit 1
+          fi
+
+          echo "PASS: forbidden paths not detected."
+
+      - name: Compile Java
+        working-directory: v10-source
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          chmod +x ./gradlew
+
+          ./gradlew \
+            --no-daemon \
+            --stacktrace \
+            compileDebugJavaWithJavac
+
+      - name: Build APK
+        working-directory: v10-source
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          ./gradlew \
+            --no-daemon \
+            --stacktrace \
+            assembleDebug
+
+      - name: Locate APK and SHA256
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          APK="$(find v10-source \
+            -type f \
+            -path '*/build/outputs/apk/*/*.apk' \
+            | head -n 1)"
+
+          if [ -z "$APK" ]; then
+            echo "ERROR: APK not found."
+            exit 1
+          fi
+
+          echo "APK: $APK"
+          echo
+          echo "SHA256:"
+          sha256sum "$APK"
+
+      - name: Upload UI Shell V1 APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: CarAssistant-V10-UI-Shell-V1
+          path: v10-source/**/build/outputs/apk/*/*.apk
+          if-no-files-found: error
+          retention-days: 14
