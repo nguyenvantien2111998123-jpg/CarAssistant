@@ -1,0 +1,273 @@
+name: Build Car Assistant V10 Display Core V1 Floating Touch Long Press SAFE
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Rebuild exact Display Core V1 from GitHub workflow
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          import subprocess
+          import yaml
+
+          wf = Path('.github/workflows/build-v10-display-core-v1.yml')
+          doc = yaml.safe_load(wf.read_text(encoding='utf-8'))
+          steps = doc['jobs']['build']['steps']
+          stop_names = {'Build V10 Display Core V1'}
+          selected = []
+          for step in steps:
+              if 'run' in step and not step.get('uses'):
+                  selected.append(step)
+              if step.get('name') in stop_names:
+                  break
+          if not selected:
+              raise SystemExit('Core V1 run steps not found')
+          for step in selected:
+              name = step.get('name','unnamed')
+              print(f'CORE > {name}')
+              subprocess.run(['bash','-euo','pipefail','-c',step['run']], check=True)
+          PY
+
+      - name: Extract only Floating Touch source patch
+        shell: bash
+        run: |
+          set -euo pipefail
+          PATCH=.github/workflows/build-v10-display-core-v1-floating-touch-fixed.yml
+          FILE=v10-source/app/src/main/java/com/hieptran/aacast/doudou/V10CarActivity.java
+          test -f "$PATCH"
+          test -f "$FILE"
+          python3 - "$PATCH" <<'PY'
+          from pathlib import Path
+          import subprocess, sys, yaml
+
+          doc = yaml.safe_load(Path(sys.argv[1]).read_text(encoding='utf-8'))
+          step = next((x for x in doc['jobs']['build']['steps']
+                       if x.get('name') == 'Patch V10CarActivity with Floating Touch only'), None)
+          if step is None:
+              raise SystemExit('Floating Touch patch step not found')
+          subprocess.run(['bash','-euo','pipefail','-c',step['run']], check=True)
+          PY
+
+      - name: Replace the entire Floating Touch listener with SAFE long-press version
+        shell: bash
+        run: |
+          set -euo pipefail
+          FILE=v10-source/app/src/main/java/com/hieptran/aacast/doudou/V10CarActivity.java
+          python3 - "$FILE" <<'PY'
+          from pathlib import Path
+          import sys
+
+          p = Path(sys.argv[1])
+          s = p.read_text(encoding='utf-8')
+
+          # Remove the accidental literal backslash-n only at the start of the
+          # generated Floating Touch method block. Do not alter other Java text.
+          s = s.replace(r'\n    private void createFloatingTouchKey()',
+                        '    private void createFloatingTouchKey()', 1)
+
+          if 'private TextView floatingTouchKey;' not in s:
+              raise SystemExit('Floating Touch fields missing')
+          if 'private void createFloatingTouchKey()' not in s:
+              raise SystemExit('Floating Touch method missing')
+
+          start = s.find('floatingTouchKey.setOnTouchListener(')
+          if start < 0:
+              raise SystemExit('Floating Touch OnTouchListener not found')
+
+          # Find the matching closing ')' for setOnTouchListener(...), ignoring
+          # parentheses inside strings and Java comments. The following ';'
+          # belongs to the listener call.
+          paren = s.find('(', start)
+          depth = 0
+          in_string = False
+          escape = False
+          line_comment = False
+          block_comment = False
+          i = paren
+          close = -1
+          while i < len(s):
+              c = s[i]
+              n = s[i+1] if i + 1 < len(s) else ''
+              if line_comment:
+                  if c == '\n': line_comment = False
+              elif block_comment:
+                  if c == '*' and n == '/':
+                      block_comment = False; i += 1
+              elif in_string:
+                  if escape:
+                      escape = False
+                  elif c == '\\':
+                      escape = True
+                  elif c == '"':
+                      in_string = False
+              else:
+                  if c == '/' and n == '/':
+                      line_comment = True; i += 1
+                  elif c == '/' and n == '*':
+                      block_comment = True; i += 1
+                  elif c == '"':
+                      in_string = True
+                  elif c == '(':
+                      depth += 1
+                  elif c == ')':
+                      depth -= 1
+                      if depth == 0:
+                          close = i
+                          break
+              i += 1
+          if close < 0:
+              raise SystemExit('Could not find end of OnTouchListener')
+
+          listener = '''floatingTouchKey.setOnTouchListener(\n                (view, event) -> {\n                    switch (event.getActionMasked()) {\n                        case MotionEvent.ACTION_DOWN:\n                            floatingDragging = false;\n                            floatingDownRawX = event.getRawX();\n                            floatingDownRawY = event.getRawY();\n                            floatingDownTime = SystemClock.uptimeMillis();\n                            ViewGroup.LayoutParams lp = view.getLayoutParams();\n                            if (lp instanceof FrameLayout.LayoutParams) {\n                                FrameLayout.LayoutParams fp = (FrameLayout.LayoutParams) lp;\n                                floatingStartX = fp.rightMargin;\n                                floatingStartY = fp.topMargin;\n                            }\n                            return true;\n\n                        case MotionEvent.ACTION_MOVE:\n                            float dx = event.getRawX() - floatingDownRawX;\n                            float dy = event.getRawY() - floatingDownRawY;\n                            if (!floatingDragging\n                                    && Math.hypot(dx, dy)\n                                    > ViewConfiguration.get(this).getScaledTouchSlop()) {\n                                floatingDragging = true;\n                            }\n                            if (floatingDragging) {\n                                int width = projectionLayer.getWidth();\n                                int height = projectionLayer.getHeight();\n                                int keySize = dp(58);\n                                int right = Math.round(floatingStartX - dx);\n                                int top = Math.round(floatingStartY + dy);\n                                right = Math.max(0, Math.min(Math.max(0, width - keySize), right));\n                                top = Math.max(0, Math.min(Math.max(0, height - keySize), top));\n                                FrameLayout.LayoutParams fp =\n                                        (FrameLayout.LayoutParams) view.getLayoutParams();\n                                fp.rightMargin = right;\n                                fp.topMargin = top;\n                                view.setLayoutParams(fp);\n                            }\n                            return true;\n\n                        case MotionEvent.ACTION_UP:\n                            if (floatingDragging) {\n                                FrameLayout.LayoutParams fp =\n                                        (FrameLayout.LayoutParams) view.getLayoutParams();\n                                prefs.edit()\n                                        .putInt("x", fp.rightMargin)\n                                        .putInt("y", fp.topMargin)\n                                        .apply();\n                                floatingDragging = false;\n                                return true;\n                            }\n                            long held = SystemClock.uptimeMillis() - floatingDownTime;\n                            if (held >= ViewConfiguration.getLongPressTimeout()) {\n                                handleControlHome();\n                                hideFloatingMenu();\n                            } else {\n                                showFloatingMenu();\n                            }\n                            view.performClick();\n                            return true;\n\n                        case MotionEvent.ACTION_CANCEL:\n                            floatingDragging = false;\n                            return true;\n\n                        default:\n                            return true;\n                    }\n                });'''
+
+          # listener above uses floatingDownTime, so replace the old field.
+          s = s[:start] + listener + s[close+1:]
+          s = s.replace('private long floatingLastTap;', 'private long floatingDownTime;', 1)
+
+          # The extracted legacy menu has extra actions. Replace only the menu
+          # builder, leaving the floating key, drag code, and control handlers intact.
+          menu_start = s.find('private void showFloatingMenu()')
+          if menu_start < 0:
+              raise SystemExit('showFloatingMenu() not found')
+          menu_brace = s.find('{', menu_start)
+          depth = 0
+          in_string = False
+          escape = False
+          line_comment = False
+          block_comment = False
+          i = menu_brace
+          menu_end = -1
+          while i < len(s):
+              c = s[i]; n = s[i+1] if i + 1 < len(s) else ''
+              if line_comment:
+                  if c == '\n': line_comment = False
+              elif block_comment:
+                  if c == '*' and n == '/': block_comment = False; i += 1
+              elif in_string:
+                  if escape: escape = False
+                  elif c == '\\': escape = True
+                  elif c == '"': in_string = False
+              else:
+                  if c == '/' and n == '/': line_comment = True; i += 1
+                  elif c == '/' and n == '*': block_comment = True; i += 1
+                  elif c == '"': in_string = True
+                  elif c == '{': depth += 1
+                  elif c == '}':
+                      depth -= 1
+                      if depth == 0:
+                          menu_end = i
+                          break
+              i += 1
+          if menu_end < 0:
+              raise SystemExit('Could not find end of showFloatingMenu()')
+
+          menu = '''private void showFloatingMenu() {\n        if (floatingMenu != null) {\n            hideFloatingMenu();\n            return;\n        }\n\n        floatingMenu = new LinearLayout(this);\n        floatingMenu.setOrientation(LinearLayout.VERTICAL);\n        floatingMenu.setPadding(dp(8), dp(8), dp(8), dp(8));\n\n        GradientDrawable menuBg = new GradientDrawable();\n        menuBg.setColor(Color.rgb(15, 20, 26));\n        menuBg.setCornerRadius(dp(16));\n        menuBg.setStroke(dp(1), Color.rgb(65, 85, 105));\n        floatingMenu.setBackground(menuBg);\n        floatingMenu.setElevation(dp(14));\n\n        addFloatingMenuButton("BACK", () -> {\n            handleControlBack();\n            hideFloatingMenu();\n        });\n\n        addFloatingMenuButton("HOME", () -> {\n            handleControlHome();\n            hideFloatingMenu();\n        });\n\n        FrameLayout.LayoutParams params =\n                new FrameLayout.LayoutParams(dp(170), -2,\n                        Gravity.TOP | Gravity.END);\n        params.setMargins(0, dp(70), dp(18), 0);\n        projectionLayer.addView(floatingMenu, params);\n        floatingMenu.bringToFront();\n        floatingTouchKey.bringToFront();\n    }'''
+          s = s[:menu_start] + menu + s[menu_end+1:]
+
+          # Remove legacy double-tap field if a duplicate survived.
+          s = s.replace('    private long floatingLastTap;\n', '')
+
+          # Hard safety checks: this patch must not add legacy menu features or
+          # any Display Core / persistence changes.
+          forbidden = [
+              'floatingLastTap',
+              'session.recents()',
+              '"RECENTS"',
+              '"2 SCREEN"',
+              '"3 SCREEN"',
+              'setLayoutModeExternal(',
+              'V10ProjectionService',
+              'am force-stop',
+          ]
+          for item in forbidden:
+              if item in s:
+                  raise SystemExit(f'Forbidden Floating Touch content remains: {item}')
+
+          if 'floatingDownTime = SystemClock.uptimeMillis();' not in s:
+              raise SystemExit('Long-press down timestamp missing')
+          if 'ViewConfiguration.getLongPressTimeout()' not in s:
+              raise SystemExit('Long-press timeout missing')
+          if 'addFloatingMenuButton("BACK"' not in s:
+              raise SystemExit('BACK menu button missing')
+          if 'addFloatingMenuButton("HOME"' not in s:
+              raise SystemExit('HOME menu button missing')
+          if '\\n    private void createFloatingTouchKey()' in s:
+              raise SystemExit('Literal \\n sequence remains before Floating Touch method')
+
+          p.write_text(s, encoding='utf-8')
+          print('SAFE Floating Touch replacement complete.')
+          PY
+
+      - name: Verify Floating Touch only
+        shell: bash
+        run: |
+          set -euo pipefail
+          FILE=v10-source/app/src/main/java/com/hieptran/aacast/doudou/V10CarActivity.java
+          SESSION=v10-source/app/src/main/java/com/hieptran/aacast/doudou/V10ProjectionSession.java
+          grep -Fq 'private TextView floatingTouchKey;' "$FILE"
+          grep -Fq 'createFloatingTouchKey();' "$FILE"
+          grep -Fq 'private void createFloatingTouchKey()' "$FILE"
+          grep -Fq 'floatingDownTime = SystemClock.uptimeMillis();' "$FILE"
+          grep -Fq 'ViewConfiguration.getLongPressTimeout()' "$FILE"
+          grep -Fq 'addFloatingMenuButton("BACK"' "$FILE"
+          grep -Fq 'addFloatingMenuButton("HOME"' "$FILE"
+          grep -Fq 'handleControlBack();' "$FILE"
+          grep -Fq 'handleControlHome();' "$FILE"
+          grep -Fq 'floatingDragging' "$FILE"
+          if grep -Fq 'floatingLastTap' "$FILE"; then exit 1; fi
+          if grep -Fq 'session.recents()' "$FILE"; then exit 1; fi
+          if grep -Fq '"RECENTS"' "$FILE"; then exit 1; fi
+          if grep -Fq '"2 SCREEN"' "$FILE"; then exit 1; fi
+          if grep -Fq '"3 SCREEN"' "$FILE"; then exit 1; fi
+          if grep -Fq 'setLayoutModeExternal(' "$FILE"; then exit 1; fi
+          if grep -Fq 'V10ProjectionService' "$SESSION"; then exit 1; fi
+          if grep -Fq 'am force-stop' "$SESSION"; then exit 1; fi
+          if grep -Fq '\\n    private void createFloatingTouchKey()' "$FILE"; then exit 1; fi
+          echo 'Floating Touch SAFE verification PASSED.'
+
+      - name: Compile Java
+        working-directory: v10-source
+        shell: bash
+        run: ./gradlew --no-daemon --stacktrace compileDebugJavaWithJavac
+
+      - name: Build APK
+        working-directory: v10-source
+        shell: bash
+        run: ./gradlew --no-daemon --stacktrace assembleDebug
+
+      - name: Locate APK and SHA256
+        working-directory: v10-source
+        shell: bash
+        run: |
+          set -euo pipefail
+          APK="$(find app/build/outputs/apk/debug -type f -name '*.apk' -print -quit)"
+          test -n "$APK"
+          echo "APK=$APK"
+          sha256sum "$APK"
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: CarAssistant-V10-Display-Core-V1-Floating-Touch
+          path: v10-source/app/build/outputs/apk/debug/*.apk
+          if-no-files-found: error
+          retention-days: 14
