@@ -8,9 +8,106 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
+
+      # ============================================================
+      # 1. CHECKOUT
+      # ============================================================
       - name: Checkout
         uses: actions/checkout@v4
 
+      # ============================================================
+      # 2. REAL YAML SYNTAX CHECK
+      # ============================================================
+      - name: Validate workflow YAML
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          echo "Installing PyYAML..."
+          python3 -m pip install \
+            --disable-pip-version-check \
+            --quiet \
+            pyyaml
+
+          echo "Validating workflow YAML..."
+
+          python3 - <<'PY'
+          from pathlib import Path
+          import yaml
+
+          workflow = Path(
+              ".github/workflows/build-v10-6a-persistence-2.yml"
+          )
+
+          if not workflow.is_file():
+              raise SystemExit(
+                  "ERROR: workflow file not found."
+              )
+
+          text = workflow.read_text(
+              encoding="utf-8"
+          )
+
+          if not text.strip():
+              raise SystemExit(
+                  "ERROR: workflow file is empty."
+              )
+
+          try:
+              data = yaml.safe_load(text)
+          except yaml.YAMLError as exc:
+              print("YAML SYNTAX ERROR:")
+              print(exc)
+              raise SystemExit(1)
+
+          if not isinstance(data, dict):
+              raise SystemExit(
+                  "ERROR: workflow root must be a YAML mapping."
+              )
+
+          print("YAML syntax: PASS")
+          print("Root type:", type(data).__name__)
+          print("Top-level keys:", list(data.keys()))
+
+          if "name" not in data:
+              raise SystemExit(
+                  "ERROR: missing top-level 'name'."
+              )
+
+          # PyYAML/YAML 1.1 can interpret 'on' as boolean.
+          # Accept either representation here.
+          has_on = (
+              "on" in data
+              or True in data
+          )
+
+          if not has_on:
+              raise SystemExit(
+                  "ERROR: missing top-level 'on'."
+              )
+
+          if "jobs" not in data:
+              raise SystemExit(
+                  "ERROR: missing top-level 'jobs'."
+              )
+
+          if not isinstance(data["jobs"], dict):
+              raise SystemExit(
+                  "ERROR: 'jobs' must be a mapping."
+              )
+
+          if "build" not in data["jobs"]:
+              raise SystemExit(
+                  "ERROR: missing jobs.build."
+              )
+
+          print("GitHub Actions basic structure: PASS")
+          print("YAML validation: PASS")
+          PY
+
+      # ============================================================
+      # 3. RESTORE EXACT V10-6A BASELINE
+      # ============================================================
       - name: Restore V10-6A baseline
         shell: bash
         run: |
@@ -21,23 +118,36 @@ jobs:
           git fetch origin "$BASELINE" --depth=1
           git checkout "$BASELINE" -- v10-source
 
-          test -f v10-source/app/src/main/java/com/hieptran/aacast/doudou/V10ProjectionSession.java
-          test -f v10-source/app/src/main/java/com/hieptran/aacast/doudou/V10CarActivity.java
-          test -f v10-source/app/src/main/java/com/hieptran/aacast/doudou/RootView.java
+          test -f \
+            v10-source/app/src/main/java/com/hieptran/aacast/doudou/V10ProjectionSession.java
 
-          if [ -f v10-source/app/src/main/java/com/hieptran/aacast/doudou/V10ProjectionService.java ]; then
+          test -f \
+            v10-source/app/src/main/java/com/hieptran/aacast/doudou/V10CarActivity.java
+
+          test -f \
+            v10-source/app/src/main/java/com/hieptran/aacast/doudou/RootView.java
+
+          if [ -f \
+            v10-source/app/src/main/java/com/hieptran/aacast/doudou/V10ProjectionService.java
+          ]; then
             echo "ERROR: V10-8 ProjectionService detected."
             exit 1
           fi
 
           echo "V10-6A baseline OK."
 
+      # ============================================================
+      # 4. JAVA 17
+      # ============================================================
       - name: Set up JDK 17
         uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: "17"
 
+      # ============================================================
+      # 5. PATCH RECENTS
+      # ============================================================
       - name: Patch V10ProjectionSession - RECENTS
         working-directory: v10-source
         shell: bash
@@ -55,6 +165,7 @@ jobs:
           s = p.read_text(encoding="utf-8")
 
           if "public void recents()" not in s:
+
               method = """
               public void recents() {
                   if (!isActive()) {
@@ -73,7 +184,10 @@ jobs:
                               try {
                                   rootShell.run(5, command);
                               } catch (Throwable t) {
-                                  Log.w(TAG, "Recents failed", t);
+                                  Log.w(
+                                          TAG,
+                                          "Recents failed",
+                                          t);
                               }
                           });
               }
@@ -87,14 +201,20 @@ jobs:
               m = pattern.search(s)
 
               if not m:
-                  raise SystemExit("ERROR: back() method not found.")
+                  raise SystemExit(
+                      "ERROR: back() method not found."
+                  )
 
               s = s[:m.start()] + method + s[m.start():]
 
           p.write_text(s, encoding="utf-8")
+
           print("RECENTS patch OK.")
           PY
 
+      # ============================================================
+      # 6. PATCH ACTIVITY IMPORTS
+      # ============================================================
       - name: Patch V10CarActivity - imports
         working-directory: v10-source
         shell: bash
@@ -120,11 +240,16 @@ jobs:
 
           marker = "import android.content.pm.ResolveInfo;"
 
-          missing = [x for x in imports if x not in s]
+          missing = [
+              x for x in imports
+              if x not in s
+          ]
 
           if missing:
               if marker not in s:
-                  raise SystemExit("ERROR: import marker not found.")
+                  raise SystemExit(
+                      "ERROR: import marker not found."
+                  )
 
               s = s.replace(
                   marker,
@@ -133,9 +258,13 @@ jobs:
               )
 
           p.write_text(s, encoding="utf-8")
+
           print("Imports OK.")
           PY
 
+      # ============================================================
+      # 7. FLOATING KEY FIELDS
+      # ============================================================
       - name: Patch V10CarActivity - floating fields
         working-directory: v10-source
         shell: bash
@@ -152,6 +281,7 @@ jobs:
           s = p.read_text(encoding="utf-8")
 
           if "private TextView floatingTouchKey;" not in s:
+
               marker = "    private V10ProjectionSession session;"
 
               fields = """
@@ -167,7 +297,9 @@ jobs:
               """
 
               if marker not in s:
-                  raise SystemExit("ERROR: session field marker not found.")
+                  raise SystemExit(
+                      "ERROR: session field marker not found."
+                  )
 
               s = s.replace(
                   marker,
@@ -176,9 +308,15 @@ jobs:
               )
 
           p.write_text(s, encoding="utf-8")
+
           print("Floating fields OK.")
           PY
 
+      # ============================================================
+      # 8. FLOATING KEY
+      # IMPORTANT:
+      # textureView indentation corrected to 16 spaces.
+      # ============================================================
       - name: Patch V10CarActivity - floating key
         working-directory: v10-source
         shell: bash
@@ -195,8 +333,10 @@ jobs:
           s = p.read_text(encoding="utf-8")
 
           if "createFloatingTouchKey();" not in s:
+
+              # CORRECT BASELINE MARKER
               marker = """        session.attachTextureView(
-                  textureView);"""
+                textureView);"""
 
               if marker not in s:
                   raise SystemExit(
@@ -210,6 +350,7 @@ jobs:
               )
 
           if "private void createFloatingTouchKey()" not in s:
+
               methods = r'''
               private void createFloatingTouchKey() {
                   if (floatingTouchKey != null) {
@@ -222,10 +363,18 @@ jobs:
                   floatingTouchKey.setTextSize(22);
                   floatingTouchKey.setGravity(Gravity.CENTER);
 
-                  GradientDrawable bg = new GradientDrawable();
-                  bg.setShape(GradientDrawable.OVAL);
-                  bg.setColor(Color.rgb(25, 35, 45));
-                  bg.setStroke(dp(2), Color.rgb(80, 170, 230));
+                  GradientDrawable bg =
+                          new GradientDrawable();
+
+                  bg.setShape(
+                          GradientDrawable.OVAL);
+
+                  bg.setColor(
+                          Color.rgb(25, 35, 45));
+
+                  bg.setStroke(
+                          dp(2),
+                          Color.rgb(80, 170, 230));
 
                   floatingTouchKey.setBackground(bg);
                   floatingTouchKey.setElevation(dp(12));
@@ -241,10 +390,17 @@ jobs:
                                   dp(58),
                                   Gravity.TOP | Gravity.END);
 
-                  int savedX = prefs.getInt("x", dp(18));
-                  int savedY = prefs.getInt("y", dp(120));
+                  int savedX =
+                          prefs.getInt("x", dp(18));
 
-                  params.setMargins(0, savedY, savedX, 0);
+                  int savedY =
+                          prefs.getInt("y", dp(120));
+
+                  params.setMargins(
+                          0,
+                          savedY,
+                          savedX,
+                          0);
 
                   projectionLayer.addView(
                           floatingTouchKey,
@@ -252,9 +408,12 @@ jobs:
 
                   floatingTouchKey.setOnTouchListener(
                           (view, event) -> {
-                              switch (event.getActionMasked()) {
+
+                              switch (
+                                      event.getActionMasked()) {
 
                                   case MotionEvent.ACTION_DOWN:
+
                                       floatingDragging = false;
 
                                       floatingDownRawX =
@@ -266,9 +425,12 @@ jobs:
                                       ViewGroup.LayoutParams lp =
                                               view.getLayoutParams();
 
-                                      if (lp instanceof FrameLayout.LayoutParams) {
+                                      if (lp instanceof
+                                              FrameLayout.LayoutParams) {
+
                                           FrameLayout.LayoutParams fp =
-                                                  (FrameLayout.LayoutParams) lp;
+                                                  (FrameLayout.LayoutParams)
+                                                          lp;
 
                                           floatingStartX =
                                                   fp.rightMargin;
@@ -280,6 +442,7 @@ jobs:
                                       return true;
 
                                   case MotionEvent.ACTION_MOVE:
+
                                       float dx =
                                               event.getRawX()
                                                       - floatingDownRawX;
@@ -293,10 +456,12 @@ jobs:
                                               > ViewConfiguration
                                                       .get(this)
                                                       .getScaledTouchSlop()) {
+
                                           floatingDragging = true;
                                       }
 
                                       if (floatingDragging) {
+
                                           int width =
                                                   projectionLayer.getWidth();
 
@@ -307,11 +472,13 @@ jobs:
 
                                           int right =
                                                   Math.round(
-                                                          floatingStartX - dx);
+                                                          floatingStartX
+                                                                  - dx);
 
                                           int top =
                                                   Math.round(
-                                                          floatingStartY + dy);
+                                                          floatingStartY
+                                                                  + dy);
 
                                           right =
                                                   Math.max(
@@ -319,7 +486,8 @@ jobs:
                                                           Math.min(
                                                                   Math.max(
                                                                           0,
-                                                                          width - size),
+                                                                          width
+                                                                                  - size),
                                                                   right));
 
                                           top =
@@ -328,7 +496,8 @@ jobs:
                                                           Math.min(
                                                                   Math.max(
                                                                           0,
-                                                                          height - size),
+                                                                          height
+                                                                                  - size),
                                                                   top));
 
                                           FrameLayout.LayoutParams fp =
@@ -346,42 +515,59 @@ jobs:
                                   case MotionEvent.ACTION_UP:
 
                                       if (floatingDragging) {
+
                                           FrameLayout.LayoutParams fp =
                                                   (FrameLayout.LayoutParams)
                                                           view.getLayoutParams();
 
                                           prefs.edit()
-                                                  .putInt("x", fp.rightMargin)
-                                                  .putInt("y", fp.topMargin)
+                                                  .putInt(
+                                                          "x",
+                                                          fp.rightMargin)
+                                                  .putInt(
+                                                          "y",
+                                                          fp.topMargin)
                                                   .apply();
 
                                           floatingDragging = false;
+
                                           return true;
                                       }
 
                                       long now =
-                                              SystemClock.uptimeMillis();
+                                              SystemClock
+                                                      .uptimeMillis();
 
                                       long delta =
-                                              now - floatingLastTap;
+                                              now
+                                                      - floatingLastTap;
 
                                       floatingLastTap = now;
 
-                                      if (delta > 0 && delta < 320) {
+                                      if (delta > 0
+                                              && delta < 320) {
+
                                           handleControlHome();
+
                                           hideFloatingMenu();
+
                                       } else {
+
                                           showFloatingMenu();
                                       }
 
                                       view.performClick();
+
                                       return true;
 
                                   case MotionEvent.ACTION_CANCEL:
+
                                       floatingDragging = false;
+
                                       return true;
 
                                   default:
+
                                       return true;
                               }
                           });
@@ -390,22 +576,33 @@ jobs:
               }
 
               private void showFloatingMenu() {
+
                   if (floatingMenu != null) {
                       hideFloatingMenu();
                       return;
                   }
 
-                  floatingMenu = new LinearLayout(this);
-                  floatingMenu.setOrientation(LinearLayout.VERTICAL);
+                  floatingMenu =
+                          new LinearLayout(this);
+
+                  floatingMenu.setOrientation(
+                          LinearLayout.VERTICAL);
+
                   floatingMenu.setPadding(
                           dp(8),
                           dp(8),
                           dp(8),
                           dp(8));
 
-                  GradientDrawable bg = new GradientDrawable();
-                  bg.setColor(Color.rgb(15, 20, 26));
-                  bg.setCornerRadius(dp(16));
+                  GradientDrawable bg =
+                          new GradientDrawable();
+
+                  bg.setColor(
+                          Color.rgb(15, 20, 26));
+
+                  bg.setCornerRadius(
+                          dp(16));
+
                   bg.setStroke(
                           dp(1),
                           Color.rgb(65, 85, 105));
@@ -467,16 +664,23 @@ jobs:
                       String label,
                       Runnable action) {
 
-                  TextView button = new TextView(this);
+                  TextView button =
+                          new TextView(this);
 
                   button.setText(label);
                   button.setTextColor(Color.WHITE);
                   button.setTextSize(14);
-                  button.setGravity(Gravity.CENTER_VERTICAL);
+                  button.setGravity(
+                          Gravity.CENTER_VERTICAL);
 
-                  GradientDrawable bg = new GradientDrawable();
-                  bg.setColor(Color.rgb(28, 38, 48));
-                  bg.setCornerRadius(dp(10));
+                  GradientDrawable bg =
+                          new GradientDrawable();
+
+                  bg.setColor(
+                          Color.rgb(28, 38, 48));
+
+                  bg.setCornerRadius(
+                          dp(10));
 
                   button.setBackground(bg);
 
@@ -506,15 +710,19 @@ jobs:
               }
 
               private void hideFloatingMenu() {
+
                   if (floatingMenu == null) {
                       return;
                   }
 
-                  projectionLayer.removeView(floatingMenu);
+                  projectionLayer.removeView(
+                          floatingMenu);
+
                   floatingMenu = null;
               }
 
               private void switchToTwoScreen() {
+
                   RootView rootView =
                           RootView.getCurrent();
 
@@ -524,6 +732,7 @@ jobs:
               }
 
               private void switchToThreeScreen() {
+
                   RootView rootView =
                           RootView.getCurrent();
 
@@ -534,7 +743,8 @@ jobs:
 
               '''
 
-              marker = "    public void handleControlBack()"
+              marker =
+                  "    public void handleControlBack()"
 
               if marker not in s:
                   raise SystemExit(
@@ -548,9 +758,13 @@ jobs:
               )
 
           p.write_text(s, encoding="utf-8")
+
           print("Floating key patch OK.")
           PY
 
+      # ============================================================
+      # 9. ROOTVIEW EXTERNAL LAYOUT
+      # ============================================================
       - name: Patch RootView - external layout
         working-directory: v10-source
         shell: bash
@@ -567,6 +781,7 @@ jobs:
           s = p.read_text(encoding="utf-8")
 
           if "setLayoutModeExternal(int mode)" not in s:
+
               method = """
               public void setLayoutModeExternal(int mode) {
                   final int targetMode =
@@ -597,7 +812,8 @@ jobs:
 
               """
 
-              marker = "    public void reloadSettings()"
+              marker =
+                  "    public void reloadSettings()"
 
               if marker not in s:
                   raise SystemExit(
@@ -611,9 +827,13 @@ jobs:
               )
 
           p.write_text(s, encoding="utf-8")
+
           print("RootView patch OK.")
           PY
 
+      # ============================================================
+      # 10. PERSISTENCE 2 - PROJECTION SESSION
+      # ============================================================
       - name: Patch Persistence 2 - ProjectionSession
         working-directory: v10-source
         shell: bash
@@ -630,7 +850,9 @@ jobs:
           s = p.read_text(encoding="utf-8")
 
           if "private boolean targetLaunched;" not in s:
-              marker = "    private boolean destroyed;"
+
+              marker =
+                  "    private boolean destroyed;"
 
               if marker not in s:
                   raise SystemExit(
@@ -639,7 +861,8 @@ jobs:
 
               s = s.replace(
                   marker,
-                  marker + "\n\n    private boolean targetLaunched;",
+                  marker
+                  + "\n\n    private boolean targetLaunched;",
                   1
               )
 
@@ -713,9 +936,14 @@ jobs:
                   "ERROR: original launchTarget block not found."
               )
 
-          s = s.replace(old, new, 1)
+          s = s.replace(
+              old,
+              new,
+              1
+          )
 
           if "targetLaunched = false;" not in s:
+
               marker = """        virtualDisplay = null;
         display = null;"""
 
@@ -733,9 +961,15 @@ jobs:
               )
 
           p.write_text(s, encoding="utf-8")
-          print("Persistence 2 ProjectionSession patch OK.")
+
+          print(
+              "Persistence 2 ProjectionSession patch OK."
+          )
           PY
 
+      # ============================================================
+      # 11. PERSISTENCE 2 - ACTIVITY LIFECYCLE
+      # ============================================================
       - name: Patch Persistence 2 - Activity lifecycle
         working-directory: v10-source
         shell: bash
@@ -770,17 +1004,30 @@ jobs:
         super.onStop();"""
 
           if old in s:
-              s = s.replace(old, new, 1)
+
+              s = s.replace(
+                  old,
+                  new,
+                  1
+              )
+
           elif "Persistence 2:" not in s:
+
               raise SystemExit(
                   "ERROR: onStop release block not found."
               )
 
           p.write_text(s, encoding="utf-8")
-          print("Persistence 2 Activity lifecycle patch OK.")
+
+          print(
+              "Persistence 2 Activity lifecycle patch OK."
+          )
           PY
 
-      - name: Verify YAML and source
+      # ============================================================
+      # 12. VERIFY SOURCE
+      # ============================================================
+      - name: Verify source
         working-directory: v10-source
         shell: bash
         run: |
@@ -792,34 +1039,79 @@ jobs:
 
           echo "Checking source architecture..."
 
-          test ! -f app/src/main/java/com/hieptran/aacast/doudou/V10ProjectionService.java
+          test ! -f \
+            app/src/main/java/com/hieptran/aacast/doudou/V10ProjectionService.java
 
-          grep -q "public void recents()" "$SESSION"
-          grep -q "keyevent 187" "$SESSION"
-          grep -q "createFloatingTouchKey" "$ACTIVITY"
-          grep -q 'session.recents()' "$ACTIVITY"
-          grep -q '"RECENTS"' "$ACTIVITY"
-          grep -q '"2 SCREEN"' "$ACTIVITY"
-          grep -q '"3 SCREEN"' "$ACTIVITY"
-          grep -q "setLayoutModeExternal(int mode)" "$ROOT"
+          grep -q \
+            "public void recents()" \
+            "$SESSION"
 
-          grep -q "private boolean targetLaunched;" "$SESSION"
-          grep -q "targetLaunched = true;" "$SESSION"
-          grep -q "targetLaunched = false;" "$SESSION"
-          grep -q "activity-reorder-to-front" "$SESSION"
+          grep -q \
+            "keyevent 187" \
+            "$SESSION"
 
-          if grep -q "am force-stop" "$SESSION"; then
+          grep -q \
+            "createFloatingTouchKey" \
+            "$ACTIVITY"
+
+          grep -q \
+            'session.recents()' \
+            "$ACTIVITY"
+
+          grep -q \
+            '"RECENTS"' \
+            "$ACTIVITY"
+
+          grep -q \
+            '"2 SCREEN"' \
+            "$ACTIVITY"
+
+          grep -q \
+            '"3 SCREEN"' \
+            "$ACTIVITY"
+
+          grep -q \
+            "setLayoutModeExternal(int mode)" \
+            "$ROOT"
+
+          grep -q \
+            "private boolean targetLaunched;" \
+            "$SESSION"
+
+          grep -q \
+            "targetLaunched = true;" \
+            "$SESSION"
+
+          grep -q \
+            "targetLaunched = false;" \
+            "$SESSION"
+
+          grep -q \
+            "activity-reorder-to-front" \
+            "$SESSION"
+
+          if grep -q \
+            "am force-stop" \
+            "$SESSION"; then
+
             echo "ERROR: force-stop still exists."
             exit 1
           fi
 
-          if grep -A18 "public void onStop()" "$ACTIVITY" | grep -q "session.release()"; then
+          if grep -A18 \
+            "public void onStop()" \
+            "$ACTIVITY" |
+            grep -q "session.release()"; then
+
             echo "ERROR: onStop still releases session."
             exit 1
           fi
 
           echo "All source checks PASS."
 
+      # ============================================================
+      # 13. COMPILE
+      # ============================================================
       - name: Compile
         working-directory: v10-source
         shell: bash
@@ -831,6 +1123,9 @@ jobs:
             --stacktrace \
             compileDebugJavaWithJavac
 
+      # ============================================================
+      # 14. BUILD APK
+      # ============================================================
       - name: Assemble APK
         working-directory: v10-source
         shell: bash
@@ -842,6 +1137,9 @@ jobs:
             --stacktrace \
             assembleDebug
 
+      # ============================================================
+      # 15. VERIFY APK
+      # ============================================================
       - name: Verify APK
         working-directory: v10-source
         shell: bash
@@ -858,6 +1156,9 @@ jobs:
           echo "APK found:"
           echo "$APK"
 
+      # ============================================================
+      # 16. UPLOAD APK
+      # ============================================================
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
