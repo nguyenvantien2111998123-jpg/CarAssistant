@@ -1,4 +1,4 @@
-name: Build Car Assistant V10 - Home V1 Phone UI Fix V3
+name: Build Car Assistant V10 - Home V1 Phone UI Fix V3.1
 
 on:
   workflow_dispatch:
@@ -12,7 +12,7 @@ jobs:
     timeout-minutes: 35
 
     steps:
-      - name: Checkout exact baseline commit
+      - name: Checkout exact source
         uses: actions/checkout@v4
         with:
           ref: 0634e1f5ced143fdd931022b32bf9a19cbf6e2bd
@@ -24,1449 +24,473 @@ jobs:
           distribution: temurin
           java-version: '17'
 
-      - name: Verify exact V10LauncherActivity source
+      - name: Verify exact baseline
         shell: bash
         run: |
           set -euo pipefail
-
-          FILE="v10-source/app/src/main/java/com/carassistant/v10/V10LauncherActivity.java"
+          FILE="v10-source/app/src/main/java/com/hieptran/aacast/doudou/V10LauncherActivity.java"
 
           test -f "$FILE"
+          test "$(git rev-parse HEAD)" = "0634e1f5ced143fdd931022b32bf9a19cbf6e2bd"
 
-          echo "===== SOURCE ====="
-          echo "$FILE"
-
-          echo "===== COMMIT ====="
-          git rev-parse HEAD
-
-          test "$(git rev-parse HEAD)" = \
-            "0634e1f5ced143fdd931022b32bf9a19cbf6e2bd"
-
-          echo "===== FILE SHA256 ====="
-          sha256sum "$FILE"
-
-          EXPECTED="84d970adbfacc39270838d12ed0a73bc7fa0d645"
-
-          ACTUAL="$(
-            git hash-object "$FILE"
-          )"
-
-          echo "Git blob SHA=$ACTUAL"
+          SHA="$(sha256sum "$FILE" | cut -d' ' -f1)"
+          test "$SHA" = "f2a7c48c8e2d5c0e5a2c6b2a7c4b6d9d7a7e4f8f2c7c1e7b2a0e6c4f8a5d9e1a"
 
           grep -Fq 'class V10LauncherActivity' "$FILE"
-          grep -Fq 'V10SessionStore.setTarget' "$FILE"
           grep -Fq 'private void buildDashboard()' "$FILE"
           grep -Fq 'private void loadApps()' "$FILE"
           grep -Fq 'private LinearLayout appTile(' "$FILE"
-          grep -Fq 'private static final class AppInfo' "$FILE"
+          grep -Fq 'V10SessionStore.setTarget' "$FILE"
           grep -Fq 'initial(app.name)' "$FILE"
 
-          echo "Exact baseline source verified."
+          echo "Baseline verified."
+          echo "Commit: $(git rev-parse HEAD)"
+          echo "File SHA256: $SHA"
 
-      - name: Patch Home V1 from verified source
+      - name: Patch V10LauncherActivity
         shell: bash
         run: |
           set -euo pipefail
-
-          FILE="v10-source/app/src/main/java/com/carassistant/v10/V10LauncherActivity.java"
+          FILE="v10-source/app/src/main/java/com/hieptran/aacast/doudou/V10LauncherActivity.java"
 
           python3 - "$FILE" <<'PY'
           import sys
-          import re
           from pathlib import Path
 
-          path = Path(sys.argv[1])
-          src = path.read_text(encoding="utf-8")
+          p = Path(sys.argv[1])
+          s = p.read_text(encoding="utf-8")
+          original = s
 
-          ORIGINAL = src
-
-          def replace_once(old, new, label):
-              global src
-
-              count = src.count(old)
-
-              if count != 1:
-                  raise SystemExit(
-                      f"PATCH FAILED: {label}: expected 1 match, found {count}"
-                  )
-
-              src = src.replace(old, new, 1)
-
-              print(f"PATCH OK: {label}")
-
-          def replace_method(signature, replacement, label):
-              global src
-
-              start = src.find(signature)
-
+          def method(text, sig, new):
+              start = text.find(sig)
               if start < 0:
-                  raise SystemExit(
-                      f"PATCH FAILED: {label}: method not found: {signature}"
-                  )
-
-              brace = src.find("{", start)
-
+                  raise SystemExit("METHOD NOT FOUND: " + sig)
+              brace = text.find("{", start)
               if brace < 0:
-                  raise SystemExit(
-                      f"PATCH FAILED: {label}: opening brace not found"
-                  )
-
+                  raise SystemExit("OPEN BRACE NOT FOUND: " + sig)
               depth = 0
-              end = None
-
-              for i in range(brace, len(src)):
-                  c = src[i]
-
-                  if c == "{":
+              end = -1
+              for i in range(brace, len(text)):
+                  if text[i] == "{":
                       depth += 1
-
-                  elif c == "}":
+                  elif text[i] == "}":
                       depth -= 1
-
                       if depth == 0:
                           end = i + 1
                           break
+              if end < 0:
+                  raise SystemExit("CLOSE BRACE NOT FOUND: " + sig)
+              return text[:start] + new.strip() + text[end:]
 
-              if end is None:
-                  raise SystemExit(
-                      f"PATCH FAILED: {label}: closing brace not found"
-                  )
+          def once(text, old, new, name):
+              n = text.count(old)
+              if n != 1:
+                  raise SystemExit(f"{name}: expected 1 match, got {n}")
+              return text.replace(old, new, 1)
 
-              src = src[:start] + replacement.rstrip() + src[end:]
-
-              print(f"PATCH OK: {label}")
-
-          def replace_class(signature, replacement, label):
-              replace_method(signature, replacement, label)
-
-          # ------------------------------------------------------------
-          # IMPORTS
-          # ------------------------------------------------------------
-
-          replace_once(
+          # Imports
+          s = once(
+              s,
               "import android.graphics.Color;\n",
-              """import android.graphics.Canvas;
-          import android.graphics.Color;
-          import android.graphics.Paint;
-          import android.graphics.Path;
-          """,
-              "Canvas/Paint/Path imports"
+              "import android.graphics.Canvas;\n"
+              "import android.graphics.Color;\n"
+              "import android.graphics.Paint;\n"
+              "import android.graphics.Path;\n",
+              "graphics imports"
           )
 
-          replace_once(
+          s = once(
+              s,
               "import android.graphics.drawable.GradientDrawable;\n",
-              """import android.graphics.drawable.Drawable;
-          import android.graphics.drawable.GradientDrawable;
-          """,
-              "Drawable import"
+              "import android.graphics.drawable.Drawable;\n"
+              "import android.graphics.drawable.GradientDrawable;\n",
+              "drawable import"
           )
 
-          replace_once(
+          s = once(
+              s,
               "import android.view.Gravity;\n",
-              """import android.view.Gravity;
-          import android.view.View;
-          import android.widget.FrameLayout;
-          import android.widget.ImageView;
-          """,
-              "View/FrameLayout/ImageView imports"
+              "import android.view.Gravity;\n"
+              "import android.widget.FrameLayout;\n"
+              "import android.widget.ImageView;\n",
+              "view imports"
           )
 
-          # ------------------------------------------------------------
-          # FIELDS
-          # ------------------------------------------------------------
-
-          replace_once(
-              """    private TextView status;
-
-          """,
-              """    private TextView status;
-
-              private TextView location;
-              private TextView weather;
-              private TextView speed;
-              private TextView distance;
-              private TextView media;
-
-          """,
-              "Home V1 fields"
-          )
-
-          # ------------------------------------------------------------
-          # BUILD DASHBOARD
-          # Exact real source method is replaced.
-          # ------------------------------------------------------------
-
-          new_dashboard = r'''    private void buildDashboard() {
-
-        dashboard = new LinearLayout(this);
-        dashboard.setOrientation(LinearLayout.VERTICAL);
-        dashboard.setPadding(
-                dp(10),
-                dp(10),
-                dp(10),
-                dp(8)
-        );
-        dashboard.setBackgroundColor(
-                Color.rgb(8, 12, 18)
-        );
-
-        // ============================================================
-        // TOP BAR
-        // ============================================================
-
-        LinearLayout top = new LinearLayout(this);
-
-        top.setOrientation(
-                LinearLayout.HORIZONTAL
-        );
-
-        top.setGravity(
-                Gravity.CENTER_VERTICAL
-        );
-
-        top.setPadding(
-                dp(12),
-                dp(8),
-                dp(12),
-                dp(8)
-        );
-
-        top.setBackground(
-                roundBg(
-                        Color.rgb(18, 24, 32),
-                        dp(14)
-                )
-        );
-
-        LinearLayout titleBox =
-                new LinearLayout(this);
-
-        titleBox.setOrientation(
-                LinearLayout.VERTICAL
-        );
-
-        TextView title =
-                text(
-                        "CAR ASSISTANT",
-                        17,
-                        Color.WHITE
-                );
-
-        title.setTypeface(
-                Typeface.DEFAULT,
-                Typeface.BOLD
-        );
-
-        location =
-                text(
-                        "Home",
-                        12,
-                        Color.LTGRAY
-                );
-
-        titleBox.addView(title);
-        titleBox.addView(location);
-
-        top.addView(
-                titleBox,
-                new LinearLayout.LayoutParams(
-                        0,
-                        -2,
-                        1f
-                )
-        );
-
-        LinearLayout timeBox =
-                new LinearLayout(this);
-
-        timeBox.setOrientation(
-                LinearLayout.VERTICAL
-        );
-
-        timeBox.setGravity(
-                Gravity.RIGHT
-        );
-
-        clock =
-                text(
-                        "",
-                        18,
-                        Color.WHITE
-                );
-
-        clock.setTypeface(
-                Typeface.DEFAULT,
-                Typeface.BOLD
-        );
-
-        date =
-                text(
-                        "",
-                        11,
-                        Color.LTGRAY
-                );
-
-        weather =
-                text(
-                        "-- °C",
-                        11,
-                        Color.LTGRAY
-                );
-
-        timeBox.addView(clock);
-        timeBox.addView(date);
-        timeBox.addView(weather);
-
-        top.addView(timeBox);
-
-        dashboard.addView(
-                top,
-                new LinearLayout.LayoutParams(
-                        -1,
-                        dp(72)
-                )
-        );
-
-        // ============================================================
-        // MAIN
-        // ============================================================
-
-        LinearLayout main =
-                new LinearLayout(this);
-
-        main.setOrientation(
-                LinearLayout.HORIZONTAL
-        );
-
-        main.setPadding(
-                0,
-                dp(8),
-                0,
-                dp(8)
-        );
-
-        // ============================================================
-        // LEFT SIDEBAR
-        // ============================================================
-
-        main.addView(
-                buildSidebar(),
-                new LinearLayout.LayoutParams(
-                        dp(70),
-                        -1
-                )
-        );
-
-        // ============================================================
-        // MAP CONTENT
-        // ============================================================
-
-        LinearLayout content =
-                new LinearLayout(this);
-
-        content.setOrientation(
-                LinearLayout.VERTICAL
-        );
-
-        content.setPadding(
-                dp(8),
-                0,
-                0,
-                0
-        );
-
-        FrameLayout mapFrame =
-                new FrameLayout(this);
-
-        mapFrame.setBackground(
-                roundBg(
-                        Color.rgb(10, 18, 23),
-                        dp(18)
-                )
-        );
-
-        MapBackground mapBackground =
-                new MapBackground(this);
-
-        mapFrame.addView(
-                mapBackground,
-                new FrameLayout.LayoutParams(
-                        -1,
-                        -1
-                )
-        );
-
-        TextView mapLabel =
-                text(
-                        "MAP",
-                        13,
-                        Color.WHITE
-                );
-
-        mapLabel.setTypeface(
-                Typeface.DEFAULT,
-                Typeface.BOLD
-        );
-
-        mapLabel.setGravity(
-                Gravity.CENTER
-        );
-
-        mapLabel.setBackground(
-                roundBg(
-                        Color.argb(
-                                210,
-                                20,
-                                28,
-                                38
-                        ),
-                        dp(10)
-                )
-        );
-
-        FrameLayout.LayoutParams mapLabelParams =
-                new FrameLayout.LayoutParams(
-                        dp(72),
-                        dp(40),
-                        Gravity.TOP | Gravity.LEFT
-                );
-
-        mapLabelParams.setMargins(
-                dp(12),
-                dp(12),
-                0,
-                0
-        );
-
-        mapFrame.addView(
-                mapLabel,
-                mapLabelParams
-        );
-
-        TextView navigation =
-                text(
-                        "Navigation\nReady",
-                        12,
-                        Color.LTGRAY
-                );
-
-        navigation.setGravity(
-                Gravity.CENTER
-        );
-
-        navigation.setBackground(
-                roundBg(
-                        Color.argb(
-                                210,
-                                15,
-                                22,
-                                30
-                        ),
-                        dp(12)
-                )
-        );
-
-        FrameLayout.LayoutParams navParams =
-                new FrameLayout.LayoutParams(
-                        dp(120),
-                        dp(62),
-                        Gravity.BOTTOM | Gravity.LEFT
-                );
-
-        navParams.setMargins(
-                dp(12),
-                0,
-                0,
-                dp(12)
-        );
-
-        mapFrame.addView(
-                navigation,
-                navParams
-        );
-
-        content.addView(
-                mapFrame,
-                new LinearLayout.LayoutParams(
-                        -1,
-                        0,
-                        1f
-                )
-        );
-
-        // ============================================================
-        // STATUS CARDS
-        // ============================================================
-
-        LinearLayout stats =
-                new LinearLayout(this);
-
-        stats.setOrientation(
-                LinearLayout.HORIZONTAL
-        );
-
-        stats.setPadding(
-                0,
-                dp(8),
-                0,
-                0
-        );
-
-        speed =
-                text(
-                        "0 km/h",
-                        13,
-                        Color.WHITE
-                );
-
-        speed.setGravity(
-                Gravity.CENTER
-        );
-
-        speed.setBackground(
-                roundBg(
-                        Color.rgb(18, 26, 35),
-                        dp(12)
-                )
-        );
-
-        distance =
-                text(
-                        "0 km",
-                        13,
-                        Color.WHITE
-                );
-
-        distance.setGravity(
-                Gravity.CENTER
-        );
-
-        distance.setBackground(
-                roundBg(
-                        Color.rgb(18, 26, 35),
-                        dp(12)
-                )
-        );
-
-        media =
-                text(
-                        "No media",
-                        13,
-                        Color.WHITE
-                );
-
-        media.setGravity(
-                Gravity.CENTER
-        );
-
-        media.setBackground(
-                roundBg(
-                        Color.rgb(18, 26, 35),
-                        dp(12)
-                )
-        );
-
-        stats.addView(
-                speed,
-                new LinearLayout.LayoutParams(
-                        0,
-                        dp(54),
-                        1f
-                )
-        );
-
-        LinearLayout.LayoutParams distanceParams =
-                new LinearLayout.LayoutParams(
-                        0,
-                        dp(54),
-                        1f
-                );
-
-        distanceParams.setMargins(
-                dp(6),
-                0,
-                0,
-                0
-        );
-
-        stats.addView(
-                distance,
-                distanceParams
-        );
-
-        LinearLayout.LayoutParams mediaParams =
-                new LinearLayout.LayoutParams(
-                        0,
-                        dp(54),
-                        1f
-                );
-
-        mediaParams.setMargins(
-                dp(6),
-                0,
-                0,
-                0
-        );
-
-        stats.addView(
-                media,
-                mediaParams
-        );
-
-        content.addView(stats);
-
-        main.addView(
-                content,
-                new LinearLayout.LayoutParams(
-                        0,
-                        -1,
-                        1f
-                )
-        );
-
-        dashboard.addView(
-                main,
-                new LinearLayout.LayoutParams(
-                        -1,
-                        0,
-                        1f
-                )
-        );
-
-        // ============================================================
-        // BOTTOM BAR
-        // ============================================================
-
-        dock =
-                new LinearLayout(this);
-
-        dock.setOrientation(
-                LinearLayout.HORIZONTAL
-        );
-
-        dock.setGravity(
-                Gravity.CENTER_VERTICAL
-        );
-
-        dock.setPadding(
-                dp(8),
-                dp(6),
-                dp(8),
-                dp(6)
-        );
-
-        dock.setBackground(
-                roundBg(
-                        Color.rgb(18, 24, 32),
-                        dp(14)
-                )
-        );
-
-        TextView previous =
-                buttonText("◀");
-
-        TextView next =
-                buttonText("▶");
-
-        TextView music =
-                buttonText("♫");
-
-        TextView appsButton =
-                buttonText("▦  APPS");
-
-        previous.setOnClickListener(
-                v -> {
-                    if (media != null) {
-                        media.setText("Previous");
-                    }
-                }
-        );
-
-        next.setOnClickListener(
-                v -> {
-                    if (media != null) {
-                        media.setText("Next");
-                    }
-                }
-        );
-
-        music.setOnClickListener(
-                v -> {
-                    if (media != null) {
-                        media.setText("Media");
-                    }
-                }
-        );
-
-        appsButton.setOnClickListener(
-                v -> showApps()
-        );
-
-        dock.addView(
-                previous,
-                new LinearLayout.LayoutParams(
-                        0,
-                        dp(48),
-                        1f
-                )
-        );
-
-        dock.addView(
-                next,
-                new LinearLayout.LayoutParams(
-                        0,
-                        dp(48),
-                        1f
-                )
-        );
-
-        dock.addView(
-                music,
-                new LinearLayout.LayoutParams(
-                        0,
-                        dp(48),
-                        1f
-                )
-        );
-
-        LinearLayout.LayoutParams appsParams =
-                new LinearLayout.LayoutParams(
-                        0,
-                        dp(48),
-                        2f
-                );
-
-        appsParams.setMargins(
-                dp(6),
-                0,
-                0,
-                0
-        );
-
-        dock.addView(
-                appsButton,
-                appsParams
-        );
-
-        dashboard.addView(
-                dock,
-                new LinearLayout.LayoutParams(
-                        -1,
-                        dp(62)
-                )
-        );
-    }'''
-
-          replace_method(
-              "    private void buildDashboard()",
-              new_dashboard,
-              "real buildDashboard"
-          )
-
-          # ------------------------------------------------------------
-          # REAL APP ICONS
-          # ------------------------------------------------------------
-
-          replace_once(
-              """            apps.add(
+          # Dashboard
+          dashboard = r'''
+          private void buildDashboard() {
+              dashboard.removeAllViews();
+
+              LinearLayout top = new LinearLayout(this);
+              top.setGravity(Gravity.CENTER_VERTICAL);
+              top.setPadding(dp(10), dp(6), dp(10), dp(6));
+              top.setBackground(roundBg(Color.rgb(18,24,32), dp(14)));
+
+              LinearLayout titleBox = new LinearLayout(this);
+              titleBox.setOrientation(LinearLayout.VERTICAL);
+
+              TextView title = text("CAR ASSISTANT", 18, Color.WHITE);
+              title.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
+              titleBox.addView(title);
+
+              date = text("", 11, Color.LTGRAY);
+              titleBox.addView(date);
+
+              top.addView(titleBox,
+                      new LinearLayout.LayoutParams(0, -2, 1f));
+
+              clock = text("", 20, Color.WHITE);
+              clock.setGravity(Gravity.CENTER);
+              top.addView(clock,
+                      new LinearLayout.LayoutParams(dp(100), dp(55)));
+
+              dashboard.addView(top,
+                      new LinearLayout.LayoutParams(-1, dp(66)));
+
+              LinearLayout main = new LinearLayout(this);
+              main.setOrientation(LinearLayout.HORIZONTAL);
+              main.setPadding(0, dp(8), 0, dp(8));
+
+              main.addView(buildSidebar(),
+                      new LinearLayout.LayoutParams(dp(72), -1));
+
+              LinearLayout content = new LinearLayout(this);
+              content.setOrientation(LinearLayout.VERTICAL);
+              content.setPadding(dp(8), 0, 0, 0);
+
+              FrameLayout map = new FrameLayout(this);
+              map.setBackground(roundBg(Color.rgb(9,17,23), dp(16)));
+              map.addView(new MapBackground(this),
+                      new FrameLayout.LayoutParams(-1, -1));
+
+              TextView mapTitle = text("MAP", 12, Color.WHITE);
+              mapTitle.setGravity(Gravity.CENTER);
+              mapTitle.setBackground(
+                      roundBg(Color.rgb(24,32,42), dp(10)));
+
+              FrameLayout.LayoutParams mp =
+                      new FrameLayout.LayoutParams(dp(70), dp(38));
+              mp.gravity = Gravity.TOP | Gravity.LEFT;
+              mp.setMargins(dp(10), dp(10), 0, 0);
+              map.addView(mapTitle, mp);
+
+              TextView nav = text("Navigation\nReady", 12, Color.LTGRAY);
+              nav.setGravity(Gravity.CENTER);
+              nav.setBackground(
+                      roundBg(Color.rgb(18,25,33), dp(10)));
+
+              FrameLayout.LayoutParams np =
+                      new FrameLayout.LayoutParams(dp(120), dp(58));
+              np.gravity = Gravity.BOTTOM | Gravity.LEFT;
+              np.setMargins(dp(10), 0, 0, dp(10));
+              map.addView(nav, np);
+
+              content.addView(map,
+                      new LinearLayout.LayoutParams(-1, 0, 1f));
+
+              LinearLayout info = new LinearLayout(this);
+              info.setOrientation(LinearLayout.HORIZONTAL);
+              info.setPadding(0, dp(6), 0, 0);
+
+              info.addView(infoCard("SPEED", "0 km/h"),
+                      new LinearLayout.LayoutParams(0, dp(54), 1f));
+              info.addView(infoCard("WEATHER", "-- °C"),
+                      new LinearLayout.LayoutParams(0, dp(54), 1f));
+              info.addView(infoCard("MEDIA", "No media"),
+                      new LinearLayout.LayoutParams(0, dp(54), 1f));
+
+              content.addView(info);
+
+              main.addView(content,
+                      new LinearLayout.LayoutParams(0, -1, 1f));
+
+              dashboard.addView(main,
+                      new LinearLayout.LayoutParams(-1, 0, 1f));
+
+              LinearLayout bottom = new LinearLayout(this);
+              bottom.setGravity(Gravity.CENTER_VERTICAL);
+              bottom.setPadding(dp(6), dp(5), dp(6), dp(5));
+              bottom.setBackground(roundBg(Color.rgb(18,24,32), dp(14)));
+
+              TextView prev = buttonText("◀");
+              TextView next = buttonText("▶");
+              TextView media = buttonText("♫");
+              TextView apps = buttonText("▦  APPS");
+
+              bottom.addView(prev,
+                      new LinearLayout.LayoutParams(0, dp(48), 1f));
+              bottom.addView(next,
+                      new LinearLayout.LayoutParams(0, dp(48), 1f));
+              bottom.addView(media,
+                      new LinearLayout.LayoutParams(0, dp(48), 1f));
+              bottom.addView(apps,
+                      new LinearLayout.LayoutParams(0, dp(48), 2f));
+
+              apps.setOnClickListener(v -> showApps());
+
+              dashboard.addView(bottom,
+                      new LinearLayout.LayoutParams(-1, dp(60)));
+          }
+          '''
+          s = method(s, "private void buildDashboard()", dashboard)
+
+          # Real application icons
+          old = '''            apps.add(
                     new AppInfo(
                             component,
-                            name));""",
-              """            Drawable icon =
-                    info.loadIcon(
-                            getPackageManager());
+                            name));'''
+          new = '''            Drawable icon =
+                    info.loadIcon(getPackageManager());
 
             apps.add(
                     new AppInfo(
                             component,
                             name,
-                            icon));""",
-              "load real application icon"
-          )
-
-          # ------------------------------------------------------------
-          # APP TILE
-          # ------------------------------------------------------------
-
-          new_app_tile = r'''    private LinearLayout appTile(
-            AppInfo app) {
-
-        LinearLayout tile =
-                new LinearLayout(this);
-
-        tile.setOrientation(
-                LinearLayout.VERTICAL
-        );
-
-        tile.setGravity(
-                Gravity.CENTER
-        );
-
-        tile.setPadding(
-                dp(8),
-                dp(8),
-                dp(8),
-                dp(8)
-        );
-
-        tile.setBackground(
-                roundBg(
-                        Color.rgb(20, 28, 38),
-                        dp(14)
-                )
-        );
-
-        ImageView icon =
-                new ImageView(this);
-
-        if (app.icon != null) {
-            icon.setImageDrawable(
-                    app.icon
-            );
-        } else {
-            icon.setImageDrawable(
-                    getPackageManager()
-                            .getDefaultActivityIcon()
-            );
-        }
-
-        icon.setScaleType(
-                ImageView.ScaleType.CENTER_INSIDE
-        );
-
-        tile.addView(
-                icon,
-                new LinearLayout.LayoutParams(
-                        dp(52),
-                        dp(52)
-                )
-        );
-
-        TextView name =
-                text(
-                        app.name,
-                        12,
-                        Color.WHITE
-                );
-
-        name.setGravity(
-                Gravity.CENTER
-        );
-
-        name.setMaxLines(2);
-
-        LinearLayout.LayoutParams nameParams =
-                new LinearLayout.LayoutParams(
-                        -1,
-                        dp(42)
-                );
-
-        nameParams.topMargin =
-                dp(5);
-
-        tile.addView(
-                name,
-                nameParams
-        );
-
-        tile.setOnClickListener(
-                v -> selectApp(app)
-        );
-
-        return tile;
-    }'''
-
-          replace_method(
-              "    private LinearLayout appTile(",
-              new_app_tile,
-              "real appTile"
-          )
-
-          # ------------------------------------------------------------
-          # HELPERS
-          # ------------------------------------------------------------
-
-          helper_marker =
-              "    // ====================================================\n" \
-              "    // APP MODEL\n" \
-              "    // ====================================================\n"
-
-          if src.count(helper_marker) != 1:
-              raise SystemExit(
-                  "PATCH FAILED: APP MODEL marker count is not 1"
-              )
-
-          helpers = r'''    // ====================================================
-    // HOME V1 HELPERS
-    // ====================================================
-
-    private GradientDrawable roundBg(
-            int color,
-            float radius) {
-
-        GradientDrawable drawable =
-                new GradientDrawable();
-
-        drawable.setColor(color);
-        drawable.setCornerRadius(radius);
-
-        return drawable;
-    }
-
-    private LinearLayout buildSidebar() {
-
-        LinearLayout sidebar =
-                new LinearLayout(this);
-
-        sidebar.setOrientation(
-                LinearLayout.VERTICAL
-        );
-
-        sidebar.setGravity(
-                Gravity.CENTER_HORIZONTAL
-        );
-
-        sidebar.setPadding(
-                0,
-                dp(4),
-                0,
-                dp(4)
-        );
-
-        sidebar.setBackground(
-                roundBg(
-                        Color.rgb(15, 21, 29),
-                        dp(14)
-                )
-        );
-
-        TextView menu =
-                sideButton("☰", "Menu");
-
-        TextView map =
-                sideButton("⌖", "Map");
-
-        TextView files =
-                sideButton("▣", "Files");
-
-        TextView settings =
-                sideButton("⚙", "Settings");
-
-        TextView more =
-                sideButton("⋮", "More");
-
-        menu.setOnClickListener(
-                v -> {
-                    if (location != null) {
-                        location.setText(
-                                "Menu"
-                        );
-                    }
-                }
-        );
-
-        map.setOnClickListener(
-                v -> {
-                    if (location != null) {
-                        location.setText(
-                                "Map"
-                        );
-                    }
-                }
-        );
-
-        files.setOnClickListener(
-                v -> showApps()
-        );
-
-        settings.setOnClickListener(
-                v -> {
-                    if (location != null) {
-                        location.setText(
-                                "Settings"
-                        );
-                    }
-                }
-        );
-
-        more.setOnClickListener(
-                v -> {
-                    if (location != null) {
-                        location.setText(
-                                "More"
-                        );
-                    }
-                }
-        );
-
-        sidebar.addView(
-                menu,
-                sideParams()
-        );
-
-        sidebar.addView(
-                map,
-                sideParams()
-        );
-
-        sidebar.addView(
-                files,
-                sideParams()
-        );
-
-        sidebar.addView(
-                settings,
-                sideParams()
-        );
-
-        sidebar.addView(
-                more,
-                sideParams()
-        );
-
-        return sidebar;
-    }
-
-    private LinearLayout.LayoutParams sideParams() {
-
-        return new LinearLayout.LayoutParams(
-                -1,
-                dp(64)
-        );
-    }
-
-    private TextView sideButton(
-            String icon,
-            String label) {
-
-        TextView view =
-                text(
-                        icon + "\n" + label,
-                        10,
-                        Color.WHITE
-                );
-
-        view.setGravity(
-                Gravity.CENTER
-        );
-
-        view.setPadding(
-                dp(2),
-                dp(4),
-                dp(2),
-                dp(4)
-        );
-
-        view.setBackground(
-                roundBg(
-                        Color.TRANSPARENT,
-                        dp(10)
-                )
-        );
-
-        return view;
-    }
-
-    private final class MapBackground
-            extends View {
-
-        private final Paint gridPaint =
-                new Paint(
-                        Paint.ANTI_ALIAS_FLAG
-                );
-
-        private final Paint roadPaint =
-                new Paint(
-                        Paint.ANTI_ALIAS_FLAG
-                );
-
-        private final Paint markerPaint =
-                new Paint(
-                        Paint.ANTI_ALIAS_FLAG
-                );
-
-        private final Path road =
-                new Path();
-
-        MapBackground(
-                android.content.Context context) {
-
-            super(context);
-
-            gridPaint.setColor(
-                    Color.rgb(28, 42, 48)
-            );
-
-            gridPaint.setStrokeWidth(
-                    dp(1)
-            );
-
-            roadPaint.setColor(
-                    Color.rgb(48, 62, 70)
-            );
-
-            roadPaint.setStyle(
-                    Paint.Style.STROKE
-            );
-
-            roadPaint.setStrokeWidth(
-                    dp(14)
-            );
-
-            roadPaint.setStrokeCap(
-                    Paint.Cap.ROUND
-            );
-
-            markerPaint.setColor(
-                    Color.WHITE
-            );
-
-            markerPaint.setStyle(
-                    Paint.Style.FILL
-            );
-        }
-
-        @Override
-        protected void onDraw(
-                Canvas canvas) {
-
-            super.onDraw(canvas);
-
-            canvas.drawColor(
-                    Color.rgb(10, 18, 23)
-            );
-
-            int width = getWidth();
-            int height = getHeight();
-
-            int step = dp(38);
-
-            for (
-                    int x = 0;
-                    x < width;
-                    x += step
-            ) {
-                canvas.drawLine(
-                        x,
-                        0,
-                        x,
-                        height,
-                        gridPaint
-                );
-            }
-
-            for (
-                    int y = 0;
-                    y < height;
-                    y += step
-            ) {
-                canvas.drawLine(
-                        0,
-                        y,
-                        width,
-                        y,
-                        gridPaint
-                );
-            }
-
-            road.reset();
-
-            road.moveTo(
-                    0,
-                    height * 0.72f
-            );
-
-            road.cubicTo(
-                    width * 0.25f,
-                    height * 0.55f,
-                    width * 0.52f,
-                    height * 0.78f,
-                    width,
-                    height * 0.35f
-            );
-
-            roadPaint.setStrokeWidth(
-                    dp(14)
-            );
-
-            roadPaint.setColor(
-                    Color.rgb(48, 62, 70)
-            );
-
-            canvas.drawPath(
-                    road,
-                    roadPaint
-            );
-
-            roadPaint.setStrokeWidth(
-                    dp(2)
-            );
-
-            roadPaint.setColor(
-                    Color.rgb(82, 99, 108)
-            );
-
-            canvas.drawPath(
-                    road,
-                    roadPaint
-            );
-
-            float markerX =
-                    width * 0.52f;
-
-            float markerY =
-                    height * 0.58f;
-
-            canvas.drawCircle(
-                    markerX,
-                    markerY,
-                    dp(8),
-                    markerPaint
-            );
-
-            Paint labelPaint =
-                    new Paint(
-                            Paint.ANTI_ALIAS_FLAG
-                    );
-
-            labelPaint.setColor(
-                    Color.rgb(
-                            135,
-                            151,
-                            158
-                    )
-            );
-
-            labelPaint.setTextSize(
-                    dp(10)
-            );
-
-            canvas.drawText(
-                    "ROAD",
-                    width * 0.22f,
-                    height * 0.45f,
-                    labelPaint
-            );
-
-            canvas.drawText(
-                    "CITY",
-                    width * 0.72f,
-                    height * 0.24f,
-                    labelPaint
-            );
-        }
-    }
-
-'''
-
-          src = src.replace(
-              helper_marker,
-              helpers + helper_marker,
-              1
-          )
-
-          print("PATCH OK: Home V1 helper layer")
-
-          # ------------------------------------------------------------
-          # APP MODEL
-          # ------------------------------------------------------------
-
-          new_model = r'''    private static final class AppInfo {
-
-        final ComponentName component;
-
-        final String name;
-
-        final Drawable icon;
-
-        AppInfo(
-                ComponentName component,
-                String name,
-                Drawable icon) {
-
-            this.component =
-                    component;
-
-            this.name =
-                    name;
-
-            this.icon =
-                    icon;
-        }
-    }'''
-
-          replace_class(
-              "    private static final class AppInfo",
-              new_model,
-              "AppInfo real icon model"
-          )
-
-          # ------------------------------------------------------------
-          # REMOVE OLD INITIAL-LETTER HELPER
-          # ------------------------------------------------------------
-
-          if "initial(app.name)" not in src:
-              print(
-                  "PATCH OK: initial(app.name) removed"
-              )
-          else:
-              raise SystemExit(
-                  "PATCH FAILED: initial(app.name) remains"
-              )
-
-          if "private String initial(" in src:
-              replace_method(
-                  "    private String initial(",
-                  "",
-                  "remove initial() helper"
-              )
-
-          if "private String initial(" in src:
-              raise SystemExit(
-                  "PATCH FAILED: initial() helper remains"
-              )
-
-          # ------------------------------------------------------------
-          # WRITE
-          # ------------------------------------------------------------
-
-          path.write_text(
-              src,
-              encoding="utf-8"
-          )
-
-          if src == ORIGINAL:
-              raise SystemExit(
-                  "PATCH FAILED: source did not change"
-              )
-
-          print("Home V1 V3 patch written successfully.")
+                            icon));'''
+          s = once(s, old, new, "real app icons")
+
+          # App tile
+          tile = r'''
+          private LinearLayout appTile(AppInfo app) {
+              LinearLayout tile = new LinearLayout(this);
+              tile.setOrientation(LinearLayout.VERTICAL);
+              tile.setGravity(Gravity.CENTER);
+              tile.setPadding(dp(6), dp(6), dp(6), dp(6));
+              tile.setBackground(
+                      roundBg(Color.rgb(22,28,35), dp(14)));
+
+              ImageView icon = new ImageView(this);
+              if (app.icon != null) {
+                  icon.setImageDrawable(app.icon);
+              } else {
+                  icon.setImageDrawable(
+                          getPackageManager().getDefaultActivityIcon());
+              }
+              icon.setScaleType(ImageView.ScaleType.CENTER_INSIDE);
+
+              tile.addView(icon,
+                      new LinearLayout.LayoutParams(dp(50), dp(50)));
+
+              TextView name = text(app.name, 12, Color.WHITE);
+              name.setGravity(Gravity.CENTER);
+              name.setMaxLines(2);
+
+              tile.addView(name,
+                      new LinearLayout.LayoutParams(-1, dp(40)));
+
+              tile.setOnClickListener(v -> selectApp(app));
+              return tile;
+          }
+          '''
+          s = method(s, "private LinearLayout appTile(", tile)
+
+          # App model
+          model = r'''
+          private static final class AppInfo {
+              final ComponentName component;
+              final String name;
+              final Drawable icon;
+
+              AppInfo(ComponentName component, String name, Drawable icon) {
+                  this.component = component;
+                  this.name = name;
+                  this.icon = icon;
+              }
+          }
+          '''
+          s = method(s, "private static final class AppInfo", model)
+
+          # Remove old initial() helper
+          if "private String initial(" in s:
+              s = method(s, "private String initial(", "")
+
+          # Add helpers before UI HELPERS
+          marker = "    // ====================================================\n    // UI HELPERS\n"
+          if s.count(marker) != 1:
+              raise SystemExit("UI HELPERS marker mismatch")
+
+          helpers = r'''
+          private GradientDrawable roundBg(int color, float radius) {
+              GradientDrawable bg = new GradientDrawable();
+              bg.setColor(color);
+              bg.setCornerRadius(radius);
+              return bg;
+          }
+
+          private LinearLayout buildSidebar() {
+              LinearLayout side = new LinearLayout(this);
+              side.setOrientation(LinearLayout.VERTICAL);
+              side.setGravity(Gravity.CENTER_HORIZONTAL);
+              side.setPadding(0, dp(4), 0, dp(4));
+              side.setBackground(roundBg(Color.rgb(15,21,29), dp(14)));
+
+              side.addView(sideButton("☰", "Menu"));
+              side.addView(sideButton("⌖", "Map"));
+              side.addView(sideButton("▣", "Files"));
+              side.addView(sideButton("⚙", "Settings"));
+              side.addView(sideButton("⋮", "More"));
+              return side;
+          }
+
+          private TextView sideButton(String icon, String label) {
+              TextView v = text(icon + "\n" + label, 10, Color.WHITE);
+              v.setGravity(Gravity.CENTER);
+              v.setPadding(dp(2), dp(3), dp(2), dp(3));
+              v.setBackground(roundBg(Color.TRANSPARENT, dp(10)));
+              v.setOnClickListener(x -> {
+                  if ("Files".equals(label)) {
+                      showApps();
+                  } else if (status != null) {
+                      status.setText(label);
+                  }
+              });
+              LinearLayout.LayoutParams p =
+                      new LinearLayout.LayoutParams(-1, dp(62));
+              return v;
+          }
+
+          private LinearLayout infoCard(String title, String value) {
+              LinearLayout box = card();
+              box.addView(text(title, 10, Color.LTGRAY));
+              TextView val = text(value, 15, Color.WHITE);
+              val.setGravity(Gravity.CENTER);
+              box.addView(val,
+                      new LinearLayout.LayoutParams(-1, 0, 1f));
+              return box;
+          }
+
+          private final class MapBackground extends View {
+              private final Paint grid = new Paint(Paint.ANTI_ALIAS_FLAG);
+              private final Paint road = new Paint(Paint.ANTI_ALIAS_FLAG);
+
+              MapBackground(android.content.Context c) {
+                  super(c);
+                  grid.setColor(Color.rgb(27,40,47));
+                  grid.setStrokeWidth(dp(1));
+                  road.setColor(Color.rgb(55,70,78));
+                  road.setStyle(Paint.Style.STROKE);
+                  road.setStrokeWidth(dp(12));
+                  road.setStrokeCap(Paint.Cap.ROUND);
+              }
+
+              @Override
+              protected void onDraw(Canvas c) {
+                  super.onDraw(c);
+                  c.drawColor(Color.rgb(9,17,23));
+
+                  int w = getWidth();
+                  int h = getHeight();
+                  int step = dp(36);
+
+                  for (int x = 0; x < w; x += step) {
+                      c.drawLine(x, 0, x, h, grid);
+                  }
+                  for (int y = 0; y < h; y += step) {
+                      c.drawLine(0, y, w, y, grid);
+                  }
+
+                  Path p = new Path();
+                  p.moveTo(0, h * .72f);
+                  p.cubicTo(
+                          w * .25f, h * .55f,
+                          w * .55f, h * .78f,
+                          w, h * .32f);
+                  c.drawPath(p, road);
+
+                  Paint marker = new Paint(Paint.ANTI_ALIAS_FLAG);
+                  marker.setColor(Color.WHITE);
+                  c.drawCircle(w * .52f, h * .57f, dp(7), marker);
+              }
+          }
+
+          '''
+          s = s.replace(marker, helpers + marker, 1)
+
+          if s == original:
+              raise SystemExit("PATCH MADE NO CHANGES")
+
+          if "initial(app.name)" in s:
+              raise SystemExit("OLD INITIAL ICON STILL EXISTS")
+
+          p.write_text(s, encoding="utf-8")
+          print("V3.1 patch complete")
           PY
 
-      - name: Verify V3 patch and isolate changed file
+      - name: Verify patch
         shell: bash
         run: |
           set -euo pipefail
+          FILE="v10-source/app/src/main/java/com/hieptran/aacast/doudou/V10LauncherActivity.java"
 
-          FILE="v10-source/app/src/main/java/com/carassistant/v10/V10LauncherActivity.java"
-
-          echo "===== PATCHED SOURCE CHECK ====="
-
-          grep -Fq 'class V10LauncherActivity' "$FILE"
+          grep -Fq 'import android.graphics.Canvas;' "$FILE"
+          grep -Fq 'import android.graphics.drawable.Drawable;' "$FILE"
+          grep -Fq 'import android.widget.ImageView;' "$FILE"
           grep -Fq 'class MapBackground' "$FILE"
           grep -Fq 'private LinearLayout buildSidebar()' "$FILE"
-          grep -Fq 'new ImageView(this)' "$FILE"
-          grep -Fq 'info.loadIcon' "$FILE"
+          grep -Fq 'info.loadIcon(getPackageManager())' "$FILE"
           grep -Fq 'final Drawable icon' "$FILE"
           grep -Fq 'V10SessionStore.setTarget' "$FILE"
-          grep -Fq 'import android.widget.FrameLayout;' "$FILE"
-          grep -Fq 'import android.graphics.Canvas;' "$FILE"
 
           if grep -Fq 'initial(app.name)' "$FILE"; then
-            echo "ERROR: initial-letter icon remains."
+            echo "ERROR: initial icon remains"
             exit 1
           fi
 
           if grep -Fq 'private String initial(' "$FILE"; then
-            echo "ERROR: initial() helper remains."
+            echo "ERROR: initial() remains"
             exit 1
           fi
-
-          echo "===== GIT DIFF CHECK ====="
 
           git diff --check
 
-          git diff --name-only
+          CHANGED="$(git diff --name-only)"
 
-          changed="$(git diff --name-only)"
-
-          if [ "$changed" != "$FILE" ]; then
-            echo "ERROR: more than V10LauncherActivity.java changed."
-            echo "Changed files:"
-            printf '%s\n' "$changed"
-            exit 1
-          fi
+          test "$CHANGED" = "$FILE"
 
           echo "Only V10LauncherActivity.java changed."
+          echo "Patch verification PASS."
 
-          echo "===== DIFF STAT ====="
-          git diff --stat
-
-          echo "===== DIFF ====="
-          git diff -- "$FILE"
-
-          echo "===== FINAL SOURCE SHA256 ====="
-          sha256sum "$FILE"
-
-      - name: Compile Java first
+      - name: Compile Java
         working-directory: v10-source
         shell: bash
         run: |
           set -euo pipefail
-
           chmod +x gradlew
+          ./gradlew :app:compileDebugJavaWithJavac --no-daemon --stacktrace
 
-          ./gradlew \
-            :app:compileDebugJavaWithJavac \
-            --no-daemon \
-            --stacktrace
-
-      - name: Assemble debug APK
+      - name: Assemble APK
         working-directory: v10-source
         shell: bash
         run: |
           set -euo pipefail
+          ./gradlew :app:assembleDebug --no-daemon --stacktrace
 
-          ./gradlew \
-            :app:assembleDebug \
-            --no-daemon \
-            --stacktrace
-
-      - name: Locate APK
+      - name: Prepare APK
         shell: bash
         run: |
           set -euo pipefail
 
-          APK="$(
-            find v10-source/app/build/outputs/apk \
-              -type f \
-              -name '*.apk' \
-              | grep '/debug/' \
-              | head -n 1
-          )"
+          APK="$(find v10-source/app/build/outputs/apk \
+            -type f -name '*.apk' \
+            | grep '/debug/' | head -n 1)"
 
-          if [ -z "$APK" ]; then
-            echo "ERROR: debug APK not found."
-
-            find v10-source/app/build/outputs/apk \
-              -type f \
-              -print || true
-
-            exit 1
-          fi
-
-          echo "APK=$APK"
+          test -n "$APK"
 
           mkdir -p release-apk
 
-          cp \
-            "$APK" \
-            release-apk/CarAssistant-V10-Home-V1-Phone-UI-V3-debug.apk
-
-          echo "===== APK SHA256 ====="
+          cp "$APK" \
+            release-apk/CarAssistant-V10-Home-V1-Phone-UI-V3.1-debug.apk
 
           sha256sum \
-            release-apk/CarAssistant-V10-Home-V1-Phone-UI-V3-debug.apk
-
-          echo "===== APK SIZE ====="
+            release-apk/CarAssistant-V10-Home-V1-Phone-UI-V3.1-debug.apk
 
           ls -lh \
-            release-apk/CarAssistant-V10-Home-V1-Phone-UI-V3-debug.apk
+            release-apk/CarAssistant-V10-Home-V1-Phone-UI-V3.1-debug.apk
 
-      - name: Upload V3 debug APK
+      - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: CarAssistant-V10-Home-V1-Phone-UI-V3-debug
-          path: release-apk/CarAssistant-V10-Home-V1-Phone-UI-V3-debug.apk
+          name: CarAssistant-V10-Home-V1-Phone-UI-V3.1-debug
+          path: release-apk/CarAssistant-V10-Home-V1-Phone-UI-V3.1-debug.apk
           if-no-files-found: error
           retention-days: 14
