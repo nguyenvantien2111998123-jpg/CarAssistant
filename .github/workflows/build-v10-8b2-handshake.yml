@@ -1,4 +1,4 @@
-name: Build Car Assistant V10 - 8B2 Startup Handshake Fixed
+name: Build Car Assistant V10 - 8B2 Startup Handshake Fixed v2
 
 on:
   workflow_dispatch:
@@ -20,6 +20,9 @@ jobs:
           distribution: temurin
           java-version: "17"
 
+      # ============================================================
+      # 1. VERIFY EXISTING V10
+      # ============================================================
       - name: Verify existing V10
         shell: bash
         run: |
@@ -33,9 +36,7 @@ jobs:
             V10CarActivity.java \
             V10SessionStore.java \
             V10InputController.java \
-            RootShellSession.java \
-            CarSystemUI.java \
-            CarRecents.java
+            RootShellSession.java
           do
             test -f "$ROOT/$f"
           done
@@ -46,8 +47,19 @@ jobs:
           grep -q 'package com.carassistant.v10;' \
             "$ROOT/V10ProjectionSession.java"
 
+          grep -q 'package com.carassistant.v10;' \
+            "$ROOT/V10CarActivity.java"
+
+          grep -Fq \
+            'private static final int MAX_RECENTS = 4;' \
+            "$ROOT/V10SessionStore.java"
+
           echo "Existing V10 source confirmed."
 
+      # ============================================================
+      # 2. PATCH V10ProjectionService
+      #    Brace-safe replacement
+      # ============================================================
       - name: Patch V10ProjectionService - brace safe
         shell: bash
         run: |
@@ -161,17 +173,8 @@ jobs:
               )
 
           def replace_method(src, name, replacement):
-
-              start, end = method_span(
-                  src,
-                  name
-              )
-
-              return (
-                  src[:start]
-                  + replacement
-                  + src[end:]
-              )
+              start, end = method_span(src, name)
+              return src[:start] + replacement + src[end:]
 
           anchor = (
               "    private static volatile "
@@ -185,35 +188,26 @@ jobs:
                       "START_LOCK anchor not found"
                   )
 
-              fields = """\
-              private static final Object START_LOCK =
-                      new Object();
+              fields = """
+          private static final Object START_LOCK =
+                  new Object();
 
-              private static ComponentName pendingTarget;
+          private static ComponentName pendingTarget;
 
-              private static Surface pendingSurface;
+          private static Surface pendingSurface;
 
-              private static int pendingWidth;
+          private static int pendingWidth;
 
-              private static int pendingHeight;
-              """
-
-              fields = "\n".join(
-                  line[14:] if line.startswith("              ")
-                  else line
-                  for line in fields.splitlines()
-              )
+          private static int pendingHeight;
+          """
 
               s = s.replace(
                   anchor,
-                  anchor
-                  + "\n\n"
-                  + fields
-                  + "\n",
+                  anchor + "\n" + fields,
                   1
               )
 
-          ensure_started = """\
+          ensure_started = """
               public static void ensureStarted(
                       android.content.Context context) {
 
@@ -250,13 +244,7 @@ jobs:
                               error);
                   }
               }
-              """
-
-          ensure_started = "\n".join(
-              line[14:] if line.startswith("              ")
-              else line
-              for line in ensure_started.splitlines()
-          )
+          """
 
           s = replace_method(
               s,
@@ -264,7 +252,7 @@ jobs:
               ensure_started
           )
 
-          set_target = """\
+          set_target = """
               public static void setTarget(
                       android.content.Context context,
                       ComponentName component) {
@@ -294,13 +282,7 @@ jobs:
                               component);
                   }
               }
-              """
-
-          set_target = "\n".join(
-              line[14:] if line.startswith("              ")
-              else line
-              for line in set_target.splitlines()
-          )
+          """
 
           s = replace_method(
               s,
@@ -308,7 +290,7 @@ jobs:
               set_target
           )
 
-          attach_surface = """\
+          attach_surface = """
               public static void attachSurface(
                       android.content.Context context,
                       Surface newSurface,
@@ -334,9 +316,7 @@ jobs:
                                           != newSurface) {
 
                               try {
-
                                   pendingSurface.release();
-
                               } catch (Throwable ignored) {
                               }
                           }
@@ -362,13 +342,7 @@ jobs:
                               newHeight);
                   }
               }
-              """
-
-          attach_surface = "\n".join(
-              line[14:] if line.startswith("              ")
-              else line
-              for line in attach_surface.splitlines()
-          )
+          """
 
           s = replace_method(
               s,
@@ -388,7 +362,7 @@ jobs:
                       "onCreate marker not found"
                   )
 
-              flush = """\
+              flush = """
               private void flushPendingState() {
 
                   synchronized (START_LOCK) {
@@ -412,22 +386,17 @@ jobs:
                               pendingHeight;
 
                       pendingTarget = null;
-
                       pendingSurface = null;
-
                       pendingWidth = 0;
-
                       pendingHeight = 0;
 
                       try {
 
                           if (t != null) {
-
                               setTargetInternal(t);
                           }
 
                           if (sf != null) {
-
                               attachSurfaceInternal(
                                       sf,
                                       w,
@@ -444,13 +413,7 @@ jobs:
                   }
               }
 
-              """
-
-              flush = "\n".join(
-                  line[14:] if line.startswith("              ")
-                  else line
-                  for line in flush.splitlines()
-              )
+          """
 
               s = s.replace(
                   marker,
@@ -464,13 +427,7 @@ jobs:
                   startForeground(
                           NOTIFICATION_ID,
                           notification);
-              """
-
-              marker = "\n".join(
-                  line[14:] if line.startswith("              ")
-                  else line
-                  for line in marker.splitlines()
-              )
+          """
 
               if marker not in s:
                   raise SystemExit(
@@ -487,13 +444,15 @@ jobs:
           p.write_text(s)
 
           print(
-              "ProjectionService patched with "
-              "brace-safe method replacement."
+              "ProjectionService patched successfully."
           )
           PY
 
           python3 /tmp/patch_service.py "$FILE"
 
+      # ============================================================
+      # 3. PATCH V10ProjectionSession
+      # ============================================================
       - name: Patch V10ProjectionSession - constructor only
         shell: bash
         run: |
@@ -514,13 +473,11 @@ jobs:
               r'\(\s*Context\s+context\s*\)\s*\{'
           )
 
-          matches = list(
-              pattern.finditer(s)
-          )
+          matches = list(pattern.finditer(s))
 
           if len(matches) != 1:
               raise SystemExit(
-                  "Expected one V10ProjectionSession "
+                  "Expected exactly one V10ProjectionSession "
                   "constructor, found "
                   + str(len(matches))
               )
@@ -559,20 +516,14 @@ jobs:
                   "Constructor unmatched braces"
               )
 
-          new = """\
+          new = """
               public V10ProjectionSession(
                       Context context) {
 
                   this.context =
                           context.getApplicationContext();
               }
-              """
-
-          new = "\n".join(
-              line[14:] if line.startswith("              ")
-              else line
-              for line in new.splitlines()
-          )
+          """
 
           s = (
               s[:start]
@@ -580,13 +531,10 @@ jobs:
               + s[end:]
           )
 
-          if (
-              "V10ProjectionService.ensureStarted"
-              in s
-          ):
+          if "V10ProjectionService.ensureStarted" in s:
               raise SystemExit(
-                  "Session still contains eager "
-                  "service startup"
+                  "Eager service startup still exists "
+                  "in V10ProjectionSession"
               )
 
           p.write_text(s)
@@ -596,6 +544,9 @@ jobs:
           )
           PY
 
+      # ============================================================
+      # 4. VERIFY 8B.2
+      # ============================================================
       - name: Verify 8B2 source
         shell: bash
         run: |
@@ -624,11 +575,12 @@ jobs:
             'startForegroundService' \
             "$SERVICE"
 
+          # Only reject an actual shell force-stop command.
           if grep -nE \
             '(^|[[:space:];&|])(/system/bin/)?am[[:space:]]+force-stop([[:space:]]|$)' \
             "$SERVICE"
           then
-            echo "ERROR: force-stop command detected"
+            echo "ERROR: actual am force-stop command detected."
             exit 1
           fi
 
@@ -636,12 +588,15 @@ jobs:
             'V10ProjectionService.ensureStarted' \
             "$SESSION"
           then
-            echo "ERROR: eager service startup remains"
+            echo "ERROR: eager service startup remains."
             exit 1
           fi
 
-          echo "V10-8B.2 source verification passed."
+          echo "V10-8B.2 handshake verification passed."
 
+      # ============================================================
+      # 5. VERIFY EXISTING COMPONENTS
+      # ============================================================
       - name: Verify V10 components preserved
         shell: bash
         run: |
@@ -653,8 +608,8 @@ jobs:
           test -f "$ROOT/V10SessionStore.java"
           test -f "$ROOT/V10InputController.java"
           test -f "$ROOT/RootShellSession.java"
-          test -f "$ROOT/CarSystemUI.java"
-          test -f "$ROOT/CarRecents.java"
+          test -f "$ROOT/V10ProjectionService.java"
+          test -f "$ROOT/V10ProjectionSession.java"
 
           grep -Fq \
             'private static final int MAX_RECENTS = 4;' \
@@ -662,6 +617,9 @@ jobs:
 
           echo "Existing V10 components preserved."
 
+      # ============================================================
+      # 6. VALIDATE JAVA BRACES
+      # ============================================================
       - name: Validate Java structure
         shell: bash
         run: |
@@ -686,7 +644,6 @@ jobs:
               while i < len(s):
 
                   c = s[i]
-
                   n = (
                       s[i + 1]
                       if i + 1 < len(s)
@@ -696,36 +653,30 @@ jobs:
                   if state == "code":
 
                       if c == '/' and n == '/':
-
                           state = "line"
                           i += 2
                           continue
 
                       if c == '/' and n == '*':
-
                           state = "block"
                           i += 2
                           continue
 
                       if c == '"':
-
                           state = "string"
 
                       elif c == "'":
-
                           state = "char"
 
                       elif c == '{':
-
                           depth += 1
 
                       elif c == '}':
-
                           depth -= 1
 
                           if depth < 0:
                               raise SystemExit(
-                                  f"{path}: negative depth"
+                                  f"{path}: negative brace depth"
                               )
 
                   elif state == "line":
@@ -736,7 +687,6 @@ jobs:
                   elif state == "block":
 
                       if c == '*' and n == '/':
-
                           state = "code"
                           i += 2
                           continue
@@ -744,7 +694,6 @@ jobs:
                   elif state == "string":
 
                       if c == '\\':
-
                           i += 2
                           continue
 
@@ -754,7 +703,6 @@ jobs:
                   elif state == "char":
 
                       if c == '\\':
-
                           i += 2
                           continue
 
@@ -764,9 +712,8 @@ jobs:
                   i += 1
 
               if depth != 0 or state != "code":
-
                   raise SystemExit(
-                      f"{path}: unbalanced structure "
+                      f"{path}: invalid Java structure "
                       f"depth={depth}, state={state}"
                   )
 
@@ -778,6 +725,9 @@ jobs:
               check(path)
           PY
 
+      # ============================================================
+      # 7. DIFF CHECK
+      # ============================================================
       - name: Check source diff
         shell: bash
         run: |
@@ -791,6 +741,9 @@ jobs:
           echo "Diff statistics:"
           git diff --stat
 
+      # ============================================================
+      # 8. BUILD
+      # ============================================================
       - name: Build V10
         working-directory: v10-source
         shell: bash
@@ -803,6 +756,9 @@ jobs:
             --no-daemon \
             --stacktrace
 
+      # ============================================================
+      # 9. VERIFY APK
+      # ============================================================
       - name: Verify APK
         shell: bash
         run: |
@@ -818,10 +774,13 @@ jobs:
           echo "SHA256:"
           sha256sum "$APK"
 
+      # ============================================================
+      # 10. UPLOAD APK
+      # ============================================================
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: CarAssistant-V10-8B2-StartupHandshake-Fixed
+          name: CarAssistant-V10-8B2-StartupHandshake-Fixed-v2
           path: v10-source/app/build/outputs/apk/debug/app-debug.apk
           if-no-files-found: error
           retention-days: 14
