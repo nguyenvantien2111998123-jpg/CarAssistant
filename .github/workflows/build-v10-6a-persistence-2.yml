@@ -1,6 +1,6 @@
 name: Build Car Assistant V10-6A Persistence 2
 
-"on":
+on:
   workflow_dispatch:
 
 jobs:
@@ -16,37 +16,27 @@ jobs:
         uses: actions/checkout@v4
 
       # ============================================================
-      # 2. REAL YAML SYNTAX CHECK
+      # 2. REAL YAML VALIDATION
       # ============================================================
       - name: Validate workflow YAML
         shell: bash
         run: |
           set -euo pipefail
 
-          echo "Installing PyYAML..."
-          python3 -m pip install \
-            --disable-pip-version-check \
-            --quiet \
-            pyyaml
-
-          echo "Validating workflow YAML..."
+          python3 -m pip install --quiet pyyaml
 
           python3 - <<'PY'
           from pathlib import Path
           import yaml
 
-          workflow = Path(
-              ".github/workflows/build-v10-6a-persistence-2.yml"
-          )
+          path = Path(".github/workflows/build-v10-6a-persistence-2.yml")
 
-          if not workflow.is_file():
+          if not path.exists():
               raise SystemExit(
                   "ERROR: workflow file not found."
               )
 
-          text = workflow.read_text(
-              encoding="utf-8"
-          )
+          text = path.read_text(encoding="utf-8")
 
           if not text.strip():
               raise SystemExit(
@@ -55,65 +45,59 @@ jobs:
 
           try:
               data = yaml.safe_load(text)
-          except yaml.YAMLError as exc:
-              print("YAML SYNTAX ERROR:")
-              print(exc)
-              raise SystemExit(1)
+          except Exception as exc:
+              raise SystemExit(
+                  f"ERROR: YAML parse failed: {exc}"
+              )
 
           if not isinstance(data, dict):
               raise SystemExit(
-                  "ERROR: workflow root must be a YAML mapping."
+                  "ERROR: YAML root is not a mapping."
               )
-
-          print("YAML syntax: PASS")
-          print("Root type:", type(data).__name__)
-          print("Top-level keys:", list(data.keys()))
 
           if "name" not in data:
               raise SystemExit(
-                  "ERROR: missing top-level 'name'."
+                  "ERROR: top-level 'name' is missing."
               )
 
-          # PyYAML/YAML 1.1 can interpret 'on' as boolean.
-          # Accept either representation here.
-          has_on = (
-              "on" in data
-              or True in data
-          )
-
-          if not has_on:
+          # PyYAML YAML 1.1 may parse "on" as boolean True.
+          if "on" not in data and True not in data:
               raise SystemExit(
-                  "ERROR: missing top-level 'on'."
+                  "ERROR: top-level 'on' is missing."
               )
 
           if "jobs" not in data:
               raise SystemExit(
-                  "ERROR: missing top-level 'jobs'."
+                  "ERROR: top-level 'jobs' is missing."
               )
 
           if not isinstance(data["jobs"], dict):
               raise SystemExit(
-                  "ERROR: 'jobs' must be a mapping."
+                  "ERROR: 'jobs' is not a mapping."
               )
 
           if "build" not in data["jobs"]:
               raise SystemExit(
-                  "ERROR: missing jobs.build."
+                  "ERROR: jobs.build is missing."
               )
 
-          print("GitHub Actions basic structure: PASS")
-          print("YAML validation: PASS")
+          print("REAL YAML VALIDATION PASSED.")
+          print("Workflow name:", data["name"])
+          print("jobs.build detected.")
           PY
 
       # ============================================================
       # 3. RESTORE EXACT V10-6A BASELINE
       # ============================================================
-      - name: Restore V10-6A baseline
+      - name: Restore V10-6A source baseline
         shell: bash
         run: |
           set -euo pipefail
 
           BASELINE="9075636a7d5947c1b0eee49c2bd3fd0e1b6b0cf1"
+
+          echo "Restoring V10-6A source from:"
+          echo "$BASELINE"
 
           git fetch origin "$BASELINE" --depth=1
           git checkout "$BASELINE" -- v10-source
@@ -130,14 +114,15 @@ jobs:
           if [ -f \
             v10-source/app/src/main/java/com/hieptran/aacast/doudou/V10ProjectionService.java
           ]; then
-            echo "ERROR: V10-8 ProjectionService detected."
+            echo "ERROR: V10ProjectionService.java exists."
+            echo "This is NOT the V10-6A baseline."
             exit 1
           fi
 
-          echo "V10-6A baseline OK."
+          echo "V10-6A source baseline restored successfully."
 
       # ============================================================
-      # 4. JAVA 17
+      # 4. JDK
       # ============================================================
       - name: Set up JDK 17
         uses: actions/setup-java@v5
@@ -146,9 +131,24 @@ jobs:
           java-version: "17"
 
       # ============================================================
-      # 5. PATCH RECENTS
+      # 5. CHECK BASE SOURCE
       # ============================================================
-      - name: Patch V10ProjectionSession - RECENTS
+      - name: Check source files
+        working-directory: v10-source
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          test -f app/src/main/java/com/hieptran/aacast/doudou/V10ProjectionSession.java
+          test -f app/src/main/java/com/hieptran/aacast/doudou/V10CarActivity.java
+          test -f app/src/main/java/com/hieptran/aacast/doudou/RootView.java
+
+          echo "Source files OK."
+
+      # ============================================================
+      # 6. RECENTS
+      # ============================================================
+      - name: Patch V10ProjectionSession - display RECENTS
         working-directory: v10-source
         shell: bash
         run: |
@@ -156,23 +156,14 @@ jobs:
 
           FILE="app/src/main/java/com/hieptran/aacast/doudou/V10ProjectionSession.java"
 
-          python3 - "$FILE" <<'PY'
-          from pathlib import Path
-          import re
-          import sys
-
-          p = Path(sys.argv[1])
-          s = p.read_text(encoding="utf-8")
-
-          if "public void recents()" not in s:
-
-              method = """
+          cat > /tmp/v10_recents_method.txt <<'EOF'
               public void recents() {
                   if (!isActive()) {
                       return;
                   }
 
-                  final int displayId = display.getDisplayId();
+                  final int displayId =
+                          display.getDisplayId();
 
                   final String command =
                           "/system/bin/input -d "
@@ -182,7 +173,9 @@ jobs:
                   RootShellSession.EXEC.execute(
                           () -> {
                               try {
-                                  rootShell.run(5, command);
+                                  rootShell.run(
+                                          5,
+                                          command);
                               } catch (Throwable t) {
                                   Log.w(
                                           TAG,
@@ -192,28 +185,47 @@ jobs:
                           });
               }
 
-              """
+          EOF
 
+          python3 - "$FILE" /tmp/v10_recents_method.txt <<'PY'
+          from pathlib import Path
+          import re
+          import sys
+
+          source = Path(sys.argv[1])
+          method_file = Path(sys.argv[2])
+
+          text = source.read_text(encoding="utf-8")
+          method = method_file.read_text(encoding="utf-8")
+
+          if "public void recents()" not in text:
               pattern = re.compile(
                   r"(?m)^[ \t]*public\s+void\s+back\s*\(\s*\)\s*\{"
               )
 
-              m = pattern.search(s)
+              match = pattern.search(text)
 
-              if not m:
+              if not match:
                   raise SystemExit(
-                      "ERROR: back() method not found."
+                      "ERROR: V10ProjectionSession.back() was not found."
                   )
 
-              s = s[:m.start()] + method + s[m.start():]
+              text = (
+                  text[:match.start()]
+                  + method
+                  + text[match.start():]
+              )
 
-          p.write_text(s, encoding="utf-8")
+              source.write_text(
+                  text,
+                  encoding="utf-8"
+              )
 
-          print("RECENTS patch OK.")
+          print("V10ProjectionSession RECENTS patch OK.")
           PY
 
       # ============================================================
-      # 6. PATCH ACTIVITY IMPORTS
+      # 7. ACTIVITY IMPORTS
       # ============================================================
       - name: Patch V10CarActivity - imports
         working-directory: v10-source
@@ -227,8 +239,10 @@ jobs:
           from pathlib import Path
           import sys
 
-          p = Path(sys.argv[1])
-          s = p.read_text(encoding="utf-8")
+          source = Path(sys.argv[1])
+          text = source.read_text(encoding="utf-8")
+
+          marker = "import android.content.pm.ResolveInfo;"
 
           imports = [
               "import android.content.SharedPreferences;",
@@ -238,34 +252,38 @@ jobs:
               "import android.view.ViewGroup;",
           ]
 
-          marker = "import android.content.pm.ResolveInfo;"
-
           missing = [
-              x for x in imports
-              if x not in s
+              item
+              for item in imports
+              if item not in text
           ]
 
           if missing:
-              if marker not in s:
+              if marker not in text:
                   raise SystemExit(
-                      "ERROR: import marker not found."
+                      "ERROR: ResolveInfo import marker not found."
                   )
 
-              s = s.replace(
+              addition = "\n".join(missing) + "\n"
+
+              text = text.replace(
                   marker,
-                  marker + "\n" + "\n".join(missing),
+                  marker + "\n" + addition,
                   1
               )
 
-          p.write_text(s, encoding="utf-8")
+              source.write_text(
+                  text,
+                  encoding="utf-8"
+              )
 
-          print("Imports OK.")
+          print("V10CarActivity imports OK.")
           PY
 
       # ============================================================
-      # 7. FLOATING KEY FIELDS
+      # 8. FLOATING KEY FIELDS
       # ============================================================
-      - name: Patch V10CarActivity - floating fields
+      - name: Patch V10CarActivity - fields
         working-directory: v10-source
         shell: bash
         run: |
@@ -273,18 +291,7 @@ jobs:
 
           FILE="app/src/main/java/com/hieptran/aacast/doudou/V10CarActivity.java"
 
-          python3 - "$FILE" <<'PY'
-          from pathlib import Path
-          import sys
-
-          p = Path(sys.argv[1])
-          s = p.read_text(encoding="utf-8")
-
-          if "private TextView floatingTouchKey;" not in s:
-
-              marker = "    private V10ProjectionSession session;"
-
-              fields = """
+          cat > /tmp/v10_floating_fields.txt <<'EOF'
               private TextView floatingTouchKey;
               private LinearLayout floatingMenu;
 
@@ -294,30 +301,46 @@ jobs:
               private int floatingStartX;
               private int floatingStartY;
               private long floatingLastTap;
-              """
 
-              if marker not in s:
+          EOF
+
+          python3 - "$FILE" /tmp/v10_floating_fields.txt <<'PY'
+          from pathlib import Path
+          import sys
+
+          source = Path(sys.argv[1])
+          field_file = Path(sys.argv[2])
+
+          text = source.read_text(encoding="utf-8")
+          fields = field_file.read_text(encoding="utf-8")
+
+          if "private TextView floatingTouchKey;" not in text:
+              marker = "    private V10ProjectionSession session;"
+
+              if marker not in text:
                   raise SystemExit(
-                      "ERROR: session field marker not found."
+                      "ERROR: V10ProjectionSession field marker not found."
                   )
 
-              s = s.replace(
+              text = text.replace(
                   marker,
-                  marker + fields,
+                  marker + "\n" + fields.rstrip(),
                   1
               )
 
-          p.write_text(s, encoding="utf-8")
+              source.write_text(
+                  text,
+                  encoding="utf-8"
+              )
 
-          print("Floating fields OK.")
+          print("V10CarActivity fields OK.")
           PY
 
       # ============================================================
-      # 8. FLOATING KEY
-      # IMPORTANT:
-      # textureView indentation corrected to 16 spaces.
+      # 9. FLOATING KEY CALL
+      # IMPORTANT: marker has 16 spaces before textureView
       # ============================================================
-      - name: Patch V10CarActivity - floating key
+      - name: Patch V10CarActivity - create floating key call
         working-directory: v10-source
         shell: bash
         run: |
@@ -329,29 +352,53 @@ jobs:
           from pathlib import Path
           import sys
 
-          p = Path(sys.argv[1])
-          s = p.read_text(encoding="utf-8")
+          source = Path(sys.argv[1])
+          text = source.read_text(encoding="utf-8")
 
-          if "createFloatingTouchKey();" not in s:
+          if "createFloatingTouchKey();" in text:
+              print("Floating key call already exists.")
+              raise SystemExit(0)
 
-              # CORRECT BASELINE MARKER
-              marker = """        session.attachTextureView(
+          marker = """        session.attachTextureView(
                 textureView);"""
 
-              if marker not in s:
-                  raise SystemExit(
-                      "ERROR: attachTextureView marker not found."
-                  )
-
-              s = s.replace(
-                  marker,
-                  marker + "\n\n        createFloatingTouchKey();",
-                  1
+          if marker not in text:
+              raise SystemExit(
+                  "ERROR: session.attachTextureView(textureView) marker not found."
               )
 
-          if "private void createFloatingTouchKey()" not in s:
+          replacement = (
+              marker
+              + "\n\n"
+              + "        createFloatingTouchKey();"
+          )
 
-              methods = r'''
+          text = text.replace(
+              marker,
+              replacement,
+              1
+          )
+
+          source.write_text(
+              text,
+              encoding="utf-8"
+          )
+
+          print("Floating key call inserted.")
+          PY
+
+      # ============================================================
+      # 10. FLOATING KEY IMPLEMENTATION
+      # ============================================================
+      - name: Patch V10CarActivity - floating key implementation
+        working-directory: v10-source
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          FILE="app/src/main/java/com/hieptran/aacast/doudou/V10CarActivity.java"
+
+          cat > /tmp/v10_floating_methods.txt <<'EOF'
               private void createFloatingTouchKey() {
                   if (floatingTouchKey != null) {
                       return;
@@ -391,10 +438,14 @@ jobs:
                                   Gravity.TOP | Gravity.END);
 
                   int savedX =
-                          prefs.getInt("x", dp(18));
+                          prefs.getInt(
+                                  "x",
+                                  dp(18));
 
                   int savedY =
-                          prefs.getInt("y", dp(120));
+                          prefs.getInt(
+                                  "y",
+                                  dp(120));
 
                   params.setMargins(
                           0,
@@ -408,12 +459,10 @@ jobs:
 
                   floatingTouchKey.setOnTouchListener(
                           (view, event) -> {
-
                               switch (
                                       event.getActionMasked()) {
 
                                   case MotionEvent.ACTION_DOWN:
-
                                       floatingDragging = false;
 
                                       floatingDownRawX =
@@ -425,12 +474,10 @@ jobs:
                                       ViewGroup.LayoutParams lp =
                                               view.getLayoutParams();
 
-                                      if (lp instanceof
-                                              FrameLayout.LayoutParams) {
-
+                                      if (lp
+                                              instanceof FrameLayout.LayoutParams) {
                                           FrameLayout.LayoutParams fp =
-                                                  (FrameLayout.LayoutParams)
-                                                          lp;
+                                                  (FrameLayout.LayoutParams) lp;
 
                                           floatingStartX =
                                                   fp.rightMargin;
@@ -442,7 +489,6 @@ jobs:
                                       return true;
 
                                   case MotionEvent.ACTION_MOVE:
-
                                       float dx =
                                               event.getRawX()
                                                       - floatingDownRawX;
@@ -456,19 +502,18 @@ jobs:
                                               > ViewConfiguration
                                                       .get(this)
                                                       .getScaledTouchSlop()) {
-
                                           floatingDragging = true;
                                       }
 
                                       if (floatingDragging) {
-
                                           int width =
                                                   projectionLayer.getWidth();
 
                                           int height =
                                                   projectionLayer.getHeight();
 
-                                          int size = dp(58);
+                                          int keySize =
+                                                  dp(58);
 
                                           int right =
                                                   Math.round(
@@ -487,7 +532,7 @@ jobs:
                                                                   Math.max(
                                                                           0,
                                                                           width
-                                                                                  - size),
+                                                                                  - keySize),
                                                                   right));
 
                                           top =
@@ -497,15 +542,18 @@ jobs:
                                                                   Math.max(
                                                                           0,
                                                                           height
-                                                                                  - size),
+                                                                                  - keySize),
                                                                   top));
 
                                           FrameLayout.LayoutParams fp =
                                                   (FrameLayout.LayoutParams)
                                                           view.getLayoutParams();
 
-                                          fp.rightMargin = right;
-                                          fp.topMargin = top;
+                                          fp.rightMargin =
+                                                  right;
+
+                                          fp.topMargin =
+                                                  top;
 
                                           view.setLayoutParams(fp);
                                       }
@@ -513,9 +561,7 @@ jobs:
                                       return true;
 
                                   case MotionEvent.ACTION_UP:
-
                                       if (floatingDragging) {
-
                                           FrameLayout.LayoutParams fp =
                                                   (FrameLayout.LayoutParams)
                                                           view.getLayoutParams();
@@ -535,8 +581,7 @@ jobs:
                                       }
 
                                       long now =
-                                              SystemClock
-                                                      .uptimeMillis();
+                                              SystemClock.uptimeMillis();
 
                                       long delta =
                                               now
@@ -546,13 +591,9 @@ jobs:
 
                                       if (delta > 0
                                               && delta < 320) {
-
                                           handleControlHome();
-
                                           hideFloatingMenu();
-
                                       } else {
-
                                           showFloatingMenu();
                                       }
 
@@ -561,13 +602,10 @@ jobs:
                                       return true;
 
                                   case MotionEvent.ACTION_CANCEL:
-
                                       floatingDragging = false;
-
                                       return true;
 
                                   default:
-
                                       return true;
                               }
                           });
@@ -576,7 +614,6 @@ jobs:
               }
 
               private void showFloatingMenu() {
-
                   if (floatingMenu != null) {
                       hideFloatingMenu();
                       return;
@@ -594,21 +631,24 @@ jobs:
                           dp(8),
                           dp(8));
 
-                  GradientDrawable bg =
+                  GradientDrawable menuBg =
                           new GradientDrawable();
 
-                  bg.setColor(
+                  menuBg.setColor(
                           Color.rgb(15, 20, 26));
 
-                  bg.setCornerRadius(
+                  menuBg.setCornerRadius(
                           dp(16));
 
-                  bg.setStroke(
+                  menuBg.setStroke(
                           dp(1),
                           Color.rgb(65, 85, 105));
 
-                  floatingMenu.setBackground(bg);
-                  floatingMenu.setElevation(dp(14));
+                  floatingMenu.setBackground(
+                          menuBg);
+
+                  floatingMenu.setElevation(
+                          dp(14));
 
                   addFloatingMenuButton(
                           "BACK",
@@ -623,6 +663,7 @@ jobs:
                               if (session != null) {
                                   session.recents();
                               }
+
                               hideFloatingMenu();
                           });
 
@@ -657,6 +698,7 @@ jobs:
                           params);
 
                   floatingMenu.bringToFront();
+
                   floatingTouchKey.bringToFront();
               }
 
@@ -710,7 +752,6 @@ jobs:
               }
 
               private void hideFloatingMenu() {
-
                   if (floatingMenu == null) {
                       return;
                   }
@@ -722,7 +763,6 @@ jobs:
               }
 
               private void switchToTwoScreen() {
-
                   RootView rootView =
                           RootView.getCurrent();
 
@@ -732,7 +772,6 @@ jobs:
               }
 
               private void switchToThreeScreen() {
-
                   RootView rootView =
                           RootView.getCurrent();
 
@@ -741,31 +780,49 @@ jobs:
                   }
               }
 
-              '''
+          EOF
 
-              marker =
-                  "    public void handleControlBack()"
+          python3 - "$FILE" /tmp/v10_floating_methods.txt <<'PY'
+          from pathlib import Path
+          import sys
 
-              if marker not in s:
-                  raise SystemExit(
-                      "ERROR: handleControlBack marker not found."
-                  )
+          source = Path(sys.argv[1])
+          method_file = Path(sys.argv[2])
 
-              s = s.replace(
-                  marker,
-                  methods + "\n" + marker,
-                  1
+          text = source.read_text(encoding="utf-8")
+          methods = method_file.read_text(encoding="utf-8")
+
+          if "private void createFloatingTouchKey()" in text:
+              print("Floating methods already exist.")
+              raise SystemExit(0)
+
+          marker = "    public void handleControlBack()"
+
+          if marker not in text:
+              raise SystemExit(
+                  "ERROR: handleControlBack() marker not found."
               )
 
-          p.write_text(s, encoding="utf-8")
+          text = text.replace(
+              marker,
+              methods.rstrip()
+              + "\n\n"
+              + marker,
+              1
+          )
 
-          print("Floating key patch OK.")
+          source.write_text(
+              text,
+              encoding="utf-8"
+          )
+
+          print("Floating key implementation inserted.")
           PY
 
       # ============================================================
-      # 9. ROOTVIEW EXTERNAL LAYOUT
+      # 11. ROOTVIEW EXTERNAL LAYOUT
       # ============================================================
-      - name: Patch RootView - external layout
+      - name: Patch RootView - external layout mode
         working-directory: v10-source
         shell: bash
         run: |
@@ -773,16 +830,7 @@ jobs:
 
           FILE="app/src/main/java/com/hieptran/aacast/doudou/RootView.java"
 
-          python3 - "$FILE" <<'PY'
-          from pathlib import Path
-          import sys
-
-          p = Path(sys.argv[1])
-          s = p.read_text(encoding="utf-8")
-
-          if "setLayoutModeExternal(int mode)" not in s:
-
-              method = """
+          cat > /tmp/v10_layout_method.txt <<'EOF'
               public void setLayoutModeExternal(int mode) {
                   final int targetMode =
                           clamp(mode, 0, 5);
@@ -793,7 +841,8 @@ jobs:
                                   return;
                               }
 
-                              layoutMode = targetMode;
+                              layoutMode =
+                                      targetMode;
 
                               loadRatios();
 
@@ -810,29 +859,47 @@ jobs:
                           });
               }
 
-              """
+          EOF
 
-              marker =
-                  "    public void reloadSettings()"
+          python3 - "$FILE" /tmp/v10_layout_method.txt <<'PY'
+          from pathlib import Path
+          import sys
 
-              if marker not in s:
-                  raise SystemExit(
-                      "ERROR: reloadSettings marker not found."
-                  )
+          source = Path(sys.argv[1])
+          method_file = Path(sys.argv[2])
 
-              s = s.replace(
-                  marker,
-                  method + marker,
-                  1
+          text = source.read_text(encoding="utf-8")
+          method = method_file.read_text(encoding="utf-8")
+
+          if "setLayoutModeExternal(int mode)" in text:
+              print("RootView external layout method already exists.")
+              raise SystemExit(0)
+
+          marker = "    public void reloadSettings()"
+
+          if marker not in text:
+              raise SystemExit(
+                  "ERROR: RootView.reloadSettings() marker not found."
               )
 
-          p.write_text(s, encoding="utf-8")
+          text = text.replace(
+              marker,
+              method.rstrip()
+              + "\n\n"
+              + marker,
+              1
+          )
+
+          source.write_text(
+              text,
+              encoding="utf-8"
+          )
 
           print("RootView patch OK.")
           PY
 
       # ============================================================
-      # 10. PERSISTENCE 2 - PROJECTION SESSION
+      # 12. PERSISTENCE 2 - PROJECTION SESSION
       # ============================================================
       - name: Patch Persistence 2 - ProjectionSession
         working-directory: v10-source
@@ -844,123 +911,330 @@ jobs:
 
           python3 - "$FILE" <<'PY'
           from pathlib import Path
+          import re
           import sys
 
-          p = Path(sys.argv[1])
-          s = p.read_text(encoding="utf-8")
+          source = Path(sys.argv[1])
+          text = source.read_text(encoding="utf-8")
 
-          if "private boolean targetLaunched;" not in s:
+          # --------------------------------------------------------
+          # Add targetLaunched field
+          # --------------------------------------------------------
+          if "private boolean targetLaunched;" not in text:
+              marker = "    private boolean destroyed;"
 
-              marker =
-                  "    private boolean destroyed;"
-
-              if marker not in s:
+              if marker not in text:
                   raise SystemExit(
                       "ERROR: destroyed field marker not found."
                   )
 
-              s = s.replace(
+              text = text.replace(
                   marker,
                   marker
-                  + "\n\n    private boolean targetLaunched;",
+                  + "\n"
+                  + "    private boolean targetLaunched;",
                   1
               )
 
-          old = """        final String command =
-                "/system/bin/am force-stop '"
-                        + packageName
-                        + "'; "
-                        + "/system/bin/am start"
-                        + " --user "
-                        + userId
-                        + " --display "
-                        + displayId
-                        + " --windowingMode 1"
-                        + " -a android.intent.action.MAIN"
-                        + " -c android.intent.category.LAUNCHER"
-                        + " -f 0x18000000"
-                        + " -n '"
-                        + flat
-                        + "'";"""
+          # --------------------------------------------------------
+          # Replace launchTarget()
+          # --------------------------------------------------------
+          start = text.find("    private void launchTarget()")
 
-          new = """        if (targetLaunched) {
-            final String command =
-                    "/system/bin/am start"
-                            + " --user "
-                            + userId
-                            + " --display "
-                            + displayId
-                            + " --windowingMode 1"
-                            + " -a android.intent.action.MAIN"
-                            + " -c android.intent.category.LAUNCHER"
-                            + " -f 0x18000000"
-                            + " --activity-reorder-to-front"
-                            + " -n '"
-                            + flat
-                            + "'";
-
-            RootShellSession.EXEC.execute(
-                    () -> {
-                        try {
-                            rootShell.run(10, command);
-                        } catch (Throwable t) {
-                            Log.w(
-                                    TAG,
-                                    "Reorder task failed",
-                                    t);
-                        }
-                    });
-
-            return;
-        }
-
-        targetLaunched = true;
-
-        final String command =
-                "/system/bin/am start"
-                        + " --user "
-                        + userId
-                        + " --display "
-                        + displayId
-                        + " --windowingMode 1"
-                        + " -a android.intent.action.MAIN"
-                        + " -c android.intent.category.LAUNCHER"
-                        + " -f 0x18000000"
-                        + " --activity-reorder-to-front"
-                        + " -n '"
-                        + flat
-                        + "'";"""
-
-          if old not in s:
+          if start < 0:
               raise SystemExit(
-                  "ERROR: original launchTarget block not found."
+                  "ERROR: launchTarget() not found."
               )
 
-          s = s.replace(
-              old,
-              new,
-              1
+          next_method = text.find(
+              "\n    private void releaseDisplayOnly()",
+              start
           )
 
-          if "targetLaunched = false;" not in s:
+          if next_method < 0:
+              raise SystemExit(
+                  "ERROR: releaseDisplayOnly() marker not found."
+              )
 
-              marker = """        virtualDisplay = null;
-        display = null;"""
+          new_launch = r'''    private void launchTarget() {
+          if (display == null || target == null) {
+              return;
+          }
 
-              if marker not in s:
+          if (targetLaunched) {
+              return;
+          }
+
+          final int displayId =
+                  display.getDisplayId();
+
+          final int userId =
+                  Process.myUid() / 100000;
+
+          final String flat =
+                  target.flattenToString()
+                          .replace(
+                                  "'",
+                                  "'\"'\"'");
+
+          final String command =
+                  "/system/bin/am start"
+                          + " --user "
+                          + userId
+                          + " --display "
+                          + displayId
+                          + " --windowingMode 1"
+                          + " -a android.intent.action.MAIN"
+                          + " -c android.intent.category.LAUNCHER"
+                          + " -f 0x18000000"
+                          + " --activity-reorder-to-front"
+                          + " -n '"
+                          + flat
+                          + "'";
+
+          targetLaunched = true;
+
+          RootShellSession.EXEC.execute(
+                  () -> {
+                      try {
+                          rootShell.run(
+                                  10,
+                                  command);
+                      } catch (Throwable t) {
+                          Log.w(
+                                  TAG,
+                                  "Launch failed",
+                                  t);
+                      }
+                  });
+      }
+'''
+
+          text = (
+              text[:start]
+              + new_launch
+              + text[next_method + 1:]
+          )
+
+          # --------------------------------------------------------
+          # Replace releaseDisplayOnly()
+          # --------------------------------------------------------
+          start = text.find(
+              "    private void releaseDisplayOnly()"
+          )
+
+          if start < 0:
+              raise SystemExit(
+                  "ERROR: releaseDisplayOnly() not found."
+              )
+
+          next_method = text.find(
+              "\n    public void release()",
+              start
+          )
+
+          if next_method < 0:
+              raise SystemExit(
+                  "ERROR: public release() marker not found."
+              )
+
+          new_release = r'''    private void releaseDisplayOnly() {
+          if (virtualDisplay != null) {
+              try {
+                  virtualDisplay.release();
+              } catch (Throwable ignored) {
+              }
+          }
+
+          virtualDisplay = null;
+          display = null;
+
+          if (surface != null) {
+              try {
+                  surface.release();
+              } catch (Throwable ignored) {
+              }
+          }
+
+          surface = null;
+
+          targetLaunched = false;
+      }
+'''
+
+          text = (
+              text[:start]
+              + new_release
+              + text[next_method + 1:]
+          )
+
+          # --------------------------------------------------------
+          # Replace SurfaceTextureAvailable
+          # --------------------------------------------------------
+          old_available = r'''    @Override
+      public void onSurfaceTextureAvailable(
+              SurfaceTexture surface,
+              int width,
+              int height) {
+          ensureDisplay();
+      }
+'''
+
+          new_available = r'''    @Override
+      public void onSurfaceTextureAvailable(
+              SurfaceTexture surfaceTexture,
+              int width,
+              int height) {
+
+          if (destroyed
+                  || target == null
+                  || textureView == null) {
+              return;
+          }
+
+          try {
+              surfaceTexture.setDefaultBufferSize(
+                      width,
+                      height);
+
+              if (virtualDisplay != null) {
+                  Surface newSurface =
+                          new Surface(surfaceTexture);
+
+                  if (surface != null) {
+                      try {
+                          surface.release();
+                      } catch (Throwable ignored) {
+                      }
+                  }
+
+                  surface = newSurface;
+
+                  virtualDisplay.setSurface(
+                          newSurface);
+
+                  contentWidth = width;
+                  contentHeight = height;
+
+                  launchTarget();
+
+                  Log.d(
+                          TAG,
+                          "Reattached Surface to existing VirtualDisplay.");
+              } else {
+                  ensureDisplay();
+              }
+
+          } catch (Throwable t) {
+              Log.w(
+                      TAG,
+                      "Surface reattach failed",
+                      t);
+          }
+      }
+'''
+
+          if old_available not in text:
+              pattern = re.compile(
+                  r"    @Override\s+"
+                  r"public void onSurfaceTextureAvailable\s*\("
+                  r".*?"
+                  r"\n    \}\n",
+                  re.DOTALL
+              )
+
+              match = pattern.search(text)
+
+              if not match:
                   raise SystemExit(
-                      "ERROR: release marker not found."
+                      "ERROR: onSurfaceTextureAvailable() not found."
                   )
 
-              s = s.replace(
-                  marker,
-                  """        virtualDisplay = null;
-        display = null;
-        targetLaunched = false;""",
+              text = (
+                  text[:match.start()]
+                  + new_available
+                  + text[match.end():]
+              )
+          else:
+              text = text.replace(
+                  old_available,
+                  new_available,
                   1
               )
 
-          p.write_text(s, encoding="utf-8")
+          # --------------------------------------------------------
+          # Replace SurfaceTextureDestroyed
+          # IMPORTANT:
+          # DO NOT release VirtualDisplay here.
+          # --------------------------------------------------------
+          old_destroyed = r'''    @Override
+      public boolean onSurfaceTextureDestroyed(
+              SurfaceTexture surface) {
+          releaseDisplayOnly();
+          return true;
+      }
+'''
+
+          new_destroyed = r'''    @Override
+      public boolean onSurfaceTextureDestroyed(
+              SurfaceTexture surfaceTexture) {
+
+          if (virtualDisplay != null) {
+              try {
+                  virtualDisplay.setSurface(null);
+              } catch (Throwable ignored) {
+              }
+          }
+
+          if (surface != null) {
+              try {
+                  surface.release();
+              } catch (Throwable ignored) {
+              }
+          }
+
+          surface = null;
+
+          Log.d(
+                  TAG,
+                  "Surface destroyed; keeping VirtualDisplay alive.");
+
+          return true;
+      }
+'''
+
+          if old_destroyed in text:
+              text = text.replace(
+                  old_destroyed,
+                  new_destroyed,
+                  1
+              )
+          else:
+              pattern = re.compile(
+                  r"    @Override\s+"
+                  r"public boolean onSurfaceTextureDestroyed\s*\("
+                  r".*?"
+                  r"\n    \}\n",
+                  re.DOTALL
+              )
+
+              match = pattern.search(text)
+
+              if not match:
+                  raise SystemExit(
+                      "ERROR: onSurfaceTextureDestroyed() not found."
+                  )
+
+              text = (
+                  text[:match.start()]
+                  + new_destroyed
+                  + text[match.end():]
+              )
+
+          source.write_text(
+              text,
+              encoding="utf-8"
+          )
 
           print(
               "Persistence 2 ProjectionSession patch OK."
@@ -968,7 +1242,7 @@ jobs:
           PY
 
       # ============================================================
-      # 11. PERSISTENCE 2 - ACTIVITY LIFECYCLE
+      # 13. PERSISTENCE 2 - ACTIVITY LIFECYCLE
       # ============================================================
       - name: Patch Persistence 2 - Activity lifecycle
         working-directory: v10-source
@@ -980,44 +1254,54 @@ jobs:
 
           python3 - "$FILE" <<'PY'
           from pathlib import Path
+          import re
           import sys
 
-          p = Path(sys.argv[1])
-          s = p.read_text(encoding="utf-8")
+          source = Path(sys.argv[1])
+          text = source.read_text(encoding="utf-8")
 
-          old = """        if (session != null) {
-            session.release();
-        }
+          # --------------------------------------------------------
+          # Remove session.release() from onStop()
+          # --------------------------------------------------------
+          pattern = re.compile(
+              r"(?s)(@Override\s+"
+              r"\s*protected\s+void\s+onStop\s*\(\s*\)\s*\{)"
+              r"(.*?)"
+              r"(\n\s*super\.onStop\s*\(\s*\)\s*;\s*\n\s*\})"
+          )
 
-        super.onStop();"""
+          match = pattern.search(text)
 
-          new = """        /*
-         * Persistence 2:
-         *
-         * Android Auto may temporarily stop this Activity.
-         * Keep the projection session alive.
-         *
-         * Explicit HOME / target switching / onDestroy()
-         * remain responsible for final cleanup.
-         */
-
-        super.onStop();"""
-
-          if old in s:
-
-              s = s.replace(
-                  old,
-                  new,
-                  1
-              )
-
-          elif "Persistence 2:" not in s:
-
+          if not match:
               raise SystemExit(
-                  "ERROR: onStop release block not found."
+                  "ERROR: V10CarActivity.onStop() not found."
               )
 
-          p.write_text(s, encoding="utf-8")
+          body = match.group(2)
+
+          body = re.sub(
+              r"\s*if\s*\(\s*session\s*!=\s*null\s*\)\s*\{\s*"
+              r"session\.release\s*\(\s*\)\s*;\s*\}\s*",
+              "\n",
+              body
+          )
+
+          replacement = (
+              match.group(1)
+              + body
+              + match.group(3)
+          )
+
+          text = (
+              text[:match.start()]
+              + replacement
+              + text[match.end():]
+          )
+
+          source.write_text(
+              text,
+              encoding="utf-8"
+          )
 
           print(
               "Persistence 2 Activity lifecycle patch OK."
@@ -1025,9 +1309,9 @@ jobs:
           PY
 
       # ============================================================
-      # 12. VERIFY SOURCE
+      # 14. STATIC VERIFICATION
       # ============================================================
-      - name: Verify source
+      - name: Verify V10-6A Persistence 2 source
         working-directory: v10-source
         shell: bash
         run: |
@@ -1037,82 +1321,125 @@ jobs:
           ACTIVITY="app/src/main/java/com/hieptran/aacast/doudou/V10CarActivity.java"
           ROOT="app/src/main/java/com/hieptran/aacast/doudou/RootView.java"
 
-          echo "Checking source architecture..."
+          echo "=========================================="
+          echo "VERIFY ARCHITECTURE"
+          echo "=========================================="
 
-          test ! -f \
+          if [ -f \
             app/src/main/java/com/hieptran/aacast/doudou/V10ProjectionService.java
+          ]; then
+            echo "ERROR: V10ProjectionService.java detected."
+            echo "V10-8 architecture must NOT be used."
+            exit 1
+          fi
+
+          echo "Architecture: PASS"
+
+          echo "=========================================="
+          echo "VERIFY RECENTS"
+          echo "=========================================="
+
+          grep -q "public void recents()" "$SESSION"
+          grep -q "/system/bin/input -d " "$SESSION"
+          grep -q "keyevent 187" "$SESSION"
+
+          echo "RECENTS: PASS"
+
+          echo "=========================================="
+          echo "VERIFY FLOATING KEY"
+          echo "=========================================="
+
+          grep -q "createFloatingTouchKey" "$ACTIVITY"
+          grep -q '"BACK"' "$ACTIVITY"
+          grep -q '"RECENTS"' "$ACTIVITY"
+          grep -q '"2 SCREEN"' "$ACTIVITY"
+          grep -q '"3 SCREEN"' "$ACTIVITY"
+
+          echo "Floating key/menu: PASS"
+
+          echo "=========================================="
+          echo "VERIFY ROOTVIEW"
+          echo "=========================================="
+
+          grep -q "setLayoutModeExternal(int mode)" "$ROOT"
+
+          echo "2/3 SCREEN external control: PASS"
+
+          echo "=========================================="
+          echo "VERIFY PERSISTENCE 2"
+          echo "=========================================="
+
+          grep -q "private boolean targetLaunched;" "$SESSION"
+
+          grep -q -- "--activity-reorder-to-front" "$SESSION"
+
+          if grep -q "am force-stop" "$SESSION"; then
+            echo "ERROR: am force-stop still exists."
+            exit 1
+          fi
+
+          grep -q "virtualDisplay.setSurface(null)" "$SESSION"
 
           grep -q \
-            "public void recents()" \
+            "keeping VirtualDisplay alive" \
             "$SESSION"
 
           grep -q \
-            "keyevent 187" \
+            "virtualDisplay.setSurface(newSurface)" \
             "$SESSION"
 
-          grep -q \
-            "createFloatingTouchKey" \
-            "$ACTIVITY"
+          if grep -A8 \
+            "onSurfaceTextureDestroyed" \
+            "$SESSION" \
+            | grep -q "releaseDisplayOnly"; then
+            echo "ERROR: Surface destruction still calls releaseDisplayOnly()."
+            exit 1
+          fi
 
-          grep -q \
-            'session.recents()' \
-            "$ACTIVITY"
+          echo "ProjectionSession persistence: PASS"
 
-          grep -q \
-            '"RECENTS"' \
-            "$ACTIVITY"
+          echo "=========================================="
+          echo "VERIFY ACTIVITY onStop"
+          echo "=========================================="
 
-          grep -q \
-            '"2 SCREEN"' \
-            "$ACTIVITY"
+          ONSTOP_BLOCK="$(
+            awk '
+              /protected void onStop\(\)/ {inside=1}
+              inside {print}
+              inside && /^[[:space:]]*}/ {exit}
+            ' "$ACTIVITY"
+          )"
 
-          grep -q \
-            '"3 SCREEN"' \
-            "$ACTIVITY"
+          echo "$ONSTOP_BLOCK"
 
-          grep -q \
-            "setLayoutModeExternal(int mode)" \
-            "$ROOT"
+          if echo "$ONSTOP_BLOCK" | grep -q "session.release"; then
+            echo "ERROR: session.release() still exists in onStop()."
+            exit 1
+          fi
 
-          grep -q \
-            "private boolean targetLaunched;" \
-            "$SESSION"
+          echo "Activity lifecycle persistence: PASS"
 
-          grep -q \
-            "targetLaunched = true;" \
-            "$SESSION"
+          echo "=========================================="
+          echo "VERIFY NO OLD FORCE-STOP"
+          echo "=========================================="
 
-          grep -q \
-            "targetLaunched = false;" \
-            "$SESSION"
-
-          grep -q \
-            "activity-reorder-to-front" \
-            "$SESSION"
-
-          if grep -q \
+          if grep -R \
             "am force-stop" \
-            "$SESSION"; then
-
-            echo "ERROR: force-stop still exists."
+            app/src/main/java/com/hieptran/aacast/doudou/V10ProjectionSession.java; then
+            echo "ERROR: force-stop command detected."
             exit 1
           fi
 
-          if grep -A18 \
-            "public void onStop()" \
-            "$ACTIVITY" |
-            grep -q "session.release()"; then
+          echo "Force-stop check: PASS"
 
-            echo "ERROR: onStop still releases session."
-            exit 1
-          fi
-
-          echo "All source checks PASS."
+          echo "=========================================="
+          echo "ALL STATIC CHECKS PASSED"
+          echo "=========================================="
 
       # ============================================================
-      # 13. COMPILE
+      # 15. COMPILE
       # ============================================================
-      - name: Compile
+      - name: Compile Java
         working-directory: v10-source
         shell: bash
         run: |
@@ -1124,9 +1451,9 @@ jobs:
             compileDebugJavaWithJavac
 
       # ============================================================
-      # 14. BUILD APK
+      # 16. BUILD APK
       # ============================================================
-      - name: Assemble APK
+      - name: Build V10-6A Persistence 2 APK
         working-directory: v10-source
         shell: bash
         run: |
@@ -1138,28 +1465,34 @@ jobs:
             assembleDebug
 
       # ============================================================
-      # 15. VERIFY APK
+      # 17. LOCATE APK
       # ============================================================
-      - name: Verify APK
+      - name: Locate APK
         working-directory: v10-source
         shell: bash
         run: |
           set -euo pipefail
 
-          APK="$(find app/build/outputs/apk \
+          find app/build/outputs/apk \
             -type f \
             -name "*.apk" \
-            -print -quit)"
+            -print
+
+          APK="$(
+            find app/build/outputs/apk \
+              -type f \
+              -name "*.apk" \
+              -print -quit
+          )"
 
           test -n "$APK"
 
-          echo "APK found:"
-          echo "$APK"
+          echo "APK=$APK"
 
       # ============================================================
-      # 16. UPLOAD APK
+      # 18. UPLOAD APK
       # ============================================================
-      - name: Upload APK
+      - name: Upload V10-6A Persistence 2 APK
         uses: actions/upload-artifact@v4
         with:
           name: CarAssistant-V10-6A-Persistence-2
