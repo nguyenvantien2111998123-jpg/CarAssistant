@@ -40,11 +40,9 @@ public final class V10CarActivity
     private LinearLayout launcherLayer;
     private LinearLayout dashboard;
     private LinearLayout appPanel;
-    private LinearLayout dock;
+    private LinearLayout bottomBar;
     private TextureView textureView;
     private V10ProjectionSession session;
-    private TextView clock;
-    private TextView date;
 
     private boolean resumed;
 
@@ -57,8 +55,6 @@ public final class V10CarActivity
             new Runnable() {
                 @Override
                 public void run() {
-                    updateClock();
-
                     if (resumed) {
                         handler.postDelayed(
                                 this,
@@ -140,7 +136,6 @@ public final class V10CarActivity
         }
 
         loadApps();
-        rebuildDock();
 
         handler.removeCallbacks(
                 clockTicker);
@@ -190,10 +185,10 @@ public final class V10CarActivity
                 LinearLayout.VERTICAL);
 
         launcherLayer.setPadding(
-                dp(18),
-                dp(12),
-                dp(18),
-                dp(8));
+                dp(10),
+                dp(10),
+                dp(10),
+                dp(10));
 
         root.addView(
                 launcherLayer,
@@ -201,18 +196,17 @@ public final class V10CarActivity
                         -1,
                         -1));
 
-        buildDashboard();
+        buildMainLayout();
         buildAppPanel();
 
         setContentView(root);
     }
 
-    private void buildDashboard() {
+    private void buildMainLayout() {
 
         dashboard = new LinearLayout(this);
-        dashboard.setOrientation(LinearLayout.VERTICAL);
-        dashboard.setBackgroundColor(Color.rgb(7, 9, 12));
-        dashboard.setPadding(dp(14), dp(14), dp(14), dp(14));
+        dashboard.setOrientation(LinearLayout.HORIZONTAL);
+        dashboard.setBackgroundColor(Color.TRANSPARENT);
 
         launcherLayer.addView(
                 dashboard,
@@ -220,236 +214,107 @@ public final class V10CarActivity
                         -1,
                         -1));
 
-        LinearLayout topBar =
-                new LinearLayout(this);
-
-        topBar.setOrientation(
-                LinearLayout.HORIZONTAL);
-        topBar.setGravity(
-                Gravity.CENTER_VERTICAL);
-        topBar.setPadding(
-                dp(8),
-                dp(8),
-                dp(8),
-                dp(8));
-
-        LinearLayout logoWrap =
-                new LinearLayout(this);
-
-        logoWrap.setOrientation(
-                LinearLayout.HORIZONTAL);
-        logoWrap.setGravity(
-                Gravity.CENTER_VERTICAL);
-
-        TextView logoBadge =
-                text(
-                        "CA",
-                        20,
-                        Color.WHITE);
-
-        logoBadge.setGravity(
-                Gravity.CENTER);
-        logoBadge.setPadding(
-                dp(10),
-                dp(8),
-                dp(10),
-                dp(8));
-
-        GradientDrawable badgeBg =
-                new GradientDrawable();
-
-        badgeBg.setColor(
-                Color.rgb(
-                        24,
-                        117,
-                        196));
-        badgeBg.setCornerRadius(
-                dp(12));
-        badgeBg.setStroke(
-                dp(1),
-                Color.argb(
-                        180,
-                        255,
-                        255,
-                        255));
-
-        logoBadge.setBackground(
-                badgeBg);
-
-        TextView logoText =
-                text(
-                        "CarAssistant",
-                        15,
-                        Color.WHITE);
-
-        logoText.setTypeface(
-                Typeface.DEFAULT,
-                Typeface.BOLD);
-
-        logoWrap.addView(
-                logoBadge,
-                new LinearLayout.LayoutParams(
-                        dp(52),
-                        dp(42)));
-
-        logoWrap.addView(
-                logoText,
-                new LinearLayout.LayoutParams(
-                        0,
-                        -2,
-                        1));
-
-        topBar.addView(
-                logoWrap,
-                new LinearLayout.LayoutParams(
-                        0,
-                        -2,
-                        1));
-
-        LinearLayout infoColumn =
-                new LinearLayout(this);
-
-        infoColumn.setOrientation(
-                LinearLayout.VERTICAL);
-        infoColumn.setGravity(
-                Gravity.CENTER);
-
-        date = text(
-                "",
-                10,
-                Color.LTGRAY);
-
-        clock = text(
-                "",
-                18,
-                Color.WHITE);
-
-        clock.setTypeface(
-                Typeface.DEFAULT,
-                Typeface.BOLD);
-        clock.setGravity(
-                Gravity.CENTER);
-
-        infoColumn.addView(
-                date,
-                new LinearLayout.LayoutParams(
-                        -2,
-                        -2));
-
-        infoColumn.addView(
-                clock,
-                new LinearLayout.LayoutParams(
-                        -2,
-                        -2));
-
-        topBar.addView(
-                infoColumn,
-                new LinearLayout.LayoutParams(
-                        dp(110),
-                        -2));
-
-        dashboard.addView(
-                topBar,
-                new LinearLayout.LayoutParams(
-                        -1,
-                        dp(64)));
-
-        LinearLayout contentRow =
-                new LinearLayout(this);
-
-        contentRow.setOrientation(
-                LinearLayout.HORIZONTAL);
-
         LinearLayout sidebar =
                 new LinearLayout(this);
 
         sidebar.setOrientation(
                 LinearLayout.VERTICAL);
         sidebar.setPadding(
-                dp(14),
-                dp(14),
-                dp(14),
-                dp(14));
+                dp(8),
+                dp(8),
+                dp(8),
+                dp(8));
+        sidebar.setGravity(Gravity.CENTER_VERTICAL);
 
         GradientDrawable sideBg =
                 new GradientDrawable();
 
         sideBg.setColor(
                 Color.argb(
-                        200,
+                        80,
                         18,
                         24,
                         31));
         sideBg.setCornerRadius(
-                dp(22));
+                dp(18));
 
         sidebar.setBackground(
                 sideBg);
 
-        TextView sideTitle =
-                text(
-                        "HOME",
-                        11,
-                        Color.LTGRAY);
-        sideTitle.setGravity(
-                Gravity.CENTER_VERTICAL);
-
+        TextView menuAppsBtn =
+                sidebarButton("📱");
+        menuAppsBtn.setOnClickListener(v -> showApps());
         sidebar.addView(
-                sideTitle,
+                menuAppsBtn,
                 new LinearLayout.LayoutParams(
                         -1,
-                        dp(26)));
+                        dp(50)));
 
-        String[] sideItems = {
-                "APPS",
-                "APP 1",
-                "APP 2",
-                "APP 3",
-                "VOICE",
-                "TASKS"
-        };
+        sidebar.addView(
+                spacer(dp(8)),
+                new LinearLayout.LayoutParams(
+                        -1,
+                        dp(8)));
 
-        for (String item : sideItems) {
-            TextView itemView =
-                    text(
-                            item,
-                            12,
-                            Color.WHITE);
-
-            itemView.setGravity(
-                    Gravity.CENTER_VERTICAL);
-            itemView.setPadding(
-                    dp(8),
-                    dp(8),
-                    dp(8),
-                    dp(8));
-
-            GradientDrawable itemBg =
-                    new GradientDrawable();
-
-            itemBg.setColor(
-                    Color.argb(
-                            120,
-                            30,
-                            40,
-                            52));
-            itemBg.setCornerRadius(
-                    dp(12));
-
-            itemView.setBackground(
-                    itemBg);
-
+        for (int i = 0; i < 3; i++) {
+            TextView favApp =
+                    sidebarButton("⭐");
+            favApp.setOnClickListener(v -> {
+                // Load favorite app at index
+            });
             sidebar.addView(
-                    itemView,
+                    favApp,
                     new LinearLayout.LayoutParams(
                             -1,
-                            dp(42)));
+                            dp(50)));
+
+            if (i < 2) {
+                sidebar.addView(
+                        spacer(dp(6)),
+                        new LinearLayout.LayoutParams(
+                                -1,
+                                dp(6)));
+            }
         }
 
-        contentRow.addView(
+        sidebar.addView(
+                spacer(dp(12)),
+                new LinearLayout.LayoutParams(
+                        -1,
+                        dp(12)));
+
+        TextView voiceBtn =
+                sidebarButton("🎤");
+        voiceBtn.setOnClickListener(v -> {
+            // Handle voice assistant
+        });
+        sidebar.addView(
+                voiceBtn,
+                new LinearLayout.LayoutParams(
+                        -1,
+                        dp(50)));
+
+        sidebar.addView(
+                spacer(dp(8)),
+                new LinearLayout.LayoutParams(
+                        -1,
+                        dp(8)));
+
+        TextView tasksBtn =
+                sidebarButton("📋");
+        tasksBtn.setOnClickListener(v -> {
+            // Show running apps
+        });
+        sidebar.addView(
+                tasksBtn,
+                new LinearLayout.LayoutParams(
+                        -1,
+                        dp(50)));
+
+        dashboard.addView(
                 sidebar,
                 new LinearLayout.LayoutParams(
-                        dp(180),
+                        dp(80),
                         -1));
 
         LinearLayout centerStage =
@@ -464,26 +329,26 @@ public final class V10CarActivity
         mapBox.setOrientation(
                 LinearLayout.VERTICAL);
         mapBox.setPadding(
-                dp(18),
-                dp(18),
-                dp(18),
-                dp(18));
+                dp(16),
+                dp(16),
+                dp(16),
+                dp(16));
 
         GradientDrawable mapBg =
                 new GradientDrawable();
 
         mapBg.setColor(
                 Color.argb(
-                        160,
+                        120,
                         10,
                         14,
                         18));
         mapBg.setCornerRadius(
-                dp(26));
+                dp(20));
         mapBg.setStroke(
                 dp(1),
                 Color.argb(
-                        120,
+                        100,
                         141,
                         156,
                         168));
@@ -493,20 +358,18 @@ public final class V10CarActivity
 
         TextView mapLabel =
                 text(
-                        "MAP / NAVIGATION",
-                        11,
+                        "NAVIGATION",
+                        10,
                         Color.LTGRAY);
 
         TextView mapPlaceholder =
                 text(
-                        "Route preview",
-                        22,
+                        "Map Preview",
+                        28,
                         Color.WHITE);
 
         mapPlaceholder.setGravity(
                 Gravity.CENTER);
-        mapPlaceholder.setTextSize(
-                24);
 
         mapBox.addView(
                 mapLabel,
@@ -524,115 +387,29 @@ public final class V10CarActivity
         centerStage.addView(
                 mapBox,
                 new LinearLayout.LayoutParams(
-                        -1,
                         0,
+                        -1,
                         1));
 
-        LinearLayout quickRow =
-                new LinearLayout(this);
-
-        quickRow.setOrientation(
-                LinearLayout.HORIZONTAL);
-        quickRow.setPadding(
-                0,
-                dp(10),
-                0,
-                0);
-
-        String[][] quickApps = {
-                {"NAV", "Nav"},
-                {"M", "Media"},
-                {"★", "Home"}
-        };
-
-        for (String[] item : quickApps) {
-            LinearLayout card =
-                    new LinearLayout(this);
-
-            card.setOrientation(
-                    LinearLayout.VERTICAL);
-            card.setGravity(
-                    Gravity.CENTER);
-            card.setPadding(
-                    dp(8),
-                    dp(8),
-                    dp(8),
-                    dp(8));
-
-            GradientDrawable quickBg =
-                    new GradientDrawable();
-
-            quickBg.setColor(
-                    Color.argb(
-                            180,
-                            22,
-                            29,
-                            37));
-            quickBg.setCornerRadius(
-                    dp(16));
-
-            card.setBackground(
-                    quickBg);
-
-            TextView icon =
-                    text(
-                            item[0],
-                            22,
-                            Color.WHITE);
-
-            icon.setGravity(
-                    Gravity.CENTER);
-
-            TextView label =
-                    text(
-                            item[1],
-                            11,
-                            Color.LTGRAY);
-
-            label.setGravity(
-                    Gravity.CENTER);
-
-            card.addView(
-                    icon,
-                    new LinearLayout.LayoutParams(
-                            -1,
-                            dp(30)));
-
-            card.addView(
-                    label,
-                    new LinearLayout.LayoutParams(
-                            -1,
-                            -2));
-
-            quickRow.addView(
-                    card,
-                    new LinearLayout.LayoutParams(
-                            0,
-                            dp(90),
-                            1f));
-        }
-
-        centerStage.addView(
-                quickRow,
-                new LinearLayout.LayoutParams(
-                        -1,
-                        dp(96)));
-
-        contentRow.addView(
+        dashboard.addView(
                 centerStage,
                 new LinearLayout.LayoutParams(
                         0,
                         -1,
                         1));
 
-        dashboard.addView(
-                contentRow,
+        buildTransparentBottomBar();
+
+        launcherLayer.addView(
+                bottomBar,
                 new LinearLayout.LayoutParams(
                         -1,
-                        0,
-                        1));
+                        dp(100)));
+    }
 
-        LinearLayout bottomBar =
+    private void buildTransparentBottomBar() {
+
+        bottomBar =
                 new LinearLayout(this);
 
         bottomBar.setOrientation(
@@ -640,9 +417,9 @@ public final class V10CarActivity
         bottomBar.setGravity(
                 Gravity.CENTER_VERTICAL);
         bottomBar.setPadding(
-                dp(10),
+                dp(12),
                 dp(8),
-                dp(10),
+                dp(12),
                 dp(8));
 
         GradientDrawable bottomBg =
@@ -650,12 +427,12 @@ public final class V10CarActivity
 
         bottomBg.setColor(
                 Color.argb(
-                        185,
+                        100,
                         16,
                         22,
                         31));
         bottomBg.setCornerRadius(
-                dp(18));
+                dp(16));
 
         bottomBar.setBackground(
                 bottomBg);
@@ -664,149 +441,147 @@ public final class V10CarActivity
                 new LinearLayout(this);
 
         trafficBox.setOrientation(
-                LinearLayout.HORIZONTAL);
+                LinearLayout.VERTICAL);
         trafficBox.setGravity(
-                Gravity.CENTER_VERTICAL);
-
-        TextView warningIcon =
-                text(
-                        "⚠",
-                        20,
-                        Color.WHITE);
-
-        warningIcon.setGravity(
                 Gravity.CENTER);
 
-        GradientDrawable warnBg =
+        FrameLayout trafficCircle =
+                new FrameLayout(this);
+
+        TextView trafficIcon =
+                text(
+                        "⚠",
+                        18,
+                        Color.WHITE);
+
+        trafficIcon.setGravity(
+                Gravity.CENTER);
+
+        GradientDrawable circleBg =
                 new GradientDrawable();
 
-        warnBg.setColor(
+        circleBg.setColor(
                 Color.rgb(
                         255,
                         168,
                         0));
-        warnBg.setCornerRadius(
-                dp(16));
+        circleBg.setCornerRadius(
+                dp(28));
 
-        warningIcon.setBackground(
-                warnBg);
-        warningIcon.setPadding(
-                dp(8),
-                dp(8),
-                dp(8),
-                dp(8));
+        trafficIcon.setBackground(
+                circleBg);
+        trafficIcon.setPadding(
+                dp(6),
+                dp(6),
+                dp(6),
+                dp(6));
 
-        TextView trafficText =
+        trafficCircle.addView(
+                trafficIcon,
+                new FrameLayout.LayoutParams(
+                        dp(56),
+                        dp(56),
+                        Gravity.CENTER));
+
+        trafficBox.addView(
+                trafficCircle,
+                new LinearLayout.LayoutParams(
+                        dp(56),
+                        dp(56)));
+
+        TextView trafficInfo =
                 text(
-                        "TRAFFIC",
-                        11,
-                        Color.WHITE);
+                        "Traffic Info",
+                        8,
+                        Color.LTGRAY);
+        trafficInfo.setGravity(
+                Gravity.CENTER);
 
         trafficBox.addView(
-                warningIcon,
+                trafficInfo,
                 new LinearLayout.LayoutParams(
-                        dp(36),
-                        dp(36)));
-
-        trafficBox.addView(
-                trafficText,
-                new LinearLayout.LayoutParams(
-                        -2,
+                        dp(56),
                         -2));
 
         bottomBar.addView(
                 trafficBox,
                 new LinearLayout.LayoutParams(
-                        -2,
-                        -2));
+                        dp(70),
+                        -1));
 
-        LinearLayout mediaControls =
+        LinearLayout mediaBox =
                 new LinearLayout(this);
 
-        mediaControls.setOrientation(
+        mediaBox.setOrientation(
+                LinearLayout.VERTICAL);
+        mediaBox.setGravity(
+                Gravity.CENTER);
+
+        LinearLayout controlsRow =
+                new LinearLayout(this);
+
+        controlsRow.setOrientation(
                 LinearLayout.HORIZONTAL);
-        mediaControls.setGravity(
+        controlsRow.setGravity(
                 Gravity.CENTER);
 
         String[] mediaButtons = {
-                "◀",
+                "⏮",
                 "⏸",
-                "▶"
+                "⏭"
         };
 
         for (String btn : mediaButtons) {
             TextView control =
                     text(
                             btn,
-                            18,
+                            16,
                             Color.WHITE);
 
             control.setGravity(
                     Gravity.CENTER);
             control.setPadding(
-                    dp(8),
-                    dp(8),
-                    dp(8),
-                    dp(8));
+                    dp(6),
+                    dp(6),
+                    dp(6),
+                    dp(6));
 
-            mediaControls.addView(
+            controlsRow.addView(
                     control,
                     new LinearLayout.LayoutParams(
-                            dp(42),
-                            dp(42)));
+                            dp(40),
+                            dp(40)));
         }
 
-        bottomBar.addView(
-                mediaControls,
+        mediaBox.addView(
+                controlsRow,
                 new LinearLayout.LayoutParams(
-                        0,
                         -2,
-                        1f));
+                        dp(50)));
 
-        LinearLayout nowPlaying =
-                new LinearLayout(this);
-
-        nowPlaying.setOrientation(
-                LinearLayout.VERTICAL);
-        nowPlaying.setGravity(
-                Gravity.CENTER_VERTICAL);
-
-        TextView mediaLabel =
+        TextView trackLabel =
                 text(
-                        "MEDIA",
-                        10,
+                        "Now playing",
+                        8,
                         Color.LTGRAY);
+        trackLabel.setGravity(
+                Gravity.CENTER);
+        trackLabel.setMaxLines(1);
+        trackLabel.setEllipsize(
+                android.text.TextUtils.TruncateAt.END);
 
-        TextView currentTrack =
-                text(
-                        "No media",
-                        12,
-                        Color.WHITE);
-
-        nowPlaying.addView(
-                mediaLabel,
+        mediaBox.addView(
+                trackLabel,
                 new LinearLayout.LayoutParams(
-                        -2,
-                        -2));
-
-        nowPlaying.addView(
-                currentTrack,
-                new LinearLayout.LayoutParams(
-                        -2,
+                        dp(150),
                         -2));
 
         bottomBar.addView(
-                nowPlaying,
+                mediaBox,
                 new LinearLayout.LayoutParams(
                         0,
-                        -2,
-                        1f));
-
-        dashboard.addView(
-                bottomBar,
-                new LinearLayout.LayoutParams(
                         -1,
-                        dp(88)));
+                        1));
     }
 
     private void buildAppPanel() {
@@ -1011,57 +786,6 @@ public final class V10CarActivity
                                     inside);
                 }
             }
-        }
-    }
-
-    private void rebuildDock() {
-
-        if (dock == null) {
-            return;
-        }
-
-        dock.removeAllViews();
-
-        int count =
-                Math.min(
-                        5,
-                        apps.size());
-
-        for (int i = 0;
-             i < count;
-             i++) {
-
-            final AppInfo app =
-                    apps.get(i);
-
-            TextView tile =
-                    buttonText(
-                            app.name); 
-
-            tile.setTextSize(11);
-            tile.setMaxLines(2);
-
-            tile.setOnClickListener(
-                    v ->
-                            launchProjection(
-                                    app.component));
-
-            LinearLayout.LayoutParams
-                    params =
-                            new LinearLayout.LayoutParams(
-                                    0,
-                                    dp(58),
-                                    1f);
-
-            params.setMargins(
-                    dp(3),
-                    0,
-                    dp(3),
-                    0);
-
-            dock.addView(
-                    tile,
-                    params);
         }
     }
 
@@ -1399,7 +1123,7 @@ public final class V10CarActivity
         launcherLayer = null;
         dashboard = null;
         appPanel = null;
-        dock = null;
+        bottomBar = null;
 
         super.onDestroy();
     }
@@ -1418,103 +1142,39 @@ public final class V10CarActivity
         }
     }
 
-    private void updateClock() {
+    private TextView sidebarButton(
+            String icon) {
 
-        if (clock == null
-                || date == null) {
-            return;
-        }
+        TextView btn =
+                text(
+                        icon,
+                        20,
+                        Color.WHITE);
 
-        Date now =
-                new Date();
-
-        clock.setText(
-                new SimpleDateFormat(
-                        "HH:mm",
-                        Locale.getDefault())
-                        .format(now));
-
-        date.setText(
-                new SimpleDateFormat(
-                        "EEEE, dd MMMM",
-                        Locale.getDefault())
-                        .format(now));
-    }
-
-    private LinearLayout card() {
-
-        LinearLayout box =
-                new LinearLayout(this);
-
-        box.setOrientation(
-                LinearLayout.VERTICAL);
-
-        box.setPadding(
-                dp(14),
-                dp(10),
-                dp(14),
-                dp(10));
+        btn.setGravity(
+                Gravity.CENTER);
 
         GradientDrawable bg =
                 new GradientDrawable();
 
         bg.setColor(
-                Color.rgb(
-                        22,
-                        27,
-                        33));
-
+                Color.argb(
+                        150,
+                        30,
+                        40,
+                        52));
         bg.setCornerRadius(
-                dp(18));
+                dp(14));
 
-        box.setBackground(bg);
+        btn.setBackground(bg);
 
-        LinearLayout.LayoutParams p =
-                new LinearLayout.LayoutParams(
-                        -1,
-                        -1);
-
-        p.setMargins(
-                dp(4),
-                dp(4),
-                dp(4),
-                dp(4));
-
-        box.setLayoutParams(p);
-
-        return box;
+        return btn;
     }
 
-    private LinearLayout infoCard(
-            String title,
-            String value) {
-
-        LinearLayout box =
-                card();
-
-        box.addView(
-                text(
-                        title,
-                        11,
-                        Color.LTGRAY));
-
-        TextView valueView =
-                text(
-                        value,
-                        21,
-                        Color.WHITE);
-
-        valueView.setGravity(
-                Gravity.CENTER);
-
-        box.addView(
-                valueView,
-                new LinearLayout.LayoutParams(
-                        -1,
-                        0,
-                        1));
-
-        return box;
+    private View spacer(int height) {
+        View v = new View(this);
+        v.setBackgroundColor(Color.TRANSPARENT);
+        return v;
     }
 
     private TextView buttonText(
@@ -1559,15 +1219,6 @@ public final class V10CarActivity
         view.setTextColor(color);
 
         return view;
-    }
-
-    private LinearLayout.LayoutParams
-            weightParams() {
-
-        return new LinearLayout.LayoutParams(
-                0,
-                -1,
-                1f);
     }
 
     private String initial(
