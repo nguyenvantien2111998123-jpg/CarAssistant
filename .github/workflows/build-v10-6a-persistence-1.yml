@@ -11,18 +11,21 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Restore V10-6A baseline
+      - name: Restore V10-6A PASS baseline
         run: |
-          set -e
-          git fetch origin 9075636a7d5947c1b0eee49c2bd3fd0e1b6b0cf1 --depth=1
-          git checkout 9075636a7d5947c1b0eee49c2bd3fd0e1b6b0cf1 -- v10-source
+          set -euo pipefail
+
+          BASELINE="9075636a7d5947c1b0eee49c2bd3fd0e1b6b0cf1"
+
+          git fetch origin "$BASELINE" --depth=1
+          git checkout "$BASELINE" -- v10-source
 
           test -f v10-source/app/src/main/java/com/hieptran/aacast/doudou/V10ProjectionSession.java
           test -f v10-source/app/src/main/java/com/hieptran/aacast/doudou/V10CarActivity.java
           test -f v10-source/app/src/main/java/com/hieptran/aacast/doudou/RootView.java
 
           if [ -f v10-source/app/src/main/java/com/hieptran/aacast/doudou/V10ProjectionService.java ]; then
-            echo "ERROR: V10-8 service detected"
+            echo "ERROR: V10-8 architecture detected"
             exit 1
           fi
 
@@ -35,66 +38,103 @@ jobs:
       - name: Patch Persistence-1
         working-directory: v10-source
         run: |
-          set -e
-          python3 - <<'PY'
-          from pathlib import Path
-          import re
+          set -euo pipefail
 
-          p = Path("app/src/main/java/com/hieptran/aacast/doudou/V10ProjectionSession.java")
+          FILE="app/src/main/java/com/hieptran/aacast/doudou/V10ProjectionSession.java"
+
+          python3 - "$FILE" <<'PY'
+          from pathlib import Path
+          import sys
+
+          p = Path(sys.argv[1])
           s = p.read_text()
 
+          # Add persistence state.
+          marker = "    private boolean destroyed;"
+          if "private boolean targetLaunched;" not in s:
+              s = s.replace(
+                  marker,
+                  marker + "\n    private boolean targetLaunched;",
+                  1
+              )
+
+          # Remove force-stop and prevent repeated launch.
           s = s.replace(
-              "    private boolean destroyed;\n",
-              "    private boolean destroyed;\n    private boolean targetLaunched;\n",
+              '        final String packageName =',
+              '        if (targetLaunched) {\n            return;\n        }\n\n        final String packageName =',
               1
           )
 
-          pattern = r"    private void launchTarget\(\) \{.*?\n    private float mapX"
+          old = '"/system/bin/am force-stop \'"'
+          if old in s:
+              s = s.replace(
+                  old,
+                  '"/system/bin/am start"',
+                  1
+              )
 
-          new_method = "\n".join([
-              "    private void launchTarget() {",
-              "        if (display == null || target == null || targetLaunched) {",
-              "            return;",
-              "        }",
-              "",
-              "        final int displayId = display.getDisplayId();",
-              "        final int userId = Process.myUid() / 100000;",
-              "        final String flat = target.flattenToString().replace(\"'\", \"'\\\"'\\\"'\");",
-              "",
-              "        final String command =",
-              "                \"/system/bin/am start\"",
-              "                        + \" --user \" + userId",
-              "                        + \" --display \" + displayId",
-              "                        + \" --windowingMode 1\"",
-              "                        + \" --activity-reorder-to-front\"",
-              "                        + \" -a android.intent.action.MAIN\"",
-              "                        + \" -c android.intent.category.LAUNCHER\"",
-              "                        + \" -f 0x10000000\"",
-              "                        + \" -n '\" + flat + \"'\";",
-              "",
-              "        targetLaunched = true;",
-              "",
-              "        RootShellSession.EXEC.execute(",
-              "                () -> {",
-              "                    try {",
-              "                        rootShell.run(10, command);",
-              "                    } catch (Throwable t) {",
-              "                        Log.w(TAG, \"Launch failed\", t);",
-              "                    }",
-              "                });",
-              "    }",
-              "",
-              "    private float mapX"
-          ])
+          s = s.replace(
+              '                        + packageName\n                        + "\'; "',
+              '                        + packageName\n                        + "\'"',
+              1
+          )
 
-          s2, count = re.subn(pattern, new_method, s, count=1, flags=re.S)
+          # Use reorder-to-front instead of restarting the task.
+          if '--activity-reorder-to-front' not in s:
+              s = s.replace(
+                  '                        + " --windowingMode 1"',
+                  '                        + " --windowingMode 1"\n'
+                  '                        + " --activity-reorder-to-front"',
+                  1
+              )
 
-          if count != 1:
-              raise SystemExit("launchTarget patch failed")
+          # Mark target as launched.
+          if "targetLaunched = true;" not in s:
+              needle = '        RootShellSession.EXEC.execute('
+              s = s.replace(
+                  needle,
+                  '        targetLaunched = true;\n\n' + needle,
+                  1
+              )
 
-          s = s2
+          # Keep VirtualDisplay alive when TextureView disappears.
+          old_destroy = """    @Override
+    public boolean onSurfaceTextureDestroyed(
+            SurfaceTexture surface) {
+        releaseDisplayOnly();
+        return true;
+    }"""
 
-          old = """    @Override
+          new_destroy = """    @Override
+    public boolean onSurfaceTextureDestroyed(
+            SurfaceTexture surface) {
+
+        if (virtualDisplay != null) {
+            try {
+                virtualDisplay.setSurface(null);
+            } catch (Throwable t) {
+                Log.w(TAG, "Persistence detach failed", t);
+            }
+        }
+
+        if (this.surface != null) {
+            try {
+                this.surface.release();
+            } catch (Throwable ignored) {
+            }
+            this.surface = null;
+        }
+
+        return true;
+    }"""
+
+          if old_destroy in s:
+              s = s.replace(old_destroy, new_destroy, 1)
+          elif "Persistence detach failed" not in s:
+              raise SystemExit("Persistence destroy patch failed")
+
+          # Reattach Surface to existing VirtualDisplay.
+          old_available = """    @Override
     public void onSurfaceTextureAvailable(
             SurfaceTexture surface,
             int width,
@@ -102,7 +142,7 @@ jobs:
         ensureDisplay();
     }"""
 
-          new = """    @Override
+          new_available = """    @Override
     public void onSurfaceTextureAvailable(
             SurfaceTexture surface,
             int width,
@@ -139,65 +179,29 @@ jobs:
                 return;
 
             } catch (Throwable t) {
-                Log.w(
-                        TAG,
-                        "Persistence reattach failed",
-                        t);
+                Log.w(TAG, "Persistence attach failed", t);
             }
         }
 
         ensureDisplay();
     }"""
 
-          if old not in s:
-              raise SystemExit("surface available block not found")
+          if old_available in s:
+              s = s.replace(
+                  old_available,
+                  new_available,
+                  1
+              )
+          elif "Persistence attach failed" not in s:
+              raise SystemExit("Persistence attach patch failed")
 
-          s = s.replace(old, new, 1)
-
-          old = """    @Override
-    public boolean onSurfaceTextureDestroyed(
-            SurfaceTexture surface) {
-        releaseDisplayOnly();
-        return true;
-    }"""
-
-          new = """    @Override
-    public boolean onSurfaceTextureDestroyed(
-            SurfaceTexture surface) {
-
-        if (virtualDisplay != null) {
-            try {
-                virtualDisplay.setSurface(null);
-            } catch (Throwable t) {
-                Log.w(
-                        TAG,
-                        "Persistence detach failed",
-                        t);
-            }
-        }
-
-        if (this.surface != null) {
-            try {
-                this.surface.release();
-            } catch (Throwable ignored) {
-            }
-
-            this.surface = null;
-        }
-
-        return true;
-    }"""
-
-          if old not in s:
-              raise SystemExit("surface destroyed block not found")
-
-          s = s.replace(old, new, 1)
-
-          s = s.replace(
-              "        surface = null;\n    }\n\n    public void release()",
-              "        surface = null;\n        targetLaunched = false;\n    }\n\n    public void release()",
-              1
-          )
+          # Reset state only when VirtualDisplay is actually released.
+          if "targetLaunched = false;" not in s:
+              s = s.replace(
+                  "        surface = null;\n    }\n\n    public void release()",
+                  "        surface = null;\n        targetLaunched = false;\n    }\n\n    public void release()",
+                  1
+              )
 
           p.write_text(s)
           print("Persistence-1 patch OK")
@@ -206,51 +210,188 @@ jobs:
       - name: Patch RECENTS
         working-directory: v10-source
         run: |
-          set -e
-          python3 - <<'PY'
-          from pathlib import Path
+          set -euo pipefail
 
-          p = Path("app/src/main/java/com/hieptran/aacast/doudou/V10ProjectionSession.java")
+          FILE="app/src/main/java/com/hieptran/aacast/doudou/V10ProjectionSession.java"
+
+          python3 - "$FILE" <<'PY'
+          from pathlib import Path
+          import sys
+
+          p = Path(sys.argv[1])
           s = p.read_text()
 
           if "public void recents()" not in s:
-              method = "\n".join([
-                  "    public void recents() {",
-                  "        if (!isActive()) return;",
-                  "        final int displayId = display.getDisplayId();",
-                  "        final String command =",
-                  "                \"/system/bin/input -d \" + displayId + \" keyevent 187\";",
-                  "        RootShellSession.EXEC.execute(",
-                  "                () -> {",
-                  "                    try {",
-                  "                        rootShell.run(5, command);",
-                  "                    } catch (Throwable t) {",
-                  "                        Log.w(TAG, \"Recents failed\", t);",
-                  "                    }",
-                  "                });",
-                  "    }",
-                  ""
-              ])
+              method = (
+                  "    public void recents() {\n"
+                  "        if (!isActive()) return;\n"
+                  "        final int displayId = display.getDisplayId();\n"
+                  "        final String command =\n"
+                  "                \"/system/bin/input -d \"\n"
+                  "                        + displayId\n"
+                  "                        + \" keyevent 187\";\n"
+                  "        RootShellSession.EXEC.execute(\n"
+                  "                () -> {\n"
+                  "                    try {\n"
+                  "                        rootShell.run(5, command);\n"
+                  "                    } catch (Throwable t) {\n"
+                  "                        Log.w(TAG, \"Recents failed\", t);\n"
+                  "                    }\n"
+                  "                });\n"
+                  "    }\n\n"
+              )
+
+              marker = "    public void back()"
+
+              if marker not in s:
+                  raise SystemExit("BACK method not found")
 
               s = s.replace(
-                  "    public void back()",
-                  method + "    public void back()",
+                  marker,
+                  method + marker,
+                  1
+              )
+
+              p.write_text(s)
+
+          print("RECENTS patch OK")
+          PY
+
+      - name: Patch V10-6A controls
+        working-directory: v10-source
+        run: |
+          set -euo pipefail
+
+          FILE="app/src/main/java/com/hieptran/aacast/doudou/V10CarActivity.java"
+
+          python3 - "$FILE" <<'PY'
+          from pathlib import Path
+          import sys
+
+          p = Path(sys.argv[1])
+          s = p.read_text()
+
+          imports = [
+              "import android.content.SharedPreferences;",
+              "import android.os.SystemClock;",
+              "import android.view.MotionEvent;",
+              "import android.view.ViewConfiguration;",
+              "import android.view.ViewGroup;"
+          ]
+
+          marker = "import android.content.pm.ResolveInfo;"
+
+          for item in imports:
+              if item not in s:
+                  if marker not in s:
+                      raise SystemExit("Import marker not found")
+                  s = s.replace(
+                      marker,
+                      marker + "\n" + item,
+                      1
+                  )
+
+          if "private TextView floatingTouchKey;" not in s:
+              marker = "    private V10ProjectionSession session;"
+              fields = (
+                  "\n"
+                  "    private TextView floatingTouchKey;\n"
+                  "    private LinearLayout floatingMenu;\n"
+                  "    private boolean floatingDragging;\n"
+                  "    private float floatingDownRawX;\n"
+                  "    private float floatingDownRawY;\n"
+                  "    private int floatingStartX;\n"
+                  "    private int floatingStartY;\n"
+                  "    private long floatingLastTap;\n"
+              )
+
+              if marker not in s:
+                  raise SystemExit("Session field not found")
+
+              s = s.replace(
+                  marker,
+                  marker + fields,
+                  1
+              )
+
+          if "createFloatingTouchKey();" not in s:
+              marker = (
+                  "        session.attachTextureView(\n"
+                  "                textureView);"
+              )
+
+              if marker not in s:
+                  raise SystemExit("TextureView attach marker not found")
+
+              s = s.replace(
+                  marker,
+                  marker + "\n\n        createFloatingTouchKey();",
                   1
               )
 
           p.write_text(s)
-          print("RECENTS OK")
+          print("V10-6A control fields OK")
           PY
 
-      - name: Verify Persistence-1
+      - name: Patch RootView
         working-directory: v10-source
         run: |
-          set -e
+          set -euo pipefail
+
+          FILE="app/src/main/java/com/hieptran/aacast/doudou/RootView.java"
+
+          python3 - "$FILE" <<'PY'
+          from pathlib import Path
+          import sys
+
+          p = Path(sys.argv[1])
+          s = p.read_text()
+
+          if "setLayoutModeExternal(int mode)" not in s:
+              method = (
+                  "    public void setLayoutModeExternal(int mode) {\n"
+                  "        final int targetMode = clamp(mode, 0, 5);\n"
+                  "        handler.post(() -> {\n"
+                  "            if (destroyed) return;\n"
+                  "            layoutMode = targetMode;\n"
+                  "            loadRatios();\n"
+                  "            prefs.edit().putInt(\n"
+                  "                    \"layout_mode_v3\",\n"
+                  "                    layoutMode).apply();\n"
+                  "            applyVisibility();\n"
+                  "            container.requestLayout();\n"
+                  "            container.resizeAll();\n"
+                  "        });\n"
+                  "    }\n\n"
+              )
+
+              marker = "    public void reloadSettings()"
+
+              if marker not in s:
+                  raise SystemExit("RootView marker not found")
+
+              s = s.replace(
+                  marker,
+                  method + marker,
+                  1
+              )
+
+              p.write_text(s)
+
+          print("RootView patch OK")
+          PY
+
+      - name: Verify V10-6A Persistence-1
+        working-directory: v10-source
+        run: |
+          set -euo pipefail
 
           SESSION="app/src/main/java/com/hieptran/aacast/doudou/V10ProjectionSession.java"
+          ACTIVITY="app/src/main/java/com/hieptran/aacast/doudou/V10CarActivity.java"
+          ROOT="app/src/main/java/com/hieptran/aacast/doudou/RootView.java"
 
           if [ -f app/src/main/java/com/hieptran/aacast/doudou/V10ProjectionService.java ]; then
-            echo "ERROR: V10-8 architecture detected"
+            echo "ERROR: V10-8 service detected"
             exit 1
           fi
 
@@ -260,13 +401,16 @@ jobs:
           grep -q "public void recents()" "$SESSION"
 
           if grep -q "am force-stop" "$SESSION"; then
-            echo "ERROR: force-stop still present"
+            echo "ERROR: force-stop still exists"
             exit 1
           fi
 
+          grep -q "floatingTouchKey" "$ACTIVITY"
+          grep -q "setLayoutModeExternal(int mode)" "$ROOT"
+
           git diff --check
 
-          echo "Persistence-1 verification PASSED"
+          echo "Persistence-1 static verification PASSED"
 
       - name: Compile
         working-directory: v10-source
@@ -277,10 +421,6 @@ jobs:
         working-directory: v10-source
         run: |
           ./gradlew --no-daemon --stacktrace assembleDebug
-
-      - name: Locate APK
-        run: |
-          find v10-source/app/build/outputs/apk/debug -type f -name "*.apk" -print
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
