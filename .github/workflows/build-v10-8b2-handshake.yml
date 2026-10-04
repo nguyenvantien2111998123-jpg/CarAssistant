@@ -1,4 +1,4 @@
-name: Build Car Assistant V10 - 8B2 Startup Handshake Fixed v6
+name: Build Car Assistant V10 - 8B2 Startup Handshake Fixed v7
 
 on:
   workflow_dispatch:
@@ -11,25 +11,29 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Setup Java
+      - name: Setup Java 17
         uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: '17'
 
-      - name: Verify existing V10
+      - name: Verify V10 source
         shell: bash
         run: |
           set -euo pipefail
 
           ROOT="v10-source/app/src/main/java/com/hieptran/aacast/doudou"
 
-          test -f "$ROOT/V10ProjectionService.java"
-          test -f "$ROOT/V10ProjectionSession.java"
-          test -f "$ROOT/V10CarActivity.java"
-          test -f "$ROOT/V10SessionStore.java"
-          test -f "$ROOT/V10InputController.java"
-          test -f "$ROOT/RootShellSession.java"
+          for f in \
+            V10CarActivity.java \
+            V10SessionStore.java \
+            V10InputController.java \
+            RootShellSession.java \
+            V10ProjectionService.java \
+            V10ProjectionSession.java
+          do
+            test -f "$ROOT/$f"
+          done
 
           grep -Fq 'package com.carassistant.v10;' \
             "$ROOT/V10ProjectionService.java"
@@ -40,82 +44,38 @@ jobs:
           grep -Eq 'MAX_RECENTS[[:space:]]*=[[:space:]]*4' \
             "$ROOT/V10SessionStore.java"
 
-          echo "PASS: existing V10"
+          echo "V10 source OK"
 
       - name: Patch V10ProjectionService
         shell: bash
         run: |
           set -euo pipefail
 
-          python3 <<'PY'
-          from pathlib import Path
+          SERVICE="v10-source/app/src/main/java/com/hieptran/aacast/doudou/V10ProjectionService.java"
+
+          python3 - "$SERVICE" <<'PY'
+          import sys
           import re
+          from pathlib import Path
 
-          p = Path(
-              "v10-source/app/src/main/java/com/hieptran/aacast/doudou/"
-              "V10ProjectionService.java"
-          )
+          path = Path(sys.argv[1])
+          s = path.read_text()
 
-          s = p.read_text()
+          def replace_between(text, start, end, replacement):
+              a = text.find(start)
+              if a < 0:
+                  raise SystemExit("Missing start: " + start)
 
-          def method_range(src, name):
-              m = re.search(
-                  r'(?m)^[ \t]*(?:public|private|protected)[^\n{;]*\b'
-                  + re.escape(name)
-                  + r'\s*\([^;{]*\)\s*\{',
-                  src
-              )
+              b = text.find(end, a)
+              if b < 0:
+                  raise SystemExit("Missing end: " + end)
 
-              if not m:
-                  raise RuntimeError(
-                      "method not found: " + name
-                  )
+              return text[:a] + replacement + "\n\n" + text[b:]
 
-              start = m.start()
-              brace = src.find("{", m.start())
-
-              depth = 0
-              quote = None
-              i = brace
-
-              while i < len(src):
-                  c = src[i]
-
-                  if quote:
-                      if c == "\\":
-                          i += 2
-                          continue
-                      if c == quote:
-                          quote = None
-                  else:
-                      if c in ('"', "'"):
-                          quote = c
-                      elif c == "{":
-                          depth += 1
-                      elif c == "}":
-                          depth -= 1
-                          if depth == 0:
-                              return start, i + 1
-
-                  i += 1
-
-              raise RuntimeError(
-                  "method brace not closed: " + name
-              )
-
-          def replace_method(src, name, body):
-              a, b = method_range(src, name)
-              return src[:a] + body + src[b:]
+          marker = "private static volatile V10ProjectionService instance;"
 
           if "private static final Object START_LOCK" not in s:
-              marker = (
-                  "private static volatile "
-                  "V10ProjectionService instance;"
-              )
-
-              fields = """
-    
-    private static final Object START_LOCK =
+              fields = """private static final Object START_LOCK =
             new Object();
 
     private static ComponentName pendingTarget;
@@ -124,58 +84,54 @@ jobs:
 
     private static int pendingWidth;
 
-    private static int pendingHeight;
-"""
+    private static int pendingHeight;"""
 
               if marker not in s:
-                  raise RuntimeError(
-                      "service instance marker not found"
-                  )
+                  raise SystemExit("Service instance marker missing")
 
               s = s.replace(
                   marker,
-                  marker + fields,
+                  marker + "\n\n    " + fields,
                   1
               )
 
-          ensure_started = """    public static void ensureStarted(
+          ensure = """    public static void ensureStarted(
             android.content.Context context) {
 
         if (getInstance() != null) {
             return;
         }
 
-        android.content.Context appContext =
+        android.content.Context app =
                 context.getApplicationContext();
 
+        Intent intent =
+                new Intent(
+                        app,
+                        V10ProjectionService.class);
+
         try {
-
-            Intent intent =
-                    new Intent(
-                            appContext,
-                            V10ProjectionService.class);
-
             if (Build.VERSION.SDK_INT >= 26) {
-
-                appContext.startForegroundService(
-                        intent);
-
+                app.startForegroundService(intent);
             } else {
-
-                appContext.startService(intent);
+                app.startService(intent);
             }
-
         } catch (Throwable error) {
-
             Log.w(
                     TAG,
-                    "Unable to start projection service",
+                    "Unable to start V10 projection service",
                     error);
         }
-    }
-"""
+    }"""
 
-          set_target = """    public static void setTarget(
+          s = replace_between(
+              s,
+              "    public static void ensureStarted(",
+              "    private static V10ProjectionService getInstance()",
+              ensure
+          )
+
+          target = """    public static void setTarget(
             android.content.Context context,
             ComponentName component) {
 
@@ -185,28 +141,31 @@ jobs:
                     getInstance();
 
             if (service == null) {
-
                 pendingTarget = component;
-
                 ensureStarted(context);
-
                 return;
             }
 
             service.setTargetInternal(component);
         }
-    }
-"""
+    }"""
 
-          attach_surface = """    public static void attachSurface(
+          s = replace_between(
+              s,
+              "    public static void setTarget(",
+              "    public static void attachSurface(",
+              target
+          )
+
+          surface = """    public static void attachSurface(
             android.content.Context context,
             Surface newSurface,
             int newWidth,
             int newHeight) {
 
         if (newSurface == null
-                || newWidth <= 0
-                || newHeight <= 0) {
+                || newWidth < 1
+                || newHeight < 1) {
             return;
         }
 
@@ -217,21 +176,11 @@ jobs:
 
             if (service == null) {
 
-                if (pendingSurface != null
-                        && pendingSurface != newSurface) {
-
-                    try {
-                        pendingSurface.release();
-                    } catch (Throwable ignored) {
-                    }
-                }
-
                 pendingSurface = newSurface;
                 pendingWidth = newWidth;
                 pendingHeight = newHeight;
 
                 ensureStarted(context);
-
                 return;
             }
 
@@ -240,35 +189,21 @@ jobs:
                     newWidth,
                     newHeight);
         }
-    }
-"""
+    }"""
 
-          s = replace_method(
+          s = replace_between(
               s,
-              "ensureStarted",
-              ensure_started
-          )
-
-          s = replace_method(
-              s,
-              "setTarget",
-              set_target
-          )
-
-          s = replace_method(
-              s,
-              "attachSurface",
-              attach_surface
+              "    public static void attachSurface(",
+              "    public static void detachSurface()",
+              surface
           )
 
           if "private void flushPendingState()" not in s:
-              marker = "    private void detachSurfaceInternal"
-
               flush = """    private void flushPendingState() {
 
         synchronized (START_LOCK) {
 
-            if (instance != this || destroyed) {
+            if (destroyed || instance != this) {
                 return;
             }
 
@@ -282,61 +217,50 @@ jobs:
             pendingWidth = 0;
             pendingHeight = 0;
 
-            try {
+            if (t != null) {
+                setTargetInternal(t);
+            }
 
-                if (t != null) {
-                    setTargetInternal(t);
-                }
-
-                if (sf != null) {
-                    attachSurfaceInternal(
-                            sf,
-                            w,
-                            h);
-                }
-
-            } catch (Throwable error) {
-
-                Log.e(
-                        TAG,
-                        "Pending projection state failed",
-                        error);
+            if (sf != null) {
+                attachSurfaceInternal(sf, w, h);
             }
         }
     }
 
 """
 
-              if marker not in s:
-                  raise RuntimeError(
-                      "detachSurfaceInternal marker not found"
+              token = "    private void detachSurfaceInternal()"
+
+              if token not in s:
+                  raise SystemExit(
+                      "detachSurfaceInternal marker missing"
                   )
 
               s = s.replace(
-                  marker,
-                  flush + marker,
+                  token,
+                  flush + token,
                   1
               )
 
           if "flushPendingState();" not in s:
-              marker = """        startForeground(
+              token = """        startForeground(
                 NOTIFICATION_ID,
                 notification);"""
 
-              if marker not in s:
-                  raise RuntimeError(
-                      "startForeground block not found"
+              if token not in s:
+                  raise SystemExit(
+                      "startForeground marker missing"
                   )
 
               s = s.replace(
-                  marker,
-                  marker + "\n\n        flushPendingState();",
+                  token,
+                  token + "\n\n        flushPendingState();",
                   1
               )
 
-          p.write_text(s)
+          path.write_text(s)
 
-          print("PASS: service patched")
+          print("ProjectionService patch OK")
           PY
 
       - name: Patch V10ProjectionSession constructor
@@ -344,26 +268,24 @@ jobs:
         run: |
           set -euo pipefail
 
-          python3 <<'PY'
-          from pathlib import Path
+          SESSION="v10-source/app/src/main/java/com/hieptran/aacast/doudou/V10ProjectionSession.java"
+
+          python3 - "$SESSION" <<'PY'
+          import sys
           import re
+          from pathlib import Path
 
-          p = Path(
-              "v10-source/app/src/main/java/com/hieptran/aacast/doudou/"
-              "V10ProjectionSession.java"
-          )
-
-          s = p.read_text()
+          path = Path(sys.argv[1])
+          s = path.read_text()
 
           pattern = re.compile(
-              r'(?m)^[ \t]*public\s+V10ProjectionSession\s*'
-              r'\(\s*Context\s+context\s*\)\s*\{'
+              r'(?m)^    public V10ProjectionSession\s*\(\s*Context\s+context\s*\)\s*\{'
           )
 
           m = pattern.search(s)
 
           if not m:
-              raise RuntimeError(
+              raise SystemExit(
                   "V10ProjectionSession constructor not found"
               )
 
@@ -372,6 +294,7 @@ jobs:
 
           depth = 0
           quote = None
+          end = -1
           i = brace
 
           while i < len(s):
@@ -395,26 +318,27 @@ jobs:
                           break
 
               i += 1
-          else:
-              raise RuntimeError(
-                  "constructor closing brace not found"
+
+          if end < 0:
+              raise SystemExit(
+                  "Constructor closing brace not found"
               )
 
-          replacement = """    public V10ProjectionSession(
+          constructor = """    public V10ProjectionSession(
             Context context) {
 
         this.context =
                 context.getApplicationContext();
     }"""
 
-          s = s[:start] + replacement + s[end:]
+          s = s[:start] + constructor + s[end:]
 
-          p.write_text(s)
+          path.write_text(s)
 
-          print("PASS: session constructor patched")
+          print("ProjectionSession constructor patch OK")
           PY
 
-      - name: Verify source
+      - name: Verify patches
         shell: bash
         run: |
           set -euo pipefail
@@ -426,8 +350,9 @@ jobs:
 
           if grep -Fq \
             "public static void public static void" \
-            "$SERVICE"; then
-            echo "ERROR: duplicated method declaration"
+            "$SERVICE"
+          then
+            echo "ERROR: duplicated Java declaration"
             exit 1
           fi
 
@@ -463,32 +388,15 @@ jobs:
           grep -Fq "release" "$SESSION"
           grep -Fq "destroy" "$SESSION"
 
-          if grep -nF \
+          if grep -Fq \
             "V10ProjectionService.ensureStarted" \
-            "$SESSION"; then
-            echo "ERROR: eager service start remains"
+            "$SESSION"
+          then
+            echo "ERROR: eager service startup remains"
             exit 1
           fi
 
-          echo "PASS: source verification"
-
-      - name: Verify V10 components
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          ROOT="v10-source/app/src/main/java/com/hieptran/aacast/doudou"
-
-          test -f "$ROOT/V10CarActivity.java"
-          test -f "$ROOT/V10SessionStore.java"
-          test -f "$ROOT/V10InputController.java"
-          test -f "$ROOT/RootShellSession.java"
-
-          grep -Eq \
-            'MAX_RECENTS[[:space:]]*=[[:space:]]*4' \
-            "$ROOT/V10SessionStore.java"
-
-          echo "PASS: V10 components preserved"
+          echo "Patch verification OK"
 
       - name: Verify no force-stop
         shell: bash
@@ -499,24 +407,28 @@ jobs:
 
           if grep -RInE \
             '(^|[[:space:];&|])(/system/bin/)?am[[:space:]]+force-stop([[:space:]]|$)' \
-            "$ROOT"; then
-            echo "ERROR: actual force-stop detected"
+            "$ROOT"
+          then
+            echo "ERROR: real am force-stop found"
             exit 1
           fi
 
-          echo "PASS: no actual force-stop"
+          echo "No force-stop OK"
 
-      - name: Validate Java braces
+      - name: Validate Java
         shell: bash
         run: |
           set -euo pipefail
 
-          python3 <<'PY'
+          ROOT="v10-source/app/src/main/java/com/hieptran/aacast/doudou"
+
+          javac -version
+
+          python3 - "$ROOT" <<'PY'
+          import sys
           from pathlib import Path
 
-          root = Path(
-              "v10-source/app/src/main/java/com/hieptran/aacast/doudou"
-          )
+          root = Path(sys.argv[1])
 
           files = [
               "V10ProjectionService.java",
@@ -528,71 +440,51 @@ jobs:
           ]
 
           for name in files:
-
-              path = root / name
-              text = path.read_text()
+              text = (root / name).read_text()
 
               depth = 0
               quote = None
               i = 0
 
               while i < len(text):
-
                   c = text[i]
 
                   if quote:
                       if c == "\\":
                           i += 2
                           continue
-
                       if c == quote:
                           quote = None
-
                   else:
                       if c in ('"', "'"):
                           quote = c
-
                       elif c == "{":
                           depth += 1
-
                       elif c == "}":
                           depth -= 1
 
-                          if depth < 0:
-                              raise RuntimeError(
-                                  "negative brace depth: " + name
-                              )
+                      if depth < 0:
+                          raise SystemExit(
+                              "Brace error: " + name
+                          )
 
                   i += 1
 
               if depth != 0:
-                  raise RuntimeError(
-                      "unbalanced braces: "
-                      + name
-                      + " depth="
-                      + str(depth)
+                  raise SystemExit(
+                      "Unbalanced braces: " + name
                   )
 
-              print("PASS: " + name)
+              print("OK:", name)
 
           PY
 
-      - name: Check diff
+      - name: Git diff check
         shell: bash
         run: |
           set -euo pipefail
-
           git diff --check
-
-          echo "===== SERVICE DIFF ====="
-
-          git diff -- \
-            v10-source/app/src/main/java/com/hieptran/aacast/doudou/V10ProjectionService.java
-
-          echo "===== SESSION DIFF ====="
-
-          git diff -- \
-            v10-source/app/src/main/java/com/hieptran/aacast/doudou/V10ProjectionSession.java
+          echo "git diff --check OK"
 
       - name: Build V10
         working-directory: v10-source
@@ -613,14 +505,13 @@ jobs:
 
           test -f "$APK"
 
-          SHA256="$(sha256sum "$APK" | awk '{print $1}')"
+          sha256sum "$APK"
 
-          echo "APK: $APK"
-          echo "SHA256: $SHA256"
+          ls -lh "$APK"
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: CarAssistant-V10-8B2-StartupHandshake-Fixed-v6
+          name: CarAssistant-V10-8B2-StartupHandshake-Fixed-v7
           path: v10-source/app/build/outputs/apk/debug/app-debug.apk
           if-no-files-found: error
