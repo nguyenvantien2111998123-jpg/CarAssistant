@@ -1,0 +1,353 @@
+name: Build Car Assistant V10 Display Core V1 Floating Touch
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Restore exact V10-6A baseline
+        shell: bash
+        run: |
+          set -euo pipefail
+          BASELINE="9075636a7d5947c1b0eee49c2bd3fd0e1b6b0cf1"
+          git fetch origin "$BASELINE" --depth=1
+          rm -rf v10-source
+          git checkout "$BASELINE" -- v10-source
+          test -f v10-source/app/src/main/java/com/hieptran/aacast/doudou/V10CarActivity.java
+          test -f v10-source/app/src/main/java/com/hieptran/aacast/doudou/V10ProjectionSession.java
+          test -f v10-source/app/src/main/java/com/hieptran/aacast/doudou/V10SessionStore.java
+          if [ -f v10-source/app/src/main/java/com/hieptran/aacast/doudou/V10ProjectionService.java ]; then exit 1; fi
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Verify V10-6A baseline
+        shell: bash
+        run: |
+          set -euo pipefail
+          SRC=v10-source/app/src/main/java/com/hieptran/aacast/doudou
+          grep -Fq DisplayManager "$SRC/V10ProjectionSession.java"
+          grep -Fq createVirtualDisplay "$SRC/V10ProjectionSession.java"
+          grep -Fq RootShellSession "$SRC/V10ProjectionSession.java"
+          grep -Fq 'public void onStop()' "$SRC/V10CarActivity.java"
+          echo "Baseline markers OK."
+
+      - name: Create Display Core V1 classes
+        shell: bash
+        run: |
+          set -euo pipefail
+          SRC=v10-source/app/src/main/java/com/hieptran/aacast/doudou
+          cat > "$SRC/V10TaskSession.java" <<'EOF'
+          package com.carassistant.v10;
+          import android.content.ComponentName;
+          public final class V10TaskSession {
+              public enum State { NEW, ACTIVE, HIDDEN, CLOSED }
+              private ComponentName target; private State state=State.NEW; private long lastActiveTime;
+              public synchronized boolean setTarget(ComponentName component){if(component==null)return false;boolean changed=target==null||!component.equals(target);if(changed){target=component;state=State.NEW;}return changed;}
+              public synchronized ComponentName getTarget(){return target;}
+              public synchronized State getState(){return state;}
+              public synchronized boolean hasTarget(){return target!=null;}
+              public synchronized void active(){state=State.ACTIVE;lastActiveTime=System.currentTimeMillis();}
+              public synchronized void hidden(){if(target!=null)state=State.HIDDEN;}
+              public synchronized void closed(){state=State.CLOSED;}
+              public synchronized long getLastActiveTime(){return lastActiveTime;}
+              public synchronized void clear(){target=null;state=State.CLOSED;lastActiveTime=0L;}
+          }
+          EOF
+          cat > "$SRC/V10DisplayController.java" <<'EOF'
+          package com.carassistant.v10;
+          import android.content.ComponentName;
+          import android.content.Context;
+          import android.graphics.SurfaceTexture;
+          import android.hardware.display.DisplayManager;
+          import android.os.Process;
+          import android.util.Log;
+          import android.view.Display;
+          import android.view.Surface;
+          public final class V10DisplayController {
+              private static final String TAG="CarAssistantV10DisplayCore"; private static V10DisplayController instance;
+              private final Context context; private final RootShellSession rootShell=new RootShellSession();
+              private android.hardware.display.VirtualDisplay virtualDisplay; private Display display; private Surface surface;
+              private ComponentName target; private boolean launched; private boolean destroyed;
+              private V10DisplayController(Context context){this.context=context.getApplicationContext();}
+              public static synchronized V10DisplayController get(Context context){if(instance==null)instance=new V10DisplayController(context);return instance;}
+              public synchronized boolean ensureDisplay(SurfaceTexture texture,int width,int height){
+                  if(destroyed||texture==null||width<1||height<1)return false;
+                  if(virtualDisplay!=null&&display!=null){attachSurface(texture,width,height);return true;}
+                  try{
+                      texture.setDefaultBufferSize(width,height); Surface newSurface=new Surface(texture);
+                      DisplayManager manager=(DisplayManager)context.getSystemService(Context.DISPLAY_SERVICE);
+                      if(manager==null){newSurface.release();throw new IllegalStateException("DisplayManager unavailable");}
+                      android.hardware.display.VirtualDisplay created=manager.createVirtualDisplay(V10Display.nameFor(0),width,height,160,newSurface,10);
+                      if(created==null){newSurface.release();throw new IllegalStateException("Cannot create virtual display");}
+                      Display createdDisplay=created.getDisplay();
+                      if(createdDisplay==null){created.release();newSurface.release();throw new IllegalStateException("Virtual display has no Display");}
+                      virtualDisplay=created;display=createdDisplay;replaceSurface(newSurface);return true;
+                  }catch(RuntimeException e){Log.w(TAG,"Display creation failed",e);return false;}
+              }
+              public synchronized void attachSurface(SurfaceTexture texture,int width,int height){if(destroyed||virtualDisplay==null||texture==null)return;texture.setDefaultBufferSize(width,height);Surface newSurface=new Surface(texture);replaceSurface(newSurface);virtualDisplay.setSurface(newSurface);}
+              public synchronized void detachSurface(){if(virtualDisplay!=null){try{virtualDisplay.setSurface(null);}catch(Throwable t){Log.w(TAG,"Display surface detach failed",t);}}releaseSurfaceOnly();}
+              private void replaceSurface(Surface newSurface){releaseSurfaceOnly();surface=newSurface;}
+              private void releaseSurfaceOnly(){if(surface!=null){try{surface.release();}catch(Throwable ignored){}}surface=null;}
+              public synchronized int getDisplayId(){return display==null?-1:display.getDisplayId();}
+              public synchronized boolean isReady(){return !destroyed&&virtualDisplay!=null&&display!=null;}
+              public synchronized boolean isLaunched(){return launched;}
+              public synchronized ComponentName getTarget(){return target;}
+              public synchronized void launchNewTask(ComponentName component){if(!isReady()||component==null)return;target=component;launched=true;final int displayId=display.getDisplayId();final int userId=Process.myUid()/100000;final String flat=component.flattenToString().replace("'","'\"'\"'");final String command="/system/bin/am start --user "+userId+" --display "+displayId+" --windowingMode 1 -a android.intent.action.MAIN -c android.intent.category.LAUNCHER -f 0x10000000 -n '"+flat+"'";execute(command,"Launch failed");}
+              public synchronized void resumeExistingTask(ComponentName component){if(!isReady()||component==null)return;target=component;final int displayId=display.getDisplayId();final int userId=Process.myUid()/100000;final String flat=component.flattenToString().replace("'","'\"'\"'");final String command="/system/bin/am start --user "+userId+" --display "+displayId+" --windowingMode 1 --activity-reorder-to-front -f 0x10000000 -n '"+flat+"'";execute(command,"Resume failed");}
+              private void execute(String command,String message){RootShellSession.EXEC.execute(()->{try{rootShell.run(10,command);}catch(Throwable t){Log.w(TAG,message,t);}});}
+              public synchronized void markNotLaunched(){launched=false;target=null;}
+              public synchronized void destroy(){if(destroyed)return;destroyed=true;if(virtualDisplay!=null){try{virtualDisplay.release();}catch(Throwable ignored){}}virtualDisplay=null;display=null;releaseSurfaceOnly();rootShell.destroy();if(instance==this)instance=null;}
+          }
+          EOF
+          cat > "$SRC/V10SurfaceManager.java" <<'EOF'
+          package com.carassistant.v10;
+          import android.graphics.SurfaceTexture;
+          public final class V10SurfaceManager {
+              private final V10DisplayController displayController;
+              public V10SurfaceManager(V10DisplayController displayController){this.displayController=displayController;}
+              public boolean attach(SurfaceTexture texture,int width,int height){if(!displayController.isReady())return displayController.ensureDisplay(texture,width,height);displayController.attachSurface(texture,width,height);return true;}
+              public void detach(){displayController.detachSurface();}
+          }
+          EOF
+
+      - name: Replace ProjectionSession with Display Core V1 bridge
+        shell: bash
+        run: |
+          set -euo pipefail
+          SRC=v10-source/app/src/main/java/com/hieptran/aacast/doudou
+          cat > "$SRC/V10ProjectionSession.java" <<'EOF'
+          package com.carassistant.v10;
+          import android.content.ComponentName;
+          import android.content.Context;
+          import android.graphics.SurfaceTexture;
+          import android.util.Log;
+          import android.view.TextureView;
+          public final class V10ProjectionSession implements TextureView.SurfaceTextureListener {
+              private static final String TAG="CarAssistantV10Projection";
+              private final V10DisplayController displayController; private final V10SurfaceManager surfaceManager; private final V10TaskSession taskSession=new V10TaskSession(); private final RootShellSession rootShell=new RootShellSession();
+              private TextureView textureView; private ComponentName target; private boolean destroyed; private int contentWidth; private int contentHeight;
+              public V10ProjectionSession(Context context){Context app=context.getApplicationContext();displayController=V10DisplayController.get(app);surfaceManager=new V10SurfaceManager(displayController);}
+              public void attachTextureView(TextureView view){textureView=view;view.setSurfaceTextureListener(this);if(view.isAvailable())attachCurrentSurface();}
+              public void setTarget(ComponentName component){if(destroyed)return;if(component==null){target=null;taskSession.clear();return;}boolean changed=target==null||!component.equals(target);target=component;if(changed){taskSession.setTarget(component);if(displayController.isLaunched())displayController.markNotLaunched();}attachCurrentSurface();}
+              public boolean isActive(){return !destroyed&&target!=null&&displayController.isReady();}
+              public int getDisplayId(){return displayController.getDisplayId();}
+              public void tap(float x,float y){if(!isActive())return;execute("/system/bin/input -d "+displayController.getDisplayId()+" tap "+Math.round(mapX(x))+" "+Math.round(mapY(y)),"Tap failed",5);}
+              public void swipe(float startX,float startY,float endX,float endY,long duration){if(!isActive())return;long safe=Math.max(80L,Math.min(800L,duration));execute("/system/bin/input -d "+displayController.getDisplayId()+" swipe "+Math.round(mapX(startX))+" "+Math.round(mapY(startY))+" "+Math.round(mapX(endX))+" "+Math.round(mapY(endY))+" "+safe,"Swipe failed",5);}
+              public void back(){if(!isActive())return;execute("/system/bin/input -d "+displayController.getDisplayId()+" keyevent 4","Back failed",5);}
+              private void attachCurrentSurface(){if(destroyed||target==null||textureView==null||!textureView.isAvailable())return;SurfaceTexture st=textureView.getSurfaceTexture();if(st==null)return;int width=textureView.getWidth(),height=textureView.getHeight();if(width<1||height<1)return;contentWidth=width;contentHeight=height;boolean wasReady=displayController.isReady();boolean wasLaunched=displayController.isLaunched();ComponentName displayTarget=displayController.getTarget();surfaceManager.attach(st,width,height);if(!wasReady){displayController.launchNewTask(target);taskSession.active();Log.d(TAG,"[CREATE] display="+displayController.getDisplayId());Log.d(TAG,"[CREATE] task="+target.flattenToString());Log.d(TAG,"[ACTIVE] task="+target.flattenToString());}else if(!wasLaunched){displayController.launchNewTask(target);taskSession.active();Log.d(TAG,"[LAUNCH] task="+target.flattenToString());}else if(taskSession.getState()==V10TaskSession.State.HIDDEN||displayTarget==null||!target.equals(displayTarget)){displayController.resumeExistingTask(target);taskSession.active();Log.d(TAG,"[RESUME] task="+target.flattenToString());}else taskSession.active();}
+              public void hideTask(){if(target==null||!displayController.isReady())return;taskSession.hidden();surfaceManager.detach();Log.d(TAG,"[HIDE] task="+target.flattenToString());Log.d(TAG,"[DETACH] surface");}
+              public void release(){hideTask();}
+              public void destroy(){if(destroyed)return;destroyed=true;surfaceManager.detach();rootShell.destroy();}
+              private float mapX(float x){if(textureView==null||contentWidth<1)return x;float width=textureView.getWidth();if(width<=0)return x;return clamp(x*contentWidth/width,0,contentWidth-1);}
+              private float mapY(float y){if(textureView==null||contentHeight<1)return y;float height=textureView.getHeight();if(height<=0)return y;return clamp(y*contentHeight/height,0,contentHeight-1);}
+              private static float clamp(float value,float min,float max){return Math.max(min,Math.min(max,value));}
+              private void execute(String command,String message,int timeout){RootShellSession.EXEC.execute(()->{try{rootShell.run(timeout,command);}catch(Throwable t){Log.w(TAG,message,t);}});}
+              @Override public void onSurfaceTextureAvailable(SurfaceTexture surface,int width,int height){attachCurrentSurface();}
+              @Override public void onSurfaceTextureSizeChanged(SurfaceTexture surface,int width,int height){contentWidth=width;contentHeight=height;}
+              @Override public boolean onSurfaceTextureDestroyed(SurfaceTexture surface){taskSession.hidden();surfaceManager.detach();Log.d(TAG,"[DETACH] surface");return true;}
+              @Override public void onSurfaceTextureUpdated(SurfaceTexture surface){}
+          }
+          EOF
+
+      - name: Patch V10CarActivity with Floating Touch only
+        shell: bash
+        run: |
+          set -euo pipefail
+          FILE=v10-source/app/src/main/java/com/hieptran/aacast/doudou/V10CarActivity.java
+          python3 - "$FILE" <<'PY'
+          from pathlib import Path
+          import sys
+          p=Path(sys.argv[1]); s=p.read_text()
+          imports='''import android.content.SharedPreferences;\nimport android.os.SystemClock;\nimport android.view.MotionEvent;\nimport android.view.ViewConfiguration;\nimport android.view.ViewGroup;\n'''
+          marker='import android.content.ComponentName;\n'
+          if 'import android.content.SharedPreferences;' not in s: s=s.replace(marker,marker+imports,1)
+          marker='    private V10ProjectionSession session;'
+          fields='''\n\n    private TextView floatingTouchKey;\n    private LinearLayout floatingMenu;\n\n    private boolean floatingDragging;\n    private float floatingDownRawX;\n    private float floatingDownRawY;\n    private int floatingStartX;\n    private int floatingStartY;\n    private long floatingLastTap;\n'''
+          if 'private TextView floatingTouchKey;' not in s: s=s.replace(marker,marker+fields,1)
+          attach='''        session.attachTextureView(\n                textureView);'''
+          if 'createFloatingTouchKey();' not in s:
+              if attach not in s: raise SystemExit('attachTextureView marker not found')
+              s=s.replace(attach,attach+'\n\n        createFloatingTouchKey();',1)
+          methods=r'''\n    private void createFloatingTouchKey() {
+              if (floatingTouchKey != null) return;
+              floatingTouchKey = new TextView(this);
+              floatingTouchKey.setText("●");
+              floatingTouchKey.setTextColor(Color.WHITE);
+              floatingTouchKey.setTextSize(22);
+              floatingTouchKey.setGravity(Gravity.CENTER);
+              GradientDrawable bg = new GradientDrawable();
+              bg.setShape(GradientDrawable.OVAL);
+              bg.setColor(Color.rgb(25, 35, 45));
+              bg.setStroke(dp(2), Color.rgb(80, 170, 230));
+              floatingTouchKey.setBackground(bg);
+              floatingTouchKey.setElevation(dp(12));
+              SharedPreferences prefs = getSharedPreferences("v10_floating_key", MODE_PRIVATE);
+              FrameLayout.LayoutParams params = new FrameLayout.LayoutParams(dp(58), dp(58), Gravity.TOP | Gravity.END);
+              int savedX = prefs.getInt("x", dp(18));
+              int savedY = prefs.getInt("y", dp(120));
+              params.setMargins(0, savedY, savedX, 0);
+              projectionLayer.addView(floatingTouchKey, params);
+              floatingTouchKey.setOnTouchListener((view, event) -> {
+                  switch (event.getActionMasked()) {
+                      case MotionEvent.ACTION_DOWN:
+                          floatingDragging = false;
+                          floatingDownRawX = event.getRawX();
+                          floatingDownRawY = event.getRawY();
+                          ViewGroup.LayoutParams lp = view.getLayoutParams();
+                          if (lp instanceof FrameLayout.LayoutParams) {
+                              FrameLayout.LayoutParams fp = (FrameLayout.LayoutParams) lp;
+                              floatingStartX = fp.rightMargin;
+                              floatingStartY = fp.topMargin;
+                          }
+                          return true;
+                      case MotionEvent.ACTION_MOVE:
+                          float dx = event.getRawX() - floatingDownRawX;
+                          float dy = event.getRawY() - floatingDownRawY;
+                          if (!floatingDragging && Math.hypot(dx, dy) > ViewConfiguration.get(this).getScaledTouchSlop()) floatingDragging = true;
+                          if (floatingDragging) {
+                              int width = projectionLayer.getWidth(), height = projectionLayer.getHeight(), keySize = dp(58);
+                              int right = Math.round(floatingStartX - dx), top = Math.round(floatingStartY + dy);
+                              right = Math.max(0, Math.min(Math.max(0, width - keySize), right));
+                              top = Math.max(0, Math.min(Math.max(0, height - keySize), top));
+                              FrameLayout.LayoutParams fp = (FrameLayout.LayoutParams) view.getLayoutParams();
+                              fp.rightMargin = right; fp.topMargin = top; view.setLayoutParams(fp);
+                          }
+                          return true;
+                      case MotionEvent.ACTION_UP:
+                          if (floatingDragging) {
+                              FrameLayout.LayoutParams fp = (FrameLayout.LayoutParams) view.getLayoutParams();
+                              prefs.edit().putInt("x", fp.rightMargin).putInt("y", fp.topMargin).apply();
+                              floatingDragging = false;
+                              return true;
+                          }
+                          long now = SystemClock.uptimeMillis();
+                          long delta = now - floatingLastTap;
+                          floatingLastTap = now;
+                          if (delta > 0 && delta < 320) {
+                              handleControlHome();
+                              hideFloatingMenu();
+                          } else {
+                              showFloatingMenu();
+                          }
+                          view.performClick();
+                          return true;
+                      case MotionEvent.ACTION_CANCEL:
+                          floatingDragging = false;
+                          return true;
+                      default: return true;
+                  }
+              });
+              floatingTouchKey.bringToFront();
+          }
+
+          private void showFloatingMenu() {
+              if (floatingMenu != null) { hideFloatingMenu(); return; }
+              floatingMenu = new LinearLayout(this);
+              floatingMenu.setOrientation(LinearLayout.VERTICAL);
+              floatingMenu.setPadding(dp(8), dp(8), dp(8), dp(8));
+              GradientDrawable menuBg = new GradientDrawable();
+              menuBg.setColor(Color.rgb(15, 20, 26));
+              menuBg.setCornerRadius(dp(16));
+              menuBg.setStroke(dp(1), Color.rgb(65, 85, 105));
+              floatingMenu.setBackground(menuBg);
+              floatingMenu.setElevation(dp(14));
+              addFloatingMenuButton("BACK", () -> { handleControlBack(); hideFloatingMenu(); });
+              FrameLayout.LayoutParams params = new FrameLayout.LayoutParams(dp(170), -2, Gravity.TOP | Gravity.END);
+              params.setMargins(0, dp(70), dp(18), 0);
+              projectionLayer.addView(floatingMenu, params);
+              floatingMenu.bringToFront();
+              floatingTouchKey.bringToFront();
+          }
+
+          private void addFloatingMenuButton(String label, Runnable action) {
+              TextView button = new TextView(this);
+              button.setText(label);
+              button.setTextColor(Color.WHITE);
+              button.setTextSize(14);
+              button.setGravity(Gravity.CENTER_VERTICAL);
+              GradientDrawable bg = new GradientDrawable();
+              bg.setColor(Color.rgb(28, 38, 48));
+              bg.setCornerRadius(dp(10));
+              button.setBackground(bg);
+              button.setPadding(dp(16), 0, dp(16), 0);
+              button.setOnClickListener(v -> action.run());
+              LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(-1, dp(48));
+              params.setMargins(0, dp(3), 0, dp(3));
+              floatingMenu.addView(button, params);
+          }
+
+          private void hideFloatingMenu() {
+              if (floatingMenu == null) return;
+              projectionLayer.removeView(floatingMenu);
+              floatingMenu = null;
+          }
+          '''
+          anchor='    public void handleControlBack()'
+          if 'private void createFloatingTouchKey()' not in s:
+              if anchor not in s: raise SystemExit('handleControlBack marker not found')
+              s=s.replace(anchor,methods+'\n'+anchor,1)
+          p.write_text(s)
+          PY
+
+      - name: Verify only allowed Floating Touch changes
+        shell: bash
+        run: |
+          set -euo pipefail
+          SRC=v10-source/app/src/main/java/com/hieptran/aacast/doudou
+          ACTIVITY=$SRC/V10CarActivity.java
+          SESSION=$SRC/V10ProjectionSession.java
+          grep -Fq 'private TextView floatingTouchKey;' "$ACTIVITY"
+          grep -Fq 'createFloatingTouchKey();' "$ACTIVITY"
+          grep -Fq 'private void createFloatingTouchKey()' "$ACTIVITY"
+          grep -Fq 'addFloatingMenuButton("BACK"' "$ACTIVITY"
+          grep -Fq 'handleControlHome();' "$ACTIVITY"
+          grep -Fq 'handleControlBack();' "$ACTIVITY"
+          grep -Fq 'floatingDragging' "$ACTIVITY"
+          grep -Fq 'SystemClock.uptimeMillis()' "$ACTIVITY"
+          if grep -Fq 'RECENTS' "$ACTIVITY"; then echo 'ERROR: RECENTS present'; exit 1; fi
+          if grep -Fq 'session.recents()' "$ACTIVITY"; then echo 'ERROR: recents method present'; exit 1; fi
+          if grep -Fq '2 SCREEN' "$ACTIVITY"; then echo 'ERROR: 2 SCREEN present'; exit 1; fi
+          if grep -Fq '3 SCREEN' "$ACTIVITY"; then echo 'ERROR: 3 SCREEN present'; exit 1; fi
+          if grep -Fq 'setLayoutModeExternal(' "$ACTIVITY"; then echo 'ERROR: RootView layout patch leaked'; exit 1; fi
+          if grep -Fq 'V10ProjectionService' "$SESSION"; then echo 'ERROR: ProjectionService leaked'; exit 1; fi
+          if grep -Fq 'am force-stop' "$SESSION"; then echo 'ERROR: force-stop leaked'; exit 1; fi
+          grep -Fq -- '--activity-reorder-to-front' "$SRC/V10DisplayController.java"
+          echo 'Floating Touch + Display Core verification OK.'
+
+      - name: Build APK
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd v10-source
+          chmod +x ./gradlew
+          ./gradlew --no-daemon --stacktrace assembleDebug
+
+      - name: Locate APK and SHA256
+        shell: bash
+        run: |
+          set -euo pipefail
+          APK="$(find v10-source -type f -path '*/build/outputs/apk/*/*.apk' | head -n 1)"
+          test -n "$APK" && test -f "$APK"
+          echo "APK=$APK"
+          sha256sum "$APK"
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: CarAssistant-V10-Display-Core-V1-Floating-Touch
+          path: v10-source/**/build/outputs/apk/*/*.apk
+          if-no-files-found: error
+          retention-days: 7
