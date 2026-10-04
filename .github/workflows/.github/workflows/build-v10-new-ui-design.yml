@@ -1,0 +1,111 @@
+name: Build Car Assistant V10 New UI Design
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Rebuild exact Display Core V1 from GitHub workflow
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          import subprocess
+          import yaml
+
+          wf = Path('.github/workflows/build-v10-display-core-v1.yml')
+          doc = yaml.safe_load(wf.read_text(encoding='utf-8'))
+          steps = doc['jobs']['build']['steps']
+          stop_names = {'Build V10 Display Core V1'}
+          selected = []
+          for step in steps:
+              if 'run' in step and not step.get('uses'):
+                  selected.append(step)
+              if step.get('name') in stop_names:
+                  break
+          if not selected:
+              raise SystemExit('Core V1 run steps not found')
+          for step in selected:
+              name = step.get('name','unnamed')
+              print(f'CORE > {name}')
+              subprocess.run(['bash','-euo','pipefail','-c',step['run']], check=True)
+          PY
+
+      - name: Replace V10CarActivity with new UI design
+        shell: bash
+        run: |
+          set -euo pipefail
+          OLD_FILE="v10-source/app/src/main/java/com/hieptran/aacast/doudou/V10CarActivity.java"
+          NEW_FILE="v10-source/app/src/main/java/com/hieptran/aacast/doudou/V10CarActivityNew.java"
+
+          if [ ! -f "$NEW_FILE" ]; then
+              echo "ERROR: V10CarActivityNew.java not found at $NEW_FILE"
+              exit 1
+          fi
+
+          cp "$OLD_FILE" "${OLD_FILE}.backup"
+          sed -i 's/public final class V10CarActivityNew/public final class V10CarActivity/g' "$NEW_FILE"
+          sed -i 's/V10CarActivityNew\\.this/V10CarActivity.this/g' "$NEW_FILE"
+
+          cp "$NEW_FILE" "$OLD_FILE"
+
+          echo "UI replacement complete: V10CarActivity updated with new design"
+
+      - name: Verify UI changes
+        shell: bash
+        run: |
+          set -euo pipefail
+          FILE="v10-source/app/src/main/java/com/hieptran/aacast/doudou/V10CarActivity.java"
+
+          grep -Fq 'buildTransparentBottomBar()' "$FILE" || { echo "FAIL: Transparent bottom bar not found"; exit 1; }
+          grep -Fq 'sidebarButton(' "$FILE" || { echo "FAIL: Sidebar buttons not found"; exit 1; }
+          grep -Fq 'trafficCircle' "$FILE" || { echo "FAIL: Traffic circle not found"; exit 1; }
+          grep -Fq '3 Favorite Apps' "$FILE" || { echo "FAIL: Favorite apps section not found"; exit 1; }
+          grep -Fq 'Voice Assistant button' "$FILE" || { echo "FAIL: Voice assistant button not found"; exit 1; }
+          grep -Fq 'Tasks button' "$FILE" || { echo "FAIL: Tasks button not found"; exit 1; }
+
+          echo "UI verification PASSED."
+
+      - name: Compile Java
+        working-directory: v10-source
+        shell: bash
+        run: ./gradlew --no-daemon --stacktrace compileDebugJavaWithJavac
+
+      - name: Build APK
+        working-directory: v10-source
+        shell: bash
+        run: ./gradlew --no-daemon --stacktrace assembleDebug
+
+      - name: Locate APK and SHA256
+        working-directory: v10-source
+        shell: bash
+        run: |
+          set -euo pipefail
+          APK="$(find app/build/outputs/apk/debug -type f -name '*.apk' -print -quit)"
+          test -n "$APK"
+          echo "APK=$APK"
+          sha256sum "$APK"
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: CarAssistant-V10-New-UI-Design
+          path: v10-source/app/build/outputs/apk/debug/*.apk
+          if-no-files-found: error
+          retention-days: 14
