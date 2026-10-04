@@ -1,6 +1,6 @@
 name: Build Car Assistant V10 - Home V1 Phone UI Fix V3.1
 
-on:
+"on":
   workflow_dispatch:
 
 permissions:
@@ -22,19 +22,20 @@ jobs:
         uses: actions/setup-java@v4
         with:
           distribution: temurin
-          java-version: '17'
+          java-version: "17"
 
       - name: Verify exact baseline
         shell: bash
         run: |
           set -euo pipefail
+
           FILE="v10-source/app/src/main/java/com/hieptran/aacast/doudou/V10LauncherActivity.java"
 
           test -f "$FILE"
           test "$(git rev-parse HEAD)" = "0634e1f5ced143fdd931022b32bf9a19cbf6e2bd"
 
           SHA="$(sha256sum "$FILE" | cut -d' ' -f1)"
-          test "$SHA" = "f2a7c48c8e2d5c0e5a2c6b2a7c4b6d9d7a7e4f8f2c7c1e7b2a0e6c4f8a5d9e1a"
+          test "$SHA" = "84d970adbfacc39270838d12ed0a73bc7fa0d645"
 
           grep -Fq 'class V10LauncherActivity' "$FILE"
           grep -Fq 'private void buildDashboard()' "$FILE"
@@ -51,6 +52,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+
           FILE="v10-source/app/src/main/java/com/hieptran/aacast/doudou/V10LauncherActivity.java"
 
           python3 - "$FILE" <<'PY'
@@ -61,35 +63,76 @@ jobs:
           s = p.read_text(encoding="utf-8")
           original = s
 
-          def method(text, sig, new):
-              start = text.find(sig)
-              if start < 0:
-                  raise SystemExit("METHOD NOT FOUND: " + sig)
+          def find_block(text, start):
               brace = text.find("{", start)
               if brace < 0:
-                  raise SystemExit("OPEN BRACE NOT FOUND: " + sig)
+                  raise SystemExit("Opening brace not found")
+
               depth = 0
-              end = -1
-              for i in range(brace, len(text)):
-                  if text[i] == "{":
+              quote = None
+              escape = False
+              line_comment = False
+              block_comment = False
+              i = brace
+
+              while i < len(text):
+                  c = text[i]
+                  n = text[i + 1] if i + 1 < len(text) else ""
+
+                  if line_comment:
+                      if c == "\n":
+                          line_comment = False
+                  elif block_comment:
+                      if c == "*" and n == "/":
+                          block_comment = False
+                          i += 1
+                  elif quote:
+                      if escape:
+                          escape = False
+                      elif c == "\\":
+                          escape = True
+                      elif c == quote:
+                          quote = None
+                  elif c == "/" and n == "/":
+                      line_comment = True
+                      i += 1
+                  elif c == "/" and n == "*":
+                      block_comment = True
+                      i += 1
+                  elif c in ('"', "'"):
+                      quote = c
+                  elif c == "{":
                       depth += 1
-                  elif text[i] == "}":
+                  elif c == "}":
                       depth -= 1
                       if depth == 0:
-                          end = i + 1
-                          break
-              if end < 0:
-                  raise SystemExit("CLOSE BRACE NOT FOUND: " + sig)
-              return text[:start] + new.strip() + text[end:]
+                          return i + 1
 
-          def once(text, old, new, name):
-              n = text.count(old)
-              if n != 1:
-                  raise SystemExit(f"{name}: expected 1 match, got {n}")
+                  i += 1
+
+              raise SystemExit("Closing brace not found")
+
+          def replace_block(text, signature, replacement):
+              start = text.find(signature)
+              if start < 0:
+                  raise SystemExit("NOT FOUND: " + signature)
+
+              end = find_block(text, start)
+              return text[:start] + replacement.strip() + text[end:]
+
+          def replace_once(text, old, new, name):
+              count = text.count(old)
+              if count != 1:
+                  raise SystemExit(
+                      f"{name}: expected 1 match, got {count}"
+                  )
               return text.replace(old, new, 1)
 
+          # --------------------------------------------------
           # Imports
-          s = once(
+          # --------------------------------------------------
+
+          s = replace_once(
               s,
               "import android.graphics.Color;\n",
               "import android.graphics.Canvas;\n"
@@ -99,7 +142,7 @@ jobs:
               "graphics imports"
           )
 
-          s = once(
+          s = replace_once(
               s,
               "import android.graphics.drawable.GradientDrawable;\n",
               "import android.graphics.drawable.Drawable;\n"
@@ -107,16 +150,19 @@ jobs:
               "drawable import"
           )
 
-          s = once(
+          s = replace_once(
               s,
               "import android.view.Gravity;\n",
               "import android.view.Gravity;\n"
               "import android.widget.FrameLayout;\n"
               "import android.widget.ImageView;\n",
-              "view imports"
+              "widget imports"
           )
 
+          # --------------------------------------------------
           # Dashboard
+          # --------------------------------------------------
+
           dashboard = r'''
           private void buildDashboard() {
               dashboard.removeAllViews();
@@ -124,121 +170,223 @@ jobs:
               LinearLayout top = new LinearLayout(this);
               top.setGravity(Gravity.CENTER_VERTICAL);
               top.setPadding(dp(10), dp(6), dp(10), dp(6));
-              top.setBackground(roundBg(Color.rgb(18,24,32), dp(14)));
+              top.setBackground(
+                      roundBg(Color.rgb(18, 24, 32), dp(14)));
 
               LinearLayout titleBox = new LinearLayout(this);
               titleBox.setOrientation(LinearLayout.VERTICAL);
 
-              TextView title = text("CAR ASSISTANT", 18, Color.WHITE);
-              title.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
+              TextView title =
+                      text("CAR ASSISTANT", 18, Color.WHITE);
+
+              title.setTypeface(
+                      Typeface.DEFAULT,
+                      Typeface.BOLD);
+
               titleBox.addView(title);
 
               date = text("", 11, Color.LTGRAY);
               titleBox.addView(date);
 
-              top.addView(titleBox,
-                      new LinearLayout.LayoutParams(0, -2, 1f));
+              top.addView(
+                      titleBox,
+                      new LinearLayout.LayoutParams(
+                              0, -2, 1f));
 
               clock = text("", 20, Color.WHITE);
               clock.setGravity(Gravity.CENTER);
-              top.addView(clock,
-                      new LinearLayout.LayoutParams(dp(100), dp(55)));
 
-              dashboard.addView(top,
-                      new LinearLayout.LayoutParams(-1, dp(66)));
+              top.addView(
+                      clock,
+                      new LinearLayout.LayoutParams(
+                              dp(100), dp(55)));
+
+              dashboard.addView(
+                      top,
+                      new LinearLayout.LayoutParams(
+                              -1, dp(66)));
 
               LinearLayout main = new LinearLayout(this);
               main.setOrientation(LinearLayout.HORIZONTAL);
               main.setPadding(0, dp(8), 0, dp(8));
 
-              main.addView(buildSidebar(),
-                      new LinearLayout.LayoutParams(dp(72), -1));
+              main.addView(
+                      buildSidebar(),
+                      new LinearLayout.LayoutParams(
+                              dp(72), -1));
 
               LinearLayout content = new LinearLayout(this);
               content.setOrientation(LinearLayout.VERTICAL);
               content.setPadding(dp(8), 0, 0, 0);
 
               FrameLayout map = new FrameLayout(this);
-              map.setBackground(roundBg(Color.rgb(9,17,23), dp(16)));
-              map.addView(new MapBackground(this),
-                      new FrameLayout.LayoutParams(-1, -1));
 
-              TextView mapTitle = text("MAP", 12, Color.WHITE);
+              map.setBackground(
+                      roundBg(
+                              Color.rgb(9, 17, 23),
+                              dp(16)));
+
+              map.addView(
+                      new MapBackground(this),
+                      new FrameLayout.LayoutParams(
+                              -1, -1));
+
+              TextView mapTitle =
+                      text("MAP", 12, Color.WHITE);
+
               mapTitle.setGravity(Gravity.CENTER);
+
               mapTitle.setBackground(
-                      roundBg(Color.rgb(24,32,42), dp(10)));
+                      roundBg(
+                              Color.rgb(24, 32, 42),
+                              dp(10)));
 
-              FrameLayout.LayoutParams mp =
-                      new FrameLayout.LayoutParams(dp(70), dp(38));
-              mp.gravity = Gravity.TOP | Gravity.LEFT;
-              mp.setMargins(dp(10), dp(10), 0, 0);
-              map.addView(mapTitle, mp);
+              FrameLayout.LayoutParams mapParams =
+                      new FrameLayout.LayoutParams(
+                              dp(70), dp(38));
 
-              TextView nav = text("Navigation\nReady", 12, Color.LTGRAY);
+              mapParams.gravity =
+                      Gravity.TOP | Gravity.LEFT;
+
+              mapParams.setMargins(
+                      dp(10), dp(10), 0, 0);
+
+              map.addView(
+                      mapTitle,
+                      mapParams);
+
+              TextView nav =
+                      text(
+                              "Navigation\nReady",
+                              12,
+                              Color.LTGRAY);
+
               nav.setGravity(Gravity.CENTER);
+
               nav.setBackground(
-                      roundBg(Color.rgb(18,25,33), dp(10)));
+                      roundBg(
+                              Color.rgb(18, 25, 33),
+                              dp(10)));
 
-              FrameLayout.LayoutParams np =
-                      new FrameLayout.LayoutParams(dp(120), dp(58));
-              np.gravity = Gravity.BOTTOM | Gravity.LEFT;
-              np.setMargins(dp(10), 0, 0, dp(10));
-              map.addView(nav, np);
+              FrameLayout.LayoutParams navParams =
+                      new FrameLayout.LayoutParams(
+                              dp(120), dp(58));
 
-              content.addView(map,
-                      new LinearLayout.LayoutParams(-1, 0, 1f));
+              navParams.gravity =
+                      Gravity.BOTTOM | Gravity.LEFT;
 
-              LinearLayout info = new LinearLayout(this);
-              info.setOrientation(LinearLayout.HORIZONTAL);
-              info.setPadding(0, dp(6), 0, 0);
+              navParams.setMargins(
+                      dp(10), 0, 0, dp(10));
 
-              info.addView(infoCard("SPEED", "0 km/h"),
-                      new LinearLayout.LayoutParams(0, dp(54), 1f));
-              info.addView(infoCard("WEATHER", "-- °C"),
-                      new LinearLayout.LayoutParams(0, dp(54), 1f));
-              info.addView(infoCard("MEDIA", "No media"),
-                      new LinearLayout.LayoutParams(0, dp(54), 1f));
+              map.addView(
+                      nav,
+                      navParams);
+
+              content.addView(
+                      map,
+                      new LinearLayout.LayoutParams(
+                              -1, 0, 1f));
+
+              LinearLayout info =
+                      new LinearLayout(this);
+
+              info.setOrientation(
+                      LinearLayout.HORIZONTAL);
+
+              info.setPadding(
+                      0, dp(6), 0, 0);
+
+              info.addView(
+                      infoCard("SPEED", "0 km/h"),
+                      new LinearLayout.LayoutParams(
+                              0, dp(54), 1f));
+
+              info.addView(
+                      infoCard("WEATHER", "-- °C"),
+                      new LinearLayout.LayoutParams(
+                              0, dp(54), 1f));
+
+              info.addView(
+                      infoCard("MEDIA", "No media"),
+                      new LinearLayout.LayoutParams(
+                              0, dp(54), 1f));
 
               content.addView(info);
 
-              main.addView(content,
-                      new LinearLayout.LayoutParams(0, -1, 1f));
+              main.addView(
+                      content,
+                      new LinearLayout.LayoutParams(
+                              0, -1, 1f));
 
-              dashboard.addView(main,
-                      new LinearLayout.LayoutParams(-1, 0, 1f));
+              dashboard.addView(
+                      main,
+                      new LinearLayout.LayoutParams(
+                              -1, 0, 1f));
 
-              LinearLayout bottom = new LinearLayout(this);
-              bottom.setGravity(Gravity.CENTER_VERTICAL);
-              bottom.setPadding(dp(6), dp(5), dp(6), dp(5));
-              bottom.setBackground(roundBg(Color.rgb(18,24,32), dp(14)));
+              LinearLayout bottom =
+                      new LinearLayout(this);
+
+              bottom.setGravity(
+                      Gravity.CENTER_VERTICAL);
+
+              bottom.setPadding(
+                      dp(6), dp(5), dp(6), dp(5));
+
+              bottom.setBackground(
+                      roundBg(
+                              Color.rgb(18, 24, 32),
+                              dp(14)));
 
               TextView prev = buttonText("◀");
               TextView next = buttonText("▶");
               TextView media = buttonText("♫");
               TextView apps = buttonText("▦  APPS");
 
-              bottom.addView(prev,
-                      new LinearLayout.LayoutParams(0, dp(48), 1f));
-              bottom.addView(next,
-                      new LinearLayout.LayoutParams(0, dp(48), 1f));
-              bottom.addView(media,
-                      new LinearLayout.LayoutParams(0, dp(48), 1f));
-              bottom.addView(apps,
-                      new LinearLayout.LayoutParams(0, dp(48), 2f));
+              bottom.addView(
+                      prev,
+                      new LinearLayout.LayoutParams(
+                              0, dp(48), 1f));
 
-              apps.setOnClickListener(v -> showApps());
+              bottom.addView(
+                      next,
+                      new LinearLayout.LayoutParams(
+                              0, dp(48), 1f));
 
-              dashboard.addView(bottom,
-                      new LinearLayout.LayoutParams(-1, dp(60)));
+              bottom.addView(
+                      media,
+                      new LinearLayout.LayoutParams(
+                              0, dp(48), 1f));
+
+              bottom.addView(
+                      apps,
+                      new LinearLayout.LayoutParams(
+                              0, dp(48), 2f));
+
+              apps.setOnClickListener(
+                      v -> showApps());
+
+              dashboard.addView(
+                      bottom,
+                      new LinearLayout.LayoutParams(
+                              -1, dp(60)));
           }
           '''
-          s = method(s, "private void buildDashboard()", dashboard)
 
+          s = replace_block(
+              s,
+              "private void buildDashboard()",
+              dashboard
+          )
+
+          # --------------------------------------------------
           # Real application icons
+          # --------------------------------------------------
+
           old = '''            apps.add(
                     new AppInfo(
                             component,
                             name));'''
+
           new = '''            Drawable icon =
                     info.loadIcon(getPackageManager());
 
@@ -247,184 +395,359 @@ jobs:
                             component,
                             name,
                             icon));'''
-          s = once(s, old, new, "real app icons")
 
+          s = replace_once(
+              s,
+              old,
+              new,
+              "real app icon loading"
+          )
+
+          # --------------------------------------------------
           # App tile
+          # --------------------------------------------------
+
           tile = r'''
           private LinearLayout appTile(AppInfo app) {
-              LinearLayout tile = new LinearLayout(this);
-              tile.setOrientation(LinearLayout.VERTICAL);
-              tile.setGravity(Gravity.CENTER);
-              tile.setPadding(dp(6), dp(6), dp(6), dp(6));
-              tile.setBackground(
-                      roundBg(Color.rgb(22,28,35), dp(14)));
+              LinearLayout tile =
+                      new LinearLayout(this);
 
-              ImageView icon = new ImageView(this);
+              tile.setOrientation(
+                      LinearLayout.VERTICAL);
+
+              tile.setGravity(Gravity.CENTER);
+
+              tile.setPadding(
+                      dp(6), dp(6), dp(6), dp(6));
+
+              tile.setBackground(
+                      roundBg(
+                              Color.rgb(22, 28, 35),
+                              dp(14)));
+
+              ImageView icon =
+                      new ImageView(this);
+
               if (app.icon != null) {
                   icon.setImageDrawable(app.icon);
               } else {
                   icon.setImageDrawable(
-                          getPackageManager().getDefaultActivityIcon());
+                          getPackageManager()
+                                  .getDefaultActivityIcon());
               }
-              icon.setScaleType(ImageView.ScaleType.CENTER_INSIDE);
 
-              tile.addView(icon,
-                      new LinearLayout.LayoutParams(dp(50), dp(50)));
+              icon.setScaleType(
+                      ImageView.ScaleType.CENTER_INSIDE);
 
-              TextView name = text(app.name, 12, Color.WHITE);
+              tile.addView(
+                      icon,
+                      new LinearLayout.LayoutParams(
+                              dp(50), dp(50)));
+
+              TextView name =
+                      text(
+                              app.name,
+                              12,
+                              Color.WHITE);
+
               name.setGravity(Gravity.CENTER);
               name.setMaxLines(2);
 
-              tile.addView(name,
-                      new LinearLayout.LayoutParams(-1, dp(40)));
+              tile.addView(
+                      name,
+                      new LinearLayout.LayoutParams(
+                              -1, dp(40)));
 
-              tile.setOnClickListener(v -> selectApp(app));
+              tile.setOnClickListener(
+                      v -> selectApp(app));
+
               return tile;
           }
           '''
-          s = method(s, "private LinearLayout appTile(", tile)
 
+          s = replace_block(
+              s,
+              "private LinearLayout appTile(",
+              tile
+          )
+
+          # --------------------------------------------------
+          # Remove initial-letter helper
+          # --------------------------------------------------
+
+          if "private String initial(" in s:
+              s = replace_block(
+                  s,
+                  "private String initial(",
+                  ""
+              )
+
+          if "initial(app.name)" in s:
+              raise SystemExit(
+                  "OLD INITIAL ICON CALL STILL EXISTS"
+              )
+
+          # --------------------------------------------------
           # App model
+          # --------------------------------------------------
+
           model = r'''
           private static final class AppInfo {
               final ComponentName component;
               final String name;
               final Drawable icon;
 
-              AppInfo(ComponentName component, String name, Drawable icon) {
+              AppInfo(
+                      ComponentName component,
+                      String name,
+                      Drawable icon) {
+
                   this.component = component;
                   this.name = name;
                   this.icon = icon;
               }
           }
           '''
-          s = method(s, "private static final class AppInfo", model)
 
-          # Remove old initial() helper
-          if "private String initial(" in s:
-              s = method(s, "private String initial(", "")
+          s = replace_block(
+              s,
+              "private static final class AppInfo",
+              model
+          )
 
-          # Add helpers before UI HELPERS
-          marker = "    // ====================================================\n    // UI HELPERS\n"
+          # --------------------------------------------------
+          # UI helpers
+          # --------------------------------------------------
+
+          marker = (
+              "    // ====================================================\n"
+              "    // UI HELPERS\n"
+          )
+
           if s.count(marker) != 1:
-              raise SystemExit("UI HELPERS marker mismatch")
+              raise SystemExit(
+                  "UI HELPERS marker mismatch"
+              )
 
           helpers = r'''
-          private GradientDrawable roundBg(int color, float radius) {
-              GradientDrawable bg = new GradientDrawable();
+          private GradientDrawable roundBg(
+                  int color,
+                  float radius) {
+
+              GradientDrawable bg =
+                      new GradientDrawable();
+
               bg.setColor(color);
               bg.setCornerRadius(radius);
+
               return bg;
           }
 
           private LinearLayout buildSidebar() {
-              LinearLayout side = new LinearLayout(this);
-              side.setOrientation(LinearLayout.VERTICAL);
-              side.setGravity(Gravity.CENTER_HORIZONTAL);
-              side.setPadding(0, dp(4), 0, dp(4));
-              side.setBackground(roundBg(Color.rgb(15,21,29), dp(14)));
 
-              side.addView(sideButton("☰", "Menu"));
-              side.addView(sideButton("⌖", "Map"));
-              side.addView(sideButton("▣", "Files"));
-              side.addView(sideButton("⚙", "Settings"));
-              side.addView(sideButton("⋮", "More"));
+              LinearLayout side =
+                      new LinearLayout(this);
+
+              side.setOrientation(
+                      LinearLayout.VERTICAL);
+
+              side.setGravity(
+                      Gravity.CENTER_HORIZONTAL);
+
+              side.setPadding(
+                      0, dp(4), 0, dp(4));
+
+              side.setBackground(
+                      roundBg(
+                              Color.rgb(15, 21, 29),
+                              dp(14)));
+
+              side.addView(
+                      sideButton("☰", "Menu"));
+
+              side.addView(
+                      sideButton("⌖", "Map"));
+
+              side.addView(
+                      sideButton("▣", "Files"));
+
+              side.addView(
+                      sideButton("⚙", "Settings"));
+
+              side.addView(
+                      sideButton("⋮", "More"));
+
               return side;
           }
 
-          private TextView sideButton(String icon, String label) {
-              TextView v = text(icon + "\n" + label, 10, Color.WHITE);
+          private TextView sideButton(
+                  String icon,
+                  String label) {
+
+              TextView v =
+                      text(
+                              icon + "\n" + label,
+                              10,
+                              Color.WHITE);
+
               v.setGravity(Gravity.CENTER);
-              v.setPadding(dp(2), dp(3), dp(2), dp(3));
-              v.setBackground(roundBg(Color.TRANSPARENT, dp(10)));
+
+              v.setPadding(
+                      dp(2), dp(3), dp(2), dp(3));
+
+              v.setBackground(
+                      roundBg(
+                              Color.TRANSPARENT,
+                              dp(10)));
+
               v.setOnClickListener(x -> {
+
                   if ("Files".equals(label)) {
                       showApps();
                   } else if (status != null) {
                       status.setText(label);
                   }
               });
-              LinearLayout.LayoutParams p =
-                      new LinearLayout.LayoutParams(-1, dp(62));
+
+              LinearLayout.LayoutParams params =
+                      new LinearLayout.LayoutParams(
+                              -1, dp(62));
+
+              v.setLayoutParams(params);
+
               return v;
           }
 
-          private LinearLayout infoCard(String title, String value) {
-              LinearLayout box = card();
-              box.addView(text(title, 10, Color.LTGRAY));
-              TextView val = text(value, 15, Color.WHITE);
-              val.setGravity(Gravity.CENTER);
-              box.addView(val,
-                      new LinearLayout.LayoutParams(-1, 0, 1f));
-              return box;
-          }
+          private final class MapBackground
+                  extends View {
 
-          private final class MapBackground extends View {
-              private final Paint grid = new Paint(Paint.ANTI_ALIAS_FLAG);
-              private final Paint road = new Paint(Paint.ANTI_ALIAS_FLAG);
+              private final Paint grid =
+                      new Paint(Paint.ANTI_ALIAS_FLAG);
 
-              MapBackground(android.content.Context c) {
-                  super(c);
-                  grid.setColor(Color.rgb(27,40,47));
+              private final Paint road =
+                      new Paint(Paint.ANTI_ALIAS_FLAG);
+
+              MapBackground(
+                      android.content.Context context) {
+
+                  super(context);
+
+                  grid.setColor(
+                          Color.rgb(27, 40, 47));
+
                   grid.setStrokeWidth(dp(1));
-                  road.setColor(Color.rgb(55,70,78));
-                  road.setStyle(Paint.Style.STROKE);
+
+                  road.setColor(
+                          Color.rgb(55, 70, 78));
+
+                  road.setStyle(
+                          Paint.Style.STROKE);
+
                   road.setStrokeWidth(dp(12));
-                  road.setStrokeCap(Paint.Cap.ROUND);
+
+                  road.setStrokeCap(
+                          Paint.Cap.ROUND);
               }
 
               @Override
-              protected void onDraw(Canvas c) {
-                  super.onDraw(c);
-                  c.drawColor(Color.rgb(9,17,23));
+              protected void onDraw(Canvas canvas) {
 
-                  int w = getWidth();
-                  int h = getHeight();
+                  super.onDraw(canvas);
+
+                  canvas.drawColor(
+                          Color.rgb(9, 17, 23));
+
+                  int width = getWidth();
+                  int height = getHeight();
                   int step = dp(36);
 
-                  for (int x = 0; x < w; x += step) {
-                      c.drawLine(x, 0, x, h, grid);
-                  }
-                  for (int y = 0; y < h; y += step) {
-                      c.drawLine(0, y, w, y, grid);
+                  for (
+                          int x = 0;
+                          x < width;
+                          x += step) {
+
+                      canvas.drawLine(
+                              x, 0,
+                              x, height,
+                              grid);
                   }
 
-                  Path p = new Path();
-                  p.moveTo(0, h * .72f);
-                  p.cubicTo(
-                          w * .25f, h * .55f,
-                          w * .55f, h * .78f,
-                          w, h * .32f);
-                  c.drawPath(p, road);
+                  for (
+                          int y = 0;
+                          y < height;
+                          y += step) {
 
-                  Paint marker = new Paint(Paint.ANTI_ALIAS_FLAG);
+                      canvas.drawLine(
+                              0, y,
+                              width, y,
+                              grid);
+                  }
+
+                  Path path = new Path();
+
+                  path.moveTo(
+                          0,
+                          height * 0.72f);
+
+                  path.cubicTo(
+                          width * 0.25f,
+                          height * 0.55f,
+                          width * 0.55f,
+                          height * 0.78f,
+                          width,
+                          height * 0.32f);
+
+                  canvas.drawPath(path, road);
+
+                  Paint marker =
+                          new Paint(
+                                  Paint.ANTI_ALIAS_FLAG);
+
                   marker.setColor(Color.WHITE);
-                  c.drawCircle(w * .52f, h * .57f, dp(7), marker);
+
+                  canvas.drawCircle(
+                          width * 0.52f,
+                          height * 0.57f,
+                          dp(7),
+                          marker);
               }
           }
 
           '''
-          s = s.replace(marker, helpers + marker, 1)
+
+          s = s.replace(
+              marker,
+              helpers + marker,
+              1
+          )
 
           if s == original:
-              raise SystemExit("PATCH MADE NO CHANGES")
+              raise SystemExit(
+                  "PATCH MADE NO CHANGES"
+              )
 
-          if "initial(app.name)" in s:
-              raise SystemExit("OLD INITIAL ICON STILL EXISTS")
+          p.write_text(
+              s,
+              encoding="utf-8"
+          )
 
-          p.write_text(s, encoding="utf-8")
           print("V3.1 patch complete")
           PY
 
-      - name: Verify patch
+      - name: Verify patched source
         shell: bash
         run: |
           set -euo pipefail
+
           FILE="v10-source/app/src/main/java/com/hieptran/aacast/doudou/V10LauncherActivity.java"
 
           grep -Fq 'import android.graphics.Canvas;' "$FILE"
+          grep -Fq 'import android.graphics.Paint;' "$FILE"
+          grep -Fq 'import android.graphics.Path;' "$FILE"
           grep -Fq 'import android.graphics.drawable.Drawable;' "$FILE"
+          grep -Fq 'import android.widget.FrameLayout;' "$FILE"
           grep -Fq 'import android.widget.ImageView;' "$FILE"
+
           grep -Fq 'class MapBackground' "$FILE"
           grep -Fq 'private LinearLayout buildSidebar()' "$FILE"
           grep -Fq 'info.loadIcon(getPackageManager())' "$FILE"
@@ -432,12 +755,12 @@ jobs:
           grep -Fq 'V10SessionStore.setTarget' "$FILE"
 
           if grep -Fq 'initial(app.name)' "$FILE"; then
-            echo "ERROR: initial icon remains"
+            echo "ERROR: old initial icon remains"
             exit 1
           fi
 
           if grep -Fq 'private String initial(' "$FILE"; then
-            echo "ERROR: initial() remains"
+            echo "ERROR: old initial() remains"
             exit 1
           fi
 
@@ -447,32 +770,44 @@ jobs:
 
           test "$CHANGED" = "$FILE"
 
-          echo "Only V10LauncherActivity.java changed."
           echo "Patch verification PASS."
+          echo "Changed file:"
+          echo "$CHANGED"
 
       - name: Compile Java
         working-directory: v10-source
         shell: bash
         run: |
           set -euo pipefail
-          chmod +x gradlew
-          ./gradlew :app:compileDebugJavaWithJavac --no-daemon --stacktrace
 
-      - name: Assemble APK
+          chmod +x gradlew
+
+          ./gradlew :app:compileDebugJavaWithJavac \
+            --no-daemon \
+            --stacktrace
+
+      - name: Assemble debug APK
         working-directory: v10-source
         shell: bash
         run: |
           set -euo pipefail
-          ./gradlew :app:assembleDebug --no-daemon --stacktrace
+
+          ./gradlew :app:assembleDebug \
+            --no-daemon \
+            --stacktrace
 
       - name: Prepare APK
         shell: bash
         run: |
           set -euo pipefail
 
-          APK="$(find v10-source/app/build/outputs/apk \
-            -type f -name '*.apk' \
-            | grep '/debug/' | head -n 1)"
+          APK="$(
+            find v10-source/app/build/outputs/apk \
+              -type f \
+              -name '*.apk' \
+              | grep '/debug/' \
+              | head -n 1
+          )"
 
           test -n "$APK"
 
