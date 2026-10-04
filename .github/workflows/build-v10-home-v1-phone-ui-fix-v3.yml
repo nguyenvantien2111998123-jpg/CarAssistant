@@ -1,6 +1,6 @@
-name: Build Car Assistant V10 - Home V1 Phone UI Fix V3.1
+name: Build Car Assistant V10 - Home V1 Phone UI Fix V3.2
 
-"on":
+on:
   workflow_dispatch:
 
 permissions:
@@ -12,19 +12,19 @@ jobs:
     timeout-minutes: 35
 
     steps:
-      - name: Checkout exact source
+      - name: Checkout exact baseline
         uses: actions/checkout@v4
         with:
           ref: 0634e1f5ced143fdd931022b32bf9a19cbf6e2bd
           fetch-depth: 1
 
       - name: Setup JDK 17
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: "17"
 
-      - name: Verify exact baseline
+      - name: Verify exact source baseline
         shell: bash
         run: |
           set -euo pipefail
@@ -32,23 +32,30 @@ jobs:
           FILE="v10-source/app/src/main/java/com/hieptran/aacast/doudou/V10LauncherActivity.java"
 
           test -f "$FILE"
-          test "$(git rev-parse HEAD)" = "0634e1f5ced143fdd931022b32bf9a19cbf6e2bd"
 
-          SHA="$(sha256sum "$FILE" | cut -d' ' -f1)"
-          test "$SHA" = "84d970adbfacc39270838d12ed0a73bc7fa0d645"
+          COMMIT="$(git rev-parse HEAD)"
+          test "$COMMIT" = "0634e1f5ced143fdd931022b32bf9a19cbf6e2bd"
 
+          BLOB_SHA="$(git hash-object "$FILE")"
+          test "$BLOB_SHA" = "84d970adbfacc39270838d12ed0a73bc7fa0d645"
+
+          grep -Fq 'package com.carassistant.v10;' "$FILE"
           grep -Fq 'class V10LauncherActivity' "$FILE"
           grep -Fq 'private void buildDashboard()' "$FILE"
           grep -Fq 'private void loadApps()' "$FILE"
           grep -Fq 'private LinearLayout appTile(' "$FILE"
           grep -Fq 'V10SessionStore.setTarget' "$FILE"
           grep -Fq 'initial(app.name)' "$FILE"
+          grep -Fq 'private static final class AppInfo' "$FILE"
 
-          echo "Baseline verified."
-          echo "Commit: $(git rev-parse HEAD)"
-          echo "File SHA256: $SHA"
+          echo "========================================"
+          echo "BASELINE VERIFIED"
+          echo "========================================"
+          echo "Commit: $COMMIT"
+          echo "Git blob SHA: $BLOB_SHA"
+          echo "Source: $FILE"
 
-      - name: Patch V10LauncherActivity
+      - name: Patch Home V1 phone UI
         shell: bash
         run: |
           set -euo pipefail
@@ -59,20 +66,24 @@ jobs:
           import sys
           from pathlib import Path
 
-          p = Path(sys.argv[1])
-          s = p.read_text(encoding="utf-8")
-          original = s
+          path = Path(sys.argv[1])
+          source = path.read_text(encoding="utf-8")
+          original = source
 
-          def find_block(text, start):
+          def find_block_end(text, start):
               brace = text.find("{", start)
+
               if brace < 0:
-                  raise SystemExit("Opening brace not found")
+                  raise RuntimeError(
+                      "Opening brace not found"
+                  )
 
               depth = 0
               quote = None
-              escape = False
+              escaped = False
               line_comment = False
               block_comment = False
+
               i = brace
 
               while i < len(text):
@@ -82,58 +93,96 @@ jobs:
                   if line_comment:
                       if c == "\n":
                           line_comment = False
+
                   elif block_comment:
                       if c == "*" and n == "/":
                           block_comment = False
                           i += 1
-                  elif quote:
-                      if escape:
-                          escape = False
+
+                  elif quote is not None:
+                      if escaped:
+                          escaped = False
                       elif c == "\\":
-                          escape = True
+                          escaped = True
                       elif c == quote:
                           quote = None
+
                   elif c == "/" and n == "/":
                       line_comment = True
                       i += 1
+
                   elif c == "/" and n == "*":
                       block_comment = True
                       i += 1
-                  elif c in ('"', "'"):
+
+                  elif c == '"' or c == "'":
                       quote = c
+
                   elif c == "{":
                       depth += 1
+
                   elif c == "}":
                       depth -= 1
+
                       if depth == 0:
                           return i + 1
 
                   i += 1
 
-              raise SystemExit("Closing brace not found")
+              raise RuntimeError(
+                  "Closing brace not found"
+              )
 
-          def replace_block(text, signature, replacement):
+          def replace_method(
+              text,
+              signature,
+              replacement
+          ):
               start = text.find(signature)
+
               if start < 0:
-                  raise SystemExit("NOT FOUND: " + signature)
-
-              end = find_block(text, start)
-              return text[:start] + replacement.strip() + text[end:]
-
-          def replace_once(text, old, new, name):
-              count = text.count(old)
-              if count != 1:
-                  raise SystemExit(
-                      f"{name}: expected 1 match, got {count}"
+                  raise RuntimeError(
+                      "Method/class not found: "
+                      + signature
                   )
-              return text.replace(old, new, 1)
+
+              end = find_block_end(
+                  text,
+                  start
+              )
+
+              return (
+                  text[:start]
+                  + replacement.strip()
+                  + text[end:]
+              )
+
+          def replace_once(
+              text,
+              old,
+              new,
+              label
+          ):
+              count = text.count(old)
+
+              if count != 1:
+                  raise RuntimeError(
+                      f"{label}: expected 1 match, "
+                      f"found {count}"
+                  )
+
+              return text.replace(
+                  old,
+                  new,
+                  1
+              )
 
           # --------------------------------------------------
-          # Imports
+          # IMPORTS
           # --------------------------------------------------
 
-          s = replace_once(
-              s,
+          source = replace_once(
+              source,
               "import android.graphics.Color;\n",
               "import android.graphics.Canvas;\n"
               "import android.graphics.Color;\n"
@@ -142,16 +191,16 @@ jobs:
               "graphics imports"
           )
 
-          s = replace_once(
-              s,
+          source = replace_once(
+              source,
               "import android.graphics.drawable.GradientDrawable;\n",
               "import android.graphics.drawable.Drawable;\n"
               "import android.graphics.drawable.GradientDrawable;\n",
               "drawable import"
           )
 
-          s = replace_once(
-              s,
+          source = replace_once(
+              source,
               "import android.view.Gravity;\n",
               "import android.view.Gravity;\n"
               "import android.widget.FrameLayout;\n"
@@ -160,24 +209,42 @@ jobs:
           )
 
           # --------------------------------------------------
-          # Dashboard
+          # DASHBOARD
           # --------------------------------------------------
 
-          dashboard = r'''
+          dashboard_method = r'''
           private void buildDashboard() {
+
               dashboard.removeAllViews();
 
-              LinearLayout top = new LinearLayout(this);
-              top.setGravity(Gravity.CENTER_VERTICAL);
-              top.setPadding(dp(10), dp(6), dp(10), dp(6));
-              top.setBackground(
-                      roundBg(Color.rgb(18, 24, 32), dp(14)));
+              LinearLayout top =
+                      new LinearLayout(this);
 
-              LinearLayout titleBox = new LinearLayout(this);
-              titleBox.setOrientation(LinearLayout.VERTICAL);
+              top.setGravity(
+                      Gravity.CENTER_VERTICAL);
+
+              top.setPadding(
+                      dp(10),
+                      dp(6),
+                      dp(10),
+                      dp(6));
+
+              top.setBackground(
+                      roundBg(
+                              Color.rgb(18, 24, 32),
+                              dp(14)));
+
+              LinearLayout titleBox =
+                      new LinearLayout(this);
+
+              titleBox.setOrientation(
+                      LinearLayout.VERTICAL);
 
               TextView title =
-                      text("CAR ASSISTANT", 18, Color.WHITE);
+                      text(
+                              "CAR ASSISTANT",
+                              18,
+                              Color.WHITE);
 
               title.setTypeface(
                       Typeface.DEFAULT,
@@ -185,41 +252,74 @@ jobs:
 
               titleBox.addView(title);
 
-              date = text("", 11, Color.LTGRAY);
+              date =
+                      text(
+                              "",
+                              11,
+                              Color.LTGRAY);
+
               titleBox.addView(date);
 
               top.addView(
                       titleBox,
                       new LinearLayout.LayoutParams(
-                              0, -2, 1f));
+                              0,
+                              -2,
+                              1f));
 
-              clock = text("", 20, Color.WHITE);
-              clock.setGravity(Gravity.CENTER);
+              clock =
+                      text(
+                              "",
+                              20,
+                              Color.WHITE);
+
+              clock.setGravity(
+                      Gravity.CENTER);
 
               top.addView(
                       clock,
                       new LinearLayout.LayoutParams(
-                              dp(100), dp(55)));
+                              dp(100),
+                              dp(55)));
 
               dashboard.addView(
                       top,
                       new LinearLayout.LayoutParams(
-                              -1, dp(66)));
+                              -1,
+                              dp(66)));
 
-              LinearLayout main = new LinearLayout(this);
-              main.setOrientation(LinearLayout.HORIZONTAL);
-              main.setPadding(0, dp(8), 0, dp(8));
+              LinearLayout main =
+                      new LinearLayout(this);
+
+              main.setOrientation(
+                      LinearLayout.HORIZONTAL);
+
+              main.setPadding(
+                      0,
+                      dp(8),
+                      0,
+                      dp(8));
 
               main.addView(
                       buildSidebar(),
                       new LinearLayout.LayoutParams(
-                              dp(72), -1));
+                              dp(72),
+                              -1));
 
-              LinearLayout content = new LinearLayout(this);
-              content.setOrientation(LinearLayout.VERTICAL);
-              content.setPadding(dp(8), 0, 0, 0);
+              LinearLayout content =
+                      new LinearLayout(this);
 
-              FrameLayout map = new FrameLayout(this);
+              content.setOrientation(
+                      LinearLayout.VERTICAL);
+
+              content.setPadding(
+                      dp(8),
+                      0,
+                      0,
+                      0);
+
+              FrameLayout map =
+                      new FrameLayout(this);
 
               map.setBackground(
                       roundBg(
@@ -229,12 +329,17 @@ jobs:
               map.addView(
                       new MapBackground(this),
                       new FrameLayout.LayoutParams(
-                              -1, -1));
+                              -1,
+                              -1));
 
               TextView mapTitle =
-                      text("MAP", 12, Color.WHITE);
+                      text(
+                              "MAP",
+                              12,
+                              Color.WHITE);
 
-              mapTitle.setGravity(Gravity.CENTER);
+              mapTitle.setGravity(
+                      Gravity.CENTER);
 
               mapTitle.setBackground(
                       roundBg(
@@ -243,49 +348,60 @@ jobs:
 
               FrameLayout.LayoutParams mapParams =
                       new FrameLayout.LayoutParams(
-                              dp(70), dp(38));
+                              dp(70),
+                              dp(38));
 
               mapParams.gravity =
                       Gravity.TOP | Gravity.LEFT;
 
               mapParams.setMargins(
-                      dp(10), dp(10), 0, 0);
+                      dp(10),
+                      dp(10),
+                      0,
+                      0);
 
               map.addView(
                       mapTitle,
                       mapParams);
 
-              TextView nav =
+              TextView navigation =
                       text(
                               "Navigation\nReady",
                               12,
                               Color.LTGRAY);
 
-              nav.setGravity(Gravity.CENTER);
+              navigation.setGravity(
+                      Gravity.CENTER);
 
-              nav.setBackground(
+              navigation.setBackground(
                       roundBg(
                               Color.rgb(18, 25, 33),
                               dp(10)));
 
               FrameLayout.LayoutParams navParams =
                       new FrameLayout.LayoutParams(
-                              dp(120), dp(58));
+                              dp(120),
+                              dp(58));
 
               navParams.gravity =
                       Gravity.BOTTOM | Gravity.LEFT;
 
               navParams.setMargins(
-                      dp(10), 0, 0, dp(10));
+                      dp(10),
+                      0,
+                      0,
+                      dp(10));
 
               map.addView(
-                      nav,
+                      navigation,
                       navParams);
 
               content.addView(
                       map,
                       new LinearLayout.LayoutParams(
-                              -1, 0, 1f));
+                              -1,
+                              0,
+                              1f));
 
               LinearLayout info =
                       new LinearLayout(this);
@@ -294,34 +410,53 @@ jobs:
                       LinearLayout.HORIZONTAL);
 
               info.setPadding(
-                      0, dp(6), 0, 0);
+                      0,
+                      dp(6),
+                      0,
+                      0);
 
               info.addView(
-                      infoCard("SPEED", "0 km/h"),
+                      infoCard(
+                              "SPEED",
+                              "0 km/h"),
                       new LinearLayout.LayoutParams(
-                              0, dp(54), 1f));
+                              0,
+                              dp(54),
+                              1f));
 
               info.addView(
-                      infoCard("WEATHER", "-- °C"),
+                      infoCard(
+                              "WEATHER",
+                              "-- °C"),
                       new LinearLayout.LayoutParams(
-                              0, dp(54), 1f));
+                              0,
+                              dp(54),
+                              1f));
 
               info.addView(
-                      infoCard("MEDIA", "No media"),
+                      infoCard(
+                              "MEDIA",
+                              "No media"),
                       new LinearLayout.LayoutParams(
-                              0, dp(54), 1f));
+                              0,
+                              dp(54),
+                              1f));
 
               content.addView(info);
 
               main.addView(
                       content,
                       new LinearLayout.LayoutParams(
-                              0, -1, 1f));
+                              0,
+                              -1,
+                              1f));
 
               dashboard.addView(
                       main,
                       new LinearLayout.LayoutParams(
-                              -1, 0, 1f));
+                              -1,
+                              0,
+                              1f));
 
               LinearLayout bottom =
                       new LinearLayout(this);
@@ -330,95 +465,117 @@ jobs:
                       Gravity.CENTER_VERTICAL);
 
               bottom.setPadding(
-                      dp(6), dp(5), dp(6), dp(5));
+                      dp(6),
+                      dp(5),
+                      dp(6),
+                      dp(5));
 
               bottom.setBackground(
                       roundBg(
                               Color.rgb(18, 24, 32),
                               dp(14)));
 
-              TextView prev = buttonText("◀");
-              TextView next = buttonText("▶");
-              TextView media = buttonText("♫");
-              TextView apps = buttonText("▦  APPS");
+              TextView previous =
+                      buttonText("◀");
+
+              TextView next =
+                      buttonText("▶");
+
+              TextView media =
+                      buttonText("♫");
+
+              TextView appsButton =
+                      buttonText("▦  APPS");
 
               bottom.addView(
-                      prev,
+                      previous,
                       new LinearLayout.LayoutParams(
-                              0, dp(48), 1f));
+                              0,
+                              dp(48),
+                              1f));
 
               bottom.addView(
                       next,
                       new LinearLayout.LayoutParams(
-                              0, dp(48), 1f));
+                              0,
+                              dp(48),
+                              1f));
 
               bottom.addView(
                       media,
                       new LinearLayout.LayoutParams(
-                              0, dp(48), 1f));
+                              0,
+                              dp(48),
+                              1f));
 
               bottom.addView(
-                      apps,
+                      appsButton,
                       new LinearLayout.LayoutParams(
-                              0, dp(48), 2f));
+                              0,
+                              dp(48),
+                              2f));
 
-              apps.setOnClickListener(
+              appsButton.setOnClickListener(
                       v -> showApps());
 
               dashboard.addView(
                       bottom,
                       new LinearLayout.LayoutParams(
-                              -1, dp(60)));
+                              -1,
+                              dp(60)));
           }
           '''
 
-          s = replace_block(
-              s,
+          source = replace_method(
+              source,
               "private void buildDashboard()",
-              dashboard
+              dashboard_method
           )
 
           # --------------------------------------------------
-          # Real application icons
+          # REAL APPLICATION ICON
           # --------------------------------------------------
 
-          old = '''            apps.add(
+          source = replace_once(
+              source,
+              '''            apps.add(
                     new AppInfo(
                             component,
-                            name));'''
-
-          new = '''            Drawable icon =
-                    info.loadIcon(getPackageManager());
+                            name));''',
+              '''            Drawable icon =
+                    info.loadIcon(
+                            getPackageManager());
 
             apps.add(
                     new AppInfo(
                             component,
                             name,
-                            icon));'''
-
-          s = replace_once(
-              s,
-              old,
-              new,
-              "real app icon loading"
+                            icon));''',
+              "load real application icon"
           )
 
           # --------------------------------------------------
-          # App tile
+          # APP TILE
           # --------------------------------------------------
 
-          tile = r'''
-          private LinearLayout appTile(AppInfo app) {
+          app_tile = r'''
+          private LinearLayout appTile(
+                  AppInfo app) {
+
               LinearLayout tile =
                       new LinearLayout(this);
 
               tile.setOrientation(
                       LinearLayout.VERTICAL);
 
-              tile.setGravity(Gravity.CENTER);
+              tile.setGravity(
+                      Gravity.CENTER);
 
               tile.setPadding(
-                      dp(6), dp(6), dp(6), dp(6));
+                      dp(6),
+                      dp(6),
+                      dp(6),
+                      dp(6));
 
               tile.setBackground(
                       roundBg(
@@ -429,7 +586,8 @@ jobs:
                       new ImageView(this);
 
               if (app.icon != null) {
-                  icon.setImageDrawable(app.icon);
+                  icon.setImageDrawable(
+                          app.icon);
               } else {
                   icon.setImageDrawable(
                           getPackageManager()
@@ -442,7 +600,8 @@ jobs:
               tile.addView(
                       icon,
                       new LinearLayout.LayoutParams(
-                              dp(50), dp(50)));
+                              dp(50),
+                              dp(50)));
 
               TextView name =
                       text(
@@ -450,13 +609,16 @@ jobs:
                               12,
                               Color.WHITE);
 
-              name.setGravity(Gravity.CENTER);
+              name.setGravity(
+                      Gravity.CENTER);
+
               name.setMaxLines(2);
 
               tile.addView(
                       name,
                       new LinearLayout.LayoutParams(
-                              -1, dp(40)));
+                              -1,
+                              dp(40)));
 
               tile.setOnClickListener(
                       v -> selectApp(app));
@@ -465,36 +627,39 @@ jobs:
           }
           '''
 
-          s = replace_block(
-              s,
+          source = replace_method(
+              source,
               "private LinearLayout appTile(",
-              tile
+              app_tile
           )
 
           # --------------------------------------------------
-          # Remove initial-letter helper
+          # REMOVE OLD INITIAL ICON METHOD
           # --------------------------------------------------
 
-          if "private String initial(" in s:
-              s = replace_block(
-                  s,
+          if "private String initial(" in source:
+              source = replace_method(
+                  source,
                   "private String initial(",
                   ""
               )
 
-          if "initial(app.name)" in s:
-              raise SystemExit(
-                  "OLD INITIAL ICON CALL STILL EXISTS"
+          if "initial(app.name)" in source:
+              raise RuntimeError(
+                  "Old initial-letter icon call remains"
               )
 
           # --------------------------------------------------
-          # App model
+          # APP MODEL
           # --------------------------------------------------
 
-          model = r'''
+          app_model = r'''
           private static final class AppInfo {
+
               final ComponentName component;
+
               final String name;
+
               final Drawable icon;
 
               AppInfo(
@@ -502,21 +667,26 @@ jobs:
                       String name,
                       Drawable icon) {
 
-                  this.component = component;
-                  this.name = name;
-                  this.icon = icon;
+                  this.component =
+                          component;
+
+                  this.name =
+                          name;
+
+                  this.icon =
+                          icon;
               }
           }
           '''
 
-          s = replace_block(
-              s,
+          source = replace_method(
+              source,
               "private static final class AppInfo",
-              model
+              app_model
           )
 
           # --------------------------------------------------
-          # UI helpers
+          # SIDEBAR + MAP BACKGROUND
           # --------------------------------------------------
 
           marker = (
@@ -524,9 +694,9 @@ jobs:
               "    // UI HELPERS\n"
           )
 
-          if s.count(marker) != 1:
-              raise SystemExit(
-                  "UI HELPERS marker mismatch"
+          if source.count(marker) != 1:
+              raise RuntimeError(
+                  "UI HELPERS marker not found exactly once"
               )
 
           helpers = r'''
@@ -538,6 +708,7 @@ jobs:
                       new GradientDrawable();
 
               bg.setColor(color);
+
               bg.setCornerRadius(radius);
 
               return bg;
@@ -555,7 +726,10 @@ jobs:
                       Gravity.CENTER_HORIZONTAL);
 
               side.setPadding(
-                      0, dp(4), 0, dp(4));
+                      0,
+                      dp(4),
+                      0,
+                      dp(4));
 
               side.setBackground(
                       roundBg(
@@ -563,19 +737,29 @@ jobs:
                               dp(14)));
 
               side.addView(
-                      sideButton("☰", "Menu"));
+                      sideButton(
+                              "☰",
+                              "Menu"));
 
               side.addView(
-                      sideButton("⌖", "Map"));
+                      sideButton(
+                              "⌖",
+                              "Map"));
 
               side.addView(
-                      sideButton("▣", "Files"));
+                      sideButton(
+                              "▣",
+                              "Files"));
 
               side.addView(
-                      sideButton("⚙", "Settings"));
+                      sideButton(
+                              "⚙",
+                              "Settings"));
 
               side.addView(
-                      sideButton("⋮", "More"));
+                      sideButton(
+                              "⋮",
+                              "More"));
 
               return side;
           }
@@ -584,48 +768,57 @@ jobs:
                   String icon,
                   String label) {
 
-              TextView v =
+              TextView view =
                       text(
                               icon + "\n" + label,
                               10,
                               Color.WHITE);
 
-              v.setGravity(Gravity.CENTER);
+              view.setGravity(
+                      Gravity.CENTER);
 
-              v.setPadding(
-                      dp(2), dp(3), dp(2), dp(3));
+              view.setPadding(
+                      dp(2),
+                      dp(3),
+                      dp(2),
+                      dp(3));
 
-              v.setBackground(
+              view.setBackground(
                       roundBg(
                               Color.TRANSPARENT,
                               dp(10)));
 
-              v.setOnClickListener(x -> {
+              view.setOnClickListener(
+                      v -> {
 
-                  if ("Files".equals(label)) {
-                      showApps();
-                  } else if (status != null) {
-                      status.setText(label);
-                  }
-              });
+                          if ("Files".equals(label)) {
 
-              LinearLayout.LayoutParams params =
+                              showApps();
+
+                          } else if (status != null) {
+
+                              status.setText(label);
+                          }
+                      });
+
+              view.setLayoutParams(
                       new LinearLayout.LayoutParams(
-                              -1, dp(62));
+                              -1,
+                              dp(62)));
 
-              v.setLayoutParams(params);
-
-              return v;
+              return view;
           }
 
           private final class MapBackground
                   extends View {
 
               private final Paint grid =
-                      new Paint(Paint.ANTI_ALIAS_FLAG);
+                      new Paint(
+                              Paint.ANTI_ALIAS_FLAG);
 
               private final Paint road =
-                      new Paint(Paint.ANTI_ALIAS_FLAG);
+                      new Paint(
+                              Paint.ANTI_ALIAS_FLAG);
 
               MapBackground(
                       android.content.Context context) {
@@ -633,33 +826,50 @@ jobs:
                   super(context);
 
                   grid.setColor(
-                          Color.rgb(27, 40, 47));
+                          Color.rgb(
+                                  27,
+                                  40,
+                                  47));
 
-                  grid.setStrokeWidth(dp(1));
+                  grid.setStrokeWidth(
+                          dp(1));
 
                   road.setColor(
-                          Color.rgb(55, 70, 78));
+                          Color.rgb(
+                                  55,
+                                  70,
+                                  78));
 
                   road.setStyle(
                           Paint.Style.STROKE);
 
-                  road.setStrokeWidth(dp(12));
+                  road.setStrokeWidth(
+                          dp(12));
 
                   road.setStrokeCap(
                           Paint.Cap.ROUND);
               }
 
               @Override
-              protected void onDraw(Canvas canvas) {
+              protected void onDraw(
+                      Canvas canvas) {
 
                   super.onDraw(canvas);
 
                   canvas.drawColor(
-                          Color.rgb(9, 17, 23));
+                          Color.rgb(
+                                  9,
+                                  17,
+                                  23));
 
-                  int width = getWidth();
-                  int height = getHeight();
-                  int step = dp(36);
+                  int width =
+                          getWidth();
+
+                  int height =
+                          getHeight();
+
+                  int step =
+                          dp(36);
 
                   for (
                           int x = 0;
@@ -667,8 +877,10 @@ jobs:
                           x += step) {
 
                       canvas.drawLine(
-                              x, 0,
-                              x, height,
+                              x,
+                              0,
+                              x,
+                              height,
                               grid);
                   }
 
@@ -678,18 +890,21 @@ jobs:
                           y += step) {
 
                       canvas.drawLine(
-                              0, y,
-                              width, y,
+                              0,
+                              y,
+                              width,
+                              y,
                               grid);
                   }
 
-                  Path path = new Path();
+                  Path roadPath =
+                          new Path();
 
-                  path.moveTo(
+                  roadPath.moveTo(
                           0,
                           height * 0.72f);
 
-                  path.cubicTo(
+                  roadPath.cubicTo(
                           width * 0.25f,
                           height * 0.55f,
                           width * 0.55f,
@@ -697,13 +912,16 @@ jobs:
                           width,
                           height * 0.32f);
 
-                  canvas.drawPath(path, road);
+                  canvas.drawPath(
+                          roadPath,
+                          road);
 
                   Paint marker =
                           new Paint(
                                   Paint.ANTI_ALIAS_FLAG);
 
-                  marker.setColor(Color.WHITE);
+                  marker.setColor(
+                          Color.WHITE);
 
                   canvas.drawCircle(
                           width * 0.52f,
@@ -715,32 +933,37 @@ jobs:
 
           '''
 
-          s = s.replace(
+          source = source.replace(
               marker,
               helpers + marker,
               1
           )
 
-          if s == original:
-              raise SystemExit(
-                  "PATCH MADE NO CHANGES"
+          if source == original:
+              raise RuntimeError(
+                  "Patch produced no changes"
               )
 
-          p.write_text(
-              s,
+          path.write_text(
+              source,
               encoding="utf-8"
           )
 
-          print("V3.1 patch complete")
+          print(
+              "Home V1 phone UI patch completed."
+          )
           PY
 
-      - name: Verify patched source
+      - name: Verify patched Java source
         shell: bash
         run: |
           set -euo pipefail
 
           FILE="v10-source/app/src/main/java/com/hieptran/aacast/doudou/V10LauncherActivity.java"
 
+          test -f "$FILE"
+
+          grep -Fq 'package com.carassistant.v10;' "$FILE"
           grep -Fq 'import android.graphics.Canvas;' "$FILE"
           grep -Fq 'import android.graphics.Paint;' "$FILE"
           grep -Fq 'import android.graphics.Path;' "$FILE"
@@ -748,31 +971,46 @@ jobs:
           grep -Fq 'import android.widget.FrameLayout;' "$FILE"
           grep -Fq 'import android.widget.ImageView;' "$FILE"
 
-          grep -Fq 'class MapBackground' "$FILE"
           grep -Fq 'private LinearLayout buildSidebar()' "$FILE"
-          grep -Fq 'info.loadIcon(getPackageManager())' "$FILE"
+          grep -Fq 'class MapBackground' "$FILE"
+          grep -Fq 'info.loadIcon(' "$FILE"
           grep -Fq 'final Drawable icon' "$FILE"
+          grep -Fq 'new AppInfo(' "$FILE"
           grep -Fq 'V10SessionStore.setTarget' "$FILE"
 
           if grep -Fq 'initial(app.name)' "$FILE"; then
-            echo "ERROR: old initial icon remains"
-            exit 1
+              echo "ERROR: old initial(app.name) still exists"
+              exit 1
           fi
 
           if grep -Fq 'private String initial(' "$FILE"; then
-            echo "ERROR: old initial() remains"
-            exit 1
+              echo "ERROR: old initial() method still exists"
+              exit 1
           fi
+
+          APPINFO_COUNT="$(
+              grep -c 'private static final class AppInfo' "$FILE"
+          )"
+
+          test "$APPINFO_COUNT" = "1"
+
+          APP_TILE_COUNT="$(
+              grep -c 'private LinearLayout appTile(' "$FILE"
+          )"
+
+          test "$APP_TILE_COUNT" = "1"
+
+          DASHBOARD_COUNT="$(
+              grep -c 'private void buildDashboard()' "$FILE"
+          )"
+
+          test "$DASHBOARD_COUNT" = "1"
 
           git diff --check
 
-          CHANGED="$(git diff --name-only)"
-
-          test "$CHANGED" = "$FILE"
-
-          echo "Patch verification PASS."
-          echo "Changed file:"
-          echo "$CHANGED"
+          echo "========================================"
+          echo "PATCH SOURCE CHECK: PASS"
+          echo "========================================"
 
       - name: Compile Java
         working-directory: v10-source
@@ -782,7 +1020,8 @@ jobs:
 
           chmod +x gradlew
 
-          ./gradlew :app:compileDebugJavaWithJavac \
+          ./gradlew \
+            :app:compileDebugJavaWithJavac \
             --no-daemon \
             --stacktrace
 
@@ -792,40 +1031,46 @@ jobs:
         run: |
           set -euo pipefail
 
-          ./gradlew :app:assembleDebug \
+          ./gradlew \
+            :app:assembleDebug \
             --no-daemon \
             --stacktrace
 
-      - name: Prepare APK
+      - name: Locate APK
         shell: bash
         run: |
           set -euo pipefail
 
           APK="$(
-            find v10-source/app/build/outputs/apk \
+            find \
+              v10-source/app/build/outputs/apk \
               -type f \
               -name '*.apk' \
-              | grep '/debug/' \
+              -path '*/debug/*' \
               | head -n 1
           )"
 
           test -n "$APK"
+          test -f "$APK"
+
+          echo "APK=$APK"
 
           mkdir -p release-apk
 
-          cp "$APK" \
-            release-apk/CarAssistant-V10-Home-V1-Phone-UI-V3.1-debug.apk
+          cp \
+            "$APK" \
+            release-apk/CarAssistant-V10-Home-V1-Phone-UI-V3.2-debug.apk
 
           sha256sum \
-            release-apk/CarAssistant-V10-Home-V1-Phone-UI-V3.1-debug.apk
+            release-apk/CarAssistant-V10-Home-V1-Phone-UI-V3.2-debug.apk
 
           ls -lh \
-            release-apk/CarAssistant-V10-Home-V1-Phone-UI-V3.1-debug.apk
+            release-apk/CarAssistant-V10-Home-V1-Phone-UI-V3.2-debug.apk
 
-      - name: Upload APK
+      - name: Upload debug APK
         uses: actions/upload-artifact@v4
         with:
-          name: CarAssistant-V10-Home-V1-Phone-UI-V3.1-debug
-          path: release-apk/CarAssistant-V10-Home-V1-Phone-UI-V3.1-debug.apk
+          name: CarAssistant-V10-Home-V1-Phone-UI-V3.2-debug
+          path: release-apk/CarAssistant-V10-Home-V1-Phone-UI-V3.2-debug.apk
           if-no-files-found: error
           retention-days: 14
