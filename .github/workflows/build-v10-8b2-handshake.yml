@@ -24,7 +24,7 @@ jobs:
 
           ROOT="v10-source/app/src/main/java/com/hieptran/aacast/doudou"
 
-          echo "Checking V10 source..."
+          echo "===== VERIFY V10 SOURCE ====="
 
           test -f "$ROOT/V10CarActivity.java"
           test -f "$ROOT/V10SessionStore.java"
@@ -44,7 +44,7 @@ jobs:
 
           echo "V10 source verification: PASS"
 
-      - name: Patch V10ProjectionService
+      - name: Patch V10ProjectionService - Startup Handshake
         shell: bash
         run: |
           set -euo pipefail
@@ -58,251 +58,413 @@ jobs:
           path = Path(sys.argv[1])
           text = path.read_text()
 
-          # Add startup handshake state if missing.
-          marker = "private static final Object START_LOCK = new Object();"
+          print("===== PATCH V10ProjectionService =====")
+          print("File:", path)
 
-          if marker not in text:
-              anchor = "public class V10ProjectionService"
-              idx = text.find(anchor)
+          # ------------------------------------------------------------
+          # Helper: replace a Java method by method name.
+          #
+          # This does NOT depend on the exact line breaks or indentation
+          # used in the Java source.
+          # ------------------------------------------------------------
+          def replace_method(source, method_name, replacement):
+              marker = method_name + "("
 
-              if idx == -1:
-                  raise SystemExit("Could not find V10ProjectionService class")
+              start = source.find(marker)
 
-              brace = text.find("{", idx)
+              if start == -1:
+                  raise SystemExit(
+                      f"Could not find method: {method_name}"
+                  )
+
+              # Find the opening brace belonging to this method.
+              brace = source.find("{", start)
 
               if brace == -1:
-                  raise SystemExit("Could not find V10ProjectionService class opening brace")
+                  raise SystemExit(
+                      f"Could not find opening brace for: {method_name}"
+                  )
+
+              depth = 0
+              end = None
+
+              for i in range(brace, len(source)):
+                  ch = source[i]
+
+                  if ch == "{":
+                      depth += 1
+
+                  elif ch == "}":
+                      depth -= 1
+
+                      if depth == 0:
+                          end = i + 1
+                          break
+
+              if end is None:
+                  raise SystemExit(
+                      f"Could not parse method: {method_name}"
+                  )
+
+              return source[:start] + replacement + source[end:]
+
+
+          # ------------------------------------------------------------
+          # 1. Verify actual class declaration.
+          # ------------------------------------------------------------
+          class_marker = (
+              "public final class V10ProjectionService extends Service"
+          )
+
+          if class_marker not in text:
+              raise SystemExit(
+                  "Unexpected V10ProjectionService class declaration"
+              )
+
+          print("Class declaration: PASS")
+
+
+          # ------------------------------------------------------------
+          # 2. Add startup handshake state.
+          # ------------------------------------------------------------
+          state_marker = (
+              "private static final Object START_LOCK = new Object();"
+          )
+
+          if state_marker not in text:
+
+              class_end = text.find("{", text.find(class_marker))
+
+              if class_end == -1:
+                  raise SystemExit(
+                      "Could not find V10ProjectionService class body"
+                  )
 
               state = r'''
-              private static final Object START_LOCK = new Object();
+
+              private static final Object START_LOCK =
+                      new Object();
 
               private static ComponentName pendingTarget;
+
               private static Surface pendingSurface;
+
               private static int pendingWidth;
+
               private static int pendingHeight;
 
               '''
 
-              text = text[:brace + 1] + state + text[brace + 1:]
+              text = (
+                  text[:class_end + 1]
+                  + state
+                  + text[class_end + 1:]
+              )
 
-          # Replace ensureStarted implementation.
-          start_marker = "public static void ensureStarted(Context context)"
+              print("Startup state: ADDED")
 
-          start_pos = text.find(start_marker)
+          else:
+              print("Startup state: ALREADY PRESENT")
 
-          if start_pos != -1:
-              brace = text.find("{", start_pos)
 
-              if brace == -1:
-                  raise SystemExit("Could not locate ensureStarted body")
+          # ------------------------------------------------------------
+          # 3. Replace ensureStarted().
+          # ------------------------------------------------------------
+          ensure_started = r'''public static void ensureStarted(
+                  android.content.Context context) {
 
-              depth = 0
-              end = None
+              if (context == null) {
+                  return;
+              }
 
-              for i in range(brace, len(text)):
-                  if text[i] == "{":
-                      depth += 1
-                  elif text[i] == "}":
-                      depth -= 1
-                      if depth == 0:
-                          end = i + 1
-                          break
+              synchronized (START_LOCK) {
 
-              if end is None:
-                  raise SystemExit("Could not parse ensureStarted body")
+                  android.content.Context app =
+                          context.getApplicationContext();
 
-              replacement = r'''public static void ensureStarted(Context context) {
-                  if (context == null) {
+                  try {
+
+                      Intent intent =
+                              new Intent(
+                                      app,
+                                      V10ProjectionService.class);
+
+                      if (Build.VERSION.SDK_INT >= 26) {
+
+                          app.startForegroundService(
+                                  intent);
+
+                      } else {
+
+                          app.startService(
+                                  intent);
+                      }
+
+                  } catch (Throwable error) {
+
+                      Log.e(
+                              TAG,
+                              "ensureStarted failed",
+                              error);
+                  }
+              }
+          }'''
+
+          text = replace_method(
+              text,
+              "public static void ensureStarted",
+              ensure_started
+          )
+
+          print("ensureStarted(): PATCHED")
+
+
+          # ------------------------------------------------------------
+          # 4. Replace setTarget().
+          #
+          # IMPORTANT:
+          # Actual service method is setTargetInternal(), NOT applyTarget().
+          # ------------------------------------------------------------
+          set_target = r'''public static void setTarget(
+                  android.content.Context context,
+                  ComponentName component) {
+
+              if (context == null) {
+                  return;
+              }
+
+              synchronized (START_LOCK) {
+
+                  pendingTarget = component;
+
+                  if (instance == null) {
+
+                      ensureStarted(context);
+
                       return;
                   }
 
-                  synchronized (START_LOCK) {
-                      Context app = context.getApplicationContext();
+                  try {
 
-                      try {
-                          Intent intent = new Intent(app, V10ProjectionService.class);
+                      instance.setTargetInternal(
+                              component);
 
-                          if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                              app.startForegroundService(intent);
-                          } else {
-                              app.startService(intent);
-                          }
-                      } catch (Throwable t) {
-                          Log.e(TAG, "ensureStarted failed", t);
-                      }
+                  } catch (Throwable error) {
+
+                      Log.e(
+                              TAG,
+                              "setTarget failed",
+                              error);
                   }
-              }'''
+              }
+          }'''
 
-              text = text[:start_pos] + replacement + text[end:]
+          text = replace_method(
+              text,
+              "public static void setTarget",
+              set_target
+          )
 
-          # Replace setTarget implementation.
-          target_marker = "public static void setTarget(Context context, ComponentName target)"
+          print("setTarget(): PATCHED")
 
-          target_pos = text.find(target_marker)
 
-          if target_pos != -1:
-              brace = text.find("{", target_pos)
+          # ------------------------------------------------------------
+          # 5. Replace attachSurface().
+          #
+          # Actual internal method is attachSurfaceInternal().
+          # ------------------------------------------------------------
+          attach_surface = r'''public static void attachSurface(
+                  android.content.Context context,
+                  Surface newSurface,
+                  int newWidth,
+                  int newHeight) {
 
-              if brace == -1:
-                  raise SystemExit("Could not locate setTarget body")
+              if (context == null) {
+                  return;
+              }
 
-              depth = 0
-              end = None
+              synchronized (START_LOCK) {
 
-              for i in range(brace, len(text)):
-                  if text[i] == "{":
-                      depth += 1
-                  elif text[i] == "}":
-                      depth -= 1
-                      if depth == 0:
-                          end = i + 1
-                          break
+                  pendingSurface = newSurface;
 
-              if end is None:
-                  raise SystemExit("Could not parse setTarget body")
+                  pendingWidth = newWidth;
 
-              replacement = r'''public static void setTarget(Context context, ComponentName target) {
-                  if (context == null) {
+                  pendingHeight = newHeight;
+
+                  if (instance == null) {
+
+                      ensureStarted(context);
+
                       return;
                   }
 
-                  synchronized (START_LOCK) {
-                      pendingTarget = target;
+                  try {
 
-                      if (instance == null) {
-                          ensureStarted(context);
-                          return;
-                      }
+                      instance.attachSurfaceInternal(
+                              newSurface,
+                              newWidth,
+                              newHeight);
 
-                      try {
-                          instance.applyTarget(target);
-                      } catch (Throwable t) {
-                          Log.e(TAG, "setTarget failed", t);
-                      }
+                  } catch (Throwable error) {
+
+                      Log.e(
+                              TAG,
+                              "attachSurface failed",
+                              error);
                   }
-              }'''
+              }
+          }'''
 
-              text = text[:target_pos] + replacement + text[end:]
+          text = replace_method(
+              text,
+              "public static void attachSurface",
+              attach_surface
+          )
 
-          # Replace attachSurface implementation.
-          surface_marker = "public static void attachSurface(Context context, Surface surface, int width, int height)"
+          print("attachSurface(): PATCHED")
 
-          surface_pos = text.find(surface_marker)
 
-          if surface_pos != -1:
-              brace = text.find("{", surface_pos)
+          # ------------------------------------------------------------
+          # 6. Add flushPendingState().
+          #
+          # This is executed after the foreground service has been
+          # created and instance has been assigned.
+          # ------------------------------------------------------------
+          flush_marker = "private void flushPendingState()"
 
-              if brace == -1:
-                  raise SystemExit("Could not locate attachSurface body")
+          if flush_marker not in text:
 
-              depth = 0
-              end = None
+              class_pos = text.find(class_marker)
 
-              for i in range(brace, len(text)):
-                  if text[i] == "{":
-                      depth += 1
-                  elif text[i] == "}":
-                      depth -= 1
-                      if depth == 0:
-                          end = i + 1
-                          break
+              class_brace = text.find("{", class_pos)
 
-              if end is None:
-                  raise SystemExit("Could not parse attachSurface body")
+              if class_brace == -1:
+                  raise SystemExit(
+                      "Could not locate service class body"
+                  )
 
-              replacement = r'''public static void attachSurface(
-                      Context context,
-                      Surface surface,
-                      int width,
-                      int height) {
-
-                  if (context == null) {
-                      return;
-                  }
-
-                  synchronized (START_LOCK) {
-                      pendingSurface = surface;
-                      pendingWidth = width;
-                      pendingHeight = height;
-
-                      if (instance == null) {
-                          ensureStarted(context);
-                          return;
-                      }
-
-                      try {
-                          instance.attachSurface(surface, width, height);
-                      } catch (Throwable t) {
-                          Log.e(TAG, "attachSurface failed", t);
-                      }
-                  }
-              }'''
-
-              text = text[:surface_pos] + replacement + text[end:]
-
-          # Add flushPendingState if missing.
-          if "void flushPendingState()" not in text:
-              anchor = "private static V10ProjectionService instance"
-
-              idx = text.find(anchor)
-
-              if idx == -1:
-                  idx = text.find("public class V10ProjectionService")
-
-              brace = text.find("{", idx)
-
-              method = r'''
+              flush_method = r'''
 
               private void flushPendingState() {
+
                   synchronized (START_LOCK) {
+
+                      V10ProjectionService service =
+                              instance;
+
+                      if (service == null) {
+                          return;
+                      }
+
                       if (pendingTarget != null) {
+
                           try {
-                              applyTarget(pendingTarget);
-                          } catch (Throwable t) {
-                              Log.e(TAG, "flush target failed", t);
+
+                              service.setTargetInternal(
+                                      pendingTarget);
+
+                          } catch (Throwable error) {
+
+                              Log.e(
+                                      TAG,
+                                      "flush target failed",
+                                      error);
                           }
                       }
 
                       if (pendingSurface != null) {
+
                           try {
-                              attachSurface(
+
+                              service.attachSurfaceInternal(
                                       pendingSurface,
                                       pendingWidth,
-                                      pendingHeight
-                              );
-                          } catch (Throwable t) {
-                              Log.e(TAG, "flush surface failed", t);
+                                      pendingHeight);
+
+                          } catch (Throwable error) {
+
+                              Log.e(
+                                      TAG,
+                                      "flush surface failed",
+                                      error);
                           }
                       }
                   }
               }
+
               '''
 
-              text = text[:brace + 1] + method + text[brace + 1:]
+              text = (
+                  text[:class_brace + 1]
+                  + flush_method
+                  + text[class_brace + 1:]
+              )
 
-          # Flush after foreground startup if the marker exists.
-          foreground_marker = "startForeground("
+              print("flushPendingState(): ADDED")
 
-          if "flushPendingState();" not in text and foreground_marker in text:
-              pos = text.find(foreground_marker)
+          else:
+              print("flushPendingState(): ALREADY PRESENT")
 
-              close = text.find(";", pos)
 
-              if close != -1:
-                  text = (
-                      text[:close + 1]
-                      + "\n\n        flushPendingState();"
-                      + text[close + 1:]
+          # ------------------------------------------------------------
+          # 7. Ensure flush occurs after startForeground().
+          # ------------------------------------------------------------
+          if "flushPendingState();" not in text:
+
+              foreground_pos = text.find(
+                  "startForeground("
+              )
+
+              if foreground_pos == -1:
+                  raise SystemExit(
+                      "Could not find startForeground()"
                   )
 
-          # Protect against accidental duplicate declaration.
+              foreground_end = text.find(
+                  ");",
+                  foreground_pos
+              )
+
+              if foreground_end == -1:
+                  raise SystemExit(
+                      "Could not find end of startForeground()"
+                  )
+
+              insertion = (
+                  "\n\n        flushPendingState();"
+              )
+
+              text = (
+                  text[:foreground_end + 2]
+                  + insertion
+                  + text[foreground_end + 2:]
+              )
+
+              print(
+                  "flushPendingState() call: ADDED"
+              )
+
+          else:
+              print(
+                  "flushPendingState() call: ALREADY PRESENT"
+              )
+
+
+          # ------------------------------------------------------------
+          # 8. Prevent accidental duplicate declarations.
+          # ------------------------------------------------------------
           text = text.replace(
               "public static void public static void",
               "public static void"
           )
 
+
+          # ------------------------------------------------------------
+          # 9. Write patched source.
+          # ------------------------------------------------------------
           path.write_text(text)
-          print(f"Patched {path}")
+
+          print("V10ProjectionService patch: PASS")
           PY
 
       - name: Patch V10ProjectionSession
@@ -319,20 +481,23 @@ jobs:
           path = Path(sys.argv[1])
           text = path.read_text()
 
-          # Make the session retain the application context.
+          print("===== PATCH V10ProjectionSession =====")
+
+          # Keep Application Context instead of Activity Context.
           text = text.replace(
               "this.context = context;",
               "this.context = context.getApplicationContext();"
           )
 
-          # Protect against accidental duplicate declaration.
+          # Prevent accidental duplicate declaration.
           text = text.replace(
               "public static void public static void",
               "public static void"
           )
 
           path.write_text(text)
-          print(f"Patched {path}")
+
+          print("V10ProjectionSession patch: PASS")
           PY
 
       - name: Verify patched V10 source
@@ -345,40 +510,113 @@ jobs:
           SERVICE="$ROOT/V10ProjectionService.java"
           SESSION="$ROOT/V10ProjectionSession.java"
 
-          echo "Checking duplicate declarations..."
-          if grep -R "public static void public static void" "$ROOT"; then
+          echo "===== VERIFY PATCH ====="
+
+          echo "Checking service class..."
+          grep -q \
+            'public final class V10ProjectionService extends Service' \
+            "$SERVICE"
+
+          echo "Checking startup lock..."
+          grep -q \
+            'START_LOCK' \
+            "$SERVICE"
+
+          echo "Checking pending target..."
+          grep -q \
+            'pendingTarget' \
+            "$SERVICE"
+
+          echo "Checking pending surface..."
+          grep -q \
+            'pendingSurface' \
+            "$SERVICE"
+
+          echo "Checking pending dimensions..."
+          grep -q \
+            'pendingWidth' \
+            "$SERVICE"
+
+          grep -q \
+            'pendingHeight' \
+            "$SERVICE"
+
+          echo "Checking flush method..."
+          grep -q \
+            'flushPendingState' \
+            "$SERVICE"
+
+          echo "Checking internal target method..."
+          grep -q \
+            'setTargetInternal' \
+            "$SERVICE"
+
+          echo "Checking internal surface method..."
+          grep -q \
+            'attachSurfaceInternal' \
+            "$SERVICE"
+
+          echo "Checking foreground service..."
+          grep -q \
+            'startForegroundService' \
+            "$SERVICE"
+
+          echo "Checking VirtualDisplay lifecycle..."
+          grep -q \
+            'VirtualDisplay' \
+            "$SERVICE"
+
+          echo "Checking session lifecycle..."
+          grep -q \
+            'attachTextureView' \
+            "$SESSION"
+
+          grep -q \
+            'setTarget' \
+            "$SESSION"
+
+          grep -q \
+            'release' \
+            "$SESSION"
+
+          grep -q \
+            'destroy' \
+            "$SESSION"
+
+          echo "Checking session does not directly start service..."
+          if grep -n \
+            "V10ProjectionService.ensureStarted" \
+            "$SESSION"; then
+
+            echo "ERROR: recursive service startup call found"
+            exit 1
+          fi
+
+          echo "Checking for accidental force-stop in V10 source..."
+
+          if grep -R -n \
+            --exclude-dir=.git \
+            "am force-stop" \
+            "$ROOT"; then
+
+            echo "ERROR: force-stop found in V10 source"
+            exit 1
+          fi
+
+          echo "Checking duplicate declaration..."
+
+          if grep -R -n \
+            "public static void public static void" \
+            "$ROOT"; then
+
             echo "ERROR: duplicate method declaration found"
             exit 1
           fi
 
-          echo "Checking startup handshake markers..."
-          grep -q "START_LOCK" "$SERVICE"
-          grep -q "pendingTarget" "$SERVICE"
-          grep -q "pendingSurface" "$SERVICE"
-          grep -q "flushPendingState" "$SERVICE"
-
-          echo "Checking projection lifecycle..."
-          grep -q "attachTextureView" "$SESSION"
-          grep -q "setTarget" "$SESSION"
-          grep -q "release" "$SESSION"
-          grep -q "destroy" "$SESSION"
-
-          echo "Checking session does not recursively start service..."
-          if grep -n "V10ProjectionService.ensureStarted" "$SESSION"; then
-            echo "ERROR: recursive service startup call found in session"
-            exit 1
-          fi
-
-          echo "Checking source for accidental am force-stop..."
-          if grep -R -n --exclude-dir=.git "am force-stop" "$ROOT"; then
-            echo "ERROR: actual force-stop found in V10 source"
-            exit 1
-          fi
-
-          echo "Running git diff check..."
+          echo "Running git diff --check..."
           git diff --check
 
-          echo "Patched V10 source verification: PASS"
+          echo "===== PATCH VERIFICATION: PASS ====="
 
       - name: Build V10 APK
         shell: bash
@@ -389,7 +627,10 @@ jobs:
 
           chmod +x gradlew
 
-          ./gradlew assembleDebug --no-daemon --stacktrace
+          ./gradlew \
+            assembleDebug \
+            --no-daemon \
+            --stacktrace
 
       - name: Verify APK
         shell: bash
@@ -400,10 +641,10 @@ jobs:
 
           test -f "$APK"
 
-          echo "APK:"
+          echo "===== APK ====="
           ls -lh "$APK"
 
-          echo "SHA256:"
+          echo "===== SHA256 ====="
           sha256sum "$APK"
 
       - name: Upload V10 APK
@@ -418,9 +659,10 @@ jobs:
         run: |
           set -euo pipefail
 
-          echo "Enabling KVM..."
+          echo "===== ENABLE KVM ====="
 
           sudo apt-get update
+
           sudo apt-get install -y cpu-checker
 
           if [ -e /dev/kvm ]; then
@@ -449,87 +691,117 @@ jobs:
             -no-snapshot
             -no-snapshot-save
           disable-animations: true
+
           script: |
             set -euo pipefail
 
             DEBUG_DIR="$GITHUB_WORKSPACE/runtime-debug"
+
             mkdir -p "$DEBUG_DIR"
 
             APK="$GITHUB_WORKSPACE/v10-source/app/build/outputs/apk/debug/app-debug.apk"
 
             echo "===== DEVICE ====="
+
             adb devices
 
             echo "===== ANDROID VERSION ====="
+
             adb shell getprop ro.build.version.release
+
             adb shell getprop ro.build.version.sdk
 
             echo "===== INSTALL APK ====="
+
             adb install -r "$APK"
 
             echo "===== PACKAGE CHECK ====="
+
             adb shell pm path com.carassistant.v10
 
             echo "===== CLEAR LOGCAT ====="
+
             adb logcat -c
 
             echo "===== START LOGCAT ====="
-            adb logcat -v threadtime > "$DEBUG_DIR/logcat-full.txt" 2>&1 &
+
+            adb logcat -v threadtime \
+              > "$DEBUG_DIR/logcat-full.txt" 2>&1 &
+
             LOGCAT_PID=$!
 
-            echo "$LOGCAT_PID" > "$DEBUG_DIR/logcat.pid"
+            echo "$LOGCAT_PID" \
+              > "$DEBUG_DIR/logcat.pid"
 
             sleep 2
 
             echo "===== RESET APP ====="
-            adb shell am force-stop com.carassistant.v10 || true
+
+            adb shell am force-stop \
+              com.carassistant.v10 || true
 
             echo "===== LAUNCH V10 ====="
+
             adb shell monkey \
               -p com.carassistant.v10 \
               -c android.intent.category.LAUNCHER \
               1 || true
 
             echo "===== WAIT FOR STARTUP ====="
+
             sleep 10
 
             echo "===== ACTIVITY STATE ====="
+
             adb shell dumpsys activity activities \
               > "$DEBUG_DIR/activity.txt" 2>&1 || true
 
             echo "===== SERVICE STATE ====="
+
             adb shell dumpsys activity services \
               > "$DEBUG_DIR/services.txt" 2>&1 || true
 
             echo "===== PROCESS STATE ====="
+
             adb shell pidof com.carassistant.v10 \
               > "$DEBUG_DIR/pid.txt" 2>&1 || true
 
             echo "===== PACKAGE STATE ====="
+
             adb shell dumpsys package com.carassistant.v10 \
               > "$DEBUG_DIR/package.txt" 2>&1 || true
 
             echo "===== DROPBOX ====="
+
             adb shell dumpsys dropbox \
               > "$DEBUG_DIR/dropbox.txt" 2>&1 || true
 
             echo "===== WAIT FOR FINAL LOGS ====="
+
             sleep 5
 
-            kill "$LOGCAT_PID" 2>/dev/null || true
-            wait "$LOGCAT_PID" 2>/dev/null || true
+            kill "$LOGCAT_PID" \
+              2>/dev/null || true
 
-            echo "===== FILTERED V10 CRASH LOG ====="
+            wait "$LOGCAT_PID" \
+              2>/dev/null || true
+
+            echo "===== FILTERED V10 LOG ====="
 
             grep -E \
               "FATAL EXCEPTION|AndroidRuntime|com\.carassistant\.v10|V10Projection|V10ProjectionService|V10ProjectionSession|V10CarActivity|V10LauncherActivity|SecurityException|DeadObjectException|RemoteException|VirtualDisplay|MediaProjection|ActivityManager" \
               "$DEBUG_DIR/logcat-full.txt" \
               > "$DEBUG_DIR/v10-crash-filter.txt" || true
 
-            cat "$DEBUG_DIR/v10-crash-filter.txt" || true
+            cat \
+              "$DEBUG_DIR/v10-crash-filter.txt" \
+              || true
 
             echo "===== PID ====="
-            cat "$DEBUG_DIR/pid.txt" || true
+
+            cat \
+              "$DEBUG_DIR/pid.txt" \
+              || true
 
             echo "===== RUNTIME DEBUG COMPLETE ====="
 
