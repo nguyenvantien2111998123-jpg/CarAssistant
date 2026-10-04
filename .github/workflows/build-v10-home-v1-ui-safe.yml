@@ -21,7 +21,7 @@ jobs:
           distribution: temurin
           java-version: "17"
 
-      - name: Rebuild exact locked Display Core V1 baseline
+      - name: Rebuild exact locked Display Core V1 Floating Touch Long Press baseline
         shell: bash
         run: |
           set -euo pipefail
@@ -35,525 +35,149 @@ jobs:
 
           wf = Path(
               ".github/workflows/"
-              "build-v10-display-core-v1.yml"
+              "build-v10-display-core-v1-floating-touch-longpress-safe.yml"
           )
+
+          if not wf.is_file():
+              raise SystemExit(
+                  "Locked baseline workflow not found"
+              )
 
           doc = yaml.safe_load(
               wf.read_text(encoding="utf-8")
           )
 
-          for step in doc["jobs"]["build"]["steps"]:
-              if step.get("name") == "Build V10 Display Core V1":
+          steps = doc["jobs"]["build"]["steps"]
+
+          selected = []
+
+          for step in steps:
+              if (
+                  "run" in step
+                  and not step.get("uses")
+              ):
+                  selected.append(step)
+
+              if step.get("name") == "Compile Java":
                   break
 
-              if "run" in step and not step.get("uses"):
-                  print(
-                      "CORE >",
-                      step.get("name", "unnamed")
-                  )
+          if not selected:
+              raise SystemExit(
+                  "Locked baseline run steps not found"
+              )
 
-                  subprocess.run(
-                      [
-                          "bash",
-                          "-euo",
-                          "pipefail",
-                          "-c",
-                          step["run"],
-                      ],
-                      check=True,
-                  )
+          for step in selected:
+              name = step.get(
+                  "name",
+                  "unnamed"
+              )
+
+              print(
+                  f"BASELINE > {name}"
+              )
+
+              subprocess.run(
+                  [
+                      "bash",
+                      "-euo",
+                      "pipefail",
+                      "-c",
+                      step["run"],
+                  ],
+                  check=True,
+              )
           PY
 
-      - name: Restore proven SAFE Floating Touch patch
+      - name: Verify locked baseline before Home patch
         shell: bash
         run: |
           set -euo pipefail
 
-          FIXED_COMMIT="f8abedfc4491205028f6d75456fe2fda80f232ff"
-
-          git fetch origin "$FIXED_COMMIT" --depth=1
-
-          git show \
-            "$FIXED_COMMIT:.github/workflows/build-v10-display-core-v1-floating-touch-fixed.yml" \
-            > /tmp/floating-touch-fixed.yml
-
-          test -s /tmp/floating-touch-fixed.yml
-
-          python3 /tmp/floating-touch-fixed.yml <<'PY'
-          PY
-
-          python3 - <<'PY'
-          from pathlib import Path
-          import subprocess
-          import yaml
-
-          path = Path(
-              "/tmp/floating-touch-fixed.yml"
-          )
-
-          doc = yaml.safe_load(
-              path.read_text(encoding="utf-8")
-          )
-
-          step = next(
-              (
-                  x
-                  for x in doc["jobs"]["build"]["steps"]
-                  if x.get("name")
-                  == "Patch V10CarActivity with Floating Touch only"
-              ),
-              None,
-          )
-
-          if step is None:
-              raise SystemExit(
-                  "Historical Floating Touch patch step not found"
-              )
-
-          subprocess.run(
-              [
-                  "bash",
-                  "-euo",
-                  "pipefail",
-                  "-c",
-                  step["run"],
-              ],
-              check=True,
-          )
-          PY
-
-      - name: Apply SAFE long-press Floating Touch
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          FILE="v10-source/app/src/main/java/com/hieptran/aacast/doudou/V10CarActivity.java"
-
-          python3 - "$FILE" <<'PY'
-          from pathlib import Path
-          import sys
-
-          p = Path(sys.argv[1])
-          s = p.read_text(encoding="utf-8")
-
-          s = s.replace(
-              r"\n    private void createFloatingTouchKey()",
-              "    private void createFloatingTouchKey()",
-              1,
-          )
-
-          if "private TextView floatingTouchKey;" not in s:
-              raise SystemExit(
-                  "Floating Touch field missing"
-              )
-
-          start = s.find(
-              "floatingTouchKey.setOnTouchListener("
-          )
-
-          if start < 0:
-              raise SystemExit(
-                  "Floating Touch listener missing"
-              )
-
-          paren = s.find("(", start)
-
-          depth = 0
-          quote = False
-          escape = False
-          line = False
-          block = False
-          close = -1
-
-          i = paren
-
-          while i < len(s):
-              c = s[i]
-              n = (
-                  s[i + 1]
-                  if i + 1 < len(s)
-                  else ""
-              )
-
-              if line:
-                  if c == "\n":
-                      line = False
-
-              elif block:
-                  if c == "*" and n == "/":
-                      block = False
-                      i += 1
-
-              elif quote:
-                  if escape:
-                      escape = False
-                  elif c == "\\":
-                      escape = True
-                  elif c == '"':
-                      quote = False
-
-              else:
-                  if c == "/" and n == "/":
-                      line = True
-                      i += 1
-
-                  elif c == "/" and n == "*":
-                      block = True
-                      i += 1
-
-                  elif c == '"':
-                      quote = True
-
-                  elif c == "(":
-                      depth += 1
-
-                  elif c == ")":
-                      depth -= 1
-
-                      if depth == 0:
-                          close = i
-                          break
-
-              i += 1
-
-          if close < 0:
-              raise SystemExit(
-                  "Floating Touch listener end not found"
-              )
-
-          listener = '''floatingTouchKey.setOnTouchListener(
-                  (view, event) -> {
-                      switch (event.getActionMasked()) {
-                          case MotionEvent.ACTION_DOWN:
-                              floatingDragging = false;
-                              floatingDownRawX = event.getRawX();
-                              floatingDownRawY = event.getRawY();
-                              floatingDownTime =
-                                      SystemClock.uptimeMillis();
-
-                              ViewGroup.LayoutParams lp =
-                                      view.getLayoutParams();
-
-                              if (lp instanceof FrameLayout.LayoutParams) {
-                                  FrameLayout.LayoutParams fp =
-                                          (FrameLayout.LayoutParams) lp;
-
-                                  floatingStartX =
-                                          fp.rightMargin;
-
-                                  floatingStartY =
-                                          fp.topMargin;
-                              }
-
-                              return true;
-
-                          case MotionEvent.ACTION_MOVE:
-                              float dx =
-                                      event.getRawX()
-                                      - floatingDownRawX;
-
-                              float dy =
-                                      event.getRawY()
-                                      - floatingDownRawY;
-
-                              if (!floatingDragging
-                                      && Math.hypot(dx, dy)
-                                      > ViewConfiguration
-                                          .get(this)
-                                          .getScaledTouchSlop()) {
-
-                                  floatingDragging = true;
-                              }
-
-                              if (floatingDragging) {
-                                  int width =
-                                          projectionLayer.getWidth();
-
-                                  int height =
-                                          projectionLayer.getHeight();
-
-                                  int keySize = dp(58);
-
-                                  int right =
-                                          Math.round(
-                                              floatingStartX - dx);
-
-                                  int top =
-                                          Math.round(
-                                              floatingStartY + dy);
-
-                                  right =
-                                      Math.max(
-                                          0,
-                                          Math.min(
-                                              Math.max(
-                                                  0,
-                                                  width - keySize
-                                              ),
-                                              right
-                                          )
-                                      );
-
-                                  top =
-                                      Math.max(
-                                          0,
-                                          Math.min(
-                                              Math.max(
-                                                  0,
-                                                  height - keySize
-                                              ),
-                                              top
-                                          )
-                                      );
-
-                                  FrameLayout.LayoutParams fp =
-                                          (FrameLayout.LayoutParams)
-                                                  view.getLayoutParams();
-
-                                  fp.rightMargin = right;
-                                  fp.topMargin = top;
-
-                                  view.setLayoutParams(fp);
-                              }
-
-                              return true;
-
-                          case MotionEvent.ACTION_UP:
-                              if (floatingDragging) {
-                                  FrameLayout.LayoutParams fp =
-                                          (FrameLayout.LayoutParams)
-                                                  view.getLayoutParams();
-
-                                  prefs.edit()
-                                          .putInt(
-                                              "x",
-                                              fp.rightMargin
-                                          )
-                                          .putInt(
-                                              "y",
-                                              fp.topMargin
-                                          )
-                                          .apply();
-
-                                  floatingDragging = false;
-
-                                  return true;
-                              }
-
-                              long held =
-                                      SystemClock.uptimeMillis()
-                                      - floatingDownTime;
-
-                              if (
-                                  held
-                                  >= ViewConfiguration
-                                      .getLongPressTimeout()
-                              ) {
-                                  handleControlHome();
-                                  hideFloatingMenu();
-                              } else {
-                                  showFloatingMenu();
-                              }
-
-                              view.performClick();
-
-                              return true;
-
-                          case MotionEvent.ACTION_CANCEL:
-                              floatingDragging = false;
-                              return true;
-
-                          default:
-                              return true;
-                      }
-                  });'''
-
-          s = (
-              s[:start]
-              + listener
-              + s[close + 1:]
-          )
-
-          s = s.replace(
-              "private long floatingLastTap;",
-              "private long floatingDownTime;",
-              1,
-          )
-
-          menu_start = s.find(
-              "private void showFloatingMenu()"
-          )
-
-          if menu_start < 0:
-              raise SystemExit(
-                  "showFloatingMenu() missing"
-              )
-
-          brace = s.find("{", menu_start)
-
-          depth = 0
-          quote = False
-          escape = False
-          line = False
-          block = False
-          end = -1
-
-          i = brace
-
-          while i < len(s):
-              c = s[i]
-              n = (
-                  s[i + 1]
-                  if i + 1 < len(s)
-                  else ""
-              )
-
-              if line:
-                  if c == "\n":
-                      line = False
-
-              elif block:
-                  if c == "*" and n == "/":
-                      block = False
-                      i += 1
-
-              elif quote:
-                  if escape:
-                      escape = False
-                  elif c == "\\":
-                      escape = True
-                  elif c == '"':
-                      quote = False
-
-              else:
-                  if c == "/" and n == "/":
-                      line = True
-                      i += 1
-
-                  elif c == "/" and n == "*":
-                      block = True
-                      i += 1
-
-                  elif c == '"':
-                      quote = True
-
-                  elif c == "{":
-                      depth += 1
-
-                  elif c == "}":
-                      depth -= 1
-
-                      if depth == 0:
-                          end = i
-                          break
-
-              i += 1
-
-          if end < 0:
-              raise SystemExit(
-                  "showFloatingMenu() end not found"
-              )
-
-          menu = '''private void showFloatingMenu() {
-          if (floatingMenu != null) {
-              hideFloatingMenu();
-              return;
-          }
-
-          floatingMenu = new LinearLayout(this);
-          floatingMenu.setOrientation(
-                  LinearLayout.VERTICAL
-          );
-
-          floatingMenu.setPadding(
-                  dp(8),
-                  dp(8),
-                  dp(8),
-                  dp(8)
-          );
-
-          GradientDrawable bg =
-                  new GradientDrawable();
-
-          bg.setColor(
-                  Color.rgb(
-                          15,
-                          20,
-                          26
-                  )
-          );
-
-          bg.setCornerRadius(dp(16));
-
-          bg.setStroke(
-                  dp(1),
-                  Color.rgb(
-                          65,
-                          85,
-                          105
-                  )
-          );
-
-          floatingMenu.setBackground(bg);
-          floatingMenu.setElevation(dp(14));
-
-          addFloatingMenuButton(
-                  "BACK",
-                  () -> {
-                      handleControlBack();
-                      hideFloatingMenu();
-                  }
-          );
-
-          addFloatingMenuButton(
-                  "HOME",
-                  () -> {
-                      handleControlHome();
-                      hideFloatingMenu();
-                  }
-          );
-
-          FrameLayout.LayoutParams params =
-                  new FrameLayout.LayoutParams(
-                          dp(170),
-                          -2,
-                          Gravity.TOP | Gravity.END
-                  );
-
-          params.setMargins(
-                  0,
-                  dp(70),
-                  dp(18),
-                  0
-          );
-
-          projectionLayer.addView(
-                  floatingMenu,
-                  params
-          );
-
-          floatingMenu.bringToFront();
-          floatingTouchKey.bringToFront();
-      }'''
-
-          s = (
-              s[:menu_start]
-              + menu
-              + s[end + 1:]
-          )
-
-          s = s.replace(
-              "    private long floatingLastTap;\n",
-              "",
-          )
-
-          p.write_text(
-              s,
-              encoding="utf-8"
-          )
-          PY
-
-      - name: Patch Home 1 visual UI only
+          SRC="v10-source/app/src/main/java/com/hieptran/aacast/doudou"
+
+          ACTIVITY="$SRC/V10CarActivity.java"
+          SESSION="$SRC/V10ProjectionSession.java"
+          DISPLAY="$SRC/V10DisplayController.java"
+          TASK="$SRC/V10TaskSession.java"
+          SURFACE="$SRC/V10SurfaceManager.java"
+
+          for f in \
+            "$ACTIVITY" \
+            "$SESSION" \
+            "$DISPLAY" \
+            "$TASK" \
+            "$SURFACE"
+          do
+            test -f "$f"
+          done
+
+          grep -Fq \
+            "private void buildDashboard()" \
+            "$ACTIVITY"
+
+          grep -Fq \
+            "private TextView floatingTouchKey;" \
+            "$ACTIVITY"
+
+          grep -Fq \
+            "createFloatingTouchKey();" \
+            "$ACTIVITY"
+
+          grep -Fq \
+            "ViewConfiguration.getLongPressTimeout()" \
+            "$ACTIVITY"
+
+          grep -Fq \
+            "floatingDownTime = SystemClock.uptimeMillis();" \
+            "$ACTIVITY"
+
+          grep -Fq \
+            "class V10TaskSession" \
+            "$TASK"
+
+          grep -Fq \
+            "class V10SurfaceManager" \
+            "$SURFACE"
+
+          grep -Fq \
+            "createVirtualDisplay" \
+            "$DISPLAY"
+
+          grep -Fq \
+            "--activity-reorder-to-front" \
+            "$DISPLAY"
+
+          if grep -Fq \
+            "V10ProjectionService" \
+            "$SESSION"
+          then
+            echo \
+              "ERROR: V10ProjectionService found"
+            exit 1
+          fi
+
+          if grep -Fq \
+            "am force-stop" \
+            "$SESSION"
+          then
+            echo \
+              "ERROR: force-stop found"
+            exit 1
+          fi
+
+          if grep -Fq \
+            "am force-stop" \
+            "$DISPLAY"
+          then
+            echo \
+              "ERROR: force-stop found"
+            exit 1
+          fi
+
+          echo \
+            "Locked baseline verification PASSED."
+
+      - name: Patch Home V1 visual UI only
         shell: bash
         run: |
           set -euo pipefail
@@ -578,11 +202,16 @@ jobs:
 
           brace = s.find("{", start)
 
+          if brace < 0:
+              raise SystemExit(
+                  "buildDashboard() opening brace not found"
+              )
+
           depth = 0
           quote = False
           escape = False
-          line = False
-          block = False
+          line_comment = False
+          block_comment = False
           end = -1
 
           i = brace
@@ -595,13 +224,13 @@ jobs:
                   else ""
               )
 
-              if line:
+              if line_comment:
                   if c == "\n":
-                      line = False
+                      line_comment = False
 
-              elif block:
+              elif block_comment:
                   if c == "*" and n == "/":
-                      block = False
+                      block_comment = False
                       i += 1
 
               elif quote:
@@ -614,11 +243,11 @@ jobs:
 
               else:
                   if c == "/" and n == "/":
-                      line = True
+                      line_comment = True
                       i += 1
 
                   elif c == "/" and n == "*":
-                      block = True
+                      block_comment = True
                       i += 1
 
                   elif c == '"':
@@ -638,7 +267,7 @@ jobs:
 
           if end < 0:
               raise SystemExit(
-                  "buildDashboard() end not found"
+                  "buildDashboard() closing brace not found"
               )
 
           new_method = '''private void buildDashboard() {
@@ -656,21 +285,21 @@ jobs:
                   dp(8)
           );
 
-          GradientDrawable wholeBg =
+          GradientDrawable background =
                   new GradientDrawable(
                           GradientDrawable.Orientation.TL_BR,
                           new int[] {
                                   Color.rgb(5, 8, 12),
-                                  Color.rgb(13, 19, 27),
+                                  Color.rgb(14, 20, 28),
                                   Color.rgb(7, 11, 16)
                           }
                   );
 
           dashboard.setBackground(
-                  wholeBg
+                  background
           );
 
-          // LEFT GLASS BAR.
+          // LEFT VERTICAL GLASS BAR.
           LinearLayout leftBar =
                   new LinearLayout(this);
 
@@ -694,14 +323,16 @@ jobs:
 
           glass.setColor(
                   Color.argb(
-                          190,
+                          205,
                           24,
                           31,
                           40
                   )
           );
 
-          glass.setCornerRadius(dp(20));
+          glass.setCornerRadius(
+                  dp(20)
+          );
 
           glass.setStroke(
                   dp(1),
@@ -713,13 +344,19 @@ jobs:
                   )
           );
 
-          leftBar.setBackground(glass);
-          leftBar.setElevation(dp(8));
+          leftBar.setBackground(
+                  glass
+          );
 
+          leftBar.setElevation(
+                  dp(8)
+          );
+
+          // CAR ASSISTANT LOGO.
           TextView logo =
                   text(
                           "CA",
-                          24,
+                          23,
                           Color.WHITE
                   );
 
@@ -731,10 +368,10 @@ jobs:
                   Gravity.CENTER
           );
 
-          GradientDrawable logoBg =
+          GradientDrawable logoBackground =
                   new GradientDrawable();
 
-          logoBg.setColor(
+          logoBackground.setColor(
                   Color.rgb(
                           35,
                           105,
@@ -742,9 +379,13 @@ jobs:
                   )
           );
 
-          logoBg.setCornerRadius(dp(15));
+          logoBackground.setCornerRadius(
+                  dp(15)
+          );
 
-          logo.setBackground(logoBg);
+          logo.setBackground(
+                  logoBackground
+          );
 
           leftBar.addView(
                   logo,
@@ -756,7 +397,7 @@ jobs:
 
           TextView brand =
                   text(
-                          "CAR\\nASSIST",
+                          "CAR\\nASSISTANT",
                           8,
                           Color.LTGRAY
                   );
@@ -769,30 +410,33 @@ jobs:
                   Typeface.DEFAULT_BOLD
           );
 
-          LinearLayout.LayoutParams brandP =
+          LinearLayout.LayoutParams brandParams =
                   new LinearLayout.LayoutParams(
-                          dp(60),
+                          dp(68),
                           dp(34)
                   );
 
-          brandP.setMargins(
+          brandParams.setMargins(
                   0,
-                  dp(5),
+                  dp(4),
                   0,
-                  dp(5)
+                  dp(4)
           );
 
           leftBar.addView(
                   brand,
-                  brandP
+                  brandParams
           );
 
+          // APPS - REAL FUNCTION IS PRESERVED.
           TextView appsButton =
                   buttonText(
                           "▦\\nAPPS"
                   );
 
-          appsButton.setTextSize(10);
+          appsButton.setTextSize(
+                  10
+          );
 
           appsButton.setOnClickListener(
                   v -> showApps()
@@ -806,9 +450,10 @@ jobs:
                   )
           );
 
+          // HOME 1 VISUAL APP SLOTS.
           addHomeSideButton(
                   leftBar,
-                  "⌂\\nAPP 1"
+                  "◉\\nAPP 1"
           );
 
           addHomeSideButton(
@@ -833,6 +478,7 @@ jobs:
                   )
           );
 
+          // VISUAL ONLY IN HOME 1.
           addHomeSideButton(
                   leftBar,
                   "◉\\nVOICE"
@@ -851,7 +497,7 @@ jobs:
                   )
           );
 
-          // MAIN AREA.
+          // MAIN CONTENT.
           LinearLayout main =
                   new LinearLayout(this);
 
@@ -866,6 +512,7 @@ jobs:
                   dp(2)
           );
 
+          // HOME / MAP AREA.
           LinearLayout mapArea =
                   new LinearLayout(this);
 
@@ -884,10 +531,10 @@ jobs:
                   dp(8)
           );
 
-          GradientDrawable mapBg =
+          GradientDrawable mapBackground =
                   new GradientDrawable();
 
-          mapBg.setColor(
+          mapBackground.setColor(
                   Color.rgb(
                           9,
                           14,
@@ -895,9 +542,11 @@ jobs:
                   )
           );
 
-          mapBg.setCornerRadius(dp(22));
+          mapBackground.setCornerRadius(
+                  dp(22)
+          );
 
-          mapBg.setStroke(
+          mapBackground.setStroke(
                   dp(1),
                   Color.rgb(
                           45,
@@ -906,7 +555,9 @@ jobs:
                   )
           );
 
-          mapArea.setBackground(mapBg);
+          mapArea.setBackground(
+                  mapBackground
+          );
 
           TextView mapTitle =
                   text(
@@ -927,7 +578,7 @@ jobs:
                   mapTitle,
                   new LinearLayout.LayoutParams(
                           -1,
-                          dp(38)
+                          dp(42)
                   )
           );
 
@@ -963,7 +614,7 @@ jobs:
 
           TextView mapStatus =
                   text(
-                          "Khu vực nội dung chính  •  HOME 1",
+                          "Khu vực nội dung chính",
                           11,
                           Color.LTGRAY
                   );
@@ -989,7 +640,7 @@ jobs:
                   )
           );
 
-          // TRANSPARENT GLASS MEDIA / TRAFFIC BAR.
+          // BOTTOM GLASS MEDIA / TRAFFIC BAR.
           LinearLayout bottom =
                   new LinearLayout(this);
 
@@ -1008,21 +659,23 @@ jobs:
                   dp(6)
           );
 
-          GradientDrawable bottomBg =
+          GradientDrawable bottomBackground =
                   new GradientDrawable();
 
-          bottomBg.setColor(
+          bottomBackground.setColor(
                   Color.argb(
-                          175,
+                          180,
                           25,
                           31,
                           39
                   )
           );
 
-          bottomBg.setCornerRadius(dp(18));
+          bottomBackground.setCornerRadius(
+                  dp(18)
+          );
 
-          bottomBg.setStroke(
+          bottomBackground.setStroke(
                   dp(1),
                   Color.argb(
                           120,
@@ -1033,13 +686,14 @@ jobs:
           );
 
           bottom.setBackground(
-                  bottomBg
+                  bottomBackground
           );
 
+          // TRAFFIC WARNING CIRCLE.
           TextView traffic =
                   text(
                           "⚠",
-                          30,
+                          28,
                           Color.WHITE
                   );
 
@@ -1047,10 +701,10 @@ jobs:
                   Gravity.CENTER
           );
 
-          GradientDrawable trafficBg =
+          GradientDrawable trafficBackground =
                   new GradientDrawable();
 
-          trafficBg.setColor(
+          trafficBackground.setColor(
                   Color.rgb(
                           82,
                           64,
@@ -1058,11 +712,11 @@ jobs:
                   )
           );
 
-          trafficBg.setShape(
+          trafficBackground.setShape(
                   GradientDrawable.OVAL
           );
 
-          trafficBg.setStroke(
+          trafficBackground.setStroke(
                   dp(2),
                   Color.rgb(
                           180,
@@ -1072,7 +726,7 @@ jobs:
           );
 
           traffic.setBackground(
-                  trafficBg
+                  trafficBackground
           );
 
           bottom.addView(
@@ -1094,13 +748,13 @@ jobs:
                   Gravity.CENTER_VERTICAL
           );
 
-          LinearLayout.LayoutParams trafficTextP =
+          LinearLayout.LayoutParams trafficParams =
                   new LinearLayout.LayoutParams(
                           dp(105),
                           dp(58)
                   );
 
-          trafficTextP.setMargins(
+          trafficParams.setMargins(
                   dp(7),
                   0,
                   dp(7),
@@ -1109,10 +763,11 @@ jobs:
 
           bottom.addView(
                   trafficText,
-                  trafficTextP
+                  trafficParams
           );
 
-          TextView prev =
+          // MEDIA CONTROLS - VISUAL ONLY IN HOME 1.
+          TextView previous =
                   buttonText("◀");
 
           TextView play =
@@ -1121,23 +776,28 @@ jobs:
           TextView next =
                   buttonText("▶|");
 
-          for (
-                  TextView media :
+          TextView[] mediaButtons =
                   new TextView[] {
-                          prev,
+                          previous,
                           play,
                           next
-                  }
-          ) {
-              media.setTextSize(17);
+                  };
 
-              LinearLayout.LayoutParams mp =
+          for (
+                  TextView mediaButton :
+                  mediaButtons
+          ) {
+              mediaButton.setTextSize(
+                      17
+              );
+
+              LinearLayout.LayoutParams mediaParams =
                       new LinearLayout.LayoutParams(
                               dp(48),
                               dp(48)
                       );
 
-              mp.setMargins(
+              mediaParams.setMargins(
                       dp(3),
                       0,
                       dp(3),
@@ -1145,30 +805,30 @@ jobs:
               );
 
               bottom.addView(
-                      media,
-                      mp
+                      mediaButton,
+                      mediaParams
               );
           }
 
-          LinearLayout now =
+          LinearLayout nowPlayingArea =
                   new LinearLayout(this);
 
-          now.setOrientation(
+          nowPlayingArea.setOrientation(
                   LinearLayout.VERTICAL
           );
 
-          now.setGravity(
+          nowPlayingArea.setGravity(
                   Gravity.CENTER_VERTICAL
           );
 
-          TextView nowTitle =
+          TextView mediaTitle =
                   text(
                           "MEDIA",
                           9,
                           Color.LTGRAY
                   );
 
-          nowTitle.setTypeface(
+          mediaTitle.setTypeface(
                   Typeface.DEFAULT_BOLD
           );
 
@@ -1180,13 +840,20 @@ jobs:
                           Color.WHITE
                   );
 
-          nowPlaying.setMaxLines(1);
+          nowPlaying.setMaxLines(
+                  1
+          );
 
-          now.addView(nowTitle);
-          now.addView(nowPlaying);
+          nowPlayingArea.addView(
+                  mediaTitle
+          );
+
+          nowPlayingArea.addView(
+                  nowPlaying
+          );
 
           bottom.addView(
-                  now,
+                  nowPlayingArea,
                   new LinearLayout.LayoutParams(
                           0,
                           dp(58),
@@ -1218,41 +885,34 @@ jobs:
                           -1
                   )
           );
-      }'''
+      }
 
-          s = (
-              s[:start]
-              + new_method
-              + s[end + 1:]
-          )
-
-          marker = "private void buildAppPanel()"
-
-          pos = s.find(marker)
-
-          if pos < 0:
-              raise SystemExit(
-                  "buildAppPanel() marker not found"
-              )
-
-          helper = '''private void addHomeSideButton(
+      private void addHomeSideButton(
               LinearLayout parent,
               String label
       ) {
-          TextView b =
+          TextView button =
                   buttonText(label);
 
-          b.setTextSize(9);
+          button.setTextSize(
+                  9
+          );
 
-          b.setMaxLines(2);
+          button.setMaxLines(
+                  2
+          );
 
-          LinearLayout.LayoutParams p =
+          button.setGravity(
+                  Gravity.CENTER
+          );
+
+          LinearLayout.LayoutParams params =
                   new LinearLayout.LayoutParams(
                           dp(62),
                           dp(54)
                   );
 
-          p.setMargins(
+          params.setMargins(
                   0,
                   dp(4),
                   0,
@@ -1260,26 +920,30 @@ jobs:
           );
 
           parent.addView(
-                  b,
-                  p
+                  button,
+                  params
           );
       }
 
       '''
 
           s = (
-              s[:pos]
-              + helper
-              + s[pos:]
+              s[:start]
+              + new_method
+              + s[end + 1:]
           )
 
           p.write_text(
               s,
               encoding="utf-8"
           )
+
+          print(
+              "Home V1 visual UI patch complete."
+          )
           PY
 
-      - name: Verify Home 1 SAFE architecture
+      - name: Verify Home V1 SAFE architecture
         shell: bash
         run: |
           set -euo pipefail
@@ -1292,18 +956,30 @@ jobs:
           TASK="$SRC/V10TaskSession.java"
           SURFACE="$SRC/V10SurfaceManager.java"
 
-          for f in \
-            "$ACTIVITY" \
-            "$SESSION" \
-            "$DISPLAY" \
-            "$TASK" \
-            "$SURFACE"
-          do
-            test -f "$f"
-          done
+          test -f "$ACTIVITY"
+          test -f "$SESSION"
+          test -f "$DISPLAY"
+          test -f "$TASK"
+          test -f "$SURFACE"
 
           grep -Fq \
             "private void buildDashboard()" \
+            "$ACTIVITY"
+
+          grep -Fq \
+            "private void addHomeSideButton(" \
+            "$ACTIVITY"
+
+          grep -Fq \
+            'TextView logo =' \
+            "$ACTIVITY"
+
+          grep -Fq \
+            '"CA"' \
+            "$ACTIVITY"
+
+          grep -Fq \
+            '"▦\\nAPPS"' \
             "$ACTIVITY"
 
           grep -Fq \
@@ -1315,11 +991,19 @@ jobs:
             "$ACTIVITY"
 
           grep -Fq \
-            'TextView logo = text(' \
+            '"◉\\nVOICE"' \
+            "$ACTIVITY"
+
+          grep -Fq \
+            '"▤\\nTASKS"' \
             "$ACTIVITY"
 
           grep -Fq \
             'GIAO THÔNG' \
+            "$ACTIVITY"
+
+          grep -Fq \
+            'Waze • cảnh báo' \
             "$ACTIVITY"
 
           grep -Fq \
@@ -1331,12 +1015,8 @@ jobs:
             "$DISPLAY"
 
           grep -Fq \
-            -- '--activity-reorder-to-front' \
+            '--activity-reorder-to-front' \
             "$DISPLAY"
-
-          grep -Fq \
-            'State.HIDDEN' \
-            "$SESSION"
 
           grep -Fq \
             'class V10TaskSession' \
@@ -1347,7 +1027,11 @@ jobs:
             "$SURFACE"
 
           grep -Fq \
-            'floatingTouchKey' \
+            'private TextView floatingTouchKey;' \
+            "$ACTIVITY"
+
+          grep -Fq \
+            'floatingDownTime = SystemClock.uptimeMillis();' \
             "$ACTIVITY"
 
           grep -Fq \
@@ -1359,7 +1043,7 @@ jobs:
             "$ACTIVITY"
           then
             echo \
-              "ERROR: Home 1 added direct startActivity()"
+              "ERROR: direct startActivity() found in V10CarActivity"
             exit 1
           fi
 
@@ -1368,7 +1052,7 @@ jobs:
             "$SESSION"
           then
             echo \
-              "ERROR: V10ProjectionService leaked"
+              "ERROR: V10ProjectionService found"
             exit 1
           fi
 
@@ -1377,7 +1061,7 @@ jobs:
             "$SESSION"
           then
             echo \
-              "ERROR: force-stop leaked"
+              "ERROR: force-stop found in session"
             exit 1
           fi
 
@@ -1386,7 +1070,7 @@ jobs:
             "$DISPLAY"
           then
             echo \
-              "ERROR: force-stop leaked"
+              "ERROR: force-stop found in display controller"
             exit 1
           fi
 
@@ -1395,7 +1079,7 @@ jobs:
             "$ACTIVITY"
           then
             echo \
-              "ERROR: old double-tap code remains"
+              "ERROR: legacy floatingLastTap found"
             exit 1
           fi
 
@@ -1404,36 +1088,63 @@ jobs:
           import re
           import sys
 
-          s = Path(
+          path = Path(sys.argv[1])
+          source = path.read_text(
+              encoding="utf-8"
+          )
+
+          method = re.search(
+              r"public void onStop\(\)\s*\{(.*?)\n\s*\}",
+              source,
+              re.S
+          )
+
+          if not method:
+              raise SystemExit(
+                  "onStop() not found"
+              )
+
+          if "session.release()" in method.group(1):
+              raise SystemExit(
+                  "ERROR: session.release() remains in onStop()"
+              )
+
+          print(
+              "onStop() persistence verification PASSED."
+          )
+          PY
+
+          python3 - "$ACTIVITY" <<'PY'
+          from pathlib import Path
+          import sys
+
+          source = Path(
               sys.argv[1]
           ).read_text(
               encoding="utf-8"
           )
 
-          m = re.search(
-              r"public void onStop\(\)\s*\{(.*?)\n\s*\}",
-              s,
-              re.S,
-          )
-
-          if not m:
+          if source.count(
+              "private void buildDashboard()"
+          ) != 1:
               raise SystemExit(
-                  "onStop() not found"
+                  "ERROR: buildDashboard() count is not exactly 1"
               )
 
-          if "session.release()" in m.group(1):
+          if source.count(
+              "private void addHomeSideButton("
+          ) != 1:
               raise SystemExit(
-                  "ERROR: session.release() "
-                  "remains in onStop()"
+                  "ERROR: addHomeSideButton() count is not exactly 1"
               )
 
           print(
-              "onStop() persistence check PASSED"
+              "Java Home method structure verification PASSED."
           )
           PY
 
           echo \
-            "Home 1 SAFE architecture verification PASSED."
+            "HOME V1 SAFE architecture verification PASSED."
 
       - name: Compile Java
         working-directory: v10-source
@@ -1469,11 +1180,12 @@ jobs:
 
           test -n "$APK"
 
-          echo "APK=$APK"
+          echo \
+            "APK=$APK"
 
           sha256sum "$APK"
 
-      - name: Upload Home 1 APK
+      - name: Upload Home V1 APK
         uses: actions/upload-artifact@v4
         with:
           name: CarAssistant-V10-Home-V1-UI-SAFE
