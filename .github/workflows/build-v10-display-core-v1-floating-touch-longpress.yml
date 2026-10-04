@@ -1,0 +1,155 @@
+name: Build Car Assistant V10 Display Core V1 + Floating Touch Long Press
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Rebuild exact Display Core V1 from GitHub workflow
+        shell: bash
+        run: |
+          set -euo pipefail
+          CORE=.github/workflows/build-v10-display-core-v1.yml
+          test -f "$CORE"
+          python3 - "$CORE" <<'PY'
+          from pathlib import Path
+          import subprocess, sys
+          import yaml
+          doc=yaml.safe_load(Path(sys.argv[1]).read_text(encoding='utf-8'))
+          for step in doc['jobs']['build']['steps']:
+              name=step.get('name','')
+              if name.startswith('Build APK') or name.startswith('Locate APK') or name.startswith('Upload APK'):
+                  break
+              if 'run' in step:
+                  print('CORE >',name)
+                  subprocess.run(['bash','-euo','pipefail','-c',step['run']],check=True)
+          PY
+
+      - name: Extract Floating Touch patch from GitHub workflow
+        shell: bash
+        run: |
+          set -euo pipefail
+          PATCH=.github/workflows/build-v10-display-core-v1-floating-touch-fixed.yml
+          test -f "$PATCH"
+          python3 - "$PATCH" <<'PY'
+          from pathlib import Path
+          import subprocess, sys
+          import yaml
+          doc=yaml.safe_load(Path(sys.argv[1]).read_text(encoding='utf-8'))
+          step=next((x for x in doc['jobs']['build']['steps'] if x.get('name')=='Patch V10CarActivity with Floating Touch only'),None)
+          if step is None: raise SystemExit('Floating Touch patch step not found')
+          subprocess.run(['bash','-euo','pipefail','-c',step['run']],check=True)
+          PY
+
+      - name: Sanitize patch and convert double-tap to long-press HOME
+        shell: bash
+        run: |
+          set -euo pipefail
+          FILE=v10-source/app/src/main/java/com/hieptran/aacast/doudou/V10CarActivity.java
+          test -f "$FILE"
+          python3 - "$FILE" <<'PY'
+          from pathlib import Path
+          import sys
+          p=Path(sys.argv[1]); s=p.read_text(encoding='utf-8')
+          # The source patch workflow used a raw Python string for its method block.
+          # Remove only the accidental literal backslash-n introduced by that patch.
+          s=s.replace(r'\n    private void createFloatingTouchKey()', '    private void createFloatingTouchKey()', 1)
+          s=s.replace('private long floatingLastTap;', 'private long floatingDownTime;', 1)
+          if 'private long floatingDownTime;' not in s: raise SystemExit('floatingDownTime field missing')
+          marker='case MotionEvent.ACTION_DOWN:'
+          pos=s.find(marker)
+          if pos<0: raise SystemExit('ACTION_DOWN missing')
+          line_end=s.find('\n',pos)+1
+          if 'floatingDownTime = SystemClock.uptimeMillis();' not in s:
+              s=s[:line_end]+'                          floatingDownTime = SystemClock.uptimeMillis();\n'+s[line_end:]
+          start=s.find('                          long now = SystemClock.uptimeMillis();')
+          if start<0: raise SystemExit('double-tap block start missing')
+          end=s.find('                          view.performClick();',start)
+          if end<0: raise SystemExit('ACTION_UP tail missing')
+          replacement = ('                          long held = SystemClock.uptimeMillis() - floatingDownTime;\n'
+                         '                          if (held >= ViewConfiguration.getLongPressTimeout()) {\n'
+                         '                              handleControlHome();\n'
+                         '                              hideFloatingMenu();\n'
+                         '                          } else {\n'
+                         '                              showFloatingMenu();\n')
+          s=s[:start]+replacement+s[end:]
+          p.write_text(s,encoding='utf-8')
+          PY
+
+      - name: Verify every required part
+        shell: bash
+        run: |
+          set -euo pipefail
+          SRC=v10-source/app/src/main/java/com/hieptran/aacast/doudou
+          A=$SRC/V10CarActivity.java
+          S=$SRC/V10ProjectionSession.java
+          D=$SRC/V10DisplayController.java
+          test -f "$SRC/V10TaskSession.java"
+          test -f "$D"
+          test -f "$SRC/V10SurfaceManager.java"
+          grep -Fq 'private TextView floatingTouchKey;' "$A"
+          grep -Fq 'createFloatingTouchKey();' "$A"
+          grep -Fq 'private void createFloatingTouchKey()' "$A"
+          grep -Fq 'floatingDragging' "$A"
+          grep -Fq 'SystemClock.uptimeMillis()' "$A"
+          grep -Fq 'ViewConfiguration.getLongPressTimeout()' "$A"
+          grep -Fq 'addFloatingMenuButton("BACK"' "$A"
+          grep -Fq 'handleControlBack();' "$A"
+          grep -Fq 'handleControlHome();' "$A"
+          ! grep -Fq 'floatingLastTap' "$A"
+          ! grep -Fq '\\n    private void createFloatingTouchKey' "$A"
+          ! grep -Fq 'RECENTS' "$A"
+          ! grep -Fq '2 SCREEN' "$A"
+          ! grep -Fq '3 SCREEN' "$A"
+          ! grep -Fq 'setLayoutModeExternal(' "$A"
+          ! grep -Fq 'V10ProjectionService' "$S"
+          ! grep -Fq 'am force-stop' "$S"
+          grep -Fq -- '--activity-reorder-to-front' "$D"
+          echo 'STATIC VERIFICATION: PASS'
+
+      - name: Compile Java
+        working-directory: v10-source
+        shell: bash
+        run: |
+          set -euo pipefail
+          chmod +x ./gradlew
+          ./gradlew --no-daemon --stacktrace compileDebugJavaWithJavac
+
+      - name: Build APK
+        working-directory: v10-source
+        shell: bash
+        run: |
+          set -euo pipefail
+          ./gradlew --no-daemon --stacktrace assembleDebug
+
+      - name: Locate APK and SHA256
+        shell: bash
+        run: |
+          set -euo pipefail
+          APK="$(find v10-source -type f -path '*/build/outputs/apk/*/*.apk' -print -quit)"
+          test -n "$APK" && test -f "$APK"
+          echo "APK=$APK"
+          sha256sum "$APK"
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: CarAssistant-V10-Display-Core-V1-Floating-Touch-LongPress
+          path: v10-source/**/build/outputs/apk/*/*.apk
+          if-no-files-found: error
+          retention-days: 14
