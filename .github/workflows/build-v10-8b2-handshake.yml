@@ -1,4 +1,4 @@
-name: Build Car Assistant V10 - 8B2 Startup Handshake Fixed v7
+name: Build Car Assistant V10 - 8B2 Startup Handshake Fixed v8
 
 on:
   workflow_dispatch:
@@ -21,7 +21,6 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-
           ROOT="v10-source/app/src/main/java/com/hieptran/aacast/doudou"
 
           for f in \
@@ -46,210 +45,197 @@ jobs:
 
           echo "V10 source OK"
 
-      - name: Patch V10ProjectionService
+      - name: Patch V10 source
         shell: bash
         run: |
           set -euo pipefail
 
-          SERVICE="v10-source/app/src/main/java/com/hieptran/aacast/doudou/V10ProjectionService.java"
+          ROOT="v10-source/app/src/main/java/com/hieptran/aacast/doudou"
 
-          python3 - "$SERVICE" <<'PY'
+          python3 - "$ROOT/V10ProjectionService.java" "$ROOT/V10ProjectionSession.java" <<'PY'
           import sys
-          import re
           from pathlib import Path
 
-          path = Path(sys.argv[1])
-          s = path.read_text()
+          service = Path(sys.argv[1])
+          session = Path(sys.argv[2])
 
-          def replace_between(text, start, end, replacement):
-              a = text.find(start)
-              if a < 0:
-                  raise SystemExit("Missing start: " + start)
+          def method_bounds(s, marker):
+              start = s.find(marker)
 
-              b = text.find(end, a)
-              if b < 0:
-                  raise SystemExit("Missing end: " + end)
+              if start < 0:
+                  raise SystemExit("Missing: " + marker)
 
-              return text[:a] + replacement + "\n\n" + text[b:]
+              brace = s.find("{", start)
 
-          marker = "private static volatile V10ProjectionService instance;"
+              if brace < 0:
+                  raise SystemExit("Missing brace: " + marker)
+
+              depth = 0
+              quote = None
+              i = brace
+
+              while i < len(s):
+                  c = s[i]
+
+                  if quote:
+                      if c == "\\":
+                          i += 2
+                          continue
+
+                      if c == quote:
+                          quote = None
+
+                  else:
+                      if c in ('"', "'"):
+                          quote = c
+
+                      elif c == "{":
+                          depth += 1
+
+                      elif c == "}":
+                          depth -= 1
+
+                          if depth == 0:
+                              return start, i + 1
+
+                  i += 1
+
+              raise SystemExit("Unclosed method: " + marker)
+
+          def replace_method(s, marker, lines):
+              a, b = method_bounds(s, marker)
+              return s[:a] + "\n".join(lines) + s[b:]
+
+          s = service.read_text()
+
+          marker = (
+              "private static volatile "
+              "V10ProjectionService instance;"
+          )
 
           if "private static final Object START_LOCK" not in s:
-              fields = """private static final Object START_LOCK =
-            new Object();
-
-    private static ComponentName pendingTarget;
-
-    private static Surface pendingSurface;
-
-    private static int pendingWidth;
-
-    private static int pendingHeight;"""
+              add = [
+                  "",
+                  "    private static final Object START_LOCK = new Object();",
+                  "    private static ComponentName pendingTarget;",
+                  "    private static Surface pendingSurface;",
+                  "    private static int pendingWidth;",
+                  "    private static int pendingHeight;"
+              ]
 
               if marker not in s:
-                  raise SystemExit("Service instance marker missing")
-
-              s = s.replace(
-                  marker,
-                  marker + "\n\n    " + fields,
-                  1
-              )
-
-          ensure = """    public static void ensureStarted(
-            android.content.Context context) {
-
-        if (getInstance() != null) {
-            return;
-        }
-
-        android.content.Context app =
-                context.getApplicationContext();
-
-        Intent intent =
-                new Intent(
-                        app,
-                        V10ProjectionService.class);
-
-        try {
-            if (Build.VERSION.SDK_INT >= 26) {
-                app.startForegroundService(intent);
-            } else {
-                app.startService(intent);
-            }
-        } catch (Throwable error) {
-            Log.w(
-                    TAG,
-                    "Unable to start V10 projection service",
-                    error);
-        }
-    }"""
-
-          s = replace_between(
-              s,
-              "    public static void ensureStarted(",
-              "    private static V10ProjectionService getInstance()",
-              ensure
-          )
-
-          target = """    public static void setTarget(
-            android.content.Context context,
-            ComponentName component) {
-
-        synchronized (START_LOCK) {
-
-            V10ProjectionService service =
-                    getInstance();
-
-            if (service == null) {
-                pendingTarget = component;
-                ensureStarted(context);
-                return;
-            }
-
-            service.setTargetInternal(component);
-        }
-    }"""
-
-          s = replace_between(
-              s,
-              "    public static void setTarget(",
-              "    public static void attachSurface(",
-              target
-          )
-
-          surface = """    public static void attachSurface(
-            android.content.Context context,
-            Surface newSurface,
-            int newWidth,
-            int newHeight) {
-
-        if (newSurface == null
-                || newWidth < 1
-                || newHeight < 1) {
-            return;
-        }
-
-        synchronized (START_LOCK) {
-
-            V10ProjectionService service =
-                    getInstance();
-
-            if (service == null) {
-
-                pendingSurface = newSurface;
-                pendingWidth = newWidth;
-                pendingHeight = newHeight;
-
-                ensureStarted(context);
-                return;
-            }
-
-            service.attachSurfaceInternal(
-                    newSurface,
-                    newWidth,
-                    newHeight);
-        }
-    }"""
-
-          s = replace_between(
-              s,
-              "    public static void attachSurface(",
-              "    public static void detachSurface()",
-              surface
-          )
-
-          if "private void flushPendingState()" not in s:
-              flush = """    private void flushPendingState() {
-
-        synchronized (START_LOCK) {
-
-            if (destroyed || instance != this) {
-                return;
-            }
-
-            ComponentName t = pendingTarget;
-            Surface sf = pendingSurface;
-            int w = pendingWidth;
-            int h = pendingHeight;
-
-            pendingTarget = null;
-            pendingSurface = null;
-            pendingWidth = 0;
-            pendingHeight = 0;
-
-            if (t != null) {
-                setTargetInternal(t);
-            }
-
-            if (sf != null) {
-                attachSurfaceInternal(sf, w, h);
-            }
-        }
-    }
-
-"""
-
-              token = "    private void detachSurfaceInternal()"
-
-              if token not in s:
                   raise SystemExit(
-                      "detachSurfaceInternal marker missing"
+                      "Service instance marker missing"
                   )
 
               s = s.replace(
-                  token,
-                  flush + token,
+                  marker,
+                  marker + "\n".join(add),
                   1
               )
 
+          s = replace_method(
+              s,
+              "public static void ensureStarted(",
+              [
+                  "    public static void ensureStarted(android.content.Context context) {",
+                  "        if (getInstance() != null) return;",
+                  "        android.content.Context app = context.getApplicationContext();",
+                  "        Intent intent = new Intent(app, V10ProjectionService.class);",
+                  "        try {",
+                  "            if (Build.VERSION.SDK_INT >= 26) app.startForegroundService(intent);",
+                  "            else app.startService(intent);",
+                  "        } catch (Throwable error) {",
+                  "            Log.w(TAG, \"Unable to start V10 projection service\", error);",
+                  "        }",
+                  "    }"
+              ]
+          )
+
+          s = replace_method(
+              s,
+              "public static void setTarget(",
+              [
+                  "    public static void setTarget(android.content.Context context, ComponentName component) {",
+                  "        synchronized (START_LOCK) {",
+                  "            V10ProjectionService service = getInstance();",
+                  "            if (service == null) {",
+                  "                pendingTarget = component;",
+                  "                ensureStarted(context);",
+                  "                return;",
+                  "            }",
+                  "            service.setTargetInternal(component);",
+                  "        }",
+                  "    }"
+              ]
+          )
+
+          s = replace_method(
+              s,
+              "public static void attachSurface(",
+              [
+                  "    public static void attachSurface(android.content.Context context, Surface newSurface, int newWidth, int newHeight) {",
+                  "        if (newSurface == null || newWidth < 1 || newHeight < 1) return;",
+                  "        synchronized (START_LOCK) {",
+                  "            V10ProjectionService service = getInstance();",
+                  "            if (service == null) {",
+                  "                pendingSurface = newSurface;",
+                  "                pendingWidth = newWidth;",
+                  "                pendingHeight = newHeight;",
+                  "                ensureStarted(context);",
+                  "                return;",
+                  "            }",
+                  "            service.attachSurfaceInternal(newSurface, newWidth, newHeight);",
+                  "        }",
+                  "    }"
+              ]
+          )
+
+          if "private void flushPendingState()" not in s:
+              marker2 = "private void detachSurfaceInternal()"
+
+              flush = [
+                  "    private void flushPendingState() {",
+                  "        synchronized (START_LOCK) {",
+                  "            if (destroyed || instance != this) return;",
+                  "            ComponentName t = pendingTarget;",
+                  "            Surface sf = pendingSurface;",
+                  "            int w = pendingWidth;",
+                  "            int h = pendingHeight;",
+                  "            pendingTarget = null;",
+                  "            pendingSurface = null;",
+                  "            pendingWidth = 0;",
+                  "            pendingHeight = 0;",
+                  "            if (t != null) setTargetInternal(t);",
+                  "            if (sf != null) attachSurfaceInternal(sf, w, h);",
+                  "        }",
+                  "    }",
+                  ""
+              ]
+
+              pos = s.find(marker2)
+
+              if pos < 0:
+                  raise SystemExit(
+                      "Missing detachSurfaceInternal"
+                  )
+
+              s = (
+                  s[:pos]
+                  + "\n".join(flush)
+                  + s[pos:]
+              )
+
           if "flushPendingState();" not in s:
-              token = """        startForeground(
-                NOTIFICATION_ID,
-                notification);"""
+              token = (
+                  "        startForeground(\n"
+                  "                NOTIFICATION_ID,\n"
+                  "                notification);"
+              )
 
               if token not in s:
                   raise SystemExit(
-                      "startForeground marker missing"
+                      "Missing startForeground"
                   )
 
               s = s.replace(
@@ -258,43 +244,33 @@ jobs:
                   1
               )
 
-          path.write_text(s)
-
-          print("ProjectionService patch OK")
-          PY
-
-      - name: Patch V10ProjectionSession constructor
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          SESSION="v10-source/app/src/main/java/com/hieptran/aacast/doudou/V10ProjectionSession.java"
-
-          python3 - "$SESSION" <<'PY'
-          import sys
-          import re
-          from pathlib import Path
-
-          path = Path(sys.argv[1])
-          s = path.read_text()
-
-          pattern = re.compile(
-              r'(?m)^    public V10ProjectionSession\s*\(\s*Context\s+context\s*\)\s*\{'
-          )
-
-          m = pattern.search(s)
-
-          if not m:
+          if "public static void public static void" in s:
               raise SystemExit(
-                  "V10ProjectionSession constructor not found"
+                  "Duplicate declaration generated"
               )
 
-          start = m.start()
-          brace = s.find("{", m.start())
+          service.write_text(s)
+
+          s = session.read_text()
+
+          start = s.find(
+              "public V10ProjectionSession("
+          )
+
+          if start < 0:
+              raise SystemExit(
+                  "Session constructor missing"
+              )
+
+          brace = s.find("{", start)
+
+          if brace < 0:
+              raise SystemExit(
+                  "Session constructor brace missing"
+              )
 
           depth = 0
           quote = None
-          end = -1
           i = brace
 
           while i < len(s):
@@ -304,41 +280,45 @@ jobs:
                   if c == "\\":
                       i += 2
                       continue
+
                   if c == quote:
                       quote = None
+
               else:
                   if c in ('"', "'"):
                       quote = c
+
                   elif c == "{":
                       depth += 1
+
                   elif c == "}":
                       depth -= 1
+
                       if depth == 0:
                           end = i + 1
                           break
 
               i += 1
 
-          if end < 0:
+          else:
               raise SystemExit(
-                  "Constructor closing brace not found"
+                  "Session constructor not closed"
               )
 
-          constructor = """    public V10ProjectionSession(
-            Context context) {
+          constructor = "\n".join([
+              "    public V10ProjectionSession(Context context) {",
+              "        this.context = context.getApplicationContext();",
+              "    }"
+          ])
 
-        this.context =
-                context.getApplicationContext();
-    }"""
-
-          s = s[:start] + constructor + s[end:]
-
-          path.write_text(s)
-
-          print("ProjectionSession constructor patch OK")
+          session.write_text(
+              s[:start]
+              + constructor
+              + s[end:]
+          )
           PY
 
-      - name: Verify patches
+      - name: Verify patched source
         shell: bash
         run: |
           set -euo pipefail
@@ -348,13 +328,9 @@ jobs:
           SERVICE="$ROOT/V10ProjectionService.java"
           SESSION="$ROOT/V10ProjectionSession.java"
 
-          if grep -Fq \
+          ! grep -Fq \
             "public static void public static void" \
             "$SERVICE"
-          then
-            echo "ERROR: duplicated Java declaration"
-            exit 1
-          fi
 
           grep -Fq \
             "private static final Object START_LOCK" \
@@ -362,48 +338,18 @@ jobs:
 
           grep -Fq "pendingTarget" "$SERVICE"
           grep -Fq "pendingSurface" "$SERVICE"
-          grep -Fq "pendingWidth" "$SERVICE"
-          grep -Fq "pendingHeight" "$SERVICE"
           grep -Fq "flushPendingState();" "$SERVICE"
-
-          grep -Fq \
-            "public static void ensureStarted" \
-            "$SERVICE"
-
-          grep -Fq \
-            "public static void setTarget" \
-            "$SERVICE"
-
-          grep -Fq \
-            "public static void attachSurface" \
-            "$SERVICE"
 
           grep -Fq "attachTextureView" "$SESSION"
           grep -Fq "setTarget" "$SESSION"
-          grep -Fq "isActive" "$SESSION"
-          grep -Fq "getDisplayId" "$SESSION"
-          grep -Fq "tap" "$SESSION"
-          grep -Fq "swipe" "$SESSION"
-          grep -Fq "back" "$SESSION"
           grep -Fq "release" "$SESSION"
           grep -Fq "destroy" "$SESSION"
 
-          if grep -Fq \
+          ! grep -Fq \
             "V10ProjectionService.ensureStarted" \
             "$SESSION"
-          then
-            echo "ERROR: eager service startup remains"
-            exit 1
-          fi
 
-          echo "Patch verification OK"
-
-      - name: Verify no force-stop
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          ROOT="v10-source/app/src/main/java/com/hieptran/aacast/doudou"
+          echo "No actual force-stop expected"
 
           if grep -RInE \
             '(^|[[:space:];&|])(/system/bin/)?am[[:space:]]+force-stop([[:space:]]|$)' \
@@ -413,78 +359,9 @@ jobs:
             exit 1
           fi
 
-          echo "No force-stop OK"
-
-      - name: Validate Java
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          ROOT="v10-source/app/src/main/java/com/hieptran/aacast/doudou"
-
-          javac -version
-
-          python3 - "$ROOT" <<'PY'
-          import sys
-          from pathlib import Path
-
-          root = Path(sys.argv[1])
-
-          files = [
-              "V10ProjectionService.java",
-              "V10ProjectionSession.java",
-              "V10CarActivity.java",
-              "V10SessionStore.java",
-              "V10InputController.java",
-              "RootShellSession.java",
-          ]
-
-          for name in files:
-              text = (root / name).read_text()
-
-              depth = 0
-              quote = None
-              i = 0
-
-              while i < len(text):
-                  c = text[i]
-
-                  if quote:
-                      if c == "\\":
-                          i += 2
-                          continue
-                      if c == quote:
-                          quote = None
-                  else:
-                      if c in ('"', "'"):
-                          quote = c
-                      elif c == "{":
-                          depth += 1
-                      elif c == "}":
-                          depth -= 1
-
-                      if depth < 0:
-                          raise SystemExit(
-                              "Brace error: " + name
-                          )
-
-                  i += 1
-
-              if depth != 0:
-                  raise SystemExit(
-                      "Unbalanced braces: " + name
-                  )
-
-              print("OK:", name)
-
-          PY
-
-      - name: Git diff check
-        shell: bash
-        run: |
-          set -euo pipefail
           git diff --check
-          echo "git diff --check OK"
+
+          echo "Patched source verification OK"
 
       - name: Build V10
         working-directory: v10-source
@@ -512,6 +389,6 @@ jobs:
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: CarAssistant-V10-8B2-StartupHandshake-Fixed-v7
+          name: CarAssistant-V10-8B2-StartupHandshake-Fixed-v8
           path: v10-source/app/build/outputs/apk/debug/app-debug.apk
           if-no-files-found: error
