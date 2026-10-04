@@ -1,0 +1,973 @@
+name: Build Car Assistant V10-6A Persistence 2
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Restore V10-6A source baseline
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          BASELINE="9075636a7d5947c1b0eee49c2bd3fd0e1b6b0cf1"
+
+          echo "Restoring V10-6A baseline..."
+          echo "$BASELINE"
+
+          git fetch origin "$BASELINE" --depth=1
+          git checkout "$BASELINE" -- v10-source
+
+          test -f \
+            v10-source/app/src/main/java/com/hieptran/aacast/doudou/V10ProjectionSession.java
+
+          test -f \
+            v10-source/app/src/main/java/com/hieptran/aacast/doudou/V10CarActivity.java
+
+          test -f \
+            v10-source/app/src/main/java/com/hieptran/aacast/doudou/RootView.java
+
+          if [ -f \
+            v10-source/app/src/main/java/com/hieptran/aacast/doudou/V10ProjectionService.java
+          ]; then
+            echo "ERROR: V10ProjectionService.java detected."
+            echo "V10-8 architecture must NOT be used."
+            exit 1
+          fi
+
+          echo "V10-6A baseline OK."
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      # ============================================================
+      # V10-6A ORIGINAL PATCHES
+      # ============================================================
+
+      - name: Patch V10ProjectionSession - RECENTS
+        working-directory: v10-source
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          FILE="app/src/main/java/com/hieptran/aacast/doudou/V10ProjectionSession.java"
+
+          python3 - "$FILE" <<'PY'
+          from pathlib import Path
+          import re
+          import sys
+
+          p = Path(sys.argv[1])
+          s = p.read_text(encoding="utf-8")
+
+          if "public void recents()" not in s:
+              method = r'''
+              public void recents() {
+                  if (!isActive()) {
+                      return;
+                  }
+
+                  final int displayId =
+                          display.getDisplayId();
+
+                  final String command =
+                          "/system/bin/input -d "
+                                  + displayId
+                                  + " keyevent 187";
+
+                  RootShellSession.EXEC.execute(
+                          () -> {
+                              try {
+                                  rootShell.run(
+                                          5,
+                                          command);
+                              } catch (Throwable t) {
+                                  Log.w(
+                                          TAG,
+                                          "Recents failed",
+                                          t);
+                              }
+                          });
+              }
+
+              '''
+
+              pattern = re.compile(
+                  r"(?m)^[ \t]*public\s+void\s+back\s*\(\s*\)\s*\{"
+              )
+
+              m = pattern.search(s)
+
+              if not m:
+                  raise SystemExit(
+                      "ERROR: back() method not found."
+                  )
+
+              s = s[:m.start()] + method + s[m.start():]
+
+          p.write_text(s, encoding="utf-8")
+          print("RECENTS patch OK.")
+          PY
+
+      - name: Patch V10CarActivity - imports
+        working-directory: v10-source
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          FILE="app/src/main/java/com/hieptran/aacast/doudou/V10CarActivity.java"
+
+          python3 - "$FILE" <<'PY'
+          from pathlib import Path
+          import sys
+
+          p = Path(sys.argv[1])
+          s = p.read_text(encoding="utf-8")
+
+          marker = "import android.content.pm.ResolveInfo;"
+
+          imports = [
+              "import android.content.SharedPreferences;",
+              "import android.os.SystemClock;",
+              "import android.view.MotionEvent;",
+              "import android.view.ViewConfiguration;",
+              "import android.view.ViewGroup;",
+          ]
+
+          missing = [x for x in imports if x not in s]
+
+          if missing:
+              if marker not in s:
+                  raise SystemExit(
+                      "ERROR: import marker not found."
+                  )
+
+              s = s.replace(
+                  marker,
+                  marker + "\n" + "\n".join(missing),
+                  1
+              )
+
+          p.write_text(s, encoding="utf-8")
+          print("Imports OK.")
+          PY
+
+      - name: Patch V10CarActivity - floating fields
+        working-directory: v10-source
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          FILE="app/src/main/java/com/hieptran/aacast/doudou/V10CarActivity.java"
+
+          python3 - "$FILE" <<'PY'
+          from pathlib import Path
+          import sys
+
+          p = Path(sys.argv[1])
+          s = p.read_text(encoding="utf-8")
+
+          if "private TextView floatingTouchKey;" not in s:
+              marker = "    private V10ProjectionSession session;"
+
+              fields = """
+              private TextView floatingTouchKey;
+              private LinearLayout floatingMenu;
+
+              private boolean floatingDragging;
+              private float floatingDownRawX;
+              private float floatingDownRawY;
+              private int floatingStartX;
+              private int floatingStartY;
+              private long floatingLastTap;
+              """
+
+              if marker not in s:
+                  raise SystemExit(
+                      "ERROR: session field marker not found."
+                  )
+
+              s = s.replace(
+                  marker,
+                  marker + fields,
+                  1
+              )
+
+          p.write_text(s, encoding="utf-8")
+          print("Floating fields OK.")
+          PY
+
+      - name: Patch V10CarActivity - floating key
+        working-directory: v10-source
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          FILE="app/src/main/java/com/hieptran/aacast/doudou/V10CarActivity.java"
+
+          python3 - "$FILE" <<'PY'
+          from pathlib import Path
+          import sys
+
+          p = Path(sys.argv[1])
+          s = p.read_text(encoding="utf-8")
+
+          if "createFloatingTouchKey();" not in s:
+              marker = """        session.attachTextureView(
+                textureView);"""
+
+              if marker not in s:
+                  raise SystemExit(
+                      "ERROR: attachTextureView marker not found."
+                  )
+
+              s = s.replace(
+                  marker,
+                  marker + "\n\n        createFloatingTouchKey();",
+                  1
+              )
+
+          if "private void createFloatingTouchKey()" not in s:
+              methods = r'''
+              private void createFloatingTouchKey() {
+                  if (floatingTouchKey != null) {
+                      return;
+                  }
+
+                  floatingTouchKey = new TextView(this);
+                  floatingTouchKey.setText("●");
+                  floatingTouchKey.setTextColor(Color.WHITE);
+                  floatingTouchKey.setTextSize(22);
+                  floatingTouchKey.setGravity(Gravity.CENTER);
+
+                  GradientDrawable bg =
+                          new GradientDrawable();
+
+                  bg.setShape(
+                          GradientDrawable.OVAL);
+
+                  bg.setColor(
+                          Color.rgb(25, 35, 45));
+
+                  bg.setStroke(
+                          dp(2),
+                          Color.rgb(80, 170, 230));
+
+                  floatingTouchKey.setBackground(bg);
+                  floatingTouchKey.setElevation(dp(12));
+
+                  SharedPreferences prefs =
+                          getSharedPreferences(
+                                  "v10_floating_key",
+                                  MODE_PRIVATE);
+
+                  FrameLayout.LayoutParams params =
+                          new FrameLayout.LayoutParams(
+                                  dp(58),
+                                  dp(58),
+                                  Gravity.TOP | Gravity.END);
+
+                  int savedX =
+                          prefs.getInt(
+                                  "x",
+                                  dp(18));
+
+                  int savedY =
+                          prefs.getInt(
+                                  "y",
+                                  dp(120));
+
+                  params.setMargins(
+                          0,
+                          savedY,
+                          savedX,
+                          0);
+
+                  projectionLayer.addView(
+                          floatingTouchKey,
+                          params);
+
+                  floatingTouchKey.setOnTouchListener(
+                          (view, event) -> {
+                              switch (
+                                      event.getActionMasked()) {
+
+                                  case MotionEvent.ACTION_DOWN:
+                                      floatingDragging = false;
+
+                                      floatingDownRawX =
+                                              event.getRawX();
+
+                                      floatingDownRawY =
+                                              event.getRawY();
+
+                                      ViewGroup.LayoutParams lp =
+                                              view.getLayoutParams();
+
+                                      if (lp instanceof FrameLayout.LayoutParams) {
+                                          FrameLayout.LayoutParams fp =
+                                                  (FrameLayout.LayoutParams) lp;
+
+                                          floatingStartX =
+                                                  fp.rightMargin;
+
+                                          floatingStartY =
+                                                  fp.topMargin;
+                                      }
+
+                                      return true;
+
+                                  case MotionEvent.ACTION_MOVE:
+                                      float dx =
+                                              event.getRawX()
+                                                      - floatingDownRawX;
+
+                                      float dy =
+                                              event.getRawY()
+                                                      - floatingDownRawY;
+
+                                      if (!floatingDragging
+                                              && Math.hypot(dx, dy)
+                                              > ViewConfiguration
+                                                      .get(this)
+                                                      .getScaledTouchSlop()) {
+                                          floatingDragging = true;
+                                      }
+
+                                      if (floatingDragging) {
+                                          int width =
+                                                  projectionLayer.getWidth();
+
+                                          int height =
+                                                  projectionLayer.getHeight();
+
+                                          int size = dp(58);
+
+                                          int right =
+                                                  Math.round(
+                                                          floatingStartX - dx);
+
+                                          int top =
+                                                  Math.round(
+                                                          floatingStartY + dy);
+
+                                          right =
+                                                  Math.max(
+                                                          0,
+                                                          Math.min(
+                                                                  Math.max(
+                                                                          0,
+                                                                          width - size),
+                                                                  right));
+
+                                          top =
+                                                  Math.max(
+                                                          0,
+                                                          Math.min(
+                                                                  Math.max(
+                                                                          0,
+                                                                          height - size),
+                                                                  top));
+
+                                          FrameLayout.LayoutParams fp =
+                                                  (FrameLayout.LayoutParams)
+                                                          view.getLayoutParams();
+
+                                          fp.rightMargin = right;
+                                          fp.topMargin = top;
+
+                                          view.setLayoutParams(fp);
+                                      }
+
+                                      return true;
+
+                                  case MotionEvent.ACTION_UP:
+
+                                      if (floatingDragging) {
+                                          FrameLayout.LayoutParams fp =
+                                                  (FrameLayout.LayoutParams)
+                                                          view.getLayoutParams();
+
+                                          prefs.edit()
+                                                  .putInt(
+                                                          "x",
+                                                          fp.rightMargin)
+                                                  .putInt(
+                                                          "y",
+                                                          fp.topMargin)
+                                                  .apply();
+
+                                          floatingDragging = false;
+                                          return true;
+                                      }
+
+                                      long now =
+                                              SystemClock.uptimeMillis();
+
+                                      long delta =
+                                              now - floatingLastTap;
+
+                                      floatingLastTap = now;
+
+                                      if (delta > 0
+                                              && delta < 320) {
+                                          handleControlHome();
+                                          hideFloatingMenu();
+                                      } else {
+                                          showFloatingMenu();
+                                      }
+
+                                      view.performClick();
+
+                                      return true;
+
+                                  case MotionEvent.ACTION_CANCEL:
+                                      floatingDragging = false;
+                                      return true;
+
+                                  default:
+                                      return true;
+                              }
+                          });
+
+                  floatingTouchKey.bringToFront();
+              }
+
+              private void showFloatingMenu() {
+                  if (floatingMenu != null) {
+                      hideFloatingMenu();
+                      return;
+                  }
+
+                  floatingMenu =
+                          new LinearLayout(this);
+
+                  floatingMenu.setOrientation(
+                          LinearLayout.VERTICAL);
+
+                  floatingMenu.setPadding(
+                          dp(8),
+                          dp(8),
+                          dp(8),
+                          dp(8));
+
+                  GradientDrawable bg =
+                          new GradientDrawable();
+
+                  bg.setColor(
+                          Color.rgb(15, 20, 26));
+
+                  bg.setCornerRadius(
+                          dp(16));
+
+                  bg.setStroke(
+                          dp(1),
+                          Color.rgb(65, 85, 105));
+
+                  floatingMenu.setBackground(bg);
+                  floatingMenu.setElevation(dp(14));
+
+                  addFloatingMenuButton(
+                          "BACK",
+                          () -> {
+                              handleControlBack();
+                              hideFloatingMenu();
+                          });
+
+                  addFloatingMenuButton(
+                          "RECENTS",
+                          () -> {
+                              if (session != null) {
+                                  session.recents();
+                              }
+                              hideFloatingMenu();
+                          });
+
+                  addFloatingMenuButton(
+                          "2 SCREEN",
+                          () -> {
+                              switchToTwoScreen();
+                              hideFloatingMenu();
+                          });
+
+                  addFloatingMenuButton(
+                          "3 SCREEN",
+                          () -> {
+                              switchToThreeScreen();
+                              hideFloatingMenu();
+                          });
+
+                  FrameLayout.LayoutParams params =
+                          new FrameLayout.LayoutParams(
+                                  dp(170),
+                                  -2,
+                                  Gravity.TOP | Gravity.END);
+
+                  params.setMargins(
+                          0,
+                          dp(70),
+                          dp(18),
+                          0);
+
+                  projectionLayer.addView(
+                          floatingMenu,
+                          params);
+
+                  floatingMenu.bringToFront();
+                  floatingTouchKey.bringToFront();
+              }
+
+              private void addFloatingMenuButton(
+                      String label,
+                      Runnable action) {
+
+                  TextView button =
+                          new TextView(this);
+
+                  button.setText(label);
+                  button.setTextColor(Color.WHITE);
+                  button.setTextSize(14);
+                  button.setGravity(Gravity.CENTER_VERTICAL);
+
+                  GradientDrawable bg =
+                          new GradientDrawable();
+
+                  bg.setColor(
+                          Color.rgb(28, 38, 48));
+
+                  bg.setCornerRadius(dp(10));
+
+                  button.setBackground(bg);
+
+                  button.setPadding(
+                          dp(16),
+                          0,
+                          dp(16),
+                          0);
+
+                  button.setOnClickListener(
+                          v -> action.run());
+
+                  LinearLayout.LayoutParams params =
+                          new LinearLayout.LayoutParams(
+                                  -1,
+                                  dp(48));
+
+                  params.setMargins(
+                          0,
+                          dp(3),
+                          0,
+                          dp(3));
+
+                  floatingMenu.addView(
+                          button,
+                          params);
+              }
+
+              private void hideFloatingMenu() {
+                  if (floatingMenu == null) {
+                      return;
+                  }
+
+                  projectionLayer.removeView(
+                          floatingMenu);
+
+                  floatingMenu = null;
+              }
+
+              private void switchToTwoScreen() {
+                  RootView rootView =
+                          RootView.getCurrent();
+
+                  if (rootView != null) {
+                      rootView.setLayoutModeExternal(0);
+                  }
+              }
+
+              private void switchToThreeScreen() {
+                  RootView rootView =
+                          RootView.getCurrent();
+
+                  if (rootView != null) {
+                      rootView.setLayoutModeExternal(2);
+                  }
+              }
+
+              '''
+
+              marker = "    public void handleControlBack()"
+
+              if marker not in s:
+                  raise SystemExit(
+                      "ERROR: handleControlBack marker not found."
+                  )
+
+              s = s.replace(
+                  marker,
+                  methods + "\n" + marker,
+                  1
+              )
+
+          p.write_text(s, encoding="utf-8")
+          print("Floating key patch OK.")
+          PY
+
+      - name: Patch RootView - external layout
+        working-directory: v10-source
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          FILE="app/src/main/java/com/hieptran/aacast/doudou/RootView.java"
+
+          python3 - "$FILE" <<'PY'
+          from pathlib import Path
+          import sys
+
+          p = Path(sys.argv[1])
+          s = p.read_text(encoding="utf-8")
+
+          if "setLayoutModeExternal(int mode)" not in s:
+              method = r'''
+              public void setLayoutModeExternal(int mode) {
+                  final int targetMode =
+                          clamp(mode, 0, 5);
+
+                  handler.post(
+                          () -> {
+                              if (destroyed) {
+                                  return;
+                              }
+
+                              layoutMode = targetMode;
+
+                              loadRatios();
+
+                              prefs.edit()
+                                      .putInt(
+                                              "layout_mode_v3",
+                                              layoutMode)
+                                      .apply();
+
+                              applyVisibility();
+
+                              container.requestLayout();
+                              container.resizeAll();
+                          });
+              }
+
+              '''
+
+              marker = "    public void reloadSettings()"
+
+              if marker not in s:
+                  raise SystemExit(
+                      "ERROR: reloadSettings marker not found."
+                  )
+
+              s = s.replace(
+                  marker,
+                  method + marker,
+                  1
+              )
+
+          p.write_text(s, encoding="utf-8")
+          print("RootView patch OK.")
+          PY
+
+      # ============================================================
+      # PERSISTENCE 2
+      # ============================================================
+
+      - name: Patch Persistence 2 - Projection Session
+        working-directory: v10-source
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          FILE="app/src/main/java/com/hieptran/aacast/doudou/V10ProjectionSession.java"
+
+          python3 - "$FILE" <<'PY'
+          from pathlib import Path
+          import sys
+
+          p = Path(sys.argv[1])
+          s = p.read_text(encoding="utf-8")
+
+          # Add launch state.
+          if "private boolean targetLaunched;" not in s:
+              marker = "    private boolean destroyed;"
+
+              if marker not in s:
+                  raise SystemExit(
+                      "ERROR: destroyed field marker not found."
+                  )
+
+              s = s.replace(
+                  marker,
+                  marker + "\n\n    private boolean targetLaunched;",
+                  1
+              )
+
+          # Replace force-stop launch with reorder-to-front.
+          old = '''        final String command =
+                "/system/bin/am force-stop '"
+                        + packageName
+                        + "'; "
+                        + "/system/bin/am start"
+                        + " --user "
+                        + userId
+                        + " --display "
+                        + displayId
+                        + " --windowingMode 1"
+                        + " -a android.intent.action.MAIN"
+                        + " -c android.intent.category.LAUNCHER"
+                        + " -f 0x18000000"
+                        + " -n '"
+                        + flat
+                        + "'";'''
+
+          new = '''        if (targetLaunched) {
+            final String command =
+                    "/system/bin/am start"
+                            + " --user "
+                            + userId
+                            + " --display "
+                            + displayId
+                            + " --windowingMode 1"
+                            + " -a android.intent.action.MAIN"
+                            + " -c android.intent.category.LAUNCHER"
+                            + " -f 0x18000000"
+                            + " --activity-reorder-to-front"
+                            + " -n '"
+                            + flat
+                            + "'";
+
+            RootShellSession.EXEC.execute(
+                    () -> {
+                        try {
+                            rootShell.run(
+                                    10,
+                                    command);
+                        } catch (Throwable t) {
+                            Log.w(
+                                    TAG,
+                                    "Reorder task failed",
+                                    t);
+                        }
+                    });
+
+            return;
+        }
+
+        targetLaunched = true;
+
+        final String command =
+                "/system/bin/am start"
+                        + " --user "
+                        + userId
+                        + " --display "
+                        + displayId
+                        + " --windowingMode 1"
+                        + " -a android.intent.action.MAIN"
+                        + " -c android.intent.category.LAUNCHER"
+                        + " -f 0x18000000"
+                        + " --activity-reorder-to-front"
+                        + " -n '"
+                        + flat
+                        + "'";'''
+
+          if old in s:
+              s = s.replace(old, new, 1)
+          elif "activity-reorder-to-front" not in s:
+              raise SystemExit(
+                  "ERROR: launchTarget block not found."
+              )
+
+          # Reset only when the whole projection display is
+          # explicitly released.
+          if "targetLaunched = false;" not in s:
+              marker = '''        virtualDisplay = null;
+        display = null;'''
+
+              if marker not in s:
+                  raise SystemExit(
+                      "ERROR: display release marker not found."
+                  )
+
+              s = s.replace(
+                  marker,
+                  '''        virtualDisplay = null;
+        display = null;
+        targetLaunched = false;''',
+                  1
+              )
+
+          p.write_text(s, encoding="utf-8")
+          print("Persistence 2 ProjectionSession patch OK.")
+          PY
+
+      - name: Patch Persistence 2 - Activity lifecycle
+        working-directory: v10-source
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          FILE="app/src/main/java/com/hieptran/aacast/doudou/V10CarActivity.java"
+
+          python3 - "$FILE" <<'PY'
+          from pathlib import Path
+          import sys
+
+          p = Path(sys.argv[1])
+          s = p.read_text(encoding="utf-8")
+
+          old = '''        if (session != null) {
+            session.release();
+        }
+
+        super.onStop();'''
+
+          new = '''        /*
+         * Persistence 2:
+         *
+         * Android Auto may temporarily stop this Activity.
+         * Keep the projection session alive.
+         *
+         * Explicit HOME / target switching / onDestroy()
+         * remain responsible for final cleanup.
+         */
+
+        super.onStop();'''
+
+          if old in s:
+              s = s.replace(old, new, 1)
+          elif "Persistence 2:" not in s:
+              raise SystemExit(
+                  "ERROR: onStop release block not found."
+              )
+
+          p.write_text(s, encoding="utf-8")
+          print("Persistence 2 Activity lifecycle patch OK.")
+          PY
+
+      # ============================================================
+      # VERIFY
+      # ============================================================
+
+      - name: Verify V10-6A Persistence 2
+        working-directory: v10-source
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          SESSION="app/src/main/java/com/hieptran/aacast/doudou/V10ProjectionSession.java"
+          ACTIVITY="app/src/main/java/com/hieptran/aacast/doudou/V10CarActivity.java"
+          ROOT="app/src/main/java/com/hieptran/aacast/doudou/RootView.java"
+
+          echo "Checking architecture..."
+
+          if [ -f \
+            app/src/main/java/com/hieptran/aacast/doudou/V10ProjectionService.java
+          ]; then
+            echo "ERROR: V10-8 ProjectionService detected."
+            exit 1
+          fi
+
+          echo "Architecture PASS."
+
+          echo "Checking V10-6A controls..."
+
+          grep -q "public void recents()" "$SESSION"
+          grep -q "keyevent 187" "$SESSION"
+          grep -q "createFloatingTouchKey" "$ACTIVITY"
+          grep -q 'session.recents()' "$ACTIVITY"
+          grep -q '"RECENTS"' "$ACTIVITY"
+          grep -q '"2 SCREEN"' "$ACTIVITY"
+          grep -q '"3 SCREEN"' "$ACTIVITY"
+          grep -q "setLayoutModeExternal(int mode)" "$ROOT"
+
+          echo "V10-6A controls PASS."
+
+          echo "Checking Persistence 2..."
+
+          grep -q "private boolean targetLaunched;" "$SESSION"
+          grep -q "targetLaunched = true;" "$SESSION"
+          grep -q "targetLaunched = false;" "$SESSION"
+          grep -q "activity-reorder-to-front" "$SESSION"
+
+          if grep -q "am force-stop" "$SESSION"; then
+            echo "ERROR: force-stop still exists."
+            exit 1
+          fi
+
+          if grep -A18 "public void onStop()" "$ACTIVITY" \
+              | grep -q "session.release()"; then
+            echo "ERROR: onStop still releases session."
+            exit 1
+          fi
+
+          echo "Persistence 2 PASS."
+
+          echo "========================================"
+          echo "V10-6A Persistence 2 verification PASS"
+          echo "========================================"
+
+      - name: Compile Java
+        working-directory: v10-source
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          ./gradlew \
+            --no-daemon \
+            --stacktrace \
+            compileDebugJavaWithJavac
+
+      - name: Build APK
+        working-directory: v10-source
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          ./gradlew \
+            --no-daemon \
+            --stacktrace \
+            assembleDebug
+
+      - name: Locate APK
+        working-directory: v10-source
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          find app/build/outputs/apk \
+            -type f \
+            -name "*.apk" \
+            -print
+
+          APK="$(find app/build/outputs/apk \
+            -type f \
+            -name "*.apk" \
+            -print -quit)"
+
+          test -n "$APK"
+
+          echo "APK=$APK"
+
+      - name: Upload Persistence 2 APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: CarAssistant-V10-6A-Persistence-2
+          path: v10-source/app/build/outputs/apk/debug/*.apk
+          if-no-files-found: error
+          retention-days: 14
