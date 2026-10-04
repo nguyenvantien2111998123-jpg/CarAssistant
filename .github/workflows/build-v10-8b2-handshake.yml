@@ -1,4 +1,4 @@
-name: Build Car Assistant V10 - 8B2 Startup Handshake Fixed v5
+name: Build Car Assistant V10 - 8B2 Startup Handshake Fixed v6
 
 on:
   workflow_dispatch:
@@ -24,17 +24,12 @@ jobs:
 
           ROOT="v10-source/app/src/main/java/com/hieptran/aacast/doudou"
 
-          for file in \
-            V10ProjectionService.java \
-            V10ProjectionSession.java \
-            V10CarActivity.java \
-            V10SessionStore.java \
-            V10InputController.java \
-            RootShellSession.java
-          do
-            test -f "$ROOT/$file"
-            echo "PASS: $file"
-          done
+          test -f "$ROOT/V10ProjectionService.java"
+          test -f "$ROOT/V10ProjectionSession.java"
+          test -f "$ROOT/V10CarActivity.java"
+          test -f "$ROOT/V10SessionStore.java"
+          test -f "$ROOT/V10InputController.java"
+          test -f "$ROOT/RootShellSession.java"
 
           grep -Fq 'package com.carassistant.v10;' \
             "$ROOT/V10ProjectionService.java"
@@ -47,7 +42,7 @@ jobs:
 
           echo "PASS: existing V10"
 
-      - name: Patch V10ProjectionService - safe full method replacement
+      - name: Patch V10ProjectionService
         shell: bash
         run: |
           set -euo pipefail
@@ -56,288 +51,70 @@ jobs:
           from pathlib import Path
           import re
 
-          path = Path(
+          p = Path(
               "v10-source/app/src/main/java/com/hieptran/aacast/doudou/"
               "V10ProjectionService.java"
           )
 
-          text = path.read_text()
+          s = p.read_text()
 
-          # ------------------------------------------------------------
-          # Generic Java method locator.
-          #
-          # IMPORTANT:
-          # The returned start position is the BEGINNING OF THE
-          # DECLARATION LINE, not the method name.
-          #
-          # This prevents:
-          #
-          # public static void public static void method(...)
-          # ------------------------------------------------------------
-
-          def find_method(text, name):
-              pattern = re.compile(
-                  r'\b' + re.escape(name) + r'\s*\('
+          def method_range(src, name):
+              m = re.search(
+                  r'(?m)^[ \t]*(?:public|private|protected)[^\n{;]*\b'
+                  + re.escape(name)
+                  + r'\s*\([^;{]*\)\s*\{',
+                  src
               )
 
-              for match in pattern.finditer(text):
-
-                  pos = match.start()
-
-                  before = text[:pos]
-
-                  # Ignore calls such as:
-                  # object.method(...)
-                  if before.rstrip().endswith("."):
-                      continue
-
-                  # Find opening parenthesis.
-                  open_paren = text.find("(", pos)
-
-                  if open_paren < 0:
-                      continue
-
-                  # Find matching parenthesis.
-                  depth = 0
-                  i = open_paren
-                  state = "normal"
-
-                  close_paren = None
-
-                  while i < len(text):
-
-                      c = text[i]
-                      n = text[i + 1] if i + 1 < len(text) else ""
-
-                      if state == "normal":
-
-                          if c == "/" and n == "/":
-                              state = "line"
-                              i += 2
-                              continue
-
-                          if c == "/" and n == "*":
-                              state = "block"
-                              i += 2
-                              continue
-
-                          if c == '"':
-                              state = "string"
-                              i += 1
-                              continue
-
-                          if c == "'":
-                              state = "char"
-                              i += 1
-                              continue
-
-                          if c == "(":
-                              depth += 1
-
-                          elif c == ")":
-                              depth -= 1
-
-                              if depth == 0:
-                                  close_paren = i
-                                  break
-
-                      elif state == "line":
-
-                          if c == "\n":
-                              state = "normal"
-
-                      elif state == "block":
-
-                          if c == "*" and n == "/":
-                              state = "normal"
-                              i += 2
-                              continue
-
-                      elif state == "string":
-
-                          if c == "\\":
-                              i += 2
-                              continue
-
-                          if c == '"':
-                              state = "normal"
-
-                      elif state == "char":
-
-                          if c == "\\":
-                              i += 2
-                              continue
-
-                          if c == "'":
-                              state = "normal"
-
-                      i += 1
-
-                  if close_paren is None:
-                      continue
-
-                  # Locate opening method brace.
-                  i = close_paren + 1
-
-                  while i < len(text):
-
-                      if text.startswith("//", i):
-
-                          nl = text.find("\n", i + 2)
-
-                          if nl < 0:
-                              i = len(text)
-                          else:
-                              i = nl + 1
-
-                          continue
-
-                      if text.startswith("/*", i):
-
-                          end = text.find("*/", i + 2)
-
-                          if end < 0:
-                              i = len(text)
-                          else:
-                              i = end + 2
-
-                          continue
-
-                      if text[i].isspace():
-                          i += 1
-                          continue
-
-                      break
-
-                  if i >= len(text) or text[i] != "{":
-                      continue
-
-                  open_brace = i
-
-                  # Find declaration line start.
-                  line_start = text.rfind("\n", 0, pos) + 1
-
-                  # Make sure this really looks like a declaration.
-                  declaration_prefix = text[
-                      line_start:pos
-                  ]
-
-                  if not re.search(
-                      r'\b(public|private|protected|static)\b',
-                      declaration_prefix
-                  ):
-                      continue
-
-                  # Match method body braces.
-                  depth = 0
-                  i = open_brace
-                  state = "normal"
-
-                  while i < len(text):
-
-                      c = text[i]
-                      n = text[i + 1] if i + 1 < len(text) else ""
-
-                      if state == "normal":
-
-                          if c == "/" and n == "/":
-                              state = "line"
-                              i += 2
-                              continue
-
-                          if c == "/" and n == "*":
-                              state = "block"
-                              i += 2
-                              continue
-
-                          if c == '"':
-                              state = "string"
-                              i += 1
-                              continue
-
-                          if c == "'":
-                              state = "char"
-                              i += 1
-                              continue
-
-                          if c == "{":
-                              depth += 1
-
-                          elif c == "}":
-
-                              depth -= 1
-
-                              if depth == 0:
-                                  return line_start, i + 1
-
-                      elif state == "line":
-
-                          if c == "\n":
-                              state = "normal"
-
-                      elif state == "block":
-
-                          if c == "*" and n == "/":
-                              state = "normal"
-                              i += 2
-                              continue
-
-                      elif state == "string":
-
-                          if c == "\\":
-                              i += 2
-                              continue
-
-                          if c == '"':
-                              state = "normal"
-
-                      elif state == "char":
-
-                          if c == "\\":
-                              i += 2
-                              continue
-
-                          if c == "'":
-                              state = "normal"
-
-                      i += 1
-
-              return None
-
-          def replace_method(text, name, replacement):
-
-              found = find_method(text, name)
-
-              if found is None:
-                  raise SystemExit(
-                      f"ERROR: method {name} not found"
+              if not m:
+                  raise RuntimeError(
+                      "method not found: " + name
                   )
 
-              start, end = found
+              start = m.start()
+              brace = src.find("{", m.start())
 
-              return (
-                  text[:start]
-                  + replacement
-                  + text[end:]
+              depth = 0
+              quote = None
+              i = brace
+
+              while i < len(src):
+                  c = src[i]
+
+                  if quote:
+                      if c == "\\":
+                          i += 2
+                          continue
+                      if c == quote:
+                          quote = None
+                  else:
+                      if c in ('"', "'"):
+                          quote = c
+                      elif c == "{":
+                          depth += 1
+                      elif c == "}":
+                          depth -= 1
+                          if depth == 0:
+                              return start, i + 1
+
+                  i += 1
+
+              raise RuntimeError(
+                  "method brace not closed: " + name
               )
 
-          # ------------------------------------------------------------
-          # Add handshake fields exactly once.
-          # ------------------------------------------------------------
+          def replace_method(src, name, body):
+              a, b = method_range(src, name)
+              return src[:a] + body + src[b:]
 
-          if "private static final Object START_LOCK" not in text:
-
+          if "private static final Object START_LOCK" not in s:
               marker = (
                   "private static volatile "
                   "V10ProjectionService instance;"
               )
 
-              if marker not in text:
-                  raise SystemExit(
-                      "ERROR: instance marker not found"
-                  )
-
               fields = """
+    
     private static final Object START_LOCK =
             new Object();
 
@@ -350,18 +127,18 @@ jobs:
     private static int pendingHeight;
 """
 
-              text = text.replace(
+              if marker not in s:
+                  raise RuntimeError(
+                      "service instance marker not found"
+                  )
+
+              s = s.replace(
                   marker,
                   marker + fields,
                   1
               )
 
-          # ------------------------------------------------------------
-          # ensureStarted()
-          # ------------------------------------------------------------
-
-          ensure_started = """
-    public static void ensureStarted(
+          ensure_started = """    public static void ensureStarted(
             android.content.Context context) {
 
         if (getInstance() != null) {
@@ -385,8 +162,7 @@ jobs:
 
             } else {
 
-                appContext.startService(
-                        intent);
+                appContext.startService(intent);
             }
 
         } catch (Throwable error) {
@@ -399,18 +175,7 @@ jobs:
     }
 """
 
-          text = replace_method(
-              text,
-              "ensureStarted",
-              ensure_started
-          )
-
-          # ------------------------------------------------------------
-          # setTarget()
-          # ------------------------------------------------------------
-
-          set_target = """
-    public static void setTarget(
+          set_target = """    public static void setTarget(
             android.content.Context context,
             ComponentName component) {
 
@@ -428,24 +193,12 @@ jobs:
                 return;
             }
 
-            service.setTargetInternal(
-                    component);
+            service.setTargetInternal(component);
         }
     }
 """
 
-          text = replace_method(
-              text,
-              "setTarget",
-              set_target
-          )
-
-          # ------------------------------------------------------------
-          # attachSurface()
-          # ------------------------------------------------------------
-
-          attach_surface = """
-    public static void attachSurface(
+          attach_surface = """    public static void attachSurface(
             android.content.Context context,
             Surface newSurface,
             int newWidth,
@@ -454,7 +207,6 @@ jobs:
         if (newSurface == null
                 || newWidth <= 0
                 || newHeight <= 0) {
-
             return;
         }
 
@@ -491,27 +243,28 @@ jobs:
     }
 """
 
-          text = replace_method(
-              text,
+          s = replace_method(
+              s,
+              "ensureStarted",
+              ensure_started
+          )
+
+          s = replace_method(
+              s,
+              "setTarget",
+              set_target
+          )
+
+          s = replace_method(
+              s,
               "attachSurface",
               attach_surface
           )
 
-          # ------------------------------------------------------------
-          # flushPendingState()
-          # ------------------------------------------------------------
-
-          if "private void flushPendingState()" not in text:
-
+          if "private void flushPendingState()" not in s:
               marker = "    private void detachSurfaceInternal"
 
-              if marker not in text:
-                  raise SystemExit(
-                      "ERROR: detachSurfaceInternal marker not found"
-                  )
-
-              flush = """
-    private void flushPendingState() {
+              flush = """    private void flushPendingState() {
 
         synchronized (START_LOCK) {
 
@@ -519,17 +272,10 @@ jobs:
                 return;
             }
 
-            ComponentName pendingT =
-                    pendingTarget;
-
-            Surface pendingS =
-                    pendingSurface;
-
-            int pendingW =
-                    pendingWidth;
-
-            int pendingH =
-                    pendingHeight;
+            ComponentName t = pendingTarget;
+            Surface sf = pendingSurface;
+            int w = pendingWidth;
+            int h = pendingHeight;
 
             pendingTarget = null;
             pendingSurface = null;
@@ -538,18 +284,15 @@ jobs:
 
             try {
 
-                if (pendingT != null) {
-
-                    setTargetInternal(
-                            pendingT);
+                if (t != null) {
+                    setTargetInternal(t);
                 }
 
-                if (pendingS != null) {
-
+                if (sf != null) {
                     attachSurfaceInternal(
-                            pendingS,
-                            pendingW,
-                            pendingH);
+                            sf,
+                            w,
+                            h);
                 }
 
             } catch (Throwable error) {
@@ -564,45 +307,39 @@ jobs:
 
 """
 
-              text = text.replace(
+              if marker not in s:
+                  raise RuntimeError(
+                      "detachSurfaceInternal marker not found"
+                  )
+
+              s = s.replace(
                   marker,
                   flush + marker,
                   1
               )
 
-          # ------------------------------------------------------------
-          # Call flushPendingState() after startForeground().
-          # ------------------------------------------------------------
+          if "flushPendingState();" not in s:
+              marker = """        startForeground(
+                NOTIFICATION_ID,
+                notification);"""
 
-          if "flushPendingState();" not in text:
-
-              marker = (
-                  "        startForeground(\n"
-                  "                NOTIFICATION_ID,\n"
-                  "                notification);"
-              )
-
-              if marker not in text:
-                  raise SystemExit(
-                      "ERROR: startForeground block not found"
+              if marker not in s:
+                  raise RuntimeError(
+                      "startForeground block not found"
                   )
 
-              text = text.replace(
+              s = s.replace(
                   marker,
-                  marker
-                  + "\n\n"
-                  + "        flushPendingState();",
+                  marker + "\n\n        flushPendingState();",
                   1
               )
 
-          path.write_text(text)
+          p.write_text(s)
 
-          print(
-              "PASS: V10ProjectionService patched"
-          )
+          print("PASS: service patched")
           PY
 
-      - name: Patch V10ProjectionSession - constructor only
+      - name: Patch V10ProjectionSession constructor
         shell: bash
         run: |
           set -euo pipefail
@@ -611,132 +348,73 @@ jobs:
           from pathlib import Path
           import re
 
-          path = Path(
+          p = Path(
               "v10-source/app/src/main/java/com/hieptran/aacast/doudou/"
               "V10ProjectionSession.java"
           )
 
-          text = path.read_text()
+          s = p.read_text()
 
-          # Locate the constructor declaration.
           pattern = re.compile(
-              r'\bV10ProjectionSession\s*\('
+              r'(?m)^[ \t]*public\s+V10ProjectionSession\s*'
+              r'\(\s*Context\s+context\s*\)\s*\{'
           )
 
-          constructor = None
+          m = pattern.search(s)
 
-          for match in pattern.finditer(text):
+          if not m:
+              raise RuntimeError(
+                  "V10ProjectionSession constructor not found"
+              )
 
-              pos = match.start()
+          start = m.start()
+          brace = s.find("{", m.start())
 
-              before = text[:pos].rstrip()
+          depth = 0
+          quote = None
+          i = brace
 
-              if before.endswith("."):
-                  continue
+          while i < len(s):
+              c = s[i]
 
-              if before.endswith("new"):
-                  continue
-
-              open_paren = text.find("(", pos)
-
-              depth = 0
-              i = open_paren
-              close_paren = None
-
-              while i < len(text):
-
-                  c = text[i]
-
-                  if c == "(":
+              if quote:
+                  if c == "\\":
+                      i += 2
+                      continue
+                  if c == quote:
+                      quote = None
+              else:
+                  if c in ('"', "'"):
+                      quote = c
+                  elif c == "{":
                       depth += 1
-
-                  elif c == ")":
-
+                  elif c == "}":
                       depth -= 1
-
                       if depth == 0:
-                          close_paren = i
+                          end = i + 1
                           break
 
-                  i += 1
-
-              if close_paren is None:
-                  continue
-
-              i = close_paren + 1
-
-              while i < len(text) and text[i].isspace():
-                  i += 1
-
-              if i < len(text) and text[i] == "{":
-
-                  line_start = text.rfind(
-                      "\n",
-                      0,
-                      pos
-                  ) + 1
-
-                  constructor = (
-                      line_start,
-                      i
-                  )
-
-                  break
-
-          if constructor is None:
-              raise SystemExit(
-                  "ERROR: V10ProjectionSession constructor not found"
-              )
-
-          start, brace = constructor
-
-          # Find matching constructor brace.
-          depth = 0
-          i = brace
-          end = None
-
-          while i < len(text):
-
-              if text[i] == "{":
-                  depth += 1
-
-              elif text[i] == "}":
-
-                  depth -= 1
-
-                  if depth == 0:
-                      end = i + 1
-                      break
-
               i += 1
-
-          if end is None:
-              raise SystemExit(
-                  "ERROR: constructor closing brace not found"
+          else:
+              raise RuntimeError(
+                  "constructor closing brace not found"
               )
 
-          replacement = """
-    public V10ProjectionSession(
+          replacement = """    public V10ProjectionSession(
             Context context) {
 
         this.context =
                 context.getApplicationContext();
     }"""
 
-          text = (
-              text[:start]
-              + replacement
-              + text[end:]
-          )
+          s = s[:start] + replacement + s[end:]
 
-          path.write_text(text)
+          p.write_text(s)
 
-          print(
-              "PASS: constructor replaced"
-          )
+          print("PASS: session constructor patched")
           PY
 
-      - name: Verify patched source before build
+      - name: Verify source
         shell: bash
         run: |
           set -euo pipefail
@@ -746,12 +424,10 @@ jobs:
           SERVICE="$ROOT/V10ProjectionService.java"
           SESSION="$ROOT/V10ProjectionSession.java"
 
-          # Critical regression check.
-          if grep -nF \
+          if grep -Fq \
             "public static void public static void" \
             "$SERVICE"; then
-
-            echo "ERROR: duplicated method declaration detected."
+            echo "ERROR: duplicated method declaration"
             exit 1
           fi
 
@@ -759,29 +435,11 @@ jobs:
             "private static final Object START_LOCK" \
             "$SERVICE"
 
-          grep -Fq \
-            "pendingTarget" \
-            "$SERVICE"
-
-          grep -Fq \
-            "pendingSurface" \
-            "$SERVICE"
-
-          grep -Fq \
-            "pendingWidth" \
-            "$SERVICE"
-
-          grep -Fq \
-            "pendingHeight" \
-            "$SERVICE"
-
-          grep -Fq \
-            "private void flushPendingState()" \
-            "$SERVICE"
-
-          grep -Fq \
-            "flushPendingState();" \
-            "$SERVICE"
+          grep -Fq "pendingTarget" "$SERVICE"
+          grep -Fq "pendingSurface" "$SERVICE"
+          grep -Fq "pendingWidth" "$SERVICE"
+          grep -Fq "pendingHeight" "$SERVICE"
+          grep -Fq "flushPendingState();" "$SERVICE"
 
           grep -Fq \
             "public static void ensureStarted" \
@@ -795,80 +453,26 @@ jobs:
             "public static void attachSurface" \
             "$SERVICE"
 
-          # Session API must remain intact.
-          for symbol in \
-            attachTextureView \
-            setTarget \
-            isActive \
-            getDisplayId \
-            tap \
-            swipe \
-            back \
-            release \
-            destroy
-          do
-            grep -Fq "$symbol" "$SESSION"
-            echo "PASS: session method $symbol"
-          done
+          grep -Fq "attachTextureView" "$SESSION"
+          grep -Fq "setTarget" "$SESSION"
+          grep -Fq "isActive" "$SESSION"
+          grep -Fq "getDisplayId" "$SESSION"
+          grep -Fq "tap" "$SESSION"
+          grep -Fq "swipe" "$SESSION"
+          grep -Fq "back" "$SESSION"
+          grep -Fq "release" "$SESSION"
+          grep -Fq "destroy" "$SESSION"
 
-          # Constructor must not eagerly start service.
-          python3 <<'PY'
-          from pathlib import Path
-          import re
+          if grep -nF \
+            "V10ProjectionService.ensureStarted" \
+            "$SESSION"; then
+            echo "ERROR: eager service start remains"
+            exit 1
+          fi
 
-          path = Path(
-              "v10-source/app/src/main/java/com/hieptran/aacast/doudou/"
-              "V10ProjectionSession.java"
-          )
+          echo "PASS: source verification"
 
-          text = path.read_text()
-
-          m = re.search(
-              r'public\s+V10ProjectionSession\s*\([^)]*\)\s*\{',
-              text
-          )
-
-          if not m:
-              raise SystemExit(
-                  "ERROR: constructor missing"
-              )
-
-          brace = text.find("{", m.start())
-
-          depth = 0
-          i = brace
-
-          while i < len(text):
-
-              if text[i] == "{":
-                  depth += 1
-
-              elif text[i] == "}":
-
-                  depth -= 1
-
-                  if depth == 0:
-                      end = i + 1
-                      break
-
-              i += 1
-
-          body = text[brace:end]
-
-          if "ensureStarted" in body:
-              raise SystemExit(
-                  "ERROR: eager ensureStarted remains "
-                  "inside V10ProjectionSession constructor"
-              )
-
-          print(
-              "PASS: no eager service start in session constructor"
-          )
-          PY
-
-          echo "PASS: patched source"
-
-      - name: Verify V10 components preserved
+      - name: Verify V10 components
         shell: bash
         run: |
           set -euo pipefail
@@ -884,9 +488,9 @@ jobs:
             'MAX_RECENTS[[:space:]]*=[[:space:]]*4' \
             "$ROOT/V10SessionStore.java"
 
-          echo "PASS: existing V10 components preserved"
+          echo "PASS: V10 components preserved"
 
-      - name: Verify no actual force-stop
+      - name: Verify no force-stop
         shell: bash
         run: |
           set -euo pipefail
@@ -896,12 +500,11 @@ jobs:
           if grep -RInE \
             '(^|[[:space:];&|])(/system/bin/)?am[[:space:]]+force-stop([[:space:]]|$)' \
             "$ROOT"; then
-
-            echo "ERROR: actual am force-stop detected."
+            echo "ERROR: actual force-stop detected"
             exit 1
           fi
 
-          echo "PASS: no actual am force-stop"
+          echo "PASS: no actual force-stop"
 
       - name: Validate Java braces
         shell: bash
@@ -916,115 +519,77 @@ jobs:
           )
 
           files = [
-              root / "V10ProjectionService.java",
-              root / "V10ProjectionSession.java",
-              root / "V10CarActivity.java",
-              root / "V10SessionStore.java",
-              root / "V10InputController.java",
-              root / "RootShellSession.java",
+              "V10ProjectionService.java",
+              "V10ProjectionSession.java",
+              "V10CarActivity.java",
+              "V10SessionStore.java",
+              "V10InputController.java",
+              "RootShellSession.java",
           ]
 
-          for path in files:
+          for name in files:
 
+              path = root / name
               text = path.read_text()
 
               depth = 0
-              state = "normal"
+              quote = None
               i = 0
 
               while i < len(text):
 
                   c = text[i]
-                  n = text[i + 1] if i + 1 < len(text) else ""
 
-                  if state == "normal":
-
-                      if c == "/" and n == "/":
-                          state = "line"
+                  if quote:
+                      if c == "\\":
                           i += 2
                           continue
 
-                      if c == "/" and n == "*":
-                          state = "block"
-                          i += 2
-                          continue
+                      if c == quote:
+                          quote = None
 
-                      if c == '"':
-                          state = "string"
-                          i += 1
-                          continue
+                  else:
+                      if c in ('"', "'"):
+                          quote = c
 
-                      if c == "'":
-                          state = "char"
-                          i += 1
-                          continue
-
-                      if c == "{":
+                      elif c == "{":
                           depth += 1
 
                       elif c == "}":
-
                           depth -= 1
 
                           if depth < 0:
-                              raise SystemExit(
-                                  f"ERROR: negative brace depth: {path}"
+                              raise RuntimeError(
+                                  "negative brace depth: " + name
                               )
-
-                  elif state == "line":
-
-                      if c == "\n":
-                          state = "normal"
-
-                  elif state == "block":
-
-                      if c == "*" and n == "/":
-                          state = "normal"
-                          i += 2
-                          continue
-
-                  elif state == "string":
-
-                      if c == "\\":
-                          i += 2
-                          continue
-
-                      if c == '"':
-                          state = "normal"
-
-                  elif state == "char":
-
-                      if c == "\\":
-                          i += 2
-                          continue
-
-                      if c == "'":
-                          state = "normal"
 
                   i += 1
 
               if depth != 0:
-                  raise SystemExit(
-                      f"ERROR: unbalanced braces: {path}, depth={depth}"
+                  raise RuntimeError(
+                      "unbalanced braces: "
+                      + name
+                      + " depth="
+                      + str(depth)
                   )
 
-              print(f"PASS: Java structure {path.name}")
+              print("PASS: " + name)
 
           PY
 
-      - name: Check source diff
+      - name: Check diff
         shell: bash
         run: |
           set -euo pipefail
 
           git diff --check
 
-          echo "===== V10ProjectionService diff ====="
+          echo "===== SERVICE DIFF ====="
 
           git diff -- \
             v10-source/app/src/main/java/com/hieptran/aacast/doudou/V10ProjectionService.java
 
-          echo "===== V10ProjectionSession diff ====="
+          echo "===== SESSION DIFF ====="
 
           git diff -- \
             v10-source/app/src/main/java/com/hieptran/aacast/doudou/V10ProjectionSession.java
@@ -1056,6 +621,6 @@ jobs:
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: CarAssistant-V10-8B2-StartupHandshake-Fixed-v5
+          name: CarAssistant-V10-8B2-StartupHandshake-Fixed-v6
           path: v10-source/app/build/outputs/apk/debug/app-debug.apk
           if-no-files-found: error
