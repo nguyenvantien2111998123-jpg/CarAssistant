@@ -1,4 +1,4 @@
-name: Build Car Assistant V10 - Home V1 Phone UI Fix V3.4
+name: Build Car Assistant V10 - Home V1 Phone UI V3.5
 
 on:
   workflow_dispatch:
@@ -7,12 +7,12 @@ permissions:
   contents: read
 
 jobs:
-  home-v1-phone-ui-v3:
+  home-v1-phone-ui-v35:
     runs-on: ubuntu-latest
     timeout-minutes: 35
 
     steps:
-      - name: Checkout exact baseline
+      - name: Checkout exact Home V1 baseline
         uses: actions/checkout@v4
         with:
           ref: 0634e1f5ced143fdd931022b32bf9a19cbf6e2bd
@@ -24,14 +24,16 @@ jobs:
           distribution: temurin
           java-version: "17"
 
-      - name: Verify exact source baseline
+      - name: Verify exact baseline and architecture
         shell: bash
         run: |
           set -euo pipefail
 
           FILE="v10-source/app/src/main/java/com/hieptran/aacast/doudou/V10LauncherActivity.java"
+          STORE="v10-source/app/src/main/java/com/hieptran/aacast/doudou/V10SessionStore.java"
 
           test -f "$FILE"
+          test -f "$STORE"
 
           COMMIT="$(git rev-parse HEAD)"
           test "$COMMIT" = "0634e1f5ced143fdd931022b32bf9a19cbf6e2bd"
@@ -40,22 +42,30 @@ jobs:
           test "$BLOB_SHA" = "84d970adbfacc39270838d12ed0a73bc7fa0d645"
 
           grep -Fq 'package com.carassistant.v10;' "$FILE"
-          grep -Fq 'class V10LauncherActivity' "$FILE"
           grep -Fq 'private void buildDashboard()' "$FILE"
+          grep -Fq 'private void buildAppPanel()' "$FILE"
           grep -Fq 'private void loadApps()' "$FILE"
           grep -Fq 'private LinearLayout appTile(' "$FILE"
           grep -Fq 'V10SessionStore.setTarget' "$FILE"
-          grep -Fq 'initial(app.name)' "$FILE"
-          grep -Fq 'private static final class AppInfo' "$FILE"
+
+          grep -Fq 'MAX_RECENTS = 4' "$STORE"
+          grep -Fq 'getRecents(' "$STORE"
+          grep -Fq 'touchRecent(' "$STORE"
+
+          # Core / Persistence files must exist and remain untouched.
+          test -f "v10-source/app/src/main/java/com/hieptran/aacast/doudou/V10CarActivity.java"
+          test -f "v10-source/app/src/main/java/com/hieptran/aacast/doudou/V10ProjectionSession.java"
+          test -f "v10-source/app/src/main/java/com/hieptran/aacast/doudou/RootView.java"
 
           echo "========================================"
           echo "BASELINE VERIFIED"
-          echo "========================================"
           echo "Commit: $COMMIT"
-          echo "Git blob SHA: $BLOB_SHA"
-          echo "Source: $FILE"
+          echo "Launcher blob: $BLOB_SHA"
+          echo "Recent store: MAX_RECENTS=4"
+          echo "Core files present"
+          echo "========================================"
 
-      - name: Patch Home V1 phone UI
+      - name: Patch Home V1 V3.5
         shell: bash
         run: |
           set -euo pipefail
@@ -72,7 +82,6 @@ jobs:
 
           def find_block_end(text, start):
               brace = text.find("{", start)
-
               if brace < 0:
                   raise RuntimeError("Opening brace not found")
 
@@ -113,7 +122,7 @@ jobs:
                       block_comment = True
                       i += 1
 
-                  elif c == '"' or c == "'":
+                  elif c in ("'", '"'):
                       quote = c
 
                   elif c == "{":
@@ -121,7 +130,6 @@ jobs:
 
                   elif c == "}":
                       depth -= 1
-
                       if depth == 0:
                           return i + 1
 
@@ -145,52 +153,76 @@ jobs:
                   + text[end:]
               )
 
-          def replace_once(text, old, new, label):
-              count = text.count(old)
-
-              if count != 1:
+          def add_import(text, anchor, imports):
+              if anchor not in text:
                   raise RuntimeError(
-                      f"{label}: expected 1 match, found {count}"
+                      "Import anchor missing: " + anchor
                   )
 
-              return text.replace(old, new, 1)
+              for imp in imports:
+                  if imp not in text:
+                      text = text.replace(
+                          anchor,
+                          anchor + "\n" + imp,
+                          1
+                      )
+
+              return text
 
           # ==================================================
           # IMPORTS
           # ==================================================
 
-          source = replace_once(
+          source = add_import(
               source,
-              "import android.graphics.Color;\n",
-              "import android.graphics.Canvas;\n"
-              "import android.graphics.Color;\n"
-              "import android.graphics.Paint;\n"
-              "import android.graphics.Path;\n",
-              "graphics imports"
+              "import android.graphics.Color;",
+              [
+                  "import android.graphics.Canvas;",
+                  "import android.graphics.Paint;",
+                  "import android.graphics.Path;"
+              ]
           )
 
-          source = replace_once(
+          source = add_import(
               source,
-              "import android.graphics.drawable.GradientDrawable;\n",
-              "import android.graphics.drawable.Drawable;\n"
-              "import android.graphics.drawable.GradientDrawable;\n",
-              "drawable import"
+              "import android.graphics.drawable.GradientDrawable;",
+              [
+                  "import android.graphics.drawable.Drawable;"
+              ]
           )
 
-          source = replace_once(
+          source = add_import(
               source,
-              "import android.view.Gravity;\n",
-              "import android.view.Gravity;\n"
-              "import android.widget.FrameLayout;\n"
-              "import android.widget.ImageView;\n",
-              "widget imports"
+              "import android.view.Gravity;",
+              [
+                  "import android.widget.FrameLayout;",
+                  "import android.widget.ImageView;"
+              ]
           )
 
           # ==================================================
-          # HOME V1 DASHBOARD
+          # FIELDS
           # ==================================================
 
-          dashboard_method = r'''
+          field_anchor = "    private TextView status;"
+
+          if "private LinearLayout sidebar;" not in source:
+              if field_anchor not in source:
+                  raise RuntimeError("status field anchor missing")
+
+              source = source.replace(
+                  field_anchor,
+                  field_anchor
+                  + "\n    private LinearLayout sidebar;"
+                  + "\n    private GridLayout appGrid;",
+                  1
+              )
+
+          # ==================================================
+          # HOME DASHBOARD
+          # ==================================================
+
+          dashboard = r'''
           private void buildDashboard() {
 
               dashboard.removeAllViews();
@@ -278,10 +310,13 @@ jobs:
                       0,
                       dp(8));
 
+              sidebar =
+                      buildSidebar();
+
               main.addView(
-                      buildSidebar(),
+                      sidebar,
                       new LinearLayout.LayoutParams(
-                              dp(72),
+                              dp(88),
                               -1));
 
               LinearLayout content =
@@ -381,46 +416,86 @@ jobs:
                               0,
                               1f));
 
-              LinearLayout info =
+              # WYN WARNING AREA
+              LinearLayout wyn =
                       new LinearLayout(this);
 
-              info.setOrientation(
+              wyn.setOrientation(
                       LinearLayout.HORIZONTAL);
 
-              info.setPadding(
-                      0,
-                      dp(6),
-                      0,
-                      0);
+              wyn.setGravity(
+                      Gravity.CENTER_VERTICAL);
 
-              info.addView(
-                      infoCard(
-                              "SPEED",
-                              "0 km/h"),
+              wyn.setPadding(
+                      dp(14),
+                      dp(8),
+                      dp(14),
+                      dp(8));
+
+              wyn.setBackground(
+                      roundBg(
+                              Color.rgb(31, 27, 24),
+                              dp(14)));
+
+              TextView wynIcon =
+                      text(
+                              "⚠",
+                              24,
+                              Color.WHITE);
+
+              wynIcon.setGravity(
+                      Gravity.CENTER);
+
+              wyn.addView(
+                      wynIcon,
+                      new LinearLayout.LayoutParams(
+                              dp(42),
+                              dp(52)));
+
+              LinearLayout wynText =
+                      new LinearLayout(this);
+
+              wynText.setOrientation(
+                      LinearLayout.VERTICAL);
+
+              TextView wynTitle =
+                      text(
+                              "WYN",
+                              13,
+                              Color.WHITE);
+
+              wynTitle.setTypeface(
+                      Typeface.DEFAULT,
+                      Typeface.BOLD);
+
+              TextView wynMessage =
+                      text(
+                              "CHƯA CÓ CẢNH BÁO",
+                              15,
+                              Color.WHITE);
+
+              TextView wynSource =
+                      text(
+                              "Nguồn cảnh báo: WYN",
+                              10,
+                              Color.LTGRAY);
+
+              wynText.addView(wynTitle);
+              wynText.addView(wynMessage);
+              wynText.addView(wynSource);
+
+              wyn.addView(
+                      wynText,
                       new LinearLayout.LayoutParams(
                               0,
-                              dp(54),
+                              -2,
                               1f));
 
-              info.addView(
-                      infoCard(
-                              "WEATHER",
-                              "-- °C"),
+              content.addView(
+                      wyn,
                       new LinearLayout.LayoutParams(
-                              0,
-                              dp(54),
-                              1f));
-
-              info.addView(
-                      infoCard(
-                              "MEDIA",
-                              "No media"),
-                      new LinearLayout.LayoutParams(
-                              0,
-                              dp(54),
-                              1f));
-
-              content.addView(info);
+                              -1,
+                              dp(72)));
 
               main.addView(
                       content,
@@ -436,68 +511,62 @@ jobs:
                               0,
                               1f));
 
-              LinearLayout bottom =
+              # MEDIA CONTROL BAR
+              LinearLayout mediaBar =
                       new LinearLayout(this);
 
-              bottom.setGravity(
+              mediaBar.setGravity(
                       Gravity.CENTER_VERTICAL);
 
-              bottom.setPadding(
+              mediaBar.setPadding(
                       dp(6),
                       dp(5),
                       dp(6),
                       dp(5));
 
-              bottom.setBackground(
+              mediaBar.setBackground(
                       roundBg(
                               Color.rgb(18, 24, 32),
                               dp(14)));
 
               TextView previous =
-                      buttonText("◀");
+                      buttonText("◀  LÙI");
 
               TextView next =
-                      buttonText("▶");
+                      buttonText("TỚI  ▶");
 
-              TextView media =
-                      buttonText("♫");
+              TextView mediaInfo =
+                      text(
+                              "♫  MEDIA\nNo media",
+                              11,
+                              Color.WHITE);
 
-              TextView appsButton =
-                      buttonText("▦  APPS");
+              mediaInfo.setGravity(
+                      Gravity.CENTER);
 
-              bottom.addView(
+              mediaInfo.setMaxLines(2);
+
+              mediaBar.addView(
                       previous,
                       new LinearLayout.LayoutParams(
+                              dp(90),
+                              dp(50)));
+
+              mediaBar.addView(
+                      mediaInfo,
+                      new LinearLayout.LayoutParams(
                               0,
-                              dp(48),
+                              dp(50),
                               1f));
 
-              bottom.addView(
+              mediaBar.addView(
                       next,
                       new LinearLayout.LayoutParams(
-                              0,
-                              dp(48),
-                              1f));
-
-              bottom.addView(
-                      media,
-                      new LinearLayout.LayoutParams(
-                              0,
-                              dp(48),
-                              1f));
-
-              bottom.addView(
-                      appsButton,
-                      new LinearLayout.LayoutParams(
-                              0,
-                              dp(48),
-                              2f));
-
-              appsButton.setOnClickListener(
-                      v -> showApps());
+                              dp(90),
+                              dp(50)));
 
               dashboard.addView(
-                      bottom,
+                      mediaBar,
                       new LinearLayout.LayoutParams(
                               -1,
                               dp(60)));
@@ -507,14 +576,203 @@ jobs:
           source = replace_method(
               source,
               "private void buildDashboard()",
-              dashboard_method
+              dashboard
           )
 
           # ==================================================
-          # LOAD APPS - REPLACE ENTIRE METHOD
+          # APP PANEL + TASK PANEL
           # ==================================================
 
-          load_apps_method = r'''
+          panel = r'''
+          private void buildAppPanel() {
+
+              appPanel =
+                      new LinearLayout(this);
+
+              appPanel.setOrientation(
+                      LinearLayout.VERTICAL);
+
+              appPanel.setBackgroundColor(
+                      Color.rgb(7, 9, 12));
+
+              appPanel.setVisibility(
+                      View.GONE);
+
+              root.addView(
+                      appPanel,
+                      new LinearLayout.LayoutParams(
+                              -1,
+                              -1));
+
+              rebuildPanel(false);
+          }
+
+          private void rebuildPanel(
+                  boolean tasks) {
+
+              appPanel.removeAllViews();
+
+              LinearLayout header =
+                      new LinearLayout(this);
+
+              header.setGravity(
+                      Gravity.CENTER_VERTICAL);
+
+              TextView back =
+                      buttonText("BACK");
+
+              back.setOnClickListener(
+                      v -> hideApps());
+
+              header.addView(
+                      back,
+                      new LinearLayout.LayoutParams(
+                              dp(90),
+                              dp(58)));
+
+              TextView title =
+                      text(
+                              tasks
+                                      ? "TASKS"
+                                      : "APPLICATIONS",
+                              21,
+                              Color.WHITE);
+
+              title.setGravity(
+                      Gravity.CENTER);
+
+              header.addView(
+                      title,
+                      new LinearLayout.LayoutParams(
+                              0,
+                              dp(58),
+                              1f));
+
+              appPanel.addView(header);
+
+              ScrollView scroll =
+                      new ScrollView(this);
+
+              if (tasks) {
+
+                  LinearLayout list =
+                          new LinearLayout(this);
+
+                  list.setOrientation(
+                          LinearLayout.VERTICAL);
+
+                  list.setPadding(
+                          dp(8),
+                          dp(8),
+                          dp(8),
+                          dp(8));
+
+                  List<ComponentName> recents =
+                          V10SessionStore.getRecents(
+                                  this);
+
+                  if (recents.isEmpty()) {
+
+                      list.addView(
+                              text(
+                                      "Chưa có task được CarAssistant quản lý.",
+                                      14,
+                                      Color.LTGRAY));
+
+                  } else {
+
+                      for (
+                              ComponentName component :
+                              recents) {
+
+                          TextView row =
+                                  buttonText(
+                                          labelFor(component)
+                                                  + "\n"
+                                                  + "Managed background task");
+
+                          row.setGravity(
+                                  Gravity.CENTER_VERTICAL);
+
+                          row.setPadding(
+                                  dp(14),
+                                  0,
+                                  dp(14),
+                                  0);
+
+                          row.setOnClickListener(
+                                  v -> {
+
+                                      V10SessionStore
+                                              .setTarget(
+                                                      this,
+                                                      component);
+
+                                      hideApps();
+                                      refreshSidebar();
+                                  });
+
+                          list.addView(
+                                  row,
+                                  new LinearLayout.LayoutParams(
+                                          -1,
+                                          dp(66)));
+                      }
+                  }
+
+                  scroll.addView(list);
+
+              } else {
+
+                  status =
+                          text(
+                                  "Select an application",
+                                  12,
+                                  Color.LTGRAY);
+
+                  status.setGravity(
+                          Gravity.CENTER_VERTICAL);
+
+                  appPanel.addView(
+                          status,
+                          new LinearLayout.LayoutParams(
+                                  -1,
+                                  dp(38)));
+
+                  appGrid =
+                          new GridLayout(this);
+
+                  appGrid.setColumnCount(4);
+
+                  appGrid.setUseDefaultMargins(false);
+
+                  scroll.addView(appGrid);
+              }
+
+              appPanel.addView(
+                      scroll,
+                      new LinearLayout.LayoutParams(
+                              -1,
+                              0,
+                              1f));
+
+              if (!tasks) {
+                  rebuildAppGrid(appGrid);
+              }
+          }
+          '''
+
+          source = replace_method(
+              source,
+              "private void buildAppPanel()",
+              panel
+          )
+
+          # ==================================================
+          # LOAD APPS
+          # ==================================================
+
+          load_apps = r'''
           private void loadApps() {
 
               apps.clear();
@@ -532,7 +790,8 @@ jobs:
                                       intent,
                                       0);
 
-              for (ResolveInfo info : result) {
+              for (ResolveInfo info :
+                      result) {
 
                   if (info == null ||
                           info.activityInfo == null) {
@@ -578,23 +837,64 @@ jobs:
                               a.name.compareToIgnoreCase(
                                       b.name));
 
-              rebuildDock();
-
-              rebuildGridFromPanel();
+              rebuildAppGrid(appGrid);
+              refreshSidebar();
           }
           '''
 
           source = replace_method(
               source,
               "private void loadApps()",
-              load_apps_method
+              load_apps
           )
 
           # ==================================================
-          # APP TILE - REAL ICON
+          # APP GRID
           # ==================================================
 
-          app_tile = r'''
+          grid_method = r'''
+          private void rebuildGridFromPanel() {
+
+              rebuildAppGrid(appGrid);
+          }
+
+          private void rebuildAppGrid(
+                  GridLayout grid) {
+
+              if (grid == null) {
+                  return;
+              }
+
+              grid.removeAllViews();
+
+              for (AppInfo app : apps) {
+
+                  LinearLayout tile =
+                          appTile(app);
+
+                  GridLayout.LayoutParams params =
+                          new GridLayout.LayoutParams();
+
+                  params.width = 0;
+                  params.height = dp(105);
+
+                  params.columnSpec =
+                          GridLayout.spec(
+                                  GridLayout.UNDEFINED,
+                                  1f);
+
+                  params.setMargins(
+                          dp(5),
+                          dp(5),
+                          dp(5),
+                          dp(5));
+
+                  grid.addView(
+                          tile,
+                          params);
+              }
+          }
+
           private LinearLayout appTile(
                   AppInfo app) {
 
@@ -622,8 +922,7 @@ jobs:
                       new ImageView(this);
 
               if (app.icon != null) {
-                  icon.setImageDrawable(
-                          app.icon);
+                  icon.setImageDrawable(app.icon);
               } else {
                   icon.setImageDrawable(
                           getPackageManager()
@@ -665,91 +964,89 @@ jobs:
 
           source = replace_method(
               source,
-              "private LinearLayout appTile(",
-              app_tile
+              "private void rebuildGridFromPanel()",
+              grid_method
           )
 
           # ==================================================
-          # REMOVE OLD INITIAL LETTER ICON METHOD
+          # SELECT APP
           # ==================================================
 
-          if "private String initial(" in source:
-              source = replace_method(
-                  source,
-                  "private String initial(",
-                  ""
-              )
+          select = r'''
+          private void selectApp(
+                  AppInfo app) {
 
-          if "initial(app.name)" in source:
-              raise RuntimeError(
-                  "Old initial-letter icon call remains"
-              )
+              V10SessionStore.setTarget(
+                      this,
+                      app.component);
 
-          # ==================================================
-          # APP MODEL
-          # ==================================================
-
-          app_model = r'''
-          private static final class AppInfo {
-
-              final ComponentName component;
-
-              final String name;
-
-              final Drawable icon;
-
-              AppInfo(
-                      ComponentName component,
-                      String name,
-                      Drawable icon) {
-
-                  this.component =
-                          component;
-
-                  this.name =
-                          name;
-
-                  this.icon =
-                          icon;
+              if (status != null) {
+                  status.setText(
+                          "Selected: "
+                                  + app.name);
               }
+
+              refreshSidebar();
           }
           '''
 
           source = replace_method(
               source,
-              "private static final class AppInfo",
-              app_model
+              "private void selectApp(",
+              select
           )
 
           # ==================================================
-          # SIDEBAR + MAP BACKGROUND
+          # SHOW / HIDE
           # ==================================================
 
-          marker = (
-              "    // ====================================================\n"
-              "    // UI HELPERS\n"
+          source = replace_method(
+              source,
+              "private void showApps()",
+              r'''
+          private void showApps() {
+
+              dashboard.setVisibility(
+                      View.GONE);
+
+              appPanel.setVisibility(
+                      View.VISIBLE);
+
+              rebuildPanel(false);
+              loadApps();
+          }
+          '''
           )
+
+          source = replace_method(
+              source,
+              "private void hideApps()",
+              r'''
+          private void hideApps() {
+
+              appPanel.setVisibility(
+                      View.GONE);
+
+              dashboard.setVisibility(
+                      View.VISIBLE);
+
+              refreshSidebar();
+          }
+          '''
+          )
+
+          # ==================================================
+          # ADD TASKS + RECENT SIDEBAR
+          # ==================================================
+
+          marker = "    // ====================================================\n    // UI HELPERS"
 
           if source.count(marker) != 1:
               raise RuntimeError(
                   "UI HELPERS marker not found exactly once"
               )
 
-          helpers = r'''
-          private GradientDrawable roundBg(
-                  int color,
-                  float radius) {
-
-              GradientDrawable bg =
-                      new GradientDrawable();
-
-              bg.setColor(color);
-
-              bg.setCornerRadius(radius);
-
-              return bg;
-          }
-
+          sidebar_helpers = r'''
           private LinearLayout buildSidebar() {
 
               LinearLayout side =
@@ -774,30 +1071,159 @@ jobs:
 
               side.addView(
                       sideButton(
-                              "☰",
-                              "Menu"));
+                              "▦",
+                              "APPS"));
 
-              side.addView(
-                      sideButton(
-                              "⌖",
-                              "Map"));
+              List<ComponentName> recents =
+                      V10SessionStore.getRecents(
+                              this);
 
-              side.addView(
-                      sideButton(
-                              "▣",
-                              "Files"));
+              for (int i = 0; i < 3; i++) {
 
-              side.addView(
-                      sideButton(
-                              "⚙",
-                              "Settings"));
+                  ComponentName component =
+                          i < recents.size()
+                                  ? recents.get(i)
+                                  : null;
 
-              side.addView(
+                  side.addView(
+                          recentButton(
+                                  component,
+                                  i + 1));
+              }
+
+              TextView tasks =
                       sideButton(
-                              "⋮",
-                              "More"));
+                              "▤",
+                              "TASKS");
+
+              tasks.setOnClickListener(
+                      v -> showTasks());
+
+              side.addView(tasks);
 
               return side;
+          }
+
+          private void refreshSidebar() {
+
+              if (sidebar == null) {
+                  return;
+              }
+
+              ViewGroup parent =
+                      (ViewGroup) sidebar.getParent();
+
+              if (parent == null) {
+                  return;
+              }
+
+              int index =
+                      parent.indexOfChild(sidebar);
+
+              parent.removeViewAt(index);
+
+              sidebar =
+                      buildSidebar();
+
+              parent.addView(
+                      sidebar,
+                      index,
+                      new LinearLayout.LayoutParams(
+                              dp(88),
+                              -1));
+          }
+
+          private TextView recentButton(
+                  ComponentName component,
+                  int index) {
+
+              String label;
+
+              if (component == null) {
+
+                  label =
+                          "RECENT "
+                                  + index
+                                  + "\n—";
+
+              } else {
+
+                  label =
+                          "RECENT "
+                                  + index
+                                  + "\n"
+                                  + labelFor(component);
+              }
+
+              TextView view =
+                      sideButton(
+                              "●",
+                              label);
+
+              if (component != null) {
+
+                  view.setOnClickListener(
+                          v -> {
+
+                              V10SessionStore
+                                      .setTarget(
+                                              this,
+                                              component);
+
+                              refreshSidebar();
+
+                              if (status != null) {
+                                  status.setText(
+                                          "Selected: "
+                                                  + labelFor(
+                                                          component));
+                              }
+                          });
+              }
+
+              return view;
+          }
+
+          private String labelFor(
+                  ComponentName component) {
+
+              if (component == null) {
+                  return "—";
+              }
+
+              try {
+
+                  android.content.pm.ActivityInfo info =
+                          getPackageManager()
+                                  .getActivityInfo(
+                                          component,
+                                          0);
+
+                  CharSequence label =
+                          info.loadLabel(
+                                  getPackageManager());
+
+                  if (label != null &&
+                          label.length() > 0) {
+
+                      return label.toString();
+                  }
+
+              } catch (Exception ignored) {
+              }
+
+              return component.getPackageName();
+          }
+
+          private void showTasks() {
+
+              dashboard.setVisibility(
+                      View.GONE);
+
+              appPanel.setVisibility(
+                      View.VISIBLE);
+
+              rebuildPanel(true);
           }
 
           private TextView sideButton(
@@ -806,7 +1232,9 @@ jobs:
 
               TextView view =
                       text(
-                              icon + "\n" + label,
+                              icon
+                                      + "\n"
+                                      + label,
                               10,
                               Color.WHITE);
 
@@ -824,27 +1252,69 @@ jobs:
                               Color.TRANSPARENT,
                               dp(10)));
 
-              view.setOnClickListener(
-                      v -> {
-
-                          if ("Files".equals(label)) {
-
-                              showApps();
-
-                          } else if (status != null) {
-
-                              status.setText(label);
-                          }
-                      });
-
               view.setLayoutParams(
                       new LinearLayout.LayoutParams(
                               -1,
                               dp(62)));
 
+              if ("APPS".equals(label)) {
+
+                  view.setOnClickListener(
+                          v -> showApps());
+
+              }
+
               return view;
           }
 
+          private GradientDrawable roundBg(
+                  int color,
+                  float radius) {
+
+              GradientDrawable bg =
+                      new GradientDrawable();
+
+              bg.setColor(color);
+              bg.setCornerRadius(radius);
+
+              return bg;
+          }
+
+          private LinearLayout card() {
+
+              LinearLayout box =
+                      new LinearLayout(this);
+
+              box.setOrientation(
+                      LinearLayout.VERTICAL);
+
+              box.setPadding(
+                      dp(14),
+                      dp(10),
+                      dp(14),
+                      dp(10));
+
+              box.setBackground(
+                      roundBg(
+                              Color.rgb(22, 27, 33),
+                              dp(18)));
+
+              return box;
+          }
+
+          '''
+
+          source = source.replace(
+              marker,
+              sidebar_helpers + marker,
+              1
+          )
+
+          # ==================================================
+          # MAP BACKGROUND
+          # ==================================================
+
+          map_background = r'''
           private final class MapBackground
                   extends View {
 
@@ -867,8 +1337,7 @@ jobs:
                                   40,
                                   47));
 
-                  grid.setStrokeWidth(
-                          dp(1));
+                  grid.setStrokeWidth(dp(1));
 
                   road.setColor(
                           Color.rgb(
@@ -879,8 +1348,7 @@ jobs:
                   road.setStyle(
                           Paint.Style.STROKE);
 
-                  road.setStrokeWidth(
-                          dp(12));
+                  road.setStrokeWidth(dp(12));
 
                   road.setStrokeCap(
                           Paint.Cap.ROUND);
@@ -971,8 +1439,55 @@ jobs:
 
           source = source.replace(
               marker,
-              helpers + marker,
+              map_background + marker,
               1
+          )
+
+          # ==================================================
+          # REMOVE OLD INITIAL METHOD
+          # ==================================================
+
+          if "private String initial(" in source:
+              source = replace_method(
+                  source,
+                  "private String initial(",
+                  ""
+              )
+
+          # ==================================================
+          # APP MODEL
+          # ==================================================
+
+          app_model = r'''
+          private static final class AppInfo {
+
+              final ComponentName component;
+
+              final String name;
+
+              final Drawable icon;
+
+              AppInfo(
+                      ComponentName component,
+                      String name,
+                      Drawable icon) {
+
+                  this.component =
+                          component;
+
+                  this.name =
+                          name;
+
+                  this.icon =
+                          icon;
+              }
+          }
+          '''
+
+          source = replace_method(
+              source,
+              "private static final class AppInfo",
+              app_model
           )
 
           if source == original:
@@ -986,19 +1501,13 @@ jobs:
           )
 
           print(
-              "Home V1 phone UI V3.4 patch completed."
+              "Home V1 V3.5 patch completed."
           )
           PY
 
-          # ================================================
-          # CLEAN GENERATED SOURCE BEFORE STRICT CHECK
-          # ================================================
-
           sed -i 's/[[:space:]]\+$//' "$FILE"
 
-          echo "Trailing whitespace cleaned."
-
-      - name: Verify patched Java source
+      - name: Verify Home V1 only
         shell: bash
         run: |
           set -euo pipefail
@@ -1007,65 +1516,92 @@ jobs:
 
           test -f "$FILE"
 
-          grep -Fq 'package com.carassistant.v10;' "$FILE"
-          grep -Fq 'import android.graphics.Canvas;' "$FILE"
-          grep -Fq 'import android.graphics.Paint;' "$FILE"
-          grep -Fq 'import android.graphics.Path;' "$FILE"
-          grep -Fq 'import android.graphics.drawable.Drawable;' "$FILE"
-          grep -Fq 'import android.widget.FrameLayout;' "$FILE"
-          grep -Fq 'import android.widget.ImageView;' "$FILE"
+          # Required V3.5 UI
+          grep -Fq 'private LinearLayout sidebar;' "$FILE"
+          grep -Fq 'private GridLayout appGrid;' "$FILE"
+          grep -Fq '"APPS"' "$FILE"
+          grep -Fq '"RECENT "' "$FILE"
+          grep -Fq '"TASKS"' "$FILE"
+          grep -Fq 'V10SessionStore.getRecents' "$FILE"
+          grep -Fq 'private void showTasks()' "$FILE"
+          grep -Fq '"WYN"' "$FILE"
+          grep -Fq '"CHƯA CÓ CẢNH BÁO"' "$FILE"
+          grep -Fq '"Nguồn cảnh báo: WYN"' "$FILE"
+          grep -Fq '"◀  LÙI"' "$FILE"
+          grep -Fq '"TỚI  ▶"' "$FILE"
+          grep -Fq '"♫  MEDIA' "$FILE"
 
-          grep -Fq 'private LinearLayout buildSidebar()' "$FILE"
-          grep -Fq 'class MapBackground' "$FILE"
-          grep -Fq 'private void loadApps()' "$FILE"
+          # Real app icons from V3.4 must remain.
           grep -Fq 'info.loadIcon(' "$FILE"
+          grep -Fq 'ImageView icon' "$FILE"
           grep -Fq 'final Drawable icon' "$FILE"
-          grep -Fq 'new AppInfo(' "$FILE"
-          grep -Fq 'V10SessionStore.setTarget' "$FILE"
 
+          # Old dashboard cards must be gone.
+          if grep -Fq '"SPEED"' "$FILE"; then
+            echo "ERROR: SPEED card remains."
+            exit 1
+          fi
+
+          if grep -Fq '"WEATHER"' "$FILE"; then
+            echo "ERROR: WEATHER card remains."
+            exit 1
+          fi
+
+          # Old APPS bottom-dock behavior must be gone.
+          if grep -Fq 'TextView appsButton' "$FILE"; then
+            echo "ERROR: old bottom APPS button remains."
+            exit 1
+          fi
+
+          # Old fake letter icon implementation must be gone.
           if grep -Fq 'initial(app.name)' "$FILE"; then
-              echo "ERROR: old initial(app.name) still exists"
-              exit 1
+            echo "ERROR: old initial icon call remains."
+            exit 1
           fi
 
           if grep -Fq 'private String initial(' "$FILE"; then
-              echo "ERROR: old initial() method still exists"
-              exit 1
+            echo "ERROR: old initial() method remains."
+            exit 1
           fi
 
-          APPINFO_COUNT="$(
-              grep -c 'private static final class AppInfo' "$FILE"
-          )"
+          # Exactly one of each critical method.
+          test "$(grep -c 'private void buildDashboard()' "$FILE")" = "1"
+          test "$(grep -c 'private void buildAppPanel()' "$FILE")" = "1"
+          test "$(grep -c 'private void loadApps()' "$FILE")" = "1"
+          test "$(grep -c 'private void showTasks()' "$FILE")" = "1"
+          test "$(grep -c 'private LinearLayout appTile(' "$FILE")" = "1"
+          test "$(grep -c 'private static final class AppInfo' "$FILE")" = "1"
 
-          test "$APPINFO_COUNT" = "1"
+          # Core / Persistence protection.
+          git diff --name-only > /tmp/changed.txt
 
-          APP_TILE_COUNT="$(
-              grep -c 'private LinearLayout appTile(' "$FILE"
-          )"
+          echo "Changed files:"
+          cat /tmp/changed.txt
 
-          test "$APP_TILE_COUNT" = "1"
+          test "$(wc -l < /tmp/changed.txt | tr -d ' ')" = "1"
+          grep -Fxq \
+            "v10-source/app/src/main/java/com/hieptran/aacast/doudou/V10LauncherActivity.java" \
+            /tmp/changed.txt
 
-          LOAD_APPS_COUNT="$(
-              grep -c 'private void loadApps()' "$FILE"
-          )"
-
-          test "$LOAD_APPS_COUNT" = "1"
-
-          DASHBOARD_COUNT="$(
-              grep -c 'private void buildDashboard()' "$FILE"
-          )"
-
-          test "$DASHBOARD_COUNT" = "1"
-
-          grep -Fq 'apps.add(' "$FILE"
-          grep -Fq 'component,' "$FILE"
-          grep -Fq 'name,' "$FILE"
-          grep -Fq 'icon));' "$FILE"
+          for protected in \
+            "v10-source/app/src/main/java/com/hieptran/aacast/doudou/V10CarActivity.java" \
+            "v10-source/app/src/main/java/com/hieptran/aacast/doudou/V10ProjectionService.java" \
+            "v10-source/app/src/main/java/com/hieptran/aacast/doudou/V10ProjectionSession.java" \
+            "v10-source/app/src/main/java/com/hieptran/aacast/doudou/RootView.java" \
+            "v10-source/app/src/main/java/com/hieptran/aacast/doudou/V10SessionStore.java"
+          do
+            if grep -Fxq "$protected" /tmp/changed.txt; then
+              echo "ERROR: Protected file changed: $protected"
+              exit 1
+            fi
+          done
 
           git diff --check
 
           echo "========================================"
-          echo "PATCH SOURCE CHECK: PASS"
+          echo "HOME V1 V3.5 STATIC CHECK: PASS"
+          echo "Only V10LauncherActivity.java changed."
+          echo "Core / Projection / Persistence untouched."
           echo "========================================"
 
       - name: Compile Java
@@ -1109,24 +1645,22 @@ jobs:
           test -n "$APK"
           test -f "$APK"
 
-          echo "APK=$APK"
-
           mkdir -p release-apk
 
           cp \
             "$APK" \
-            release-apk/CarAssistant-V10-Home-V1-Phone-UI-V3.4-debug.apk
+            release-apk/CarAssistant-V10-Home-V1-Phone-UI-V3.5-debug.apk
 
           sha256sum \
-            release-apk/CarAssistant-V10-Home-V1-Phone-UI-V3.4-debug.apk
+            release-apk/CarAssistant-V10-Home-V1-Phone-UI-V3.5-debug.apk
 
           ls -lh \
-            release-apk/CarAssistant-V10-Home-V1-Phone-UI-V3.4-debug.apk
+            release-apk/CarAssistant-V10-Home-V1-Phone-UI-V3.5-debug.apk
 
-      - name: Upload debug APK
+      - name: Upload V3.5 APK
         uses: actions/upload-artifact@v4
         with:
-          name: CarAssistant-V10-Home-V1-Phone-UI-V3.4-debug
-          path: release-apk/CarAssistant-V10-Home-V1-Phone-UI-V3.4-debug.apk
+          name: CarAssistant-V10-Home-V1-Phone-UI-V3.5-debug
+          path: release-apk/CarAssistant-V10-Home-V1-Phone-UI-V3.5-debug.apk
           if-no-files-found: error
           retention-days: 14
