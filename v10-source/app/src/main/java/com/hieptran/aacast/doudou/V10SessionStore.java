@@ -4,85 +4,55 @@ import android.content.ComponentName;
 import android.content.Context;
 import android.content.SharedPreferences;
 
-import java.util.ArrayList;
-import java.util.List;
-
 public final class V10SessionStore {
 
-    private static final String PREFS = "v10_session";
+    private static final String PREFS =
+            "v10_session";
 
-    private static final String KEY_TARGET =
+    private static final String TARGET =
             "target_component";
 
-    private static final String KEY_RECENT_PREFIX =
-            "recent_";
-
-    private static final int MAX_RECENTS = 4;
     private static volatile V10CarActivity currentActivity;
 
     private V10SessionStore() {
     }
 
-    public static void setCurrentActivity(
-        V10CarActivity activity) {
+    private static SharedPreferences prefs(
+            Context context) {
 
-    currentActivity = activity;
-}
-
-public static V10CarActivity getCurrentActivity() {
-
-    return currentActivity;
-}
-
-public static void clearCurrentActivity(
-        V10CarActivity activity) {
-
-    if (currentActivity == activity) {
-        currentActivity = null;
+        return context.getSharedPreferences(
+                PREFS,
+                Context.MODE_PRIVATE);
     }
-}
+
     public static void setTarget(
             Context context,
             ComponentName component) {
 
-        if (context == null || component == null) {
-            return;
+        SharedPreferences.Editor editor =
+                prefs(context).edit();
+
+        if (component == null) {
+            editor.remove(TARGET);
+        } else {
+            editor.putString(
+                    TARGET,
+                    component.flattenToString());
         }
 
-        SharedPreferences prefs =
-                context.getSharedPreferences(
-                        PREFS,
-                        Context.MODE_PRIVATE);
-
-        prefs.edit()
-                .putString(
-                        KEY_TARGET,
-                        component.flattenToString())
-                .apply();
-
-        touchRecent(
-                context,
-                component);
+        editor.apply();
     }
 
     public static ComponentName getTarget(
             Context context) {
 
-        if (context == null) {
-            return null;
-        }
-
-        SharedPreferences prefs =
-                context.getSharedPreferences(
-                        PREFS,
-                        Context.MODE_PRIVATE);
-
         String value =
-                prefs.getString(
-                        KEY_TARGET,
+                prefs(context).getString(
+                        TARGET,
                         null);
 
-        if (value == null || value.isEmpty()) {
+        if (value == null ||
+                value.isEmpty()) {
             return null;
         }
 
@@ -93,161 +63,28 @@ public static void clearCurrentActivity(
     public static void clearTarget(
             Context context) {
 
-        if (context == null) {
-            return;
-        }
-
-        context.getSharedPreferences(
-                        PREFS,
-                        Context.MODE_PRIVATE)
+        prefs(context)
                 .edit()
-                .remove(KEY_TARGET)
+                .remove(TARGET)
                 .apply();
     }
 
-    public static void touchRecent(
-            Context context,
-            ComponentName component) {
+    public static void setCurrentActivity(
+            V10CarActivity activity) {
 
-        if (context == null || component == null) {
-            return;
-        }
-
-        List<String> current =
-                readRecentStrings(context);
-
-        String value =
-                component.flattenToString();
-
-        current.remove(value);
-        current.add(0, value);
-
-        while (current.size() > MAX_RECENTS) {
-            current.remove(
-                    current.size() - 1);
-        }
-
-        SharedPreferences.Editor editor =
-                context.getSharedPreferences(
-                        PREFS,
-                        Context.MODE_PRIVATE)
-                        .edit();
-
-        for (int i = 0;
-                i < MAX_RECENTS;
-                i++) {
-
-            String key =
-                    KEY_RECENT_PREFIX + i;
-
-            if (i < current.size()) {
-                editor.putString(
-                        key,
-                        current.get(i));
-            } else {
-                editor.remove(key);
-            }
-        }
-
-        editor.apply();
+        currentActivity = activity;
     }
 
-    public static List<ComponentName> getRecents(
-            Context context) {
+    public static V10CarActivity getCurrentActivity() {
 
-        List<ComponentName> result =
-                new ArrayList<>();
-
-        if (context == null) {
-            return result;
-        }
-
-        for (String value :
-                readRecentStrings(context)) {
-
-            ComponentName component =
-                    ComponentName.unflattenFromString(
-                            value);
-
-            if (component != null) {
-                result.add(component);
-            }
-        }
-
-        return result;
+        return currentActivity;
     }
 
-    public static boolean isRecent(
-            Context context,
-            ComponentName component) {
+    public static void clearCurrentActivity(
+            V10CarActivity activity) {
 
-        if (context == null || component == null) {
-            return false;
+        if (currentActivity == activity) {
+            currentActivity = null;
         }
-
-        String value =
-                component.flattenToString();
-
-        return readRecentStrings(context)
-                .contains(value);
-    }
-
-    public static void clearRecents(
-            Context context) {
-
-        if (context == null) {
-            return;
-        }
-
-        SharedPreferences.Editor editor =
-                context.getSharedPreferences(
-                        PREFS,
-                        Context.MODE_PRIVATE)
-                        .edit();
-
-        for (int i = 0;
-                i < MAX_RECENTS;
-                i++) {
-
-            editor.remove(
-                    KEY_RECENT_PREFIX + i);
-        }
-
-        editor.apply();
-    }
-
-    private static List<String> readRecentStrings(
-            Context context) {
-
-        List<String> result =
-                new ArrayList<>();
-
-        if (context == null) {
-            return result;
-        }
-
-        SharedPreferences prefs =
-                context.getSharedPreferences(
-                        PREFS,
-                        Context.MODE_PRIVATE);
-
-        for (int i = 0;
-                i < MAX_RECENTS;
-                i++) {
-
-            String value =
-                    prefs.getString(
-                            KEY_RECENT_PREFIX + i,
-                            null);
-
-            if (value != null
-                    && !value.isEmpty()
-                    && !result.contains(value)) {
-
-                result.add(value);
-            }
-        }
-
-        return result;
     }
 }

@@ -2,6 +2,11 @@
 package com.carassistant.v10;
 
 import android.content.ComponentName;
+import android.content.SharedPreferences;
+import android.os.SystemClock;
+import android.view.MotionEvent;
+import android.view.ViewConfiguration;
+import android.view.ViewGroup;
 import android.content.Intent;
 import android.content.pm.ResolveInfo;
 import android.graphics.Color;
@@ -40,9 +45,22 @@ public final class V10CarActivity
     private LinearLayout launcherLayer;
     private LinearLayout dashboard;
     private LinearLayout appPanel;
-    private LinearLayout bottomBar;
+    private LinearLayout dock;
     private TextureView textureView;
     private V10ProjectionSession session;
+
+    private TextView floatingTouchKey;
+    private LinearLayout floatingMenu;
+
+    private boolean floatingDragging;
+    private float floatingDownRawX;
+    private float floatingDownRawY;
+    private int floatingStartX;
+    private int floatingStartY;
+    private long floatingDownTime;
+
+    private TextView clock;
+    private TextView date;
 
     private boolean resumed;
 
@@ -55,6 +73,8 @@ public final class V10CarActivity
             new Runnable() {
                 @Override
                 public void run() {
+                    updateClock();
+
                     if (resumed) {
                         handler.postDelayed(
                                 this,
@@ -136,6 +156,7 @@ public final class V10CarActivity
         }
 
         loadApps();
+        rebuildDock();
 
         handler.removeCallbacks(
                 clockTicker);
@@ -185,10 +206,10 @@ public final class V10CarActivity
                 LinearLayout.VERTICAL);
 
         launcherLayer.setPadding(
-                dp(10),
-                dp(10),
-                dp(10),
-                dp(10));
+                dp(18),
+                dp(12),
+                dp(18),
+                dp(8));
 
         root.addView(
                 launcherLayer,
@@ -196,17 +217,19 @@ public final class V10CarActivity
                         -1,
                         -1));
 
-        buildMainLayout();
+        buildDashboard();
         buildAppPanel();
 
         setContentView(root);
     }
 
-    private void buildMainLayout() {
+    private void buildDashboard() {
 
-        dashboard = new LinearLayout(this);
-        dashboard.setOrientation(LinearLayout.HORIZONTAL);
-        dashboard.setBackgroundColor(Color.TRANSPARENT);
+        dashboard =
+                new LinearLayout(this);
+
+        dashboard.setOrientation(
+                LinearLayout.VERTICAL);
 
         launcherLayer.addView(
                 dashboard,
@@ -214,374 +237,176 @@ public final class V10CarActivity
                         -1,
                         -1));
 
-        LinearLayout sidebar =
+        LinearLayout header =
                 new LinearLayout(this);
 
-        sidebar.setOrientation(
-                LinearLayout.VERTICAL);
-        sidebar.setPadding(
-                dp(8),
-                dp(8),
-                dp(8),
-                dp(8));
-        sidebar.setGravity(Gravity.CENTER_VERTICAL);
+        header.setGravity(
+                Gravity.CENTER_VERTICAL);
 
-        GradientDrawable sideBg =
-                new GradientDrawable();
-
-        sideBg.setColor(
-                Color.argb(
-                        80,
-                        18,
-                        24,
-                        31));
-        sideBg.setCornerRadius(
-                dp(18));
-
-        sidebar.setBackground(
-                sideBg);
-
-        TextView menuAppsBtn =
-                sidebarButton("📱");
-        menuAppsBtn.setOnClickListener(v -> showApps());
-        sidebar.addView(
-                menuAppsBtn,
-                new LinearLayout.LayoutParams(
-                        -1,
-                        dp(50)));
-
-        sidebar.addView(
-                spacer(dp(8)),
-                new LinearLayout.LayoutParams(
-                        -1,
-                        dp(8)));
-
-        for (int i = 0; i < 3; i++) {
-            TextView favApp =
-                    sidebarButton("⭐");
-            favApp.setOnClickListener(v -> {
-                // Load favorite app at index
-            });
-            sidebar.addView(
-                    favApp,
-                    new LinearLayout.LayoutParams(
-                            -1,
-                            dp(50)));
-
-            if (i < 2) {
-                sidebar.addView(
-                        spacer(dp(6)),
-                        new LinearLayout.LayoutParams(
-                                -1,
-                                dp(6)));
-            }
-        }
-
-        sidebar.addView(
-                spacer(dp(12)),
-                new LinearLayout.LayoutParams(
-                        -1,
-                        dp(12)));
-
-        TextView voiceBtn =
-                sidebarButton("🎤");
-        voiceBtn.setOnClickListener(v -> {
-            // Handle voice assistant
-        });
-        sidebar.addView(
-                voiceBtn,
-                new LinearLayout.LayoutParams(
-                        -1,
-                        dp(50)));
-
-        sidebar.addView(
-                spacer(dp(8)),
-                new LinearLayout.LayoutParams(
-                        -1,
-                        dp(8)));
-
-        TextView tasksBtn =
-                sidebarButton("📋");
-        tasksBtn.setOnClickListener(v -> {
-            // Show running apps
-        });
-        sidebar.addView(
-                tasksBtn,
-                new LinearLayout.LayoutParams(
-                        -1,
-                        dp(50)));
-
-        dashboard.addView(
-                sidebar,
-                new LinearLayout.LayoutParams(
-                        dp(80),
-                        -1));
-
-        LinearLayout centerStage =
+        LinearLayout titleBox =
                 new LinearLayout(this);
 
-        centerStage.setOrientation(
+        titleBox.setOrientation(
                 LinearLayout.VERTICAL);
 
-        LinearLayout mapBox =
-                new LinearLayout(this);
-
-        mapBox.setOrientation(
-                LinearLayout.VERTICAL);
-        mapBox.setPadding(
-                dp(16),
-                dp(16),
-                dp(16),
-                dp(16));
-
-        GradientDrawable mapBg =
-                new GradientDrawable();
-
-        mapBg.setColor(
-                Color.argb(
-                        120,
-                        10,
-                        14,
-                        18));
-        mapBg.setCornerRadius(
-                dp(20));
-        mapBg.setStroke(
-                dp(1),
-                Color.argb(
-                        100,
-                        141,
-                        156,
-                        168));
-
-        mapBox.setBackground(
-                mapBg);
-
-        TextView mapLabel =
+        TextView title =
                 text(
-                        "NAVIGATION",
-                        10,
+                        "CAR ASSISTANT",
+                        21,
+                        Color.WHITE);
+
+        title.setTypeface(
+                Typeface.DEFAULT,
+                Typeface.BOLD);
+
+        date =
+                text(
+                        "",
+                        12,
                         Color.LTGRAY);
 
-        TextView mapPlaceholder =
+        titleBox.addView(title);
+        titleBox.addView(date);
+
+        header.addView(
+                titleBox,
+                new LinearLayout.LayoutParams(
+                        0,
+                        -2,
+                        1));
+
+        clock =
                 text(
-                        "Map Preview",
+                        "",
+                        27,
+                        Color.WHITE);
+
+        clock.setGravity(
+                Gravity.CENTER);
+
+        header.addView(
+                clock,
+                new LinearLayout.LayoutParams(
+                        dp(130),
+                        dp(58)));
+
+        dashboard.addView(
+                header,
+                new LinearLayout.LayoutParams(
+                        -1,
+                        dp(65)));
+
+        LinearLayout content =
+                new LinearLayout(this);
+
+        content.setOrientation(
+                LinearLayout.VERTICAL);
+
+        LinearLayout map =
+                card();
+
+        map.addView(
+                text(
+                        "MAP",
+                        12,
+                        Color.LTGRAY));
+
+        TextView mapText =
+                text(
+                        "Navigation",
                         28,
                         Color.WHITE);
 
-        mapPlaceholder.setGravity(
+        mapText.setGravity(
                 Gravity.CENTER);
 
-        mapBox.addView(
-                mapLabel,
-                new LinearLayout.LayoutParams(
-                        -1,
-                        -2));
-
-        mapBox.addView(
-                mapPlaceholder,
+        map.addView(
+                mapText,
                 new LinearLayout.LayoutParams(
                         -1,
                         0,
                         1));
 
-        centerStage.addView(
-                mapBox,
+        content.addView(
+                map,
                 new LinearLayout.LayoutParams(
-                        0,
                         -1,
-                        1));
+                        0,
+                        2));
+
+        LinearLayout info =
+                new LinearLayout(this);
+
+        info.setOrientation(
+                LinearLayout.HORIZONTAL);
+
+        info.addView(
+                infoCard(
+                        "SPEED",
+                        "0 km/h"),
+                weightParams());
+
+        info.addView(
+                infoCard(
+                        "WEATHER",
+                        "-- °C"),
+                weightParams());
+
+        info.addView(
+                infoCard(
+                        "MEDIA",
+                        "No media"),
+                weightParams());
+
+        content.addView(
+                info,
+                new LinearLayout.LayoutParams(
+                        -1,
+                        dp(120)));
 
         dashboard.addView(
-                centerStage,
+                content,
                 new LinearLayout.LayoutParams(
-                        0,
                         -1,
+                        0,
                         1));
 
-        buildTransparentBottomBar();
-
-        launcherLayer.addView(
-                bottomBar,
-                new LinearLayout.LayoutParams(
-                        -1,
-                        dp(100)));
-    }
-
-    private void buildTransparentBottomBar() {
-
-        bottomBar =
+        LinearLayout dockRow =
                 new LinearLayout(this);
 
-        bottomBar.setOrientation(
-                LinearLayout.HORIZONTAL);
-        bottomBar.setGravity(
+        dockRow.setGravity(
                 Gravity.CENTER_VERTICAL);
-        bottomBar.setPadding(
-                dp(12),
-                dp(8),
-                dp(12),
-                dp(8));
 
-        GradientDrawable bottomBg =
-                new GradientDrawable();
-
-        bottomBg.setColor(
-                Color.argb(
-                        100,
-                        16,
-                        22,
-                        31));
-        bottomBg.setCornerRadius(
-                dp(16));
-
-        bottomBar.setBackground(
-                bottomBg);
-
-        LinearLayout trafficBox =
+        dock =
                 new LinearLayout(this);
 
-        trafficBox.setOrientation(
-                LinearLayout.VERTICAL);
-        trafficBox.setGravity(
-                Gravity.CENTER);
+        dock.setGravity(
+                Gravity.CENTER_VERTICAL);
 
-        FrameLayout trafficCircle =
-                new FrameLayout(this);
-
-        TextView trafficIcon =
-                text(
-                        "⚠",
-                        18,
-                        Color.WHITE);
-
-        trafficIcon.setGravity(
-                Gravity.CENTER);
-
-        GradientDrawable circleBg =
-                new GradientDrawable();
-
-        circleBg.setColor(
-                Color.rgb(
-                        255,
-                        168,
-                        0));
-        circleBg.setCornerRadius(
-                dp(28));
-
-        trafficIcon.setBackground(
-                circleBg);
-        trafficIcon.setPadding(
-                dp(6),
-                dp(6),
-                dp(6),
-                dp(6));
-
-        trafficCircle.addView(
-                trafficIcon,
-                new FrameLayout.LayoutParams(
-                        dp(56),
-                        dp(56),
-                        Gravity.CENTER));
-
-        trafficBox.addView(
-                trafficCircle,
-                new LinearLayout.LayoutParams(
-                        dp(56),
-                        dp(56)));
-
-        TextView trafficInfo =
-                text(
-                        "Traffic Info",
-                        8,
-                        Color.LTGRAY);
-        trafficInfo.setGravity(
-                Gravity.CENTER);
-
-        trafficBox.addView(
-                trafficInfo,
-                new LinearLayout.LayoutParams(
-                        dp(56),
-                        -2));
-
-        bottomBar.addView(
-                trafficBox,
-                new LinearLayout.LayoutParams(
-                        dp(70),
-                        -1));
-
-        LinearLayout mediaBox =
-                new LinearLayout(this);
-
-        mediaBox.setOrientation(
-                LinearLayout.VERTICAL);
-        mediaBox.setGravity(
-                Gravity.CENTER);
-
-        LinearLayout controlsRow =
-                new LinearLayout(this);
-
-        controlsRow.setOrientation(
-                LinearLayout.HORIZONTAL);
-        controlsRow.setGravity(
-                Gravity.CENTER);
-
-        String[] mediaButtons = {
-                "⏮",
-                "⏸",
-                "⏭"
-        };
-
-        for (String btn : mediaButtons) {
-            TextView control =
-                    text(
-                            btn,
-                            16,
-                            Color.WHITE);
-
-            control.setGravity(
-                    Gravity.CENTER);
-            control.setPadding(
-                    dp(6),
-                    dp(6),
-                    dp(6),
-                    dp(6));
-
-            controlsRow.addView(
-                    control,
-                    new LinearLayout.LayoutParams(
-                            dp(40),
-                            dp(40)));
-        }
-
-        mediaBox.addView(
-                controlsRow,
-                new LinearLayout.LayoutParams(
-                        -2,
-                        dp(50)));
-
-        TextView trackLabel =
-                text(
-                        "Now playing",
-                        8,
-                        Color.LTGRAY);
-        trackLabel.setGravity(
-                Gravity.CENTER);
-        trackLabel.setMaxLines(1);
-        trackLabel.setEllipsize(
-                android.text.TextUtils.TruncateAt.END);
-
-        mediaBox.addView(
-                trackLabel,
-                new LinearLayout.LayoutParams(
-                        dp(150),
-                        -2));
-
-        bottomBar.addView(
-                mediaBox,
+        dockRow.addView(
+                dock,
                 new LinearLayout.LayoutParams(
                         0,
                         -1,
                         1));
+
+        TextView appsButton =
+                buttonText("APPS");
+
+        appsButton.setOnClickListener(
+                v -> showApps());
+
+        dockRow.addView(
+                appsButton,
+                new LinearLayout.LayoutParams(
+                        dp(90),
+                        dp(58)));
+
+        dashboard.addView(
+                dockRow,
+                new LinearLayout.LayoutParams(
+                        -1,
+                        dp(70)));
     }
 
     private void buildAppPanel() {
@@ -789,6 +614,57 @@ public final class V10CarActivity
         }
     }
 
+    private void rebuildDock() {
+
+        if (dock == null) {
+            return;
+        }
+
+        dock.removeAllViews();
+
+        int count =
+                Math.min(
+                        5,
+                        apps.size());
+
+        for (int i = 0;
+             i < count;
+             i++) {
+
+            final AppInfo app =
+                    apps.get(i);
+
+            TextView tile =
+                    buttonText(
+                            app.name);
+
+            tile.setTextSize(11);
+            tile.setMaxLines(2);
+
+            tile.setOnClickListener(
+                    v ->
+                            launchProjection(
+                                    app.component));
+
+            LinearLayout.LayoutParams
+                    params =
+                            new LinearLayout.LayoutParams(
+                                    0,
+                                    dp(58),
+                                    1f);
+
+            params.setMargins(
+                    dp(3),
+                    0,
+                    dp(3),
+                    0);
+
+            dock.addView(
+                    tile,
+                    params);
+        }
+    }
+
     private LinearLayout appTile(
             AppInfo app) {
 
@@ -877,6 +753,8 @@ public final class V10CarActivity
         session.attachTextureView(
                 textureView);
 
+        createFloatingTouchKey();
+
         V10InputController
                 inputController =
                         new V10InputController(
@@ -888,58 +766,73 @@ public final class V10CarActivity
                                 .createListener());
     }
 
-    private void launchProjection(
-            ComponentName component) {
 
-        if (component == null
-                || session == null) {
+private void launchProjection(
+        ComponentName component) {
 
-            return;
-        }
+    if (component == null
+            || session == null) {
 
-        if (activeTarget != null
-                && !activeTarget.equals(component)) {
-
-            session.release();
-        }
-
-        activeTarget =
-                component;
-
-        V10SessionStore
-                .setTarget(
-                        this,
-                        component);
-
-        launcherLayer
-                .setVisibility(
-                        View.GONE);
-
-        appPanel
-                .setVisibility(
-                        View.GONE);
-
-        dashboard
-                .setVisibility(
-                        View.GONE);
-
-        projectionLayer
-                .setVisibility(
-                        View.VISIBLE);
-
-        session.setTarget(
-                component);
+        return;
     }
+
+    /*
+     * If the user selects another application while
+     * an application is already projected, release
+     * the old display first.
+     *
+     * V10ProjectionSession itself also handles target
+     * changes safely.
+     */
+    if (activeTarget != null
+            && !activeTarget.equals(component)) {
+
+        session.release();
+    }
+
+    activeTarget =
+            component;
+
+    /*
+     * Keep the existing V10 session persistence.
+     */
+    V10SessionStore
+            .setTarget(
+                    this,
+                    component);
+
+    /*
+     * Hide the complete launcher UI.
+     */
+    launcherLayer
+            .setVisibility(
+                    View.GONE);
+
+    appPanel
+            .setVisibility(
+                    View.GONE);
+
+    dashboard
+            .setVisibility(
+                    View.GONE);
+
+    projectionLayer
+            .setVisibility(
+                    View.VISIBLE);
+
+    /*
+     * Start the existing proven V10 projection
+     * engine.
+     */
+    session.setTarget(
+            component);
+}
 
     private void returnToLauncher() {
 
-        activeTarget = null;
-
-        V10SessionStore
-                .clearTarget(this);
-
-        if (session != null) {
-            session.release();
+        if (session != null
+                && session.isActive()) {
+            session.hideTask();
         }
 
         projectionLayer
@@ -959,51 +852,234 @@ public final class V10CarActivity
                         View.GONE);
     }
 
-    private void showApps() {
 
-        if (launcherLayer == null
-                || appPanel == null
-                || dashboard == null) {
+private void showApps() {
 
+    /*
+     * V10.4 V4
+     *
+     * APPS is a real Android Auto-side application
+     * selector.
+     *
+     * It works from:
+     *
+     * 1. Dashboard
+     * 2. Active projection
+     *
+     * Therefore the launcher layer is explicitly
+     * restored before displaying Applications.
+     */
+
+    if (launcherLayer == null
+            || appPanel == null
+            || dashboard == null) {
+
+        return;
+    }
+
+    /*
+     * Hide the projected application while the
+     * application selector is visible.
+     *
+     * The projection session itself is intentionally
+     * kept alive. If another application is selected,
+     * V10ProjectionSession.setTarget() will detect the
+     * changed target and recreate the display.
+     */
+    projectionLayer.setVisibility(
+            View.GONE);
+
+    launcherLayer.setVisibility(
+            View.VISIBLE);
+
+    dashboard.setVisibility(
+            View.GONE);
+
+    appPanel.setVisibility(
+            View.VISIBLE);
+
+    loadApps();
+}
+
+
+private void hideApps() {
+
+    if (appPanel == null
+            || dashboard == null
+            || launcherLayer == null) {
+
+        return;
+    }
+
+    appPanel.setVisibility(
+            View.GONE);
+
+    dashboard.setVisibility(
+            View.VISIBLE);
+
+    launcherLayer.setVisibility(
+            View.VISIBLE);
+
+    /*
+     * The Applications screen belongs to the
+     * V10 dashboard.
+     *
+     * Projection is hidden until an application
+     * is selected again.
+     */
+    projectionLayer.setVisibility(
+            View.GONE);
+}
+
+    private void createFloatingTouchKey() {
+    if (floatingTouchKey != null) return;
+    floatingTouchKey = new TextView(this);
+    floatingTouchKey.setText("●");
+    floatingTouchKey.setTextColor(Color.WHITE);
+    floatingTouchKey.setTextSize(22);
+    floatingTouchKey.setGravity(Gravity.CENTER);
+    GradientDrawable bg = new GradientDrawable();
+    bg.setShape(GradientDrawable.OVAL);
+    bg.setColor(Color.rgb(25, 35, 45));
+    bg.setStroke(dp(2), Color.rgb(80, 170, 230));
+    floatingTouchKey.setBackground(bg);
+    floatingTouchKey.setElevation(dp(12));
+    SharedPreferences prefs = getSharedPreferences("v10_floating_key", MODE_PRIVATE);
+    FrameLayout.LayoutParams params = new FrameLayout.LayoutParams(dp(58), dp(58), Gravity.TOP | Gravity.END);
+    int savedX = prefs.getInt("x", dp(18));
+    int savedY = prefs.getInt("y", dp(120));
+    params.setMargins(0, savedY, savedX, 0);
+    projectionLayer.addView(floatingTouchKey, params);
+    floatingTouchKey.setOnTouchListener(
+                (view, event) -> {
+                    switch (event.getActionMasked()) {
+                        case MotionEvent.ACTION_DOWN:
+                            floatingDragging = false;
+                            floatingDownRawX = event.getRawX();
+                            floatingDownRawY = event.getRawY();
+                            floatingDownTime = SystemClock.uptimeMillis();
+                            ViewGroup.LayoutParams lp = view.getLayoutParams();
+                            if (lp instanceof FrameLayout.LayoutParams) {
+                                FrameLayout.LayoutParams fp = (FrameLayout.LayoutParams) lp;
+                                floatingStartX = fp.rightMargin;
+                                floatingStartY = fp.topMargin;
+                            }
+                            return true;
+
+                        case MotionEvent.ACTION_MOVE:
+                            float dx = event.getRawX() - floatingDownRawX;
+                            float dy = event.getRawY() - floatingDownRawY;
+                            if (!floatingDragging
+                                    && Math.hypot(dx, dy)
+                                    > ViewConfiguration.get(this).getScaledTouchSlop()) {
+                                floatingDragging = true;
+                            }
+                            if (floatingDragging) {
+                                int width = projectionLayer.getWidth();
+                                int height = projectionLayer.getHeight();
+                                int keySize = dp(58);
+                                int right = Math.round(floatingStartX - dx);
+                                int top = Math.round(floatingStartY + dy);
+                                right = Math.max(0, Math.min(Math.max(0, width - keySize), right));
+                                top = Math.max(0, Math.min(Math.max(0, height - keySize), top));
+                                FrameLayout.LayoutParams fp =
+                                        (FrameLayout.LayoutParams) view.getLayoutParams();
+                                fp.rightMargin = right;
+                                fp.topMargin = top;
+                                view.setLayoutParams(fp);
+                            }
+                            return true;
+
+                        case MotionEvent.ACTION_UP:
+                            if (floatingDragging) {
+                                FrameLayout.LayoutParams fp =
+                                        (FrameLayout.LayoutParams) view.getLayoutParams();
+                                prefs.edit()
+                                        .putInt("x", fp.rightMargin)
+                                        .putInt("y", fp.topMargin)
+                                        .apply();
+                                floatingDragging = false;
+                                return true;
+                            }
+                            long held = SystemClock.uptimeMillis() - floatingDownTime;
+                            if (held >= ViewConfiguration.getLongPressTimeout()) {
+                                handleControlHome();
+                                hideFloatingMenu();
+                            } else {
+                                showFloatingMenu();
+                            }
+                            view.performClick();
+                            return true;
+
+                        case MotionEvent.ACTION_CANCEL:
+                            floatingDragging = false;
+                            return true;
+
+                        default:
+                            return true;
+                    }
+                });;
+    floatingTouchKey.bringToFront();
+}
+
+private void showFloatingMenu() {
+        if (floatingMenu != null) {
+            hideFloatingMenu();
             return;
         }
 
-        projectionLayer.setVisibility(
-                View.GONE);
+        floatingMenu = new LinearLayout(this);
+        floatingMenu.setOrientation(LinearLayout.VERTICAL);
+        floatingMenu.setPadding(dp(8), dp(8), dp(8), dp(8));
 
-        launcherLayer.setVisibility(
-                View.VISIBLE);
+        GradientDrawable menuBg = new GradientDrawable();
+        menuBg.setColor(Color.rgb(15, 20, 26));
+        menuBg.setCornerRadius(dp(16));
+        menuBg.setStroke(dp(1), Color.rgb(65, 85, 105));
+        floatingMenu.setBackground(menuBg);
+        floatingMenu.setElevation(dp(14));
 
-        dashboard.setVisibility(
-                View.GONE);
+        addFloatingMenuButton("BACK", () -> {
+            handleControlBack();
+            hideFloatingMenu();
+        });
 
-        appPanel.setVisibility(
-                View.VISIBLE);
+        addFloatingMenuButton("HOME", () -> {
+            handleControlHome();
+            hideFloatingMenu();
+        });
 
-        loadApps();
+        FrameLayout.LayoutParams params =
+                new FrameLayout.LayoutParams(dp(170), -2,
+                        Gravity.TOP | Gravity.END);
+        params.setMargins(0, dp(70), dp(18), 0);
+        projectionLayer.addView(floatingMenu, params);
+        floatingMenu.bringToFront();
+        floatingTouchKey.bringToFront();
     }
 
-    private void hideApps() {
+private void addFloatingMenuButton(String label, Runnable action) {
+    TextView button = new TextView(this);
+    button.setText(label);
+    button.setTextColor(Color.WHITE);
+    button.setTextSize(14);
+    button.setGravity(Gravity.CENTER_VERTICAL);
+    GradientDrawable bg = new GradientDrawable();
+    bg.setColor(Color.rgb(28, 38, 48));
+    bg.setCornerRadius(dp(10));
+    button.setBackground(bg);
+    button.setPadding(dp(16), 0, dp(16), 0);
+    button.setOnClickListener(v -> action.run());
+    LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(-1, dp(48));
+    params.setMargins(0, dp(3), 0, dp(3));
+    floatingMenu.addView(button, params);
+}
 
-        if (appPanel == null
-                || dashboard == null
-                || launcherLayer == null) {
-
-            return;
-        }
-
-        appPanel.setVisibility(
-                View.GONE);
-
-        dashboard.setVisibility(
-                View.VISIBLE);
-
-        launcherLayer.setVisibility(
-                View.VISIBLE);
-
-        projectionLayer.setVisibility(
-                View.GONE);
-    }
+private void hideFloatingMenu() {
+    if (floatingMenu == null) return;
+    projectionLayer.removeView(floatingMenu);
+    floatingMenu = null;
+}
 
     public void handleControlBack() {
 
@@ -1088,10 +1164,7 @@ public final class V10CarActivity
         handler.removeCallbacks(
                 targetPoller);
 
-        if (session != null) {
-            session.release();
-        }
-
+        /* Display Core V1: Activity stop is not task close. */
         super.onStop();
     }
 
@@ -1123,7 +1196,7 @@ public final class V10CarActivity
         launcherLayer = null;
         dashboard = null;
         appPanel = null;
-        bottomBar = null;
+        dock = null;
 
         super.onDestroy();
     }
@@ -1142,39 +1215,103 @@ public final class V10CarActivity
         }
     }
 
-    private TextView sidebarButton(
-            String icon) {
+    private void updateClock() {
 
-        TextView btn =
-                text(
-                        icon,
-                        20,
-                        Color.WHITE);
+        if (clock == null
+                || date == null) {
+            return;
+        }
 
-        btn.setGravity(
-                Gravity.CENTER);
+        Date now =
+                new Date();
+
+        clock.setText(
+                new SimpleDateFormat(
+                        "HH:mm",
+                        Locale.getDefault())
+                        .format(now));
+
+        date.setText(
+                new SimpleDateFormat(
+                        "EEEE, dd MMMM",
+                        Locale.getDefault())
+                        .format(now));
+    }
+
+    private LinearLayout card() {
+
+        LinearLayout box =
+                new LinearLayout(this);
+
+        box.setOrientation(
+                LinearLayout.VERTICAL);
+
+        box.setPadding(
+                dp(14),
+                dp(10),
+                dp(14),
+                dp(10));
 
         GradientDrawable bg =
                 new GradientDrawable();
 
         bg.setColor(
-                Color.argb(
-                        150,
-                        30,
-                        40,
-                        52));
+                Color.rgb(
+                        22,
+                        27,
+                        33));
+
         bg.setCornerRadius(
-                dp(14));
+                dp(18));
 
-        btn.setBackground(bg);
+        box.setBackground(bg);
 
-        return btn;
+        LinearLayout.LayoutParams p =
+                new LinearLayout.LayoutParams(
+                        -1,
+                        -1);
+
+        p.setMargins(
+                dp(4),
+                dp(4),
+                dp(4),
+                dp(4));
+
+        box.setLayoutParams(p);
+
+        return box;
     }
 
-    private View spacer(int height) {
-        View v = new View(this);
-        v.setBackgroundColor(Color.TRANSPARENT);
-        return v;
+    private LinearLayout infoCard(
+            String title,
+            String value) {
+
+        LinearLayout box =
+                card();
+
+        box.addView(
+                text(
+                        title,
+                        11,
+                        Color.LTGRAY));
+
+        TextView valueView =
+                text(
+                        value,
+                        21,
+                        Color.WHITE);
+
+        valueView.setGravity(
+                Gravity.CENTER);
+
+        box.addView(
+                valueView,
+                new LinearLayout.LayoutParams(
+                        -1,
+                        0,
+                        1));
+
+        return box;
     }
 
     private TextView buttonText(
@@ -1219,6 +1356,15 @@ public final class V10CarActivity
         view.setTextColor(color);
 
         return view;
+    }
+
+    private LinearLayout.LayoutParams
+            weightParams() {
+
+        return new LinearLayout.LayoutParams(
+                0,
+                -1,
+                1f);
     }
 
     private String initial(
