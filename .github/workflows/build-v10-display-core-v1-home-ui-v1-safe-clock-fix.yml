@@ -1,0 +1,1128 @@
+name: CarAssistant V10 - Display Core V1 - Home UI V1 Safe Clock Fix
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Install PyYAML
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -m pip install --disable-pip-version-check PyYAML
+
+      - name: Restore Stable Base V1
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          BASELINE="9075636a7d5947c1b0eee49c2bd3fd0e1b6b0cf1"
+
+          git fetch origin "$BASELINE" --depth=1
+
+          rm -rf v10-source
+
+          git checkout "$BASELINE" -- v10-source
+
+          SRC="v10-source/app/src/main/java/com/hieptran/aacast/doudou"
+
+          test -f "$SRC/V10ProjectionSession.java"
+          test -f "$SRC/V10CarActivity.java"
+          test -f "$SRC/V10SessionStore.java"
+
+          if [ -f "$SRC/V10ProjectionService.java" ]; then
+            echo "ERROR: V10ProjectionService.java exists."
+            exit 1
+          fi
+
+          echo "Stable Base source restored."
+          echo "BASELINE=$BASELINE"
+
+      - name: Rebuild Display Core V1 from Stable Freeze source
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          cat > /tmp/run_core.py <<'PY'
+          from pathlib import Path
+          import subprocess
+          import yaml
+          import sys
+
+          workflow = Path(
+              ".github/workflows/build-v10-stable-base-freeze-v1.yml"
+          )
+
+          data = yaml.safe_load(
+              workflow.read_text(encoding="utf-8")
+          )
+
+          steps = data["jobs"]["stable-base"]["steps"]
+
+          found = False
+
+          for step in steps:
+              name = step.get("name", "")
+
+              if name == "Create Display Core V1 from exact workflow":
+                  found = True
+
+                  subprocess.run(
+                      [
+                          "bash",
+                          "-euo",
+                          "pipefail",
+                          "-c",
+                          step["run"]
+                      ],
+                      check=True
+                  )
+
+                  break
+
+          if not found:
+              print(
+                  "ERROR: Stable Freeze Display Core step not found."
+              )
+              sys.exit(1)
+          PY
+
+          python3 /tmp/run_core.py
+
+      - name: Apply Floating Touch and SAFE Long Press from Stable Freeze
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          cat > /tmp/apply_stable_patches.py <<'PY'
+          from pathlib import Path
+          import subprocess
+          import yaml
+          import sys
+
+          workflow = Path(
+              ".github/workflows/build-v10-stable-base-freeze-v1.yml"
+          )
+
+          data = yaml.safe_load(
+              workflow.read_text(encoding="utf-8")
+          )
+
+          wanted = {
+              "Recover deleted Floating Touch workflow",
+              "Apply historical Floating Touch patch",
+              "Extract exact SAFE Long Press patch",
+              "Apply exact SAFE Long Press patch",
+          }
+
+          for step in data["jobs"]["stable-base"]["steps"]:
+              name = step.get("name", "")
+
+              if name not in wanted:
+                  continue
+
+              run = step.get("run")
+
+              if not run:
+                  print("ERROR: missing run block:", name)
+                  sys.exit(1)
+
+              subprocess.run(
+                  [
+                      "bash",
+                      "-euo",
+                      "pipefail",
+                      "-c",
+                      run
+                  ],
+                  check=True
+              )
+
+          print(
+              "Stable Freeze Floating Touch + SAFE Long Press applied."
+          )
+          PY
+
+          python3 /tmp/apply_stable_patches.py
+
+      - name: Verify V10CarActivity before Home patch
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          FILE="v10-source/app/src/main/java/com/hieptran/aacast/doudou/V10CarActivity.java"
+
+          test -f "$FILE"
+
+          grep -Fq "private TextView clock;" "$FILE"
+          grep -Fq "private TextView date;" "$FILE"
+          grep -Fq "private void updateClock()" "$FILE"
+
+          echo "V10CarActivity clock/date baseline markers PASS."
+
+      - name: Freeze protected Core and Persistence files
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          SRC="v10-source/app/src/main/java/com/hieptran/aacast/doudou"
+
+          sha256sum \
+            "$SRC/V10DisplayController.java" \
+            "$SRC/V10SurfaceManager.java" \
+            "$SRC/V10TaskSession.java" \
+            "$SRC/V10ProjectionSession.java" \
+            "$SRC/V10SessionStore.java" \
+            > /tmp/protected-before.sha256
+
+      - name: Patch Home UI V1 Safe Clock Fix
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          cat > /tmp/patch_home_clock_fix.py <<'PY'
+          from pathlib import Path
+          import sys
+
+          file = Path(
+              "v10-source/app/src/main/java/com/hieptran/aacast/doudou/V10CarActivity.java"
+          )
+
+          text = file.read_text(encoding="utf-8")
+
+          original = text
+
+          def find_method(source, signature):
+              start = source.find(signature)
+
+              if start < 0:
+                  raise SystemExit(
+                      "Method not found: " + signature
+                  )
+
+              brace = source.find("{", start)
+
+              if brace < 0:
+                  raise SystemExit(
+                      "Opening brace not found: " + signature
+                  )
+
+              depth = 0
+              in_string = False
+              escaped = False
+              line_comment = False
+              block_comment = False
+
+              i = brace
+
+              while i < len(source):
+                  c = source[i]
+                  n = (
+                      source[i + 1]
+                      if i + 1 < len(source)
+                      else ""
+                  )
+
+                  if line_comment:
+                      if c == "\n":
+                          line_comment = False
+
+                  elif block_comment:
+                      if c == "*" and n == "/":
+                          block_comment = False
+                          i += 1
+
+                  elif in_string:
+                      if escaped:
+                          escaped = False
+                      elif c == "\\":
+                          escaped = True
+                      elif c == '"':
+                          in_string = False
+
+                  else:
+                      if c == "/" and n == "/":
+                          line_comment = True
+                          i += 1
+
+                      elif c == "/" and n == "*":
+                          block_comment = True
+                          i += 1
+
+                      elif c == '"':
+                          in_string = True
+
+                      elif c == "{":
+                          depth += 1
+
+                      elif c == "}":
+                          depth -= 1
+
+                          if depth == 0:
+                              return start, i + 1
+
+                  i += 1
+
+              raise SystemExit(
+                  "Closing brace not found: " + signature
+              )
+
+          # ----------------------------------------------------------
+          # IMPORTS
+          # ----------------------------------------------------------
+
+          if "import android.content.pm.ApplicationInfo;" not in text:
+              marker = "import android.content.pm.ResolveInfo;"
+
+              if marker not in text:
+                  raise SystemExit(
+                      "ResolveInfo import not found."
+                  )
+
+              text = text.replace(
+                  marker,
+                  marker
+                  + "\n"
+                  + "import android.content.pm.ApplicationInfo;",
+                  1
+              )
+
+          if "import android.widget.ImageView;" not in text:
+              marker = "import android.widget.FrameLayout;"
+
+              if marker not in text:
+                  raise SystemExit(
+                      "FrameLayout import not found."
+                  )
+
+              text = text.replace(
+                  marker,
+                  marker
+                  + "\n"
+                  + "import android.widget.ImageView;",
+                  1
+              )
+
+          # ----------------------------------------------------------
+          # IMPORTANT CLOCK FIX
+          #
+          # DO NOT DELETE:
+          #   private TextView clock;
+          #   private TextView date;
+          #
+          # They are still required by updateClock().
+          #
+          # The Home UI itself does not attach these TextViews.
+          # updateClock() already safely returns when they are null.
+          # ----------------------------------------------------------
+
+          if "private TextView clock;" not in text:
+              raise SystemExit(
+                  "ERROR: clock declaration missing before patch."
+              )
+
+          if "private TextView date;" not in text:
+              raise SystemExit(
+                  "ERROR: date declaration missing before patch."
+              )
+
+          if "private void updateClock()" not in text:
+              raise SystemExit(
+                  "ERROR: updateClock() missing before patch."
+              )
+
+          # ----------------------------------------------------------
+          # BUILD DASHBOARD ONLY
+          #
+          # No clock/date fields are removed.
+          # No projection code is touched.
+          # ----------------------------------------------------------
+
+          start, end = find_method(
+              text,
+              "private void buildDashboard("
+          )
+
+          dashboard = """private void buildDashboard() {
+              dashboard =
+                      new LinearLayout(this);
+
+              dashboard.setOrientation(
+                      LinearLayout.VERTICAL);
+
+              launcherLayer.addView(
+                      dashboard,
+                      new LinearLayout.LayoutParams(
+                              -1,
+                              -1));
+
+              LinearLayout content =
+                      new LinearLayout(this);
+
+              content.setOrientation(
+                      LinearLayout.VERTICAL);
+
+              LinearLayout map =
+                      card();
+
+              map.addView(
+                      text(
+                              "MAP",
+                              12,
+                              Color.LTGRAY));
+
+              TextView mapText =
+                      text(
+                              "Navigation",
+                              28,
+                              Color.WHITE);
+
+              mapText.setGravity(
+                      Gravity.CENTER);
+
+              map.addView(
+                      mapText,
+                      new LinearLayout.LayoutParams(
+                              -1,
+                              0,
+                              1));
+
+              content.addView(
+                      map,
+                      new LinearLayout.LayoutParams(
+                              -1,
+                              0,
+                              2));
+
+              LinearLayout info =
+                      new LinearLayout(this);
+
+              info.setOrientation(
+                      LinearLayout.HORIZONTAL);
+
+              info.addView(
+                      infoCard(
+                              "MEDIA",
+                              "No media"),
+                      weightParams());
+
+              info.addView(
+                      infoCard(
+                              "STATUS",
+                              "Ready"),
+                      weightParams());
+
+              info.addView(
+                      infoCard(
+                              "APPS",
+                              String.valueOf(apps.size())),
+                      weightParams());
+
+              content.addView(
+                      info,
+                      new LinearLayout.LayoutParams(
+                              -1,
+                              dp(120)));
+
+              dashboard.addView(
+                      content,
+                      new LinearLayout.LayoutParams(
+                              -1,
+                              0,
+                              1));
+
+              LinearLayout dockRow =
+                      new LinearLayout(this);
+
+              dockRow.setGravity(
+                      Gravity.CENTER_VERTICAL);
+
+              dock =
+                      new LinearLayout(this);
+
+              dock.setGravity(
+                      Gravity.CENTER_VERTICAL);
+
+              dockRow.addView(
+                      dock,
+                      new LinearLayout.LayoutParams(
+                              0,
+                              -1,
+                              1));
+
+              TextView appsButton =
+                      buttonText("APPS");
+
+              appsButton.setOnClickListener(
+                      v -> showApps());
+
+              dockRow.addView(
+                      appsButton,
+                      new LinearLayout.LayoutParams(
+                              dp(90),
+                              dp(58)));
+
+              dashboard.addView(
+                      dockRow,
+                      new LinearLayout.LayoutParams(
+                              -1,
+                              dp(70)));
+          }"""
+
+          text = (
+              text[:start]
+              + dashboard
+              + text[end:]
+          )
+
+          # ----------------------------------------------------------
+          # REAL APPLICATION ICONS - DOCK
+          # ----------------------------------------------------------
+
+          start, end = find_method(
+              text,
+              "private void rebuildDock("
+          )
+
+          dock_method = """private void rebuildDock() {
+              if (dock == null) {
+                  return;
+              }
+
+              dock.removeAllViews();
+
+              int count =
+                      Math.min(
+                              5,
+                              apps.size());
+
+              for (int i = 0;
+                   i < count;
+                   i++) {
+
+                  final AppInfo app =
+                          apps.get(i);
+
+                  LinearLayout tile =
+                          new LinearLayout(this);
+
+                  tile.setOrientation(
+                          LinearLayout.VERTICAL);
+
+                  tile.setGravity(
+                          Gravity.CENTER);
+
+                  GradientDrawable bg =
+                          new GradientDrawable();
+
+                  bg.setColor(
+                          Color.rgb(
+                                  29,
+                                  35,
+                                  42));
+
+                  bg.setCornerRadius(
+                          dp(14));
+
+                  tile.setBackground(bg);
+
+                  ImageView icon =
+                          new ImageView(this);
+
+                  try {
+                      ApplicationInfo applicationInfo =
+                              getPackageManager()
+                                      .getApplicationInfo(
+                                              app.component
+                                                      .getPackageName(),
+                                              0);
+
+                      icon.setImageDrawable(
+                              applicationInfo.loadIcon(
+                                      getPackageManager()));
+
+                  } catch (Throwable ignored) {
+
+                      icon.setImageResource(
+                              android.R.drawable
+                                      .sym_def_app_icon);
+                  }
+
+                  icon.setScaleType(
+                          ImageView.ScaleType.CENTER_INSIDE);
+
+                  tile.addView(
+                          icon,
+                          new LinearLayout.LayoutParams(
+                                  -1,
+                                  dp(34)));
+
+                  TextView label =
+                          text(
+                                  app.name,
+                                  10,
+                                  Color.WHITE);
+
+                  label.setGravity(
+                          Gravity.CENTER);
+
+                  label.setMaxLines(1);
+
+                  tile.addView(
+                          label,
+                          new LinearLayout.LayoutParams(
+                                  -1,
+                                  dp(20)));
+
+                  tile.setOnClickListener(
+                          v ->
+                                  launchProjection(
+                                          app.component));
+
+                  LinearLayout.LayoutParams params =
+                          new LinearLayout.LayoutParams(
+                                  0,
+                                  dp(58),
+                                  1f);
+
+                  params.setMargins(
+                          dp(3),
+                          0,
+                          dp(3),
+                          0);
+
+                  dock.addView(
+                          tile,
+                          params);
+              }
+          }"""
+
+          text = (
+              text[:start]
+              + dock_method
+              + text[end:]
+          )
+
+          # ----------------------------------------------------------
+          # REAL APPLICATION ICONS - APP GRID
+          # ----------------------------------------------------------
+
+          start, end = find_method(
+              text,
+              "private LinearLayout appTile("
+          )
+
+          app_tile = """private LinearLayout appTile(
+                  AppInfo app) {
+
+              LinearLayout tile =
+                      new LinearLayout(this);
+
+              tile.setOrientation(
+                      LinearLayout.VERTICAL);
+
+              tile.setGravity(
+                      Gravity.CENTER);
+
+              GradientDrawable bg =
+                      new GradientDrawable();
+
+              bg.setColor(
+                      Color.rgb(
+                              22,
+                              27,
+                              33));
+
+              bg.setCornerRadius(
+                      dp(16));
+
+              tile.setBackground(bg);
+
+              ImageView icon =
+                      new ImageView(this);
+
+              try {
+                  ApplicationInfo applicationInfo =
+                          getPackageManager()
+                                  .getApplicationInfo(
+                                          app.component
+                                                  .getPackageName(),
+                                          0);
+
+                  icon.setImageDrawable(
+                          applicationInfo.loadIcon(
+                                  getPackageManager()));
+
+              } catch (Throwable ignored) {
+
+                  icon.setImageResource(
+                          android.R.drawable
+                                  .sym_def_app_icon);
+              }
+
+              icon.setScaleType(
+                      ImageView.ScaleType.CENTER_INSIDE);
+
+              icon.setPadding(
+                      dp(8),
+                      dp(6),
+                      dp(8),
+                      dp(6));
+
+              tile.addView(
+                      icon,
+                      new LinearLayout.LayoutParams(
+                              -1,
+                              dp(58)));
+
+              TextView name =
+                      text(
+                              app.name,
+                              12,
+                              Color.WHITE);
+
+              name.setGravity(
+                      Gravity.CENTER);
+
+              name.setMaxLines(2);
+
+              tile.addView(
+                      name,
+                      new LinearLayout.LayoutParams(
+                              -1,
+                              dp(42)));
+
+              tile.setOnClickListener(
+                      v -> {
+
+                          hideApps();
+
+                          launchProjection(
+                                  app.component);
+                      });
+
+              return tile;
+          }"""
+
+          text = (
+              text[:start]
+              + app_tile
+              + text[end:]
+          )
+
+          # ----------------------------------------------------------
+          # SMALL, TARGETED SAFETY CHECKS
+          # ----------------------------------------------------------
+
+          required = [
+              "private TextView clock;",
+              "private TextView date;",
+              "private void updateClock()",
+              "import android.content.pm.ApplicationInfo;",
+              "import android.widget.ImageView;",
+              "loadIcon(",
+              "buttonText(\"APPS\")",
+              "ImageView.ScaleType.CENTER_INSIDE"
+          ]
+
+          for item in required:
+              if item not in text:
+                  raise SystemExit(
+                      "Required marker missing: " + item
+                  )
+
+          # Old Home header must not return.
+          if "CAR ASSISTANT" in text:
+              raise SystemExit(
+                  "ERROR: old CAR ASSISTANT header remains."
+              )
+
+          # Old cards must not return.
+          if '"SPEED"' in text:
+              raise SystemExit(
+                  "ERROR: old SPEED card remains."
+              )
+
+          if '"WEATHER"' in text:
+              raise SystemExit(
+                  "ERROR: old WEATHER card remains."
+              )
+
+          # Old letter icon must not return.
+          if "initial(app.name)" in text:
+              raise SystemExit(
+                  "ERROR: old letter-based app icon remains."
+              )
+
+          # The clock/date declarations MUST remain.
+          if "private TextView clock;" not in text:
+              raise SystemExit(
+                  "ERROR: clock declaration disappeared."
+              )
+
+          if "private TextView date;" not in text:
+              raise SystemExit(
+                  "ERROR: date declaration disappeared."
+              )
+
+          # The Home dashboard must NOT recreate the old clock/date.
+          if 'clock = text(' in text:
+              raise SystemExit(
+                  "ERROR: old clock UI assignment remains."
+              )
+
+          if 'date = text(' in text:
+              raise SystemExit(
+                  "ERROR: old date UI assignment remains."
+              )
+
+          if text == original:
+              raise SystemExit(
+                  "ERROR: Home UI patch produced no changes."
+              )
+
+          file.write_text(
+              text,
+              encoding="utf-8"
+          )
+
+          print(
+              "Home UI V1 Safe Clock Fix applied."
+          )
+          print(
+              "clock/date declarations preserved."
+          )
+          print(
+              "old clock/date Home widgets remain removed."
+          )
+          print(
+              "real ApplicationInfo.loadIcon() icons preserved."
+          )
+          PY
+
+          python3 /tmp/patch_home_clock_fix.py
+
+      - name: Verify V10CarActivity Clock Fix
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          FILE="v10-source/app/src/main/java/com/hieptran/aacast/doudou/V10CarActivity.java"
+
+          grep -Fq "private TextView clock;" "$FILE"
+          grep -Fq "private TextView date;" "$FILE"
+          grep -Fq "private void updateClock()" "$FILE"
+
+          if grep -Fq 'clock = text(' "$FILE"; then
+            echo "ERROR: old clock UI assignment remains."
+            exit 1
+          fi
+
+          if grep -Fq 'date = text(' "$FILE"; then
+            echo "ERROR: old date UI assignment remains."
+            exit 1
+          fi
+
+          grep -Fq "if (clock == null" "$FILE"
+          grep -Fq "|| date == null" "$FILE"
+
+          echo "V10CarActivity Clock Fix verification PASS."
+
+      - name: Verify Home UI V1 SAFE
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          FILE="v10-source/app/src/main/java/com/hieptran/aacast/doudou/V10CarActivity.java"
+
+          grep -Fq \
+            "import android.content.pm.ApplicationInfo;" \
+            "$FILE"
+
+          grep -Fq \
+            "import android.widget.ImageView;" \
+            "$FILE"
+
+          grep -Fq \
+            "loadIcon(" \
+            "$FILE"
+
+          grep -Fq \
+            'buttonText("APPS")' \
+            "$FILE"
+
+          NORMALIZED="$(
+            tr -d '[:space:]' < "$FILE"
+          )"
+
+          case "$NORMALIZED" in
+            *"ImageView.ScaleType.CENTER_INSIDE"*)
+              echo "Real icon scale marker OK."
+              ;;
+            *)
+              echo "ERROR: CENTER_INSIDE marker missing."
+              exit 1
+              ;;
+          esac
+
+          if grep -Fq "CAR ASSISTANT" "$FILE"; then
+            echo "ERROR: old CAR ASSISTANT header remains."
+            exit 1
+          fi
+
+          if grep -Fq '"SPEED"' "$FILE"; then
+            echo "ERROR: old SPEED card remains."
+            exit 1
+          fi
+
+          if grep -Fq '"WEATHER"' "$FILE"; then
+            echo "ERROR: old WEATHER card remains."
+            exit 1
+          fi
+
+          if grep -Fq "initial(app.name)" "$FILE"; then
+            echo "ERROR: letter-based icon remains."
+            exit 1
+          fi
+
+          echo "Home UI V1 SAFE verification PASS."
+
+      - name: Verify Core and Persistence isolation
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          SRC="v10-source/app/src/main/java/com/hieptran/aacast/doudou"
+
+          sha256sum \
+            "$SRC/V10DisplayController.java" \
+            "$SRC/V10SurfaceManager.java" \
+            "$SRC/V10TaskSession.java" \
+            "$SRC/V10ProjectionSession.java" \
+            "$SRC/V10SessionStore.java" \
+            > /tmp/protected-after.sha256
+
+          diff -u \
+            /tmp/protected-before.sha256 \
+            /tmp/protected-after.sha256
+
+          if grep -Fq \
+              "V10ProjectionService" \
+              "$SRC/V10ProjectionSession.java"; then
+            echo "ERROR: V10ProjectionService found."
+            exit 1
+          fi
+
+          if grep -Fq \
+              "am force-stop" \
+              "$SRC/V10ProjectionSession.java"; then
+            echo "ERROR: am force-stop found."
+            exit 1
+          fi
+
+          echo "Core/Persistence isolation PASS."
+
+      - name: Verify Floating Touch SAFE integrity
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          FILE="v10-source/app/src/main/java/com/hieptran/aacast/doudou/V10CarActivity.java"
+
+          grep -Fq \
+            "floatingTouchKey" \
+            "$FILE"
+
+          grep -Fq \
+            "createFloatingTouchKey()" \
+            "$FILE"
+
+          grep -Fq \
+            "floatingDownTime" \
+            "$FILE"
+
+          grep -Fq \
+            "ViewConfiguration.getLongPressTimeout()" \
+            "$FILE"
+
+          grep -Fq \
+            'addFloatingMenuButton("BACK"' \
+            "$FILE"
+
+          grep -Fq \
+            'addFloatingMenuButton("HOME"' \
+            "$FILE"
+
+          if grep -Fq \
+              "floatingLastTap" \
+              "$FILE"; then
+            echo "ERROR: old floatingLastTap remains."
+            exit 1
+          fi
+
+          if grep -Fq \
+              'session.recents()' \
+              "$FILE"; then
+            echo "ERROR: RECENTS logic remains."
+            exit 1
+          fi
+
+          if grep -Fq \
+              '"RECENTS"' \
+              "$FILE"; then
+            echo "ERROR: RECENTS menu remains."
+            exit 1
+          fi
+
+          if grep -Fq \
+              '"2 SCREEN"' \
+              "$FILE"; then
+            echo "ERROR: 2 SCREEN remains."
+            exit 1
+          fi
+
+          if grep -Fq \
+              '"3 SCREEN"' \
+              "$FILE"; then
+            echo "ERROR: 3 SCREEN remains."
+            exit 1
+          fi
+
+          echo "Floating Touch SAFE integrity PASS."
+
+      - name: Compile Java
+        working-directory: v10-source
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          chmod +x ./gradlew
+
+          ./gradlew \
+            --no-daemon \
+            --stacktrace \
+            compileDebugJavaWithJavac
+
+      - name: Assemble APK
+        working-directory: v10-source
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          ./gradlew \
+            --no-daemon \
+            --stacktrace \
+            assembleDebug
+
+      - name: Locate APK and SHA256
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          APK="$(
+            find v10-source \
+              -type f \
+              -path '*/build/outputs/apk/*/*.apk' \
+              -print \
+              -quit
+          )"
+
+          if [ -z "$APK" ]; then
+            echo "ERROR: APK not found."
+            exit 1
+          fi
+
+          cp \
+            "$APK" \
+            CarAssistant-V10-Display-Core-V1-Home-UI-V1-Safe-Clock-Fix.apk
+
+          SHA="$(
+            sha256sum \
+              CarAssistant-V10-Display-Core-V1-Home-UI-V1-Safe-Clock-Fix.apk \
+              | awk '{print $1}'
+          )"
+
+          printf '%s\n' "$SHA" \
+            > CarAssistant-V10-Display-Core-V1-Home-UI-V1-Safe-Clock-Fix.sha256
+
+          echo "APK:"
+          echo "CarAssistant-V10-Display-Core-V1-Home-UI-V1-Safe-Clock-Fix.apk"
+
+          echo "SHA256:"
+          echo "$SHA"
+
+      - name: Create SAFE Clock Fix manifest
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          cat > Home-UI-V1-SAFE-CLOCK-FIX-MANIFEST.txt <<'EOF'
+          CarAssistant V10 Display Core V1
+          Home UI V1 SAFE Clock Fix
+
+          BASELINE
+          V10-6A:
+          9075636a7d5947c1b0eee49c2bd3fd0e1b6b0cf1
+
+          HOME UI
+          Home UI V1 preserved.
+
+          CLOCK FIX
+          private TextView clock; preserved.
+          private TextView date; preserved.
+          updateClock() preserved.
+          Old clock/date UI widgets are not recreated.
+
+          ICONS
+          ApplicationInfo.loadIcon().
+          Real Android application icons.
+
+          PROTECTED
+          V10DisplayController unchanged.
+          V10SurfaceManager unchanged.
+          V10TaskSession unchanged.
+          V10ProjectionSession unchanged.
+          V10SessionStore unchanged.
+
+          FLOATING TOUCH
+          Stable Freeze Floating Touch.
+          SAFE Long Press preserved.
+
+          NOT ADDED
+          No RECENTS.
+          No 2 SCREEN.
+          No 3 SCREEN.
+          No V10ProjectionService.
+          No am force-stop.
+
+          PURPOSE
+          Fix only the V10CarActivity.java clock/date
+          compilation regression from Home UI V1 Safe.
+          EOF
+
+      - name: Upload Safe APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: CarAssistant-V10-Display-Core-V1-Home-UI-V1-Safe-Clock-Fix
+          path: |
+            CarAssistant-V10-Display-Core-V1-Home-UI-V1-Safe-Clock-Fix.apk
+            CarAssistant-V10-Display-Core-V1-Home-UI-V1-Safe-Clock-Fix.sha256
+            Home-UI-V1-SAFE-CLOCK-FIX-MANIFEST.txt
+          if-no-files-found: error
+          retention-days: 14
