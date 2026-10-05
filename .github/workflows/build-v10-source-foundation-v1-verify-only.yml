@@ -1,0 +1,675 @@
+name: CarAssistant V10 Source Foundation V1 Verify Only
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  foundation:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Install PyYAML
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -m pip install --disable-pip-version-check PyYAML
+
+      - name: Restore exact Foundation baseline
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          BASELINE="9075636a7d5947c1b0eee49c2bd3fd0e1b6b0cf1"
+
+          echo "Foundation source baseline:"
+          echo "$BASELINE"
+
+          git fetch origin "$BASELINE" --depth=1
+
+          rm -rf v10-source
+          git checkout "$BASELINE" -- v10-source
+
+          SRC="v10-source/app/src/main/java/com/hieptran/aacast/doudou"
+
+          test -d "v10-source"
+          test -f "$SRC/V10CarActivity.java"
+          test -f "$SRC/V10ProjectionSession.java"
+          test -f "$SRC/V10SessionStore.java"
+
+          if [ -f "$SRC/V10ProjectionService.java" ]; then
+            echo "ERROR: V10ProjectionService.java exists in baseline."
+            exit 1
+          fi
+
+          echo "Exact 9075636a baseline restored."
+
+      - name: Verify exact baseline before patches
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          SRC="v10-source/app/src/main/java/com/hieptran/aacast/doudou"
+
+          grep -Fq "DisplayManager" "$SRC/V10ProjectionSession.java"
+          grep -Fq "createVirtualDisplay" "$SRC/V10ProjectionSession.java"
+          grep -Fq "RootShellSession" "$SRC/V10ProjectionSession.java"
+          grep -Fq "am force-stop" "$SRC/V10ProjectionSession.java"
+
+          grep -Fq "public void onStop()" "$SRC/V10CarActivity.java"
+          grep -Fq "session.release()" "$SRC/V10CarActivity.java"
+
+          if grep -Fq "V10ProjectionService" "$SRC/V10CarActivity.java"; then
+            echo "ERROR: Service architecture already present."
+            exit 1
+          fi
+
+          echo "Baseline verification PASSED."
+
+      - name: Rebuild exact Display Core V1
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          cat > /tmp/run_display_core.py <<'PY'
+          from pathlib import Path
+          import subprocess
+          import sys
+          import yaml
+
+          workflow = Path(
+              ".github/workflows/build-v10-display-core-v1.yml"
+          )
+
+          if not workflow.exists():
+              raise SystemExit(
+                  "ERROR: build-v10-display-core-v1.yml not found."
+              )
+
+          data = yaml.safe_load(
+              workflow.read_text(encoding="utf-8")
+          )
+
+          steps = data.get("jobs", {}).get("build", {}).get("steps", [])
+
+          if not steps:
+              raise SystemExit(
+                  "ERROR: Display Core workflow has no steps."
+              )
+
+          executed = 0
+
+          for step in steps:
+              name = step.get("name", "")
+
+              if name == "Build V10 Display Core V1":
+                  break
+
+              if "run" not in step:
+                  continue
+
+              if step.get("uses"):
+                  continue
+
+              print("CORE >", name)
+
+              subprocess.run(
+                  [
+                      "bash",
+                      "-euo",
+                      "pipefail",
+                      "-c",
+                      step["run"]
+                  ],
+                  check=True
+              )
+
+              executed += 1
+
+          if executed == 0:
+              raise SystemExit(
+                  "ERROR: No Display Core run steps executed."
+              )
+
+          print(
+              "Exact Display Core V1 reconstruction PASSED."
+          )
+          PY
+
+          python3 /tmp/run_display_core.py
+
+      - name: Recover exact historical Floating Touch workflow
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          DELETE_COMMIT="6abfbe6a498a738c012a10cb13f98e285cdb8017"
+          PATCH_PATH=".github/workflows/build-v10-display-core-v1-floating-touch-fixed.yml"
+
+          git fetch origin "$DELETE_COMMIT" --depth=2
+
+          PARENT="$(git rev-list --parents -n 1 "$DELETE_COMMIT" | awk '{print $2}')"
+
+          if [ -z "$PARENT" ]; then
+            echo "ERROR: Cannot determine parent commit."
+            exit 1
+          fi
+
+          git show "$PARENT:$PATCH_PATH" > /tmp/floating-touch-fixed.yml
+
+          test -s /tmp/floating-touch-fixed.yml
+
+          echo "Historical Floating Touch workflow recovered."
+          echo "Parent commit: $PARENT"
+
+      - name: Apply exact historical Floating Touch patch
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          cat > /tmp/apply_floating_touch.py <<'PY'
+          from pathlib import Path
+          import subprocess
+          import sys
+          import yaml
+
+          workflow = Path(
+              "/tmp/floating-touch-fixed.yml"
+          )
+
+          data = yaml.safe_load(
+              workflow.read_text(encoding="utf-8")
+          )
+
+          steps = data.get("jobs", {}).get("build", {}).get("steps", [])
+
+          target = None
+
+          for step in steps:
+              if step.get("name") == \
+                      "Patch V10CarActivity with Floating Touch only":
+                  target = step
+                  break
+
+          if target is None:
+              raise SystemExit(
+                  "ERROR: Exact Floating Touch patch step not found."
+              )
+
+          run_text = target.get("run")
+
+          if not run_text:
+              raise SystemExit(
+                  "ERROR: Floating Touch patch has no run block."
+              )
+
+          print(
+              "Applying exact historical Floating Touch patch..."
+          )
+
+          subprocess.run(
+              [
+                  "bash",
+                  "-euo",
+                  "pipefail",
+                  "-c",
+                  run_text
+              ],
+              check=True
+          )
+
+          print("Floating Touch patch PASSED.")
+          PY
+
+          python3 /tmp/apply_floating_touch.py
+
+      - name: Extract exact SAFE Long Press patch
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          WORKFLOW=".github/workflows/build-v10-display-core-v1-floating-touch-longpress-safe.yml"
+
+          test -f "$WORKFLOW"
+
+          cat > /tmp/extract_safe_longpress.py <<'PY'
+          from pathlib import Path
+          import sys
+          import yaml
+
+          workflow = Path(
+              ".github/workflows/build-v10-display-core-v1-floating-touch-longpress-safe.yml"
+          )
+
+          data = yaml.safe_load(
+              workflow.read_text(encoding="utf-8")
+          )
+
+          steps = data.get("jobs", {}).get("build", {}).get("steps", [])
+
+          target = None
+
+          for step in steps:
+              if step.get("name") == \
+                      "Replace the entire Floating Touch listener with SAFE long-press version":
+                  target = step
+                  break
+
+          if target is None:
+              raise SystemExit(
+                  "ERROR: SAFE Long Press patch step not found."
+              )
+
+          run_text = target.get("run")
+
+          if not run_text:
+              raise SystemExit(
+                  "ERROR: SAFE Long Press patch has no run block."
+              )
+
+          Path(
+              "/tmp/safe-longpress.sh"
+          ).write_text(
+              run_text,
+              encoding="utf-8"
+          )
+
+          print("Exact SAFE Long Press patch extracted.")
+          PY
+
+          python3 /tmp/extract_safe_longpress.py
+
+          test -s /tmp/safe-longpress.sh
+
+      - name: Apply exact SAFE Long Press patch
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          bash -euo pipefail /tmp/safe-longpress.sh
+
+          echo "SAFE Long Press patch applied."
+
+      - name: Verify Foundation source architecture
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          SRC="v10-source/app/src/main/java/com/hieptran/aacast/doudou"
+
+          DISPLAY="$SRC/V10DisplayController.java"
+          SURFACE="$SRC/V10SurfaceManager.java"
+          TASK="$SRC/V10TaskSession.java"
+          SESSION="$SRC/V10ProjectionSession.java"
+          ACTIVITY="$SRC/V10CarActivity.java"
+
+          echo "===== REQUIRED FILES ====="
+
+          for file in \
+            "$DISPLAY" \
+            "$SURFACE" \
+            "$TASK" \
+            "$SESSION" \
+            "$ACTIVITY"; do
+
+            test -f "$file"
+            echo "OK: $file"
+          done
+
+          echo "===== DISPLAY CORE ====="
+
+          grep -Fq "DisplayManager" "$DISPLAY"
+          grep -Fq "createVirtualDisplay" "$DISPLAY"
+          grep -Fq "virtualDisplay.setSurface(null)" "$DISPLAY"
+          grep -Fq -- "--activity-reorder-to-front" "$DISPLAY"
+
+          echo "Display Core markers OK."
+
+          echo "===== PROJECTION SESSION ====="
+
+          grep -Fq "launchNewTask" "$SESSION"
+          grep -Fq "resumeExistingTask" "$SESSION"
+          grep -Fq "State.HIDDEN" "$SESSION"
+          grep -Fq "RootShellSession" "$SESSION"
+
+          echo "Projection Session markers OK."
+
+          echo "===== TASK SESSION ====="
+
+          grep -Fq "enum State" "$TASK"
+          grep -Fq "NEW" "$TASK"
+          grep -Fq "ACTIVE" "$TASK"
+          grep -Fq "HIDDEN" "$TASK"
+          grep -Fq "CLOSED" "$TASK"
+
+          echo "Task Session markers OK."
+
+          echo "===== FLOATING TOUCH ====="
+
+          grep -Fq "floatingTouchKey" "$ACTIVITY"
+          grep -Fq "createFloatingTouchKey()" "$ACTIVITY"
+          grep -Fq "floatingDragging" "$ACTIVITY"
+          grep -Fq "floatingDownTime" "$ACTIVITY"
+          grep -Fq "ViewConfiguration.getLongPressTimeout()" "$ACTIVITY"
+
+          echo "Floating Touch markers OK."
+
+          echo "===== BACK / HOME ====="
+
+          grep -Fq "handleControlBack()" "$ACTIVITY"
+          grep -Fq "handleControlHome()" "$ACTIVITY"
+          grep -Fq 'addFloatingMenuButton("BACK"' "$ACTIVITY"
+          grep -Fq 'addFloatingMenuButton("HOME"' "$ACTIVITY"
+
+          echo "BACK/HOME markers OK."
+
+      - name: Verify forbidden architecture is absent
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          SRC="v10-source/app/src/main/java/com/hieptran/aacast/doudou"
+
+          ACTIVITY="$SRC/V10CarActivity.java"
+          SESSION="$SRC/V10ProjectionSession.java"
+          DISPLAY="$SRC/V10DisplayController.java"
+
+          echo "Checking forbidden Service architecture..."
+
+          if [ -f "$SRC/V10ProjectionService.java" ]; then
+            echo "ERROR: V10ProjectionService.java exists."
+            exit 1
+          fi
+
+          if grep -Fq "V10ProjectionService" "$ACTIVITY"; then
+            echo "ERROR: V10ProjectionService reference found."
+            exit 1
+          fi
+
+          if grep -Fq "V10ProjectionService" "$SESSION"; then
+            echo "ERROR: V10ProjectionService reference found."
+            exit 1
+          fi
+
+          echo "Service architecture absent."
+
+          echo "Checking forbidden force-stop..."
+
+          if grep -Fq "am force-stop" "$SESSION"; then
+            echo "ERROR: am force-stop remains in ProjectionSession."
+            exit 1
+          fi
+
+          if grep -Fq "am force-stop" "$DISPLAY"; then
+            echo "ERROR: am force-stop remains in DisplayController."
+            exit 1
+          fi
+
+          echo "force-stop absent."
+
+          echo "Checking forbidden legacy menu..."
+
+          FORBIDDEN=(
+            'session.recents()'
+            '"RECENTS"'
+            '"2 SCREEN"'
+            '"3 SCREEN"'
+            'setLayoutModeExternal('
+          )
+
+          for item in "${FORBIDDEN[@]}"; do
+            if grep -Fq "$item" "$ACTIVITY"; then
+              echo "ERROR: forbidden marker found: $item"
+              exit 1
+            fi
+          done
+
+          echo "Legacy menu paths absent."
+
+          echo "Checking old floating tap state..."
+
+          if grep -Fq "floatingLastTap" "$ACTIVITY"; then
+            echo "ERROR: floatingLastTap remains."
+            exit 1
+          fi
+
+          echo "Old floating tap state absent."
+
+      - name: Verify SAFE Long Press implementation
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          FILE="v10-source/app/src/main/java/com/hieptran/aacast/doudou/V10CarActivity.java"
+
+          grep -Fq "floatingDownTime = SystemClock.uptimeMillis();" "$FILE"
+          grep -Fq "ViewConfiguration.getLongPressTimeout()" "$FILE"
+          grep -Fq "floatingDragging = false;" "$FILE"
+          grep -Fq "floatingDragging = true;" "$FILE"
+
+          if grep -Fq '\n    private void createFloatingTouchKey()' "$FILE"; then
+            echo "ERROR: literal escaped newline remains."
+            exit 1
+          fi
+
+          echo "SAFE Long Press implementation PASSED."
+
+      - name: Verify actual V10CarActivity structure
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          FILE="v10-source/app/src/main/java/com/hieptran/aacast/doudou/V10CarActivity.java"
+
+          test -s "$FILE"
+
+          grep -Fq "class V10CarActivity" "$FILE"
+          grep -Fq "onCreate" "$FILE"
+          grep -Fq "onResume" "$FILE"
+          grep -Fq "onStop" "$FILE"
+
+          echo "V10CarActivity structural markers OK."
+
+      - name: Verify Core files are internally consistent
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          SRC="v10-source/app/src/main/java/com/hieptran/aacast/doudou"
+
+          grep -Fq "class V10DisplayController" \
+            "$SRC/V10DisplayController.java"
+
+          grep -Fq "class V10SurfaceManager" \
+            "$SRC/V10SurfaceManager.java"
+
+          grep -Fq "class V10TaskSession" \
+            "$SRC/V10TaskSession.java"
+
+          grep -Fq "class V10ProjectionSession" \
+            "$SRC/V10ProjectionSession.java"
+
+          grep -Fq "V10DisplayController" \
+            "$SRC/V10ProjectionSession.java"
+
+          grep -Fq "V10SurfaceManager" \
+            "$SRC/V10ProjectionSession.java"
+
+          grep -Fq "V10TaskSession" \
+            "$SRC/V10ProjectionSession.java"
+
+          echo "Core source consistency PASSED."
+
+      - name: Compile Java Foundation
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          cd v10-source
+
+          chmod +x ./gradlew
+
+          ./gradlew \
+            --no-daemon \
+            --stacktrace \
+            compileDebugJavaWithJavac
+
+      - name: Assemble Foundation APK
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          cd v10-source
+
+          ./gradlew \
+            --no-daemon \
+            --stacktrace \
+            assembleDebug
+
+      - name: Locate APK and calculate SHA256
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          APK="$(find v10-source \
+            -type f \
+            -path '*/build/outputs/apk/*/*.apk' \
+            -print -quit)"
+
+          if [ -z "$APK" ]; then
+            echo "ERROR: Foundation APK not found."
+            exit 1
+          fi
+
+          cp "$APK" \
+            CarAssistant-V10-Source-Foundation-V1.apk
+
+          SHA="$(sha256sum \
+            CarAssistant-V10-Source-Foundation-V1.apk \
+            | awk '{print $1}')"
+
+          echo "Foundation APK:"
+          echo "CarAssistant-V10-Source-Foundation-V1.apk"
+
+          echo "SHA256:"
+          echo "$SHA"
+
+          printf '%s\n' "$SHA" \
+            > CarAssistant-V10-Source-Foundation-V1.sha256
+
+      - name: Create Foundation manifest
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          cat > Foundation-V1-MANIFEST.txt <<'EOF'
+          CarAssistant V10 Source Foundation V1
+
+          STATUS
+          VERIFY-ONLY BUILD
+          This workflow does NOT modify main source.
+          No commit is created by this workflow.
+
+          BASELINE
+          9075636a7d5947c1b0eee49c2bd3fd0e1b6b0cf1
+
+          SOURCE FOUNDATION
+          Exact V10-6A baseline restored from the commit above.
+
+          DISPLAY CORE
+          Display Core V1 reconstructed from:
+          .github/workflows/build-v10-display-core-v1.yml
+
+          FLOATING TOUCH
+          Historical Floating Touch patch reconstructed from:
+          parent of commit 6abfbe6a498a738c012a10cb13f98e285cdb8017
+
+          SAFE LONG PRESS
+          Exact SAFE Long Press implementation reconstructed from:
+          .github/workflows/build-v10-display-core-v1-floating-touch-longpress-safe.yml
+
+          PRESERVED
+          BACK
+          HOME
+          Floating Touch
+          Display Core
+          Projection Session
+          Task Session
+          Surface Manager
+
+          NOT INCLUDED
+          V10ProjectionService
+          Voice
+          Running Apps
+          WYN functionality
+          Media API
+          RECENTS
+          2 SCREEN
+          3 SCREEN
+          External layout mode
+          Home UI V2
+          Persistence rewrite
+
+          BUILD
+          compileDebugJavaWithJavac
+          assembleDebug
+
+          PURPOSE
+          This artifact is a candidate Source Foundation V1.
+          It must be tested before becoming the new main baseline.
+          EOF
+
+      - name: Package exact Foundation source
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          zip -qr \
+            CarAssistant-V10-Source-Foundation-V1-source.zip \
+            v10-source
+
+          test -s \
+            CarAssistant-V10-Source-Foundation-V1-source.zip
+
+      - name: Final Foundation PASS gate
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          test -s CarAssistant-V10-Source-Foundation-V1.apk
+          test -s CarAssistant-V10-Source-Foundation-V1.sha256
+          test -s Foundation-V1-MANIFEST.txt
+          test -s CarAssistant-V10-Source-Foundation-V1-source.zip
+
+          echo "========================================"
+          echo "FOUNDATION V1 VERIFICATION: PASS"
+          echo "========================================"
+          echo "Baseline: 9075636a7d5947c1b0eee49c2bd3fd0e1b6b0cf1"
+          echo "Main source was NOT modified."
+          echo "No source commit was created."
+          echo "APK + SHA256 + source archive are ready."
+          echo "========================================"
+
+      - name: Upload Foundation artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: CarAssistant-V10-Source-Foundation-V1
+          path: |
+            CarAssistant-V10-Source-Foundation-V1.apk
+            CarAssistant-V10-Source-Foundation-V1.sha256
+            Foundation-V1-MANIFEST.txt
+            CarAssistant-V10-Source-Foundation-V1-source.zip
+          if-no-files-found: error
+          retention-days: 14
