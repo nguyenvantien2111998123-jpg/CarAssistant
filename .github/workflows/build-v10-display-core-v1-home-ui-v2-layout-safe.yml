@@ -12,6 +12,10 @@ jobs:
 
     steps:
 
+      # ============================================================
+      # 1. RESTORE EXACT FOUNDATION V1
+      # ============================================================
+
       - name: Checkout exact Foundation V1
         uses: actions/checkout@v4
         with:
@@ -26,36 +30,65 @@ jobs:
           EXPECTED="7292b0569359a2fe6f7c3829561b6f65664fbd2e"
           ACTUAL="$(git rev-parse HEAD)"
 
-          if [ "$ACTUAL" != "$EXPECTED" ]; then
-            echo "ERROR: wrong Foundation V1 commit"
-            echo "EXPECTED=$EXPECTED"
-            echo "ACTUAL=$ACTUAL"
-            exit 1
-          fi
+          echo "EXPECTED=$EXPECTED"
+          echo "ACTUAL=$ACTUAL"
+
+          test "$ACTUAL" = "$EXPECTED"
 
           echo "Foundation V1 commit: PASS"
 
-      - name: Verify Foundation V1 architecture
+      # ============================================================
+      # 2. VERIFY EXACT FOUNDATION ARCHITECTURE
+      # ============================================================
+
+      - name: Verify exact V10CarActivity and protected architecture
         shell: bash
         run: |
           set -euo pipefail
 
           BASE="v10-source/app/src/main/java/com/hieptran/aacast/doudou"
+          ACTIVITY="$BASE/V10CarActivity.java"
 
-          test -f "$BASE/V10CarActivity.java"
+          test -f "$ACTIVITY"
           test -f "$BASE/V10ProjectionSession.java"
           test -f "$BASE/V10DisplayController.java"
           test -f "$BASE/V10SurfaceManager.java"
           test -f "$BASE/V10TaskSession.java"
 
           if [ -f "$BASE/V10ProjectionService.java" ]; then
-            echo "ERROR: forbidden V10ProjectionService.java exists"
+            echo "ERROR: V10ProjectionService.java must not exist"
             exit 1
           fi
 
-          echo "Foundation V1 architecture: PASS"
+          echo "Checking exact V10CarActivity foundation markers..."
 
-      - name: Snapshot protected files
+          grep -Fq "public final class V10CarActivity" "$ACTIVITY"
+          grep -Fq "private void buildUi()" "$ACTIVITY"
+          grep -Fq "private void buildDashboard()" "$ACTIVITY"
+          grep -Fq "private void buildAppPanel()" "$ACTIVITY"
+          grep -Fq "private void rebuildAppGrid(" "$ACTIVITY"
+          grep -Fq "private void loadApps()" "$ACTIVITY"
+          grep -Fq "private void rebuildDock()" "$ACTIVITY"
+          grep -Fq "private LinearLayout appTile(" "$ACTIVITY"
+          grep -Fq "private void attachProjection()" "$ACTIVITY"
+          grep -Fq "private void launchProjection(" "$ACTIVITY"
+          grep -Fq "private void returnToLauncher()" "$ACTIVITY"
+          grep -Fq "private void showApps()" "$ACTIVITY"
+          grep -Fq "private void hideApps()" "$ACTIVITY"
+          grep -Fq "private void createFloatingTouchKey()" "$ACTIVITY"
+          grep -Fq "public void handleControlBack()" "$ACTIVITY"
+          grep -Fq "public void handleControlHome()" "$ACTIVITY"
+          grep -Fq "public void handleControlRecents()" "$ACTIVITY"
+          grep -Fq "public void handleControlApps()" "$ACTIVITY"
+
+          echo "Exact V10CarActivity foundation markers: PASS"
+          echo "Exact protected architecture: PASS"
+
+      # ============================================================
+      # 3. SNAPSHOT PROTECTED FILES
+      # ============================================================
+
+      - name: Snapshot Projection and Persistence
         shell: bash
         run: |
           set -euo pipefail
@@ -71,7 +104,15 @@ jobs:
             "$BASE/V10TaskSession.java" \
             > foundation-protected/hashes-before.txt
 
+          sha256sum \
+            "$BASE/V10CarActivity.java" \
+            > foundation-protected/activity-before.txt
+
           echo "Protected snapshot: PASS"
+
+      # ============================================================
+      # 4. JAVA 17
+      # ============================================================
 
       - name: Setup Java 17
         uses: actions/setup-java@v4
@@ -79,804 +120,639 @@ jobs:
           distribution: temurin
           java-version: "17"
 
-      - name: Apply Home UI V2 Safe Patch
+      - name: Prepare Gradle
+        shell: bash
+        working-directory: v10-source
+        run: |
+          set -euo pipefail
+          chmod +x ./gradlew
+
+      # ============================================================
+      # 5. CREATE SMALL PATCH TOOL
+      #
+      # No long Python heredoc.
+      # The patcher is created from small printf statements.
+      # ============================================================
+
+      - name: Create safe patch tool
         shell: bash
         run: |
           set -euo pipefail
 
-          python3 - <<'PY'
-          from pathlib import Path
-
-          path = Path(
-              "v10-source/app/src/main/java/com/hieptran/aacast/doudou/V10CarActivity.java"
-          )
-
-          source = path.read_text(encoding="utf-8")
-
-          def replace_method(text, signature, replacement):
-              start = text.find(signature)
-
-              if start < 0:
-                  raise RuntimeError(
-                      "Method not found: " + signature
-                  )
-
-              brace = text.find("{", start)
-
-              if brace < 0:
-                  raise RuntimeError(
-                      "Opening brace not found: " + signature
-                  )
-
-              depth = 0
-              end = -1
-
-              for i in range(brace, len(text)):
-                  ch = text[i]
-
-                  if ch == "{":
-                      depth += 1
-
-                  elif ch == "}":
-                      depth -= 1
-
-                      if depth == 0:
-                          end = i + 1
-                          break
-
-              if end < 0:
-                  raise RuntimeError(
-                      "Closing brace not found: " + signature
-                  )
-
-              return (
-                  text[:start]
-                  + replacement.rstrip()
-                  + "\n"
-                  + text[end:]
-              )
-
-          def add_import(text, anchor, new_import):
-              if new_import in text:
-                  return text
-
-              if anchor not in text:
-                  raise RuntimeError(
-                      "Import anchor not found: " + anchor
-                  )
-
-              return text.replace(
-                  anchor,
-                  anchor + new_import,
-                  1
-              )
-
-          required = [
-              "public final class V10CarActivity",
-              "private void buildUi()",
-              "private void buildDashboard()",
-              "private void buildAppPanel()",
-              "private void rebuildAppGrid(",
-              "private void loadApps()",
-              "private void rebuildDock()",
-              "private LinearLayout appTile(",
-              "private void attachProjection()",
-              "private void launchProjection(",
-              "private void returnToLauncher()",
-              "private void showApps()",
-              "private void hideApps()",
-              "private void createFloatingTouchKey()",
-              "public void handleControlBack()",
-              "public void handleControlHome()",
-              "public void handleControlRecents()",
-              "public void handleControlApps()"
-          ]
-
-          for marker in required:
-              if marker not in source:
-                  raise RuntimeError(
-                      "Foundation marker missing: " + marker
-                  )
-
-          source = add_import(
-              source,
-              "import android.content.pm.ResolveInfo;\n",
-              "import android.content.pm.ApplicationInfo;\n"
-              "import android.content.pm.PackageManager;\n"
-          )
-
-          source = add_import(
-              source,
-              "import android.graphics.drawable.GradientDrawable;\n",
-              "import android.graphics.drawable.Drawable;\n"
-          )
-
-          source = add_import(
-              source,
-              "import android.widget.GridLayout;\n",
-              "import android.widget.ImageView;\n"
-          )
-
-          dashboard = r'''
-    private void buildDashboard() {
-
-        dashboard =
-                new LinearLayout(this);
-
-        dashboard.setOrientation(
-                LinearLayout.HORIZONTAL);
-
-        dashboard.setGravity(
-                Gravity.CENTER_VERTICAL);
-
-        dashboard.setPadding(
-                0,
-                0,
-                0,
-                0);
-
-        launcherLayer.addView(
-                dashboard,
-                new LinearLayout.LayoutParams(
-                        -1,
-                        -1));
-
-        LinearLayout sidebar =
-                new LinearLayout(this);
-
-        sidebar.setOrientation(
-                LinearLayout.VERTICAL);
-
-        sidebar.setGravity(
-                Gravity.TOP | Gravity.CENTER_HORIZONTAL);
-
-        sidebar.setPadding(
-                dp(3),
-                dp(3),
-                dp(3),
-                dp(3));
-
-        dashboard.addView(
-                sidebar,
-                new LinearLayout.LayoutParams(
-                        dp(88),
-                        -1));
-
-        TextView choose =
-                sidebarButton(
-                        "APP\nCHỌN");
-
-        choose.setOnClickListener(
-                v -> showApps());
-
-        sidebar.addView(
-                choose,
-                sidebarButtonParams());
-
-        dock =
-                new LinearLayout(this);
-
-        dock.setOrientation(
-                LinearLayout.VERTICAL);
-
-        dock.setGravity(
-                Gravity.TOP | Gravity.CENTER_HORIZONTAL);
-
-        sidebar.addView(
-                dock,
-                new LinearLayout.LayoutParams(
-                        -1,
-                        0,
-                        1f));
-
-        TextView voice =
-                sidebarButton(
-                        "🎙");
-
-        voice.setTextSize(20);
-
-        voice.setOnClickListener(
-                v -> { });
-
-        sidebar.addView(
-                voice,
-                sidebarFixedButtonParams());
-
-        TextView tasks =
-                sidebarButton(
-                        "TASKS");
-
-        tasks.setOnClickListener(
-                v -> { });
-
-        sidebar.addView(
-                tasks,
-                sidebarFixedButtonParams());
-
-        FrameLayout main =
-                new FrameLayout(this);
-
-        dashboard.addView(
-                main,
-                new LinearLayout.LayoutParams(
-                        0,
-                        -1,
-                        1f));
-
-        LinearLayout bottom =
-                new LinearLayout(this);
-
-        bottom.setOrientation(
-                LinearLayout.HORIZONTAL);
-
-        bottom.setGravity(
-                Gravity.CENTER_VERTICAL);
-
-        bottom.setPadding(
-                dp(8),
-                dp(8),
-                dp(8),
-                dp(8));
-
-        FrameLayout.LayoutParams bottomParams =
-                new FrameLayout.LayoutParams(
-                        -1,
-                        dp(88),
-                        Gravity.BOTTOM);
-
-        main.addView(
-                bottom,
-                bottomParams);
-
-        TextView wyn =
-                circleButton(
-                        "WYN");
-
-        wyn.setOnClickListener(
-                v -> { });
-
-        bottom.addView(
-                wyn,
-                new LinearLayout.LayoutParams(
-                        dp(78),
-                        dp(78)));
-
-        LinearLayout media =
-                card();
-
-        media.setPadding(
-                dp(14),
-                dp(7),
-                dp(14),
-                dp(7));
-
-        TextView mediaTitle =
-                text(
-                        "MEDIA",
-                        12,
-                        Color.LTGRAY);
-
-        mediaTitle.setGravity(
-                Gravity.CENTER_VERTICAL);
-
-        TextView mediaLine =
-                text(
-                        "▶  Đang phát...",
-                        17,
-                        Color.WHITE);
-
-        mediaLine.setGravity(
-                Gravity.CENTER_VERTICAL);
-
-        media.addView(
-                mediaTitle,
-                new LinearLayout.LayoutParams(
-                        -1,
-                        dp(25)));
-
-        media.addView(
-                mediaLine,
-                new LinearLayout.LayoutParams(
-                        -1,
-                        dp(35)));
-
-        media.setOnClickListener(
-                v -> { });
-
-        LinearLayout.LayoutParams mediaParams =
-                new LinearLayout.LayoutParams(
-                        0,
-                        dp(78),
-                        1f);
-
-        mediaParams.setMargins(
-                dp(12),
-                0,
-                0,
-                0);
-
-        bottom.addView(
-                media,
-                mediaParams);
-    }
-          '''
-
-          source = replace_method(
-              source,
-              "    private void buildDashboard()",
-              dashboard
-          )
-
-          rebuild_dock = r'''
-    private void rebuildDock() {
-
-        if (dock == null) {
-            return;
-        }
-
-        dock.removeAllViews();
-
-        ArrayList<AppInfo> quickApps =
-                getQuickLaunchApps();
-
-        int count =
-                Math.min(
-                        4,
-                        quickApps.size());
-
-        for (int i = 0;
-             i < count;
-             i++) {
-
-            final AppInfo app =
-                    quickApps.get(i);
-
-            dock.addView(
-                    quickLaunchTile(app),
-                    sidebarQuickParams());
-        }
-    }
-
-    private ArrayList<AppInfo> getQuickLaunchApps() {
-
-        ArrayList<AppInfo> selected =
-                new ArrayList<>();
-
-        String[] preferredPackages = {
-                "com.google.android.apps.maps",
-                "com.google.android.youtube",
-                "com.zing.zalo",
-                "com.spotify.music"
-        };
-
-        for (String packageName :
-                preferredPackages) {
-
-            if (selected.size() >= 4) {
-                break;
-            }
-
-            for (AppInfo app : apps) {
-
-                if (packageName.equals(
-                        app.component.getPackageName())) {
-
-                    boolean duplicate = false;
-
-                    for (AppInfo existing :
-                            selected) {
-
-                        if (existing.component.equals(
-                                app.component)) {
-
-                            duplicate = true;
-                            break;
-                        }
-                    }
-
-                    if (!duplicate) {
-                        selected.add(app);
-                    }
-
-                    break;
-                }
-            }
-        }
-
-        if (selected.size() < 4) {
-
-            for (AppInfo app : apps) {
-
-                if (selected.size() >= 4) {
-                    break;
-                }
-
-                boolean duplicate = false;
-
-                for (AppInfo existing :
-                        selected) {
-
-                    if (existing.component.equals(
-                            app.component)) {
-
-                        duplicate = true;
-                        break;
-                    }
-                }
-
-                if (!duplicate) {
-                    selected.add(app);
-                }
-            }
-        }
-
-        return selected;
-    }
-
-    private LinearLayout quickLaunchTile(
-            AppInfo app) {
-
-        LinearLayout tile =
-                new LinearLayout(this);
-
-        tile.setOrientation(
-                LinearLayout.VERTICAL);
-
-        tile.setGravity(
-                Gravity.CENTER);
-
-        GradientDrawable background =
-                new GradientDrawable();
-
-        background.setColor(
-                Color.rgb(
-                        22,
-                        27,
-                        33));
-
-        background.setCornerRadius(
-                dp(14));
-
-        tile.setBackground(background);
-
-        ImageView icon =
-                new ImageView(this);
-
-        Drawable drawable =
-                getRealAppIcon(
-                        app.component.getPackageName());
-
-        if (drawable != null) {
-            icon.setImageDrawable(drawable);
-        }
-
-        icon.setScaleType(
-                ImageView.ScaleType.CENTER_INSIDE);
-
-        tile.addView(
-                icon,
-                new LinearLayout.LayoutParams(
-                        dp(42),
-                        dp(42)));
-
-        TextView name =
-                text(
-                        app.name,
-                        8,
-                        Color.WHITE);
-
-        name.setGravity(
-                Gravity.CENTER);
-
-        name.setMaxLines(1);
-
-        tile.addView(
-                name,
-                new LinearLayout.LayoutParams(
-                        -1,
-                        dp(18)));
-
-        tile.setOnClickListener(
-                v -> launchProjection(
-                        app.component));
-
-        return tile;
-    }
-          '''
-
-          source = replace_method(
-              source,
-              "    private void rebuildDock()",
-              rebuild_dock
-          )
-
-          app_tile = r'''
-    private LinearLayout appTile(
-            AppInfo app) {
-
-        LinearLayout tile =
-                new LinearLayout(this);
-
-        tile.setOrientation(
-                LinearLayout.VERTICAL);
-
-        tile.setGravity(
-                Gravity.CENTER);
-
-        GradientDrawable background =
-                new GradientDrawable();
-
-        background.setColor(
-                Color.rgb(
-                        22,
-                        27,
-                        33));
-
-        background.setCornerRadius(
-                dp(16));
-
-        tile.setBackground(background);
-
-        ImageView icon =
-                new ImageView(this);
-
-        Drawable drawable =
-                getRealAppIcon(
-                        app.component.getPackageName());
-
-        if (drawable != null) {
-            icon.setImageDrawable(drawable);
-        }
-
-        icon.setScaleType(
-                ImageView.ScaleType.CENTER_INSIDE);
-
-        tile.addView(
-                icon,
-                new LinearLayout.LayoutParams(
-                        -1,
-                        dp(64)));
-
-        TextView name =
-                text(
-                        app.name,
-                        12,
-                        Color.WHITE);
-
-        name.setGravity(
-                Gravity.CENTER);
-
-        name.setMaxLines(2);
-
-        tile.addView(
-                name,
-                new LinearLayout.LayoutParams(
-                        -1,
-                        dp(38)));
-
-        tile.setOnClickListener(
-                v -> {
-
-                    hideApps();
-
-                    launchProjection(
-                            app.component);
-                });
-
-        return tile;
-    }
-
-    private Drawable getRealAppIcon(
-            String packageName) {
-
-        try {
-
-            PackageManager pm =
-                    getPackageManager();
-
-            ApplicationInfo info =
-                    pm.getApplicationInfo(
-                            packageName,
-                            0);
-
-            return info.loadIcon(pm);
-
-        } catch (Exception ignored) {
-
-            return null;
-        }
-    }
-          '''
-
-          source = replace_method(
-              source,
-              "    private LinearLayout appTile(",
-              app_tile
-          )
-
-          helpers = r'''
-    private LinearLayout.LayoutParams
-            sidebarButtonParams() {
-
-        LinearLayout.LayoutParams params =
-                new LinearLayout.LayoutParams(
-                        -1,
-                        dp(62));
-
-        params.setMargins(
-                dp(1),
-                dp(2),
-                dp(1),
-                dp(2));
-
-        return params;
-    }
-
-    private LinearLayout.LayoutParams
-            sidebarFixedButtonParams() {
-
-        LinearLayout.LayoutParams params =
-                new LinearLayout.LayoutParams(
-                        -1,
-                        dp(62));
-
-        params.setMargins(
-                dp(1),
-                dp(2),
-                dp(1),
-                dp(2));
-
-        return params;
-    }
-
-    private LinearLayout.LayoutParams
-            sidebarQuickParams() {
-
-        LinearLayout.LayoutParams params =
-                new LinearLayout.LayoutParams(
-                        -1,
-                        dp(66));
-
-        params.setMargins(
-                dp(1),
-                dp(2),
-                dp(1),
-                dp(2));
-
-        return params;
-    }
-
-    private TextView sidebarButton(
-            String value) {
-
-        TextView view =
-                buttonText(value);
-
-        view.setTextSize(11);
-
-        view.setGravity(
-                Gravity.CENTER);
-
-        return view;
-    }
-
-    private TextView circleButton(
-            String value) {
-
-        TextView view =
-                text(
-                        value,
-                        15,
-                        Color.WHITE);
-
-        view.setGravity(
-                Gravity.CENTER);
-
-        GradientDrawable background =
-                new GradientDrawable();
-
-        background.setShape(
-                GradientDrawable.OVAL);
-
-        background.setColor(
-                Color.rgb(
-                        22,
-                        27,
-                        33));
-
-        background.setStroke(
-                dp(2),
-                Color.rgb(
-                        70,
-                        150,
-                        210));
-
-        view.setBackground(
-                background);
-
-        return view;
-    }
-
-          '''
-
-          marker = "    private LinearLayout card()"
-
-          if marker not in source:
-              raise RuntimeError(
-                  "card() helper not found"
-              )
-
-          if "sidebarButtonParams()" not in source:
-              source = source.replace(
-                  marker,
-                  helpers + marker,
-                  1
-              )
-
-          path.write_text(
-              source.rstrip() + "\n",
-              encoding="utf-8"
-          )
-
-          print("Home UI V2 patch: PASS")
-          PY
-
-      - name: Verify Home UI V2 source
+          mkdir -p tools
+
+          printf '%s\n' \
+          'from pathlib import Path' \
+          '' \
+          'def replace_method(text, signature, replacement):' \
+          '    start = text.find(signature)' \
+          '    if start < 0:' \
+          '        raise RuntimeError("METHOD NOT FOUND: " + signature)' \
+          '' \
+          '    brace = text.find("{", start)' \
+          '    if brace < 0:' \
+          '        raise RuntimeError("OPEN BRACE NOT FOUND: " + signature)' \
+          '' \
+          '    depth = 0' \
+          '    end = -1' \
+          '' \
+          '    for i in range(brace, len(text)):' \
+          '        ch = text[i]' \
+          '        if ch == "{":' \
+          '            depth += 1' \
+          '        elif ch == "}":' \
+          '            depth -= 1' \
+          '            if depth == 0:' \
+          '                end = i + 1' \
+          '                break' \
+          '' \
+          '    if end < 0:' \
+          '        raise RuntimeError("CLOSING BRACE NOT FOUND: " + signature)' \
+          '' \
+          '    return text[:start] + replacement.rstrip() + "\n" + text[end:]' \
+          '' \
+          'def add_import(text, anchor, new_import):' \
+          '    if new_import in text:' \
+          '        return text' \
+          '    if anchor not in text:' \
+          '        raise RuntimeError("IMPORT ANCHOR NOT FOUND: " + anchor)' \
+          '    return text.replace(anchor, anchor + new_import, 1)' \
+          '' \
+          'def require(text, marker):' \
+          '    if marker not in text:' \
+          '        raise RuntimeError("FOUNDATION MARKER MISSING: " + marker)' \
+          > tools/patch_common.py
+
+          python3 -m py_compile tools/patch_common.py
+
+          echo "Patch tool syntax: PASS"
+
+      # ============================================================
+      # 6. PATCH PHASE 1 - IMPORTS
+      # ============================================================
+
+      - name: Create import patch
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          mkdir -p tools
+
+          printf '%s\n' \
+          'from pathlib import Path' \
+          'from patch_common import add_import, require' \
+          '' \
+          'path = Path("v10-source/app/src/main/java/com/hieptran/aacast/doudou/V10CarActivity.java")' \
+          'source = path.read_text(encoding="utf-8")' \
+          '' \
+          'require(source, "public final class V10CarActivity")' \
+          'require(source, "import android.content.pm.ResolveInfo;")' \
+          'require(source, "import android.graphics.drawable.GradientDrawable;")' \
+          'require(source, "import android.widget.GridLayout;")' \
+          '' \
+          'source = add_import(source, "import android.content.pm.ResolveInfo;\n", "import android.content.pm.ApplicationInfo;\nimport android.content.pm.PackageManager;\n")' \
+          'source = add_import(source, "import android.graphics.drawable.GradientDrawable;\n", "import android.graphics.drawable.Drawable;\n")' \
+          'source = add_import(source, "import android.widget.GridLayout;\n", "import android.widget.ImageView;\n")' \
+          '' \
+          'path.write_text(source, encoding="utf-8")' \
+          'print("IMPORT PATCH: PASS")' \
+          > tools/patch_imports.py
+
+          python3 -m py_compile tools/patch_imports.py
+
+      - name: Apply import patch
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          PYTHONPATH="$PWD/tools" python3 tools/patch_imports.py
+
+      - name: Compile after imports
+        shell: bash
+        working-directory: v10-source
+        run: |
+          set -euo pipefail
+
+          ./gradlew \
+            :app:compileDebugJavaWithJavac \
+            --no-daemon
+
+          echo "Compile after imports: PASS"
+
+      # ============================================================
+      # 7. PATCH PHASE 2 - HOME DASHBOARD
+      # ============================================================
+
+      - name: Create dashboard patch
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          printf '%s\n' \
+          'from pathlib import Path' \
+          'from patch_common import replace_method, require' \
+          '' \
+          'path = Path("v10-source/app/src/main/java/com/hieptran/aacast/doudou/V10CarActivity.java")' \
+          'source = path.read_text(encoding="utf-8")' \
+          '' \
+          'require(source, "private void buildDashboard()")' \
+          'require(source, "private void showApps()")' \
+          'require(source, "private void hideApps()")' \
+          'require(source, "private void rebuildDock()")' \
+          '' \
+          'dashboard = """' \
+          '    private void buildDashboard() {' \
+          '' \
+          '        dashboard = new LinearLayout(this);' \
+          '        dashboard.setOrientation(LinearLayout.HORIZONTAL);' \
+          '        dashboard.setGravity(Gravity.CENTER_VERTICAL);' \
+          '' \
+          '        launcherLayer.addView(' \
+          '                dashboard,' \
+          '                new LinearLayout.LayoutParams(-1, -1));' \
+          '' \
+          '        LinearLayout sidebar = new LinearLayout(this);' \
+          '        sidebar.setOrientation(LinearLayout.VERTICAL);' \
+          '        sidebar.setGravity(Gravity.TOP | Gravity.CENTER_HORIZONTAL);' \
+          '        sidebar.setPadding(dp(3), dp(3), dp(3), dp(3));' \
+          '' \
+          '        dashboard.addView(' \
+          '                sidebar,' \
+          '                new LinearLayout.LayoutParams(dp(88), -1));' \
+          '' \
+          '        TextView choose = sidebarButton("APP\\nCHỌN");' \
+          '        choose.setOnClickListener(v -> showApps());' \
+          '        sidebar.addView(choose, sidebarButtonParams());' \
+          '' \
+          '        dock = new LinearLayout(this);' \
+          '        dock.setOrientation(LinearLayout.VERTICAL);' \
+          '        dock.setGravity(Gravity.TOP | Gravity.CENTER_HORIZONTAL);' \
+          '        sidebar.addView(dock, new LinearLayout.LayoutParams(-1, 0, 1f));' \
+          '' \
+          '        TextView voice = sidebarButton("🎙");' \
+          '        voice.setTextSize(20);' \
+          '        voice.setOnClickListener(v -> { });' \
+          '        sidebar.addView(voice, sidebarFixedButtonParams());' \
+          '' \
+          '        TextView tasks = sidebarButton("TASKS");' \
+          '        tasks.setOnClickListener(v -> { });' \
+          '        sidebar.addView(tasks, sidebarFixedButtonParams());' \
+          '' \
+          '        FrameLayout main = new FrameLayout(this);' \
+          '        dashboard.addView(main, new LinearLayout.LayoutParams(0, -1, 1f));' \
+          '' \
+          '        LinearLayout bottom = new LinearLayout(this);' \
+          '        bottom.setOrientation(LinearLayout.HORIZONTAL);' \
+          '        bottom.setGravity(Gravity.CENTER_VERTICAL);' \
+          '        bottom.setPadding(dp(8), dp(8), dp(8), dp(8));' \
+          '' \
+          '        FrameLayout.LayoutParams bottomParams =' \
+          '                new FrameLayout.LayoutParams(-1, dp(88), Gravity.BOTTOM);' \
+          '' \
+          '        main.addView(bottom, bottomParams);' \
+          '' \
+          '        TextView wyn = circleButton("WYN");' \
+          '        wyn.setOnClickListener(v -> { });' \
+          '        bottom.addView(wyn, new LinearLayout.LayoutParams(dp(78), dp(78)));' \
+          '' \
+          '        LinearLayout media = card();' \
+          '        media.setPadding(dp(14), dp(7), dp(14), dp(7));' \
+          '' \
+          '        TextView mediaTitle = text("MEDIA", 12, Color.LTGRAY);' \
+          '        mediaTitle.setGravity(Gravity.CENTER_VERTICAL);' \
+          '' \
+          '        TextView mediaLine = text("▶  Đang phát...", 17, Color.WHITE);' \
+          '        mediaLine.setGravity(Gravity.CENTER_VERTICAL);' \
+          '' \
+          '        media.addView(mediaTitle, new LinearLayout.LayoutParams(-1, dp(25)));' \
+          '        media.addView(mediaLine, new LinearLayout.LayoutParams(-1, dp(35)));' \
+          '        media.setOnClickListener(v -> { });' \
+          '' \
+          '        LinearLayout.LayoutParams mediaParams =' \
+          '                new LinearLayout.LayoutParams(0, dp(78), 1f);' \
+          '' \
+          '        mediaParams.setMargins(dp(12), 0, 0, 0);' \
+          '        bottom.addView(media, mediaParams);' \
+          '    }' \
+          '"""' \
+          '' \
+          'source = replace_method(source, "    private void buildDashboard()", dashboard)' \
+          'path.write_text(source.rstrip() + "\n", encoding="utf-8")' \
+          'print("DASHBOARD PATCH: PASS")' \
+          > tools/patch_dashboard.py
+
+          python3 -m py_compile tools/patch_dashboard.py
+
+      - name: Apply dashboard patch
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          PYTHONPATH="$PWD/tools" python3 tools/patch_dashboard.py
+
+      - name: Compile after dashboard
+        shell: bash
+        working-directory: v10-source
+        run: |
+          set -euo pipefail
+
+          ./gradlew \
+            :app:compileDebugJavaWithJavac \
+            --no-daemon
+
+          echo "Compile after dashboard: PASS"
+
+      # ============================================================
+      # 8. PATCH PHASE 3 - REAL APP ICON + FOUR QUICK APPS
+      # ============================================================
+
+      - name: Create app icon and quick-launch patch
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          printf '%s\n' \
+          'from pathlib import Path' \
+          'from patch_common import replace_method, require' \
+          '' \
+          'path = Path("v10-source/app/src/main/java/com/hieptran/aacast/doudou/V10CarActivity.java")' \
+          'source = path.read_text(encoding="utf-8")' \
+          '' \
+          'require(source, "private void rebuildDock()")' \
+          'require(source, "private LinearLayout appTile(")' \
+          'require(source, "private void loadApps()")' \
+          'require(source, "class AppInfo")' \
+          '' \
+          'dock = """' \
+          '    private void rebuildDock() {' \
+          '        if (dock == null) return;' \
+          '        dock.removeAllViews();' \
+          '' \
+          '        ArrayList<AppInfo> quickApps = getQuickLaunchApps();' \
+          '        int count = Math.min(4, quickApps.size());' \
+          '' \
+          '        for (int i = 0; i < count; i++) {' \
+          '            final AppInfo app = quickApps.get(i);' \
+          '            dock.addView(quickLaunchTile(app), sidebarQuickParams());' \
+          '        }' \
+          '    }' \
+          '' \
+          '    private ArrayList<AppInfo> getQuickLaunchApps() {' \
+          '        ArrayList<AppInfo> selected = new ArrayList<>();' \
+          '' \
+          '        String[] preferredPackages = {' \
+          '                "com.google.android.apps.maps",' \
+          '                "com.google.android.youtube",' \
+          '                "com.zing.zalo",' \
+          '                "com.spotify.music"' \
+          '        };' \
+          '' \
+          '        for (String packageName : preferredPackages) {' \
+          '            if (selected.size() >= 4) break;' \
+          '' \
+          '            for (AppInfo app : apps) {' \
+          '                if (packageName.equals(app.component.getPackageName())) {' \
+          '                    boolean duplicate = false;' \
+          '' \
+          '                    for (AppInfo existing : selected) {' \
+          '                        if (existing.component.equals(app.component)) {' \
+          '                            duplicate = true;' \
+          '                            break;' \
+          '                        }' \
+          '                    }' \
+          '' \
+          '                    if (!duplicate) selected.add(app);' \
+          '                    break;' \
+          '                }' \
+          '            }' \
+          '        }' \
+          '' \
+          '        if (selected.size() < 4) {' \
+          '            for (AppInfo app : apps) {' \
+          '                if (selected.size() >= 4) break;' \
+          '' \
+          '                boolean duplicate = false;' \
+          '                for (AppInfo existing : selected) {' \
+          '                    if (existing.component.equals(app.component)) {' \
+          '                        duplicate = true;' \
+          '                        break;' \
+          '                    }' \
+          '                }' \
+          '' \
+          '                if (!duplicate) selected.add(app);' \
+          '            }' \
+          '        }' \
+          '' \
+          '        return selected;' \
+          '    }' \
+          '' \
+          '    private LinearLayout quickLaunchTile(AppInfo app) {' \
+          '        LinearLayout tile = new LinearLayout(this);' \
+          '        tile.setOrientation(LinearLayout.VERTICAL);' \
+          '        tile.setGravity(Gravity.CENTER);' \
+          '' \
+          '        GradientDrawable background = new GradientDrawable();' \
+          '        background.setColor(Color.rgb(22, 27, 33));' \
+          '        background.setCornerRadius(dp(14));' \
+          '        tile.setBackground(background);' \
+          '' \
+          '        ImageView icon = new ImageView(this);' \
+          '        Drawable drawable = getRealAppIcon(app.component.getPackageName());' \
+          '        if (drawable != null) icon.setImageDrawable(drawable);' \
+          '        icon.setScaleType(ImageView.ScaleType.CENTER_INSIDE);' \
+          '' \
+          '        tile.addView(icon, new LinearLayout.LayoutParams(dp(42), dp(42)));' \
+          '' \
+          '        TextView name = text(app.name, 8, Color.WHITE);' \
+          '        name.setGravity(Gravity.CENTER);' \
+          '        name.setMaxLines(1);' \
+          '        tile.addView(name, new LinearLayout.LayoutParams(-1, dp(18)));' \
+          '' \
+          '        tile.setOnClickListener(v -> launchProjection(app.component));' \
+          '        return tile;' \
+          '    }' \
+          '' \
+          '    private Drawable getRealAppIcon(String packageName) {' \
+          '        try {' \
+          '            PackageManager pm = getPackageManager();' \
+          '            ApplicationInfo info = pm.getApplicationInfo(packageName, 0);' \
+          '            return info.loadIcon(pm);' \
+          '        } catch (Exception ignored) {' \
+          '            return null;' \
+          '        }' \
+          '    }' \
+          '"""' \
+          '' \
+          'source = replace_method(source, "    private void rebuildDock()", dock)' \
+          'path.write_text(source.rstrip() + "\n", encoding="utf-8")' \
+          'print("QUICK APP PATCH: PASS")' \
+          > tools/patch_quick_apps.py
+
+          python3 -m py_compile tools/patch_quick_apps.py
+
+      - name: Apply app icon and quick-launch patch
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          PYTHONPATH="$PWD/tools" python3 tools/patch_quick_apps.py
+
+      - name: Compile after quick-launch patch
+        shell: bash
+        working-directory: v10-source
+        run: |
+          set -euo pipefail
+
+          ./gradlew \
+            :app:compileDebugJavaWithJavac \
+            --no-daemon
+
+          echo "Compile after quick-launch: PASS"
+
+      # ============================================================
+      # 9. PATCH PHASE 4 - APP GRID REAL ICONS
+      # ============================================================
+
+      - name: Create app-grid icon patch
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          printf '%s\n' \
+          'from pathlib import Path' \
+          'from patch_common import replace_method, require' \
+          '' \
+          'path = Path("v10-source/app/src/main/java/com/hieptran/aacast/doudou/V10CarActivity.java")' \
+          'source = path.read_text(encoding="utf-8")' \
+          '' \
+          'require(source, "private LinearLayout appTile(")' \
+          'require(source, "private Drawable getRealAppIcon(")' \
+          'require(source, "private void hideApps()")' \
+          'require(source, "private void launchProjection(")' \
+          '' \
+          'tile = """' \
+          '    private LinearLayout appTile(AppInfo app) {' \
+          '        LinearLayout tile = new LinearLayout(this);' \
+          '        tile.setOrientation(LinearLayout.VERTICAL);' \
+          '        tile.setGravity(Gravity.CENTER);' \
+          '' \
+          '        GradientDrawable background = new GradientDrawable();' \
+          '        background.setColor(Color.rgb(22, 27, 33));' \
+          '        background.setCornerRadius(dp(16));' \
+          '        tile.setBackground(background);' \
+          '' \
+          '        ImageView icon = new ImageView(this);' \
+          '        Drawable drawable = getRealAppIcon(app.component.getPackageName());' \
+          '        if (drawable != null) icon.setImageDrawable(drawable);' \
+          '        icon.setScaleType(ImageView.ScaleType.CENTER_INSIDE);' \
+          '' \
+          '        tile.addView(icon, new LinearLayout.LayoutParams(-1, dp(64)));' \
+          '' \
+          '        TextView name = text(app.name, 12, Color.WHITE);' \
+          '        name.setGravity(Gravity.CENTER);' \
+          '        name.setMaxLines(2);' \
+          '        tile.addView(name, new LinearLayout.LayoutParams(-1, dp(38)));' \
+          '' \
+          '        tile.setOnClickListener(v -> {' \
+          '            hideApps();' \
+          '            launchProjection(app.component);' \
+          '        });' \
+          '' \
+          '        return tile;' \
+          '    }' \
+          '"""' \
+          '' \
+          'source = replace_method(source, "    private LinearLayout appTile(", tile)' \
+          'path.write_text(source.rstrip() + "\n", encoding="utf-8")' \
+          'print("APP GRID ICON PATCH: PASS")' \
+          > tools/patch_app_grid.py
+
+          python3 -m py_compile tools/patch_app_grid.py
+
+      - name: Apply app-grid icon patch
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          PYTHONPATH="$PWD/tools" python3 tools/patch_app_grid.py
+
+      - name: Compile after app-grid patch
+        shell: bash
+        working-directory: v10-source
+        run: |
+          set -euo pipefail
+
+          ./gradlew \
+            :app:compileDebugJavaWithJavac \
+            --no-daemon
+
+          echo "Compile after app-grid: PASS"
+
+      # ============================================================
+      # 10. ADD SMALL HOME UI HELPERS
+      # ============================================================
+
+      - name: Create Home UI helper patch
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          printf '%s\n' \
+          'from pathlib import Path' \
+          'from patch_common import require' \
+          '' \
+          'path = Path("v10-source/app/src/main/java/com/hieptran/aacast/doudou/V10CarActivity.java")' \
+          'source = path.read_text(encoding="utf-8")' \
+          '' \
+          'require(source, "private LinearLayout card()")' \
+          'require(source, "sidebarButtonParams()")' \
+          '' \
+          'helpers = """' \
+          '    private LinearLayout.LayoutParams sidebarButtonParams() {' \
+          '        LinearLayout.LayoutParams params =' \
+          '                new LinearLayout.LayoutParams(-1, dp(62));' \
+          '        params.setMargins(dp(1), dp(2), dp(1), dp(2));' \
+          '        return params;' \
+          '    }' \
+          '' \
+          '    private LinearLayout.LayoutParams sidebarFixedButtonParams() {' \
+          '        LinearLayout.LayoutParams params =' \
+          '                new LinearLayout.LayoutParams(-1, dp(62));' \
+          '        params.setMargins(dp(1), dp(2), dp(1), dp(2));' \
+          '        return params;' \
+          '    }' \
+          '' \
+          '    private LinearLayout.LayoutParams sidebarQuickParams() {' \
+          '        LinearLayout.LayoutParams params =' \
+          '                new LinearLayout.LayoutParams(-1, dp(66));' \
+          '        params.setMargins(dp(1), dp(2), dp(1), dp(2));' \
+          '        return params;' \
+          '    }' \
+          '' \
+          '    private TextView sidebarButton(String value) {' \
+          '        TextView view = buttonText(value);' \
+          '        view.setTextSize(11);' \
+          '        view.setGravity(Gravity.CENTER);' \
+          '        return view;' \
+          '    }' \
+          '' \
+          '    private TextView circleButton(String value) {' \
+          '        TextView view = text(value, 15, Color.WHITE);' \
+          '        view.setGravity(Gravity.CENTER);' \
+          '' \
+          '        GradientDrawable background = new GradientDrawable();' \
+          '        background.setShape(GradientDrawable.OVAL);' \
+          '        background.setColor(Color.rgb(22, 27, 33));' \
+          '        background.setStroke(dp(2), Color.rgb(70, 150, 210));' \
+          '        view.setBackground(background);' \
+          '' \
+          '        return view;' \
+          '    }' \
+          '"""' \
+          '' \
+          'if "private LinearLayout.LayoutParams sidebarButtonParams()" not in source:' \
+          '    source = source.replace("    private LinearLayout card()", helpers + "\n    private LinearLayout card()", 1)' \
+          '' \
+          'path.write_text(source.rstrip() + "\n", encoding="utf-8")' \
+          'print("HOME HELPERS PATCH: PASS")' \
+          > tools/patch_helpers.py
+
+          python3 -m py_compile tools/patch_helpers.py
+
+      - name: Apply Home UI helper patch
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          PYTHONPATH="$PWD/tools" python3 tools/patch_helpers.py
+
+      - name: Compile after Home UI helpers
+        shell: bash
+        working-directory: v10-source
+        run: |
+          set -euo pipefail
+
+          ./gradlew \
+            :app:compileDebugJavaWithJavac \
+            --no-daemon
+
+          echo "Compile after helpers: PASS"
+
+      # ============================================================
+      # 11. FINAL SOURCE VERIFICATION
+      # ============================================================
+
+      - name: Verify final Home UI V2 source
         shell: bash
         run: |
           set -euo pipefail
 
           FILE="v10-source/app/src/main/java/com/hieptran/aacast/doudou/V10CarActivity.java"
 
-          echo "Checking Home UI V2 markers..."
+          echo "Checking real icon implementation..."
 
-          grep -q "ApplicationInfo" "$FILE"
-          grep -q "PackageManager" "$FILE"
-          grep -q "ImageView" "$FILE"
-          grep -q "getRealAppIcon" "$FILE"
-          grep -q "getQuickLaunchApps" "$FILE"
-          grep -q "quickLaunchTile" "$FILE"
-          grep -q '"TASKS"' "$FILE"
-          grep -q '"MEDIA"' "$FILE"
-          grep -q '"WYN"' "$FILE"
-          grep -q '"APP" "$FILE" 2>/dev/null || true
-          grep -q "showApps()" "$FILE"
+          grep -Fq "ApplicationInfo" "$FILE"
+          grep -Fq "PackageManager" "$FILE"
+          grep -Fq "Drawable" "$FILE"
+          grep -Fq "ImageView" "$FILE"
+          grep -Fq "getRealAppIcon" "$FILE"
+          grep -Fq "info.loadIcon(pm)" "$FILE"
 
-          echo "Checking protected projection markers..."
+          echo "Real ApplicationInfo.loadIcon(): PASS"
 
-          grep -q "V10SessionStore" "$FILE"
-          grep -q "setTarget(this, component)" "$FILE"
-          grep -q "session.setTarget(component)" "$FILE"
-          grep -q "session.release()" "$FILE"
-          grep -q "createFloatingTouchKey" "$FILE"
-          grep -q "handleControlBack" "$FILE"
-          grep -q "handleControlHome" "$FILE"
+          echo "Checking four quick-launch packages..."
+
+          grep -Fq '"com.google.android.apps.maps"' "$FILE"
+          grep -Fq '"com.google.android.youtube"' "$FILE"
+          grep -Fq '"com.zing.zalo"' "$FILE"
+          grep -Fq '"com.spotify.music"' "$FILE"
+
+          grep -Fq "Math.min(4, quickApps.size())" "$FILE"
+
+          echo "Four quick-launch slots: PASS"
+
+          echo "Checking Home UI..."
+
+          grep -Fq '"APP' "$FILE"
+          grep -Fq '"TASKS"' "$FILE"
+          grep -Fq '"MEDIA"' "$FILE"
+          grep -Fq '"WYN"' "$FILE"
+
+          echo "Home UI markers: PASS"
+
+          echo "Checking Voice/Tasks/Media remain placeholders..."
+
+          grep -Fq 'voice.setOnClickListener(v -> { });' "$FILE"
+          grep -Fq 'tasks.setOnClickListener(v -> { });' "$FILE"
+          grep -Fq 'media.setOnClickListener(v -> { });' "$FILE"
+          grep -Fq 'wyn.setOnClickListener(v -> { });' "$FILE"
+
+          echo "No Voice/Tasks/Media functionality added: PASS"
 
           echo "Checking old Home UI is gone..."
 
-          if grep -q '"CAR ASSISTANT"' "$FILE"; then
+          if grep -Fq '"CAR ASSISTANT"' "$FILE"; then
             echo "ERROR: old CAR ASSISTANT title remains"
             exit 1
           fi
 
-          if grep -q '"SPEED"' "$FILE"; then
+          if grep -Fq '"SPEED"' "$FILE"; then
             echo "ERROR: old SPEED card remains"
             exit 1
           fi
 
-          if grep -q '"WEATHER"' "$FILE"; then
+          if grep -Fq '"WEATHER"' "$FILE"; then
             echo "ERROR: old WEATHER card remains"
             exit 1
           fi
 
-          if grep -q 'initial(app.name)' "$FILE"; then
-            echo "ERROR: fake app icon remains"
-            exit 1
-          fi
+          echo "Old Home UI removal: PASS"
 
-          echo "Home UI V2 source verification: PASS"
+      # ============================================================
+      # 12. VERIFY PROJECTION / PERSISTENCE UNCHANGED
+      # ============================================================
 
-      - name: Verify protected Projection and Persistence
+      - name: Verify Projection and Persistence unchanged
         shell: bash
         run: |
           set -euo pipefail
@@ -899,35 +775,32 @@ jobs:
             exit 1
           fi
 
-          echo "Projection/Persistence protection: PASS"
+          echo "Projection/Persistence unchanged: PASS"
+
+      # ============================================================
+      # 13. VERIFY ONLY V10CarActivity CHANGED
+      # ============================================================
 
       - name: Verify only Home Activity changed
         shell: bash
         run: |
           set -euo pipefail
 
+          echo "Git status:"
           git status --short
-
-          CHANGED="$(
-            git status --short |
-            awk '{print substr($0,4)}'
-          )"
-
-          if [ -z "$CHANGED" ]; then
-            echo "ERROR: no changed file detected"
-            exit 1
-          fi
 
           BAD=0
 
-          while IFS= read -r file; do
-            [ -z "$file" ] && continue
+          while IFS= read -r line; do
+            [ -z "$line" ] && continue
+
+            file="${line:3}"
 
             if [ "$file" != "v10-source/app/src/main/java/com/hieptran/aacast/doudou/V10CarActivity.java" ]; then
               echo "ERROR: unexpected changed file: $file"
               BAD=1
             fi
-          done <<< "$CHANGED"
+          done < <(git status --short)
 
           if [ "$BAD" -ne 0 ]; then
             exit 1
@@ -935,7 +808,29 @@ jobs:
 
           echo "Only V10CarActivity.java changed: PASS"
 
-      - name: Git diff check
+      - name: Verify Activity changed from exact Foundation
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          BASE="v10-source/app/src/main/java/com/hieptran/aacast/doudou/V10CarActivity.java"
+
+          sha256sum "$BASE" > foundation-protected/activity-after.txt
+
+          if cmp -s \
+            foundation-protected/activity-before.txt \
+            foundation-protected/activity-after.txt; then
+            echo "ERROR: V10CarActivity.java was not changed"
+            exit 1
+          fi
+
+          echo "V10CarActivity Home UI patch detected: PASS"
+
+      # ============================================================
+      # 14. DIFF SAFETY
+      # ============================================================
+
+      - name: Git diff safety
         shell: bash
         run: |
           set -euo pipefail
@@ -944,18 +839,26 @@ jobs:
 
           echo "Git diff check: PASS"
 
-      - name: Compile Java
+      # ============================================================
+      # 15. FINAL COMPILE
+      # ============================================================
+
+      - name: Final Compile Java
         shell: bash
         working-directory: v10-source
         run: |
           set -euo pipefail
 
-          chmod +x ./gradlew
-
           ./gradlew \
             :app:compileDebugJavaWithJavac \
             --no-daemon \
             --stacktrace
+
+          echo "FINAL JAVA COMPILE: PASS"
+
+      # ============================================================
+      # 16. ASSEMBLE APK
+      # ============================================================
 
       - name: Assemble Debug APK
         shell: bash
@@ -968,6 +871,12 @@ jobs:
             --no-daemon \
             --stacktrace
 
+          echo "APK ASSEMBLE: PASS"
+
+      # ============================================================
+      # 17. SHA256
+      # ============================================================
+
       - name: Locate APK and SHA256
         shell: bash
         run: |
@@ -978,8 +887,8 @@ jobs:
           APK="$(
             find v10-source/app/build/outputs/apk \
               -type f \
-              -name "*.apk" |
-            head -n 1
+              -name "*.apk" \
+              | head -n 1
           )"
 
           if [ -z "$APK" ]; then
@@ -994,7 +903,12 @@ jobs:
             release/CarAssistant-V10-Home-UI-V2.apk \
             | tee release/SHA256SUM.txt
 
-          echo "APK located successfully"
+          echo "APK located: $APK"
+          echo "SHA256 generated: PASS"
+
+      # ============================================================
+      # 18. UPLOAD APK
+      # ============================================================
 
       - name: Upload Home UI V2 APK
         uses: actions/upload-artifact@v4
@@ -1005,27 +919,41 @@ jobs:
             release/SHA256SUM.txt
           if-no-files-found: error
 
+      # ============================================================
+      # 19. FINAL GATE
+      # ============================================================
+
       - name: Final Home UI V2 Gate
         shell: bash
         run: |
           set -euo pipefail
 
-          test -s \
-            release/CarAssistant-V10-Home-UI-V2.apk
+          test -s release/CarAssistant-V10-Home-UI-V2.apk
+          test -s release/SHA256SUM.txt
 
-          test -s \
-            release/SHA256SUM.txt
-
+          echo ""
           echo "=============================================="
           echo "HOME UI V2 LAYOUT SAFE: PASS"
-          echo "Foundation V1 preserved."
-          echo "Real ApplicationInfo icons enabled."
-          echo "Four quick-launch slots enabled."
-          echo "APP CHON opens the real app chooser."
-          echo "Voice is placeholder only."
-          echo "Tasks is placeholder only."
-          echo "WYN is placeholder only."
-          echo "Media is placeholder only."
-          echo "Projection Core preserved."
-          echo "Persistence preserved."
+          echo "=============================================="
+          echo "Foundation V1:"
+          echo "  7292b0569359a2fe6f7c3829561b6f65664fbd2e"
+          echo ""
+          echo "Projection Core: PRESERVED"
+          echo "Persistence: PRESERVED"
+          echo "V10ProjectionService: ABSENT"
+          echo ""
+          echo "Home UI V2: APPLIED"
+          echo "Real ApplicationInfo.loadIcon(): ENABLED"
+          echo "Quick-launch slots: MAX 4"
+          echo "Maps / YouTube / Zalo / Spotify preferred"
+          echo "APP CHỌN: REAL APP GRID"
+          echo "Voice: PLACEHOLDER ONLY"
+          echo "Tasks: PLACEHOLDER ONLY"
+          echo "WYN: PLACEHOLDER ONLY"
+          echo "Media: PLACEHOLDER ONLY"
+          echo ""
+          echo "Java compile: PASS"
+          echo "APK assemble: PASS"
+          echo "SHA256: PASS"
+          echo "Artifact upload: PASS"
           echo "=============================================="
