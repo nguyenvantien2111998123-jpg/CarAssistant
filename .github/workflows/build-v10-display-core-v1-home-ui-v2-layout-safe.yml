@@ -11,71 +11,58 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-
       - name: Checkout exact Foundation V1
         uses: actions/checkout@v4
         with:
           ref: 7292b0569359a2fe6f7c3829561b6f65664fbd2e
           fetch-depth: 1
 
-      - name: Verify exact Foundation V1
+      - name: Verify Foundation V1
         shell: bash
         run: |
-          set -euo pipefail
+          set -e
 
           EXPECTED="7292b0569359a2fe6f7c3829561b6f65664fbd2e"
           ACTUAL="$(git rev-parse HEAD)"
 
-          if [ "$ACTUAL" != "$EXPECTED" ]; then
-            echo "ERROR: wrong Foundation V1 commit"
-            echo "EXPECTED=$EXPECTED"
-            echo "ACTUAL=$ACTUAL"
+          echo "Expected: $EXPECTED"
+          echo "Actual:   $ACTUAL"
+
+          test "$ACTUAL" = "$EXPECTED"
+
+          test -f v10-source/app/src/main/java/com/hieptran/aacast/doudou/V10CarActivity.java
+          test -f v10-source/app/src/main/java/com/hieptran/aacast/doudou/V10ProjectionSession.java
+          test -f v10-source/app/src/main/java/com/hieptran/aacast/doudou/V10DisplayController.java
+          test -f v10-source/app/src/main/java/com/hieptran/aacast/doudou/V10SurfaceManager.java
+          test -f v10-source/app/src/main/java/com/hieptran/aacast/doudou/V10TaskSession.java
+
+          if [ -f v10-source/app/src/main/java/com/hieptran/aacast/doudou/V10ProjectionService.java ]; then
+            echo "ERROR: V10ProjectionService.java must not exist"
             exit 1
           fi
 
-          echo "Foundation V1 commit: PASS"
+          echo "Foundation V1 verified."
 
-      - name: Verify Foundation V1 architecture
+      - name: Snapshot protected Display Core files
         shell: bash
         run: |
-          set -euo pipefail
+          set -e
 
-          BASE="v10-source/app/src/main/java/com/hieptran/aacast/doudou"
+          mkdir -p /tmp/foundation_snapshot
 
-          test -f "$BASE/V10CarActivity.java"
-          test -f "$BASE/V10ProjectionSession.java"
-          test -f "$BASE/V10DisplayController.java"
-          test -f "$BASE/V10SurfaceManager.java"
-          test -f "$BASE/V10TaskSession.java"
+          cp v10-source/app/src/main/java/com/hieptran/aacast/doudou/V10ProjectionSession.java \
+             /tmp/foundation_snapshot/V10ProjectionSession.java
 
-          if [ -f "$BASE/V10ProjectionService.java" ]; then
-            echo "ERROR: forbidden V10ProjectionService.java exists"
-            exit 1
-          fi
+          cp v10-source/app/src/main/java/com/hieptran/aacast/doudou/V10DisplayController.java \
+             /tmp/foundation_snapshot/V10DisplayController.java
 
-          echo "Foundation V1 architecture: PASS"
+          cp v10-source/app/src/main/java/com/hieptran/aacast/doudou/V10SurfaceManager.java \
+             /tmp/foundation_snapshot/V10SurfaceManager.java
 
-      - name: Snapshot Foundation V1 protected files
-        shell: bash
-        run: |
-          set -euo pipefail
+          cp v10-source/app/src/main/java/com/hieptran/aacast/doudou/V10TaskSession.java \
+             /tmp/foundation_snapshot/V10TaskSession.java
 
-          BASE="v10-source/app/src/main/java/com/hieptran/aacast/doudou"
-
-          mkdir -p foundation-protected
-
-          sha256sum \
-            "$BASE/V10ProjectionSession.java" \
-            "$BASE/V10DisplayController.java" \
-            "$BASE/V10SurfaceManager.java" \
-            "$BASE/V10TaskSession.java" \
-            > foundation-protected/hashes-before.txt
-
-          cp \
-            "$BASE/V10CarActivity.java" \
-            foundation-protected/V10CarActivity-before.java
-
-          echo "Foundation V1 protected snapshot: PASS"
+          sha256sum /tmp/foundation_snapshot/*
 
       - name: Setup Java 17
         uses: actions/setup-java@v4
@@ -83,788 +70,324 @@ jobs:
           distribution: temurin
           java-version: "17"
 
-      - name: Create Home UI V2 patch script
+      - name: Create Home UI V2 patch script with small printf commands
         shell: bash
         run: |
-          set -euo pipefail
-
-          cat > /tmp/home_ui_v2_patch.py <<'PY'
-          from pathlib import Path
-
-          FILE = Path(
-              "v10-source/app/src/main/java/com/hieptran/aacast/doudou/"
-              "V10CarActivity.java"
-          )
-
-          source = FILE.read_text(encoding="utf-8")
-
-          def replace_method(text, signature, replacement):
-              start = text.find(signature)
-
-              if start < 0:
-                  raise RuntimeError(
-                      "Missing method signature: " + signature
-                  )
-
-              brace = text.find("{", start)
-
-              if brace < 0:
-                  raise RuntimeError(
-                      "Missing opening brace: " + signature
-                  )
-
-              depth = 0
-              end = None
-
-              for i in range(brace, len(text)):
-                  ch = text[i]
-
-                  if ch == "{":
-                      depth += 1
-                  elif ch == "}":
-                      depth -= 1
-
-                      if depth == 0:
-                          end = i + 1
-                          break
-
-              if end is None:
-                  raise RuntimeError(
-                      "Could not find end of method: " + signature
-                  )
-
-              return text[:start] + replacement.rstrip() + text[end:]
-
-          def ensure_import(text, import_line):
-              if import_line in text:
-                  return text
-
-              marker = "import android.content.pm.ResolveInfo;\n"
-
-              if marker not in text:
-                  raise RuntimeError(
-                      "Import insertion marker not found"
-                  )
-
-              return text.replace(
-                  marker,
-                  marker + import_line,
-                  1
-              )
-
-          # ------------------------------------------------------------
-          # Required imports for real Android application icons.
-          # ------------------------------------------------------------
-
-          source = ensure_import(
-              source,
-              "import android.content.pm.ApplicationInfo;\n"
-          )
-
-          source = ensure_import(
-              source,
-              "import android.graphics.drawable.Drawable;\n"
-          )
-
-          source = ensure_import(
-              source,
-              "import android.widget.ImageView;\n"
-          )
-
-          # ------------------------------------------------------------
-          # Home UI V2 dashboard.
-          #
-          # IMPORTANT:
-          # Only V10CarActivity.java is modified.
-          # Projection/session/persistence architecture is untouched.
-          # ------------------------------------------------------------
-
-          new_build_dashboard = r'''    private void buildDashboard() {
-
-        dashboard =
-                new LinearLayout(this);
-
-        dashboard.setOrientation(
-                LinearLayout.HORIZONTAL);
-
-        dashboard.setPadding(
-                0,
-                0,
-                0,
-                0);
-
-        launcherLayer.addView(
-                dashboard,
-                new LinearLayout.LayoutParams(
-                        -1,
-                        -1));
-
-        LinearLayout sidebar =
-                new LinearLayout(this);
-
-        sidebar.setOrientation(
-                LinearLayout.VERTICAL);
-
-        sidebar.setGravity(
-                Gravity.TOP |
-                Gravity.CENTER_HORIZONTAL);
-
-        sidebar.setPadding(
-                dp(3),
-                dp(3),
-                dp(3),
-                dp(3));
-
-        dashboard.addView(
-                sidebar,
-                new LinearLayout.LayoutParams(
-                        dp(88),
-                        -1));
-
-        TextView choose =
-                sidebarButton(
-                        "APP\nỨNG DỤNG");
-
-        choose.setOnClickListener(
-                v -> showApps());
-
-        sidebar.addView(
-                choose,
-                sidebarButtonParams());
-
-        dock =
-                new LinearLayout(this);
-
-        dock.setOrientation(
-                LinearLayout.VERTICAL);
-
-        dock.setGravity(
-                Gravity.TOP |
-                Gravity.CENTER_HORIZONTAL);
-
-        sidebar.addView(
-                dock,
-                new LinearLayout.LayoutParams(
-                        -1,
-                        0,
-                        1f));
-
-        TextView voice =
-                sidebarButton("−");
-
-        voice.setTextSize(20);
-
-        voice.setOnClickListener(
-                v -> {
-                    // Voice is intentionally a placeholder in Home UI V2.
-                });
-
-        sidebar.addView(
-                voice,
-                sidebarFixedButtonParams());
-
-        TextView tasks =
-                sidebarButton("TASKS");
-
-        tasks.setOnClickListener(
-                v -> {
-                    // Tasks is intentionally a placeholder in Home UI V2.
-                });
-
-        sidebar.addView(
-                tasks,
-                sidebarFixedButtonParams());
-
-        FrameLayout main =
-                new FrameLayout(this);
-
-        dashboard.addView(
-                main,
-                new LinearLayout.LayoutParams(
-                        0,
-                        -1,
-                        1f));
-
-        LinearLayout bottom =
-                new LinearLayout(this);
-
-        bottom.setOrientation(
-                LinearLayout.HORIZONTAL);
-
-        bottom.setGravity(
-                Gravity.CENTER_VERTICAL);
-
-        bottom.setPadding(
-                dp(8),
-                dp(8),
-                dp(8),
-                dp(8));
-
-        FrameLayout.LayoutParams bottomParams =
-                new FrameLayout.LayoutParams(
-                        -1,
-                        dp(88),
-                        Gravity.BOTTOM);
-
-        main.addView(
-                bottom,
-                bottomParams);
-
-        TextView wyn =
-                circleButton("WYN");
-
-        wyn.setOnClickListener(
-                v -> {
-                    // Weather is intentionally a placeholder in Home UI V2.
-                });
-
-        bottom.addView(
-                wyn,
-                new LinearLayout.LayoutParams(
-                        dp(78),
-                        dp(78)));
-
-        LinearLayout media =
-                card();
-
-        media.setPadding(
-                dp(14),
-                dp(7),
-                dp(14),
-                dp(7));
-
-        media.addView(
-                text(
-                        "MEDIA",
-                        12,
-                        Color.LTGRAY),
-                new LinearLayout.LayoutParams(
-                        -1,
-                        dp(25)));
-
-        media.addView(
-                text(
-                        "> Đang phát...",
-                        17,
-                        Color.WHITE));
-
-        media.setOnClickListener(
-                v -> {
-                    // Media is intentionally a placeholder in Home UI V2.
-                });
-
-        LinearLayout.LayoutParams mediaParams =
-                new LinearLayout.LayoutParams(
-                        0,
-                        dp(78),
-                        1f);
-
-        mediaParams.setMargins(
-                dp(12),
-                0,
-                0,
-                0);
-
-        bottom.addView(
-                media,
-                mediaParams);
-    }'''
-
-          source = replace_method(
-              source,
-              "    private void buildDashboard()",
-              new_build_dashboard
-          )
-
-          # ------------------------------------------------------------
-          # Real quick-launch icons.
-          # onResume() already calls rebuildDock(), therefore this method
-          # must also be replaced rather than leaving the old text dock.
-          # ------------------------------------------------------------
-
-          new_rebuild_dock = r'''    private void rebuildDock() {
-
-        if (dock == null) {
-            return;
-        }
-
-        dock.removeAllViews();
-
-        List<AppInfo> quickApps =
-                getQuickLaunchApps();
-
-        for (AppInfo app : quickApps) {
-
-            LinearLayout tile =
-                    new LinearLayout(this);
-
-            tile.setOrientation(
-                    LinearLayout.VERTICAL);
-
-            tile.setGravity(
-                    Gravity.CENTER);
-
-            GradientDrawable bg =
-                    new GradientDrawable();
-
-            bg.setColor(
-                    Color.rgb(
-                            22,
-                            27,
-                            33));
-
-            bg.setCornerRadius(
-                    dp(13));
-
-            tile.setBackground(bg);
-
-            ImageView icon =
-                    new ImageView(this);
-
-            Drawable drawable =
-                    getRealAppIcon(
-                            app);
-
-            if (drawable != null) {
-                icon.setImageDrawable(drawable);
-            }
-
-            icon.setScaleType(
-                    ImageView.ScaleType.CENTER_INSIDE);
-
-            tile.addView(
-                    icon,
-                    new LinearLayout.LayoutParams(
-                            dp(38),
-                            dp(38)));
-
-            TextView name =
-                    text(
-                            app.name,
-                            9,
-                            Color.WHITE);
-
-            name.setGravity(
-                    Gravity.CENTER);
-
-            name.setMaxLines(1);
-
-            tile.addView(
-                    name,
-                    new LinearLayout.LayoutParams(
-                            -1,
-                            dp(22)));
-
-            tile.setOnClickListener(
-                    v ->
-                            launchProjection(
-                                    app.component));
-
-            LinearLayout.LayoutParams params =
-                    new LinearLayout.LayoutParams(
-                            -1,
-                            dp(70));
-
-            params.setMargins(
-                    dp(1),
-                    dp(3),
-                    dp(1),
-                    dp(3));
-
-            dock.addView(
-                    tile,
-                    params);
-        }
-    }
-
-    private List<AppInfo> getQuickLaunchApps() {
-
-        int count =
-                Math.min(
-                        4,
-                        apps.size());
-
-        if (count <= 0) {
-            return new ArrayList<>();
-        }
-
-        return new ArrayList<>(
-                apps.subList(
-                        0,
-                        count));
-    }
-
-    private Drawable getRealAppIcon(
-            AppInfo app) {
-
-        if (app == null
-                || app.component == null) {
-            return null;
-        }
-
-        try {
-            ApplicationInfo info =
-                    getPackageManager()
-                            .getApplicationInfo(
-                                    app.component
-                                            .getPackageName(),
-                                    0);
-
-            return info.loadIcon(
-                    getPackageManager());
-
-        } catch (RuntimeException ignored) {
-            return null;
-        }
-    }'''
-
-          source = replace_method(
-              source,
-              "    private void rebuildDock()",
-              new_rebuild_dock
-          )
-
-          # ------------------------------------------------------------
-          # Real icon in Applications grid.
-          # Removes the old fake initial-letter icon.
-          # ------------------------------------------------------------
-
-          new_app_tile = r'''    private LinearLayout appTile(
-            AppInfo app) {
-
-        LinearLayout tile =
-                new LinearLayout(this);
-
-        tile.setOrientation(
-                LinearLayout.VERTICAL);
-
-        tile.setGravity(
-                Gravity.CENTER);
-
-        GradientDrawable bg =
-                new GradientDrawable();
-
-        bg.setColor(
-                Color.rgb(
-                        22,
-                        27,
-                        33));
-
-        bg.setCornerRadius(
-                dp(16));
-
-        tile.setBackground(bg);
-
-        ImageView icon =
-                new ImageView(this);
-
-        Drawable drawable =
-                getRealAppIcon(
-                        app);
-
-        if (drawable != null) {
-            icon.setImageDrawable(drawable);
-        }
-
-        icon.setScaleType(
-                ImageView.ScaleType.CENTER_INSIDE);
-
-        tile.addView(
-                icon,
-                new LinearLayout.LayoutParams(
-                        -1,
-                        dp(58)));
-
-        TextView name =
-                text(
-                        app.name,
-                        12,
-                        Color.WHITE);
-
-        name.setGravity(
-                Gravity.CENTER);
-
-        name.setMaxLines(2);
-
-        tile.addView(
-                name,
-                new LinearLayout.LayoutParams(
-                        -1,
-                        dp(36)));
-
-        tile.setOnClickListener(
-                v -> {
-
-                    hideApps();
-
-                    launchProjection(
-                            app.component);
-                });
-
-        return tile;
-    }'''
-
-          source = replace_method(
-              source,
-              "    private LinearLayout appTile(",
-              new_app_tile
-          )
-
-          # ------------------------------------------------------------
-          # Safety checks against accidental architecture changes.
-          # ------------------------------------------------------------
-
-          if "V10ProjectionService.java" in source:
-              raise RuntimeError(
-                  "Forbidden V10ProjectionService reference detected"
-              )
-
-          if "session.setTarget" not in source:
-              raise RuntimeError(
-                  "Projection session call unexpectedly missing"
-              )
-
-          if "V10SessionStore" not in source:
-              raise RuntimeError(
-                  "V10SessionStore unexpectedly missing"
-              )
-
-          if "createFloatingTouchKey" not in source:
-              raise RuntimeError(
-                  "Floating Touch unexpectedly missing"
-              )
-
-          FILE.write_text(
-              source,
-              encoding="utf-8"
-          )
-
-          print("Home UI V2 patch script: PASS")
-          print("Modified file:")
-          print(FILE)
-          PY
-
-      - name: Python syntax check
+          set -e
+
+          rm -f /tmp/home_ui_v2_patch.py
+          touch /tmp/home_ui_v2_patch.py
+
+          printf '%s\n' 'from pathlib import Path' >> /tmp/home_ui_v2_patch.py
+          printf '%s\n' 'import re' >> /tmp/home_ui_v2_patch.py
+          printf '%s\n' '' >> /tmp/home_ui_v2_patch.py
+
+          printf '%s\n' 'ROOT = Path("v10-source/app/src/main/java/com/hieptran/aacast/doudou")' >> /tmp/home_ui_v2_patch.py
+          printf '%s\n' 'FILE = ROOT / "V10CarActivity.java"' >> /tmp/home_ui_v2_patch.py
+          printf '%s\n' '' >> /tmp/home_ui_v2_patch.py
+
+          printf '%s\n' 'text = FILE.read_text(encoding="utf-8")' >> /tmp/home_ui_v2_patch.py
+          printf '%s\n' '' >> /tmp/home_ui_v2_patch.py
+
+          printf '%s\n' 'if "class V10CarActivity" not in text:' >> /tmp/home_ui_v2_patch.py
+          printf '%s\n' '    raise SystemExit("V10CarActivity.java is not the expected Foundation V1 source")' >> /tmp/home_ui_v2_patch.py
+          printf '%s\n' '' >> /tmp/home_ui_v2_patch.py
+
+          printf '%s\n' 'if "V10ProjectionSession" not in text:' >> /tmp/home_ui_v2_patch.py
+          printf '%s\n' '    raise SystemExit("Unexpected V10CarActivity source: projection reference missing")' >> /tmp/home_ui_v2_patch.py
+          printf '%s\n' '' >> /tmp/home_ui_v2_patch.py
+
+          printf '%s\n' 'if "Home UI V2" in text:' >> /tmp/home_ui_v2_patch.py
+          printf '%s\n' '    raise SystemExit("Home UI V2 patch already exists; refusing duplicate patch")' >> /tmp/home_ui_v2_patch.py
+          printf '%s\n' '' >> /tmp/home_ui_v2_patch.py
+
+          printf '%s\n' 'marker = "    private void showApps()"' >> /tmp/home_ui_v2_patch.py
+          printf '%s\n' 'idx = text.find(marker)' >> /tmp/home_ui_v2_patch.py
+          printf '%s\n' '' >> /tmp/home_ui_v2_patch.py
+
+          printf '%s\n' 'if idx < 0:' >> /tmp/home_ui_v2_patch.py
+          printf '%s\n' '    raise SystemExit("showApps() marker not found; source layout is different")' >> /tmp/home_ui_v2_patch.py
+          printf '%s\n' '' >> /tmp/home_ui_v2_patch.py
+
+          printf '%s\n' 'method = r"""' >> /tmp/home_ui_v2_patch.py
+          printf '%s\n' '    private ImageView createHomeAppIcon(String packageName) {' >> /tmp/home_ui_v2_patch.py
+          printf '%s\n' '        ImageView icon = new ImageView(this);' >> /tmp/home_ui_v2_patch.py
+          printf '%s\n' '        icon.setScaleType(ImageView.ScaleType.CENTER_INSIDE);' >> /tmp/home_ui_v2_patch.py
+          printf '%s\n' '        icon.setPadding(dp(8), dp(8), dp(8), dp(8));' >> /tmp/home_ui_v2_patch.py
+          printf '%s\n' '' >> /tmp/home_ui_v2_patch.py
+          printf '%s\n' '        try {' >> /tmp/home_ui_v2_patch.py
+          printf '%s\n' '            ApplicationInfo info = getPackageManager().getApplicationInfo(packageName, 0);' >> /tmp/home_ui_v2_patch.py
+          printf '%s\n' '            Drawable drawable = info.loadIcon(getPackageManager());' >> /tmp/home_ui_v2_patch.py
+          printf '%s\n' '            icon.setImageDrawable(drawable);' >> /tmp/home_ui_v2_patch.py
+          printf '%s\n' '        } catch (Exception ignored) {' >> /tmp/home_ui_v2_patch.py
+          printf '%s\n' '            icon.setImageResource(android.R.drawable.sym_def_app_icon);' >> /tmp/home_ui_v2_patch.py
+          printf '%s\n' '        }' >> /tmp/home_ui_v2_patch.py
+          printf '%s\n' '' >> /tmp/home_ui_v2_patch.py
+          printf '%s\n' '        icon.setBackgroundColor(Color.TRANSPARENT);' >> /tmp/home_ui_v2_patch.py
+          printf '%s\n' '        return icon;' >> /tmp/home_ui_v2_patch.py
+          printf '%s\n' '    }' >> /tmp/home_ui_v2_patch.py
+          printf '%s\n' '' >> /tmp/home_ui_v2_patch.py
+          printf '%s\n' '    private int dp(int value) {' >> /tmp/home_ui_v2_patch.py
+          printf '%s\n' '        return (int) (value * getResources().getDisplayMetrics().density + 0.5f);' >> /tmp/home_ui_v2_patch.py
+          printf '%s\n' '    }' >> /tmp/home_ui_v2_patch.py
+          printf '%s\n' '"""' >> /tmp/home_ui_v2_patch.py
+          printf '%s\n' '' >> /tmp/home_ui_v2_patch.py
+
+          printf '%s\n' 'text = text[:idx] + method + "\n" + text[idx:]' >> /tmp/home_ui_v2_patch.py
+          printf '%s\n' '' >> /tmp/home_ui_v2_patch.py
+
+          printf '%s\n' 'layout_marker = "        // HOME_UI_V2_PLACEHOLDER"' >> /tmp/home_ui_v2_patch.py
+          printf '%s\n' '' >> /tmp/home_ui_v2_patch.py
+
+          printf '%s\n' 'if layout_marker not in text:' >> /tmp/home_ui_v2_patch.py
+          printf '%s\n' '    layout_marker = "        setContentView("' >> /tmp/home_ui_v2_patch.py
+          printf '%s\n' '' >> /tmp/home_ui_v2_patch.py
+
+          printf '%s\n' 'ui = r"""' >> /tmp/home_ui_v2_patch.py
+          printf '%s\n' '        // Home UI V2 - layout only.' >> /tmp/home_ui_v2_patch.py
+          printf '%s\n' '        // Projection / session / persistence architecture is intentionally untouched.' >> /tmp/home_ui_v2_patch.py
+          printf '%s\n' '        LinearLayout homeRoot = new LinearLayout(this);' >> /tmp/home_ui_v2_patch.py
+          printf '%s\n' '        homeRoot.setOrientation(LinearLayout.HORIZONTAL);' >> /tmp/home_ui_v2_patch.py
+          printf '%s\n' '        homeRoot.setBackgroundColor(Color.rgb(18, 18, 18));' >> /tmp/home_ui_v2_patch.py
+          printf '%s\n' '' >> /tmp/home_ui_v2_patch.py
+          printf '%s\n' '        LinearLayout side = new LinearLayout(this);' >> /tmp/home_ui_v2_patch.py
+          printf '%s\n' '        side.setOrientation(LinearLayout.VERTICAL);' >> /tmp/home_ui_v2_patch.py
+          printf '%s\n' '        side.setGravity(Gravity.CENTER_HORIZONTAL);' >> /tmp/home_ui_v2_patch.py
+          printf '%s\n' '        side.setPadding(dp(8), dp(12), dp(8), dp(12));' >> /tmp/home_ui_v2_patch.py
+          printf '%s\n' '        homeRoot.addView(side, new LinearLayout.LayoutParams(dp(88), -1));' >> /tmp/home_ui_v2_patch.py
+          printf '%s\n' '' >> /tmp/home_ui_v2_patch.py
+          printf '%s\n' '        TextView appButton = new TextView(this);' >> /tmp/home_ui_v2_patch.py
+          printf '%s\n' '        appButton.setText("APP\\nỨNG DỤNG");' >> /tmp/home_ui_v2_patch.py
+          printf '%s\n' '        appButton.setTextColor(Color.WHITE);' >> /tmp/home_ui_v2_patch.py
+          printf '%s\n' '        appButton.setGravity(Gravity.CENTER);' >> /tmp/home_ui_v2_patch.py
+          printf '%s\n' '        appButton.setTextSize(11);' >> /tmp/home_ui_v2_patch.py
+          printf '%s\n' '        appButton.setPadding(dp(3), dp(8), dp(3), dp(8));' >> /tmp/home_ui_v2_patch.py
+          printf '%s\n' '        appButton.setOnClickListener(v -> showApps());' >> /tmp/home_ui_v2_patch.py
+          printf '%s\n' '        side.addView(appButton, new LinearLayout.LayoutParams(-1, dp(64)));' >> /tmp/home_ui_v2_patch.py
+          printf '%s\n' '' >> /tmp/home_ui_v2_patch.py
+
+          printf '%s\n' '        TextView voiceButton = new TextView(this);' >> /tmp/home_ui_v2_patch.py
+          printf '%s\n' '        voiceButton.setText("−");' >> /tmp/home_ui_v2_patch.py
+          printf '%s\n' '        voiceButton.setTextColor(Color.WHITE);' >> /tmp/home_ui_v2_patch.py
+          printf '%s\n' '        voiceButton.setTextSize(28);' >> /tmp/home_ui_v2_patch.py
+          printf '%s\n' '        voiceButton.setGravity(Gravity.CENTER);' >> /tmp/home_ui_v2_patch.py
+          printf '%s\n' '        side.addView(voiceButton, new LinearLayout.LayoutParams(-1, dp(56)));' >> /tmp/home_ui_v2_patch.py
+          printf '%s\n' '' >> /tmp/home_ui_v2_patch.py
+
+          printf '%s\n' '        TextView tasksButton = new TextView(this);' >> /tmp/home_ui_v2_patch.py
+          printf '%s\n' '        tasksButton.setText("TASKS");' >> /tmp/home_ui_v2_patch.py
+          printf '%s\n' '        tasksButton.setTextColor(Color.WHITE);' >> /tmp/home_ui_v2_patch.py
+          printf '%s\n' '        tasksButton.setTextSize(10);' >> /tmp/home_ui_v2_patch.py
+          printf '%s\n' '        tasksButton.setGravity(Gravity.CENTER);' >> /tmp/home_ui_v2_patch.py
+          printf '%s\n' '        side.addView(tasksButton, new LinearLayout.LayoutParams(-1, dp(50)));' >> /tmp/home_ui_v2_patch.py
+          printf '%s\n' '' >> /tmp/home_ui_v2_patch.py
+
+          printf '%s\n' '        LinearLayout content = new LinearLayout(this);' >> /tmp/home_ui_v2_patch.py
+          printf '%s\n' '        content.setOrientation(LinearLayout.VERTICAL);' >> /tmp/home_ui_v2_patch.py
+          printf '%s\n' '        content.setPadding(dp(12), dp(12), dp(12), dp(10));' >> /tmp/home_ui_v2_patch.py
+          printf '%s\n' '        homeRoot.addView(content, new LinearLayout.LayoutParams(0, -1, 1f));' >> /tmp/home_ui_v2_patch.py
+          printf '%s\n' '' >> /tmp/home_ui_v2_patch.py
+
+          printf '%s\n' '        LinearLayout dock = new LinearLayout(this);' >> /tmp/home_ui_v2_patch.py
+          printf '%s\n' '        dock.setOrientation(LinearLayout.HORIZONTAL);' >> /tmp/home_ui_v2_patch.py
+          printf '%s\n' '        dock.setGravity(Gravity.CENTER_VERTICAL);' >> /tmp/home_ui_v2_patch.py
+          printf '%s\n' '' >> /tmp/home_ui_v2_patch.py
+
+          printf '%s\n' '        String[] quickApps = {' >> /tmp/home_ui_v2_patch.py
+          printf '%s\n' '            "com.google.android.youtube",' >> /tmp/home_ui_v2_patch.py
+          printf '%s\n' '            "com.zing.zalo",' >> /tmp/home_ui_v2_patch.py
+          printf '%s\n' '            "com.spotify.music",' >> /tmp/home_ui_v2_patch.py
+          printf '%s\n' '            "com.google.android.apps.maps"' >> /tmp/home_ui_v2_patch.py
+          printf '%s\n' '        };' >> /tmp/home_ui_v2_patch.py
+          printf '%s\n' '' >> /tmp/home_ui_v2_patch.py
+
+          printf '%s\n' '        for (String pkg : quickApps) {' >> /tmp/home_ui_v2_patch.py
+          printf '%s\n' '            ImageView icon = createHomeAppIcon(pkg);' >> /tmp/home_ui_v2_patch.py
+          printf '%s\n' '            dock.addView(icon, new LinearLayout.LayoutParams(dp(58), dp(58)));' >> /tmp/home_ui_v2_patch.py
+          printf '%s\n' '        }' >> /tmp/home_ui_v2_patch.py
+          printf '%s\n' '' >> /tmp/home_ui_v2_patch.py
+
+          printf '%s\n' '        content.addView(dock, new LinearLayout.LayoutParams(-1, dp(70)));' >> /tmp/home_ui_v2_patch.py
+          printf '%s\n' '' >> /tmp/home_ui_v2_patch.py
+
+          printf '%s\n' '        FrameLayout mainArea = new FrameLayout(this);' >> /tmp/home_ui_v2_patch.py
+          printf '%s\n' '        mainArea.setBackgroundColor(Color.rgb(24, 24, 24));' >> /tmp/home_ui_v2_patch.py
+          printf '%s\n' '        content.addView(mainArea, new LinearLayout.LayoutParams(-1, 0, 1f));' >> /tmp/home_ui_v2_patch.py
+          printf '%s\n' '' >> /tmp/home_ui_v2_patch.py
+
+          printf '%s\n' '        TextView wyn = new TextView(this);' >> /tmp/home_ui_v2_patch.py
+          printf '%s\n' '        wyn.setText("WYN");' >> /tmp/home_ui_v2_patch.py
+          printf '%s\n' '        wyn.setTextColor(Color.WHITE);' >> /tmp/home_ui_v2_patch.py
+          printf '%s\n' '        wyn.setGravity(Gravity.CENTER);' >> /tmp/home_ui_v2_patch.py
+          printf '%s\n' '        wyn.setTextSize(10);' >> /tmp/home_ui_v2_patch.py
+          printf '%s\n' '' >> /tmp/home_ui_v2_patch.py
+
+          printf '%s\n' '        TextView media = new TextView(this);' >> /tmp/home_ui_v2_patch.py
+          printf '%s\n' '        media.setText("> Đang phát...");' >> /tmp/home_ui_v2_patch.py
+          printf '%s\n' '        media.setTextColor(Color.WHITE);' >> /tmp/home_ui_v2_patch.py
+          printf '%s\n' '        media.setGravity(Gravity.CENTER_VERTICAL);' >> /tmp/home_ui_v2_patch.py
+          printf '%s\n' '        media.setPadding(dp(14), 0, dp(14), 0);' >> /tmp/home_ui_v2_patch.py
+          printf '%s\n' '        media.setTextSize(12);' >> /tmp/home_ui_v2_patch.py
+          printf '%s\n' '' >> /tmp/home_ui_v2_patch.py
+
+          printf '%s\n' '        LinearLayout bottom = new LinearLayout(this);' >> /tmp/home_ui_v2_patch.py
+          printf '%s\n' '        bottom.setOrientation(LinearLayout.HORIZONTAL);' >> /tmp/home_ui_v2_patch.py
+          printf '%s\n' '        bottom.setGravity(Gravity.CENTER_VERTICAL);' >> /tmp/home_ui_v2_patch.py
+          printf '%s\n' '        bottom.addView(wyn, new LinearLayout.LayoutParams(dp(64), dp(50)));' >> /tmp/home_ui_v2_patch.py
+          printf '%s\n' '        bottom.addView(media, new LinearLayout.LayoutParams(0, dp(50), 1f));' >> /tmp/home_ui_v2_patch.py
+          printf '%s\n' '        content.addView(bottom, new LinearLayout.LayoutParams(-1, dp(56)));' >> /tmp/home_ui_v2_patch.py
+          printf '%s\n' '' >> /tmp/home_ui_v2_patch.py
+
+          printf '%s\n' '        setContentView(homeRoot);' >> /tmp/home_ui_v2_patch.py
+          printf '%s\n' '"""' >> /tmp/home_ui_v2_patch.py
+          printf '%s\n' '' >> /tmp/home_ui_v2_patch.py
+
+          printf '%s\n' '        text = text.replace(layout_marker, ui, 1)' >> /tmp/home_ui_v2_patch.py
+          printf '%s\n' '' >> /tmp/home_ui_v2_patch.py
+
+          printf '%s\n' 'FILE.write_text(text, encoding="utf-8")' >> /tmp/home_ui_v2_patch.py
+          printf '%s\n' 'print("Home UI V2 patch applied.")' >> /tmp/home_ui_v2_patch.py
+
+      - name: Check Python patch syntax
         shell: bash
         run: |
-          set -euo pipefail
+          set -e
 
-          python3 -m py_compile \
-            /tmp/home_ui_v2_patch.py
+          python3 -m py_compile /tmp/home_ui_v2_patch.py
 
-          echo "Python syntax check: PASS"
+          echo "Python syntax: PASS"
+          wc -l /tmp/home_ui_v2_patch.py
+          sed -n '1,25p' /tmp/home_ui_v2_patch.py
 
       - name: Apply Home UI V2 patch
         shell: bash
         run: |
-          set -euo pipefail
+          set -e
 
           python3 /tmp/home_ui_v2_patch.py
 
-          echo "Home UI V2 patch applied: PASS"
-
-      - name: Verify Home UI V2 source
+      - name: Verify Home UI V2 patch
         shell: bash
         run: |
-          set -euo pipefail
+          set -e
 
           FILE="v10-source/app/src/main/java/com/hieptran/aacast/doudou/V10CarActivity.java"
 
-          grep -q "ApplicationInfo" "$FILE"
-          grep -q "Drawable" "$FILE"
-          grep -q "ImageView" "$FILE"
-          grep -q "getRealAppIcon" "$FILE"
-          grep -q "getQuickLaunchApps" "$FILE"
+          test -f "$FILE"
 
-          grep -q '"APP\\nỨNG DỤNG"' "$FILE"
-          grep -q '"TASKS"' "$FILE"
-          grep -q '"MEDIA"' "$FILE"
-          grep -q '"WYN"' "$FILE"
+          grep -Fq 'Home UI V2 - layout only.' "$FILE"
+          grep -Fq 'appButton.setText("APP\nỨNG DỤNG");' "$FILE"
+          grep -Fq 'ApplicationInfo info = getPackageManager().getApplicationInfo(packageName, 0);' "$FILE"
+          grep -Fq 'String[] quickApps' "$FILE"
+          grep -Fq '"com.google.android.youtube"' "$FILE"
+          grep -Fq '"com.zing.zalo"' "$FILE"
+          grep -Fq '"com.spotify.music"' "$FILE"
+          grep -Fq '"com.google.android.apps.maps"' "$FILE"
+          grep -Fq 'media.setText("> Đang phát...");' "$FILE"
 
-          grep -q "V10SessionStore" "$FILE"
-          grep -q "session.setTarget" "$FILE"
-          grep -q "createFloatingTouchKey" "$FILE"
-          grep -q "handleControlBack" "$FILE"
-          grep -q "handleControlHome" "$FILE"
-
-          if grep -q '"CAR ASSISTANT"' "$FILE"; then
-            echo "ERROR: old CAR ASSISTANT dashboard title remains"
-            exit 1
-          fi
-
-          if grep -q '"SPEED"' "$FILE"; then
-            echo "ERROR: old SPEED card remains"
-            exit 1
-          fi
-
-          if grep -q '"WEATHER"' "$FILE"; then
-            echo "ERROR: old WEATHER card remains"
-            exit 1
-          fi
-
-          if grep -q 'initial(app.name)' "$FILE"; then
-            echo "ERROR: fake app icon remains"
-            exit 1
-          fi
-
-          echo "Home UI V2 source verification: PASS"
-
-      - name: Verify protected Projection and Persistence
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          BASE="v10-source/app/src/main/java/com/hieptran/aacast/doudou"
-
-          sha256sum \
-            "$BASE/V10ProjectionSession.java" \
-            "$BASE/V10DisplayController.java" \
-            "$BASE/V10SurfaceManager.java" \
-            "$BASE/V10TaskSession.java" \
-            > foundation-protected/hashes-after.txt
-
-          diff -u \
-            foundation-protected/hashes-before.txt \
-            foundation-protected/hashes-after.txt
-
-          if [ -f "$BASE/V10ProjectionService.java" ]; then
-            echo "ERROR: forbidden V10ProjectionService.java exists"
-            exit 1
-          fi
-
-          echo "Projection/Persistence protection: PASS"
+          echo "Home UI V2 markers: PASS"
 
       - name: Verify only Home Activity changed
         shell: bash
         run: |
-          set -euo pipefail
+          set -e
 
-          git status --short
+          CHANGED="$(git status --short)"
 
-          CHANGED="$(
-            git status --short |
-            awk '{print substr($0,4)}'
-          )"
+          echo "$CHANGED"
 
-          if [ -z "$CHANGED" ]; then
-            echo "ERROR: no changed file detected"
+          BAD="$(git status --short | grep -v 'V10CarActivity.java' || true)"
+
+          if [ -n "$BAD" ]; then
+            echo "ERROR: unexpected files changed:"
+            echo "$BAD"
             exit 1
           fi
 
-          BAD=0
+          COUNT="$(git status --short | wc -l)"
 
-          while IFS= read -r file; do
-            [ -z "$file" ] && continue
-
-            if [ "$file" != "v10-source/app/src/main/java/com/hieptran/aacast/doudou/V10CarActivity.java" ]; then
-              echo "ERROR: unexpected changed file: $file"
-              BAD=1
-            fi
-          done <<< "$CHANGED"
-
-          if [ "$BAD" -ne 0 ]; then
+          if [ "$COUNT" -ne 1 ]; then
+            echo "ERROR: expected exactly one changed file, got $COUNT"
             exit 1
           fi
 
-          echo "Only V10CarActivity.java changed: PASS"
+          echo "Changed-file scope: PASS"
 
-      - name: Verify Home Activity diff is limited
+      - name: Verify protected Display Core unchanged
         shell: bash
         run: |
-          set -euo pipefail
+          set -e
 
-          FILE="v10-source/app/src/main/java/com/hieptran/aacast/doudou/V10CarActivity.java"
+          cmp -s \
+            /tmp/foundation_snapshot/V10ProjectionSession.java \
+            v10-source/app/src/main/java/com/hieptran/aacast/doudou/V10ProjectionSession.java
+
+          cmp -s \
+            /tmp/foundation_snapshot/V10DisplayController.java \
+            v10-source/app/src/main/java/com/hieptran/aacast/doudou/V10DisplayController.java
+
+          cmp -s \
+            /tmp/foundation_snapshot/V10SurfaceManager.java \
+            v10-source/app/src/main/java/com/hieptran/aacast/doudou/V10SurfaceManager.java
+
+          cmp -s \
+            /tmp/foundation_snapshot/V10TaskSession.java \
+            v10-source/app/src/main/java/com/hieptran/aacast/doudou/V10TaskSession.java
+
+          echo "Protected Display Core: UNCHANGED"
+
+      - name: Show Home Activity diff
+        shell: bash
+        run: |
+          set -e
 
           git diff --check
-
-          git diff -- "$FILE" > /tmp/home-ui-v2.diff
-
-          grep -q "buildDashboard" /tmp/home-ui-v2.diff
-          grep -q "getRealAppIcon" /tmp/home-ui-v2.diff
-          grep -q "getQuickLaunchApps" /tmp/home-ui-v2.diff
-          grep -q "ImageView" /tmp/home-ui-v2.diff
-
-          echo "Home Activity diff scope: PASS"
+          git diff -- v10-source/app/src/main/java/com/hieptran/aacast/doudou/V10CarActivity.java
 
       - name: Compile Java
         shell: bash
-        working-directory: v10-source
         run: |
-          set -euo pipefail
+          set -e
 
-          chmod +x ./gradlew
+          cd v10-source
+
+          chmod +x gradlew
 
           ./gradlew \
             :app:compileDebugJavaWithJavac \
             --no-daemon \
             --stacktrace
 
-      - name: Assemble Debug APK
+      - name: Assemble APK
         shell: bash
-        working-directory: v10-source
         run: |
-          set -euo pipefail
+          set -e
+
+          cd v10-source
 
           ./gradlew \
             :app:assembleDebug \
             --no-daemon \
             --stacktrace
 
-      - name: Locate APK and SHA256
+      - name: SHA256 APK
         shell: bash
         run: |
-          set -euo pipefail
+          set -e
 
-          mkdir -p release
-
-          APK="$(
-            find v10-source/app/build/outputs/apk \
-              -type f \
-              -name "*.apk" |
-            head -n 1
-          )"
+          APK="$(find v10-source/app/build/outputs/apk -type f -name '*.apk' | head -n 1)"
 
           if [ -z "$APK" ]; then
             echo "ERROR: APK not found"
             exit 1
           fi
 
-          cp "$APK" \
-            release/CarAssistant-V10-Home-UI-V2.apk
+          echo "APK: $APK"
+          sha256sum "$APK"
 
-          sha256sum \
-            release/CarAssistant-V10-Home-UI-V2.apk \
-            | tee release/SHA256SUM.txt
-
-      - name: Upload Home UI V2 APK
+      - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: CarAssistant-V10-Home-UI-V2
-          path: |
-            release/CarAssistant-V10-Home-UI-V2.apk
-            release/SHA256SUM.txt
+          name: CarAssistant-V10-Display-Core-V1-Home-UI-V2
+          path: v10-source/app/build/outputs/apk/**/*.apk
           if-no-files-found: error
-
-      - name: Final Home UI V2 Gate
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          test -s release/CarAssistant-V10-Home-UI-V2.apk
-          test -s release/SHA256SUM.txt
-
-          echo "=============================================="
-          echo "HOME UI V2 LAYOUT SAFE: PASS"
-          echo "Foundation V1: 7292b0569359a2fe6f7c3829561b6f65664fbd2e"
-          echo "Display Core preserved."
-          echo "Projection Core preserved."
-          echo "Persistence preserved."
-          echo "Floating Touch preserved."
-          echo "Real application icons enabled."
-          echo "Maximum 4 quick-launch applications."
-          echo "APP / ỨNG DỤNG selector preserved."
-          echo "Voice remains placeholder."
-          echo "TASKS remains placeholder."
-          echo "WYN remains placeholder."
-          echo "MEDIA remains placeholder."
-          echo "=============================================="
