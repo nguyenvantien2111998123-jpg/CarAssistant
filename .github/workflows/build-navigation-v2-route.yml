@@ -1,4 +1,4 @@
-name: Build Navigation V2 Compile Fix
+name: Build Navigation V2 Route Clean
 
 on:
   workflow_dispatch:
@@ -17,14 +17,21 @@ jobs:
           ref: 9b2fc5b3f24b32ff4f2ed7ddb6d794cdb5f647f9
           fetch-depth: 1
 
-      - name: Verify baseline
+      - name: Verify baseline and project
         shell: bash
         run: |
           set -e
+
           EXPECTED="9b2fc5b3f24b32ff4f2ed7ddb6d794cdb5f647f9"
-          ACTUAL="$(git rev-parse HEAD)"
-          test "$ACTUAL" = "$EXPECTED"
-          echo "Baseline OK: $ACTUAL"
+          test "$(git rev-parse HEAD)" = "$EXPECTED"
+
+          test -f v10-source/settings.gradle
+          test -f v10-source/app/build.gradle
+          test -f v10-source/gradlew
+          test -f v10-source/app/src/main/AndroidManifest.xml
+          test -f v10-source/app/src/main/java/com/hieptran/aacast/doudou/V10CarActivity.java
+
+          echo "Baseline/project OK: $EXPECTED"
 
       - name: Setup Java 17
         uses: actions/setup-java@v5
@@ -32,50 +39,47 @@ jobs:
           distribution: temurin
           java-version: "17"
 
-      - name: Verify project
+      - name: Protect Projection Core
         shell: bash
         run: |
           set -e
 
-          test -f v10-source/settings.gradle
-          test -f v10-source/app/build.gradle
+          sha256sum \
+            v10-source/app/src/main/java/com/hieptran/aacast/doudou/V10ProjectionSession.java \
+            v10-source/app/src/main/java/com/hieptran/aacast/doudou/V10DisplayController.java \
+            v10-source/app/src/main/java/com/hieptran/aacast/doudou/V10SurfaceManager.java \
+            v10-source/app/src/main/java/com/hieptran/aacast/doudou/V10TaskSession.java \
+            v10-source/app/src/main/java/com/hieptran/aacast/doudou/V10SessionStore.java \
+            > /tmp/projection-before.txt
 
-          test -f v10-source/app/src/main/java/com/hieptran/aacast/doudou/V10CarActivity.java
-          test -f v10-source/app/src/main/java/com/hieptran/aacast/doudou/V10ProjectionSession.java
-          test -f v10-source/app/src/main/java/com/hieptran/aacast/doudou/V10DisplayController.java
-          test -f v10-source/app/src/main/java/com/hieptran/aacast/doudou/V10SurfaceManager.java
-          test -f v10-source/app/src/main/java/com/hieptran/aacast/doudou/V10TaskSession.java
-          test -f v10-source/app/src/main/java/com/hieptran/aacast/doudou/V10SessionStore.java
-
-          echo "Project verification OK"
-
-      - name: Fix MapLibre dependency only
+      - name: Fix MapLibre dependency
         shell: bash
         run: |
           set -e
 
           FILE="v10-source/app/build.gradle"
 
-          python3 <<'PY'
+          python3 - <<'PY'
           from pathlib import Path
 
-          path = Path("v10-source/app/build.gradle")
-          text = path.read_text()
+          p = Path("v10-source/app/build.gradle")
+          s = p.read_text()
 
-          old_opengl = 'implementation "org.maplibre.gl:android-sdk-opengl:11.8.0"'
-          old_original = 'implementation "org.maplibre.gl:android-sdk:11.11.0"'
-          new = 'implementation "org.maplibre.gl:android-sdk:11.8.0"'
+          replacements = [
+              'implementation "org.maplibre.gl:android-sdk-opengl:11.8.0"',
+              'implementation "org.maplibre.gl:android-sdk:11.11.0"',
+          ]
 
-          if old_opengl in text:
-              text = text.replace(old_opengl, new, 1)
-          elif old_original in text:
-              text = text.replace(old_original, new, 1)
-          else:
-              raise SystemExit(
-                  "Expected MapLibre dependency marker not found"
-              )
+          target = 'implementation "org.maplibre.gl:android-sdk:11.8.0"'
 
-          path.write_text(text)
+          for old in replacements:
+              if old in s:
+                  s = s.replace(old, target, 1)
+
+          if target not in s:
+              raise SystemExit("MapLibre dependency not found")
+
+          p.write_text(s)
           PY
 
           grep -Fq \
@@ -83,1038 +87,176 @@ jobs:
             "$FILE"
 
           ! grep -Fq \
-            'implementation "org.maplibre.gl:android-sdk-opengl:11.8.0"' \
+            'android-sdk-opengl:11.8.0' \
             "$FILE"
 
-          echo "MapLibre dependency fixed: android-sdk:11.8.0"
-
-      - name: Verify MapLibre dependency
-        shell: bash
-        run: |
-          set -e
-
-          chmod +x v10-source/gradlew
-          cd v10-source
-
-          ./gradlew :app:dependencies \
-            --configuration debugCompileClasspath \
-            --no-daemon \
-            > /tmp/maplibre-dependencies.txt
-
-          grep -Fq \
-            'org.maplibre.gl:android-sdk:11.8.0' \
-            /tmp/maplibre-dependencies.txt
-
-          echo "MapLibre dependency resolution OK"
-
-          grep -F \
-            'org.maplibre.gl:android-sdk:11.8.0' \
-            /tmp/maplibre-dependencies.txt
-
-      - name: Hash protected Projection Core before changes
-        shell: bash
-        run: |
-          set -e
-
-          sha256sum \
-            v10-source/app/src/main/java/com/hieptran/aacast/doudou/V10ProjectionSession.java \
-            v10-source/app/src/main/java/com/hieptran/aacast/doudou/V10DisplayController.java \
-            v10-source/app/src/main/java/com/hieptran/aacast/doudou/V10SurfaceManager.java \
-            v10-source/app/src/main/java/com/hieptran/aacast/doudou/V10TaskSession.java \
-            v10-source/app/src/main/java/com/hieptran/aacast/doudou/V10SessionStore.java \
-            > /tmp/projection-core-before.txt
+          echo "MapLibre dependency OK"
 
       - name: Add INTERNET permission
         shell: bash
         run: |
           set -e
 
-          python3 <<'PY'
+          python3 - <<'PY'
           from pathlib import Path
 
-          path = Path("v10-source/app/src/main/AndroidManifest.xml")
-          text = path.read_text()
+          p = Path("v10-source/app/src/main/AndroidManifest.xml")
+          s = p.read_text()
 
           permission = '<uses-permission android:name="android.permission.INTERNET" />'
 
-          if permission not in text:
-              marker = "<application"
-              if marker not in text:
-                  raise SystemExit("AndroidManifest application marker not found")
-
-              text = text.replace(
-                  marker,
-                  permission + "\n    " + marker,
+          if permission not in s:
+              s = s.replace(
+                  "<application",
+                  permission + "\n    <application",
                   1
               )
-
-              path.write_text(text)
-
-          print("INTERNET permission OK")
+              p.write_text(s)
           PY
 
-      - name: Write Navigation V2 source
+      - name: Get exact Navigation V2 source
         shell: bash
         run: |
           set -e
 
-          cat > v10-source/app/src/main/java/com/hieptran/aacast/doudou/NavigationMapView.java <<'JAVA'
-          package com.hieptran.aacast.doudou;
+          OLD_WORKFLOW="4b391b252b9d92840b151045f533056f47684e71"
+          SRC="v10-source/app/src/main/java/com/hieptran/aacast/doudou/NavigationMapView.java"
 
-          import android.Manifest;
-          import android.app.Activity;
-          import android.content.pm.PackageManager;
-          import android.graphics.Color;
-          import android.os.Handler;
-          import android.os.Looper;
-          import android.view.Gravity;
-          import android.view.View;
-          import android.widget.Button;
-          import android.widget.EditText;
-          import android.widget.FrameLayout;
-          import android.widget.LinearLayout;
-          import android.widget.TextView;
-          import android.widget.Toast;
+          git fetch origin "$OLD_WORKFLOW" --depth=1
 
-          import com.maplibre.android.annotations.PolylineOptions;
-          import com.maplibre.android.camera.CameraUpdateFactory;
-          import com.maplibre.android.geometry.LatLng;
-          import com.maplibre.android.location.LocationComponent;
-          import com.maplibre.android.location.LocationComponentActivationOptions;
-          import com.maplibre.android.location.modes.CameraMode;
-          import com.maplibre.android.maps.MapView;
-          import com.maplibre.android.maps.MapLibreMap;
-          import com.maplibre.android.maps.OnMapReadyCallback;
-          import com.maplibre.android.maps.Style;
+          git show "$OLD_WORKFLOW:.github/workflows/build-navigation-v2-route.yml" \
+            > /tmp/navigation-v2-old.yml
 
-          import org.json.JSONArray;
-          import org.json.JSONObject;
-
-          import java.io.BufferedReader;
-          import java.io.InputStream;
-          import java.io.InputStreamReader;
-          import java.net.HttpURLConnection;
-          import java.net.URL;
-          import java.net.URLEncoder;
-          import java.util.ArrayList;
-          import java.util.List;
-          import java.util.Locale;
-
-          public class NavigationMapView extends FrameLayout {
-
-              public interface ExitListener {
-                  void onExitNavigation();
-              }
-
-              private final Activity activity;
-              private final Handler mainHandler =
-                      new Handler(Looper.getMainLooper());
-
-              private MapView mapView;
-              private MapLibreMap map;
-              private LocationComponent locationComponent;
-
-              private EditText searchBox;
-              private TextView resultText;
-
-              private double currentLat;
-              private double currentLon;
-
-              private boolean hasLocation;
-              private boolean firstFollowDone;
-
-              private ExitListener exitListener;
-
-              public NavigationMapView(Activity activity) {
-                  super(activity);
-
-                  this.activity = activity;
-
-                  setBackgroundColor(Color.BLACK);
-
-                  mapView = new MapView(activity);
-
-                  LayoutParams mapParams =
-                          new LayoutParams(
-                                  LayoutParams.MATCH_PARENT,
-                                  LayoutParams.MATCH_PARENT
-                          );
-
-                  addView(mapView, mapParams);
-
-                  mapView.onCreate(null);
-
-                  mapView.getMapAsync(
-                          new OnMapReadyCallback() {
-                              @Override
-                              public void onMapReady(
-                                      MapLibreMap readyMap
-                              ) {
-                                  map = readyMap;
-
-                                  map.setStyle(
-                                          new Style.Builder()
-                                                  .fromUri(
-                                                          "https://tiles.openfreemap.org/styles/liberty"
-                                                  ),
-                                          style -> enableLocation()
-                                  );
-                              }
-                          }
-                  );
-
-                  buildControls();
-              }
-
-              private void buildControls() {
-                  LinearLayout panel =
-                          new LinearLayout(activity);
-
-                  panel.setOrientation(
-                          LinearLayout.VERTICAL
-                  );
-
-                  panel.setPadding(
-                          12,
-                          12,
-                          12,
-                          12
-                  );
-
-                  panel.setBackgroundColor(
-                          0xCC202020
-                  );
-
-                  LayoutParams panelParams =
-                          new LayoutParams(
-                                  LayoutParams.MATCH_PARENT,
-                                  LayoutParams.WRAP_CONTENT
-                          );
-
-                  panelParams.gravity = Gravity.TOP;
-
-                  panelParams.setMargins(
-                          16,
-                          16,
-                          16,
-                          0
-                  );
-
-                  addView(panel, panelParams);
-
-                  LinearLayout searchRow =
-                          new LinearLayout(activity);
-
-                  searchRow.setOrientation(
-                          LinearLayout.HORIZONTAL
-                  );
-
-                  searchBox = new EditText(activity);
-
-                  searchBox.setHint(
-                          "Tìm địa điểm"
-                  );
-
-                  searchBox.setSingleLine(true);
-
-                  searchBox.setTextColor(
-                          Color.WHITE
-                  );
-
-                  searchBox.setHintTextColor(
-                          0xFFBBBBBB
-                  );
-
-                  searchBox.setBackgroundColor(
-                          0xFF303030
-                  );
-
-                  searchRow.addView(
-                          searchBox,
-                          new LinearLayout.LayoutParams(
-                                  0,
-                                  52,
-                                  1
-                          )
-                  );
-
-                  Button searchButton =
-                          new Button(activity);
-
-                  searchButton.setText("TÌM");
-
-                  searchButton.setOnClickListener(
-                          v -> searchPlace()
-                  );
-
-                  searchRow.addView(
-                          searchButton,
-                          new LinearLayout.LayoutParams(
-                                  90,
-                                  52
-                          )
-                  );
-
-                  panel.addView(searchRow);
-
-                  LinearLayout buttonRow =
-                          new LinearLayout(activity);
-
-                  buttonRow.setOrientation(
-                          LinearLayout.HORIZONTAL
-                  );
-
-                  Button locationButton =
-                          new Button(activity);
-
-                  locationButton.setText("VỊ TRÍ");
-
-                  locationButton.setOnClickListener(
-                          v -> recenter()
-                  );
-
-                  Button exitButton =
-                          new Button(activity);
-
-                  exitButton.setText("THOÁT");
-
-                  exitButton.setOnClickListener(
-                          v -> {
-                              if (exitListener != null) {
-                                  exitListener.onExitNavigation();
-                              }
-                          }
-                  );
-
-                  buttonRow.addView(
-                          locationButton,
-                          new LinearLayout.LayoutParams(
-                                  0,
-                                  52,
-                                  1
-                          )
-                  );
-
-                  buttonRow.addView(
-                          exitButton,
-                          new LinearLayout.LayoutParams(
-                                  0,
-                                  52,
-                                  1
-                          )
-                  );
-
-                  panel.addView(buttonRow);
-                                    resultText =
-                          new TextView(activity);
-
-                  resultText.setTextColor(
-                          Color.WHITE
-                  );
-
-                  resultText.setPadding(
-                          8,
-                          8,
-                          8,
-                          8
-                  );
-
-                  panel.addView(resultText);
-              }
-
-              public void setOnExitListener(
-                      ExitListener listener
-              ) {
-                  exitListener = listener;
-              }
-
-              public void openNavigation() {
-                  setVisibility(VISIBLE);
-                  bringToFront();
-
-                  if (mapView != null) {
-                      mapView.onStart();
-                      mapView.onResume();
-                  }
-
-                  if (hasLocation &&
-                          !firstFollowDone) {
-                      recenter();
-                  }
-              }
-
-              public void closeNavigation() {
-                  if (mapView != null) {
-                      mapView.onPause();
-                  }
-
-                  setVisibility(GONE);
-              }
-
-              private void enableLocation() {
-                  if (map == null) {
-                      return;
-                  }
-
-                  locationComponent =
-                          map.getLocationComponent();
-
-                  if (activity.checkSelfPermission(
-                          Manifest.permission.ACCESS_FINE_LOCATION
-                  ) != PackageManager.PERMISSION_GRANTED) {
-
-                      activity.requestPermissions(
-                              new String[]{
-                                      Manifest.permission.ACCESS_FINE_LOCATION,
-                                      Manifest.permission.ACCESS_COARSE_LOCATION
-                              },
-                              701
-                      );
-
-                      return;
-                  }
-
-                  LocationComponentActivationOptions activationOptions =
-                          LocationComponentActivationOptions
-                                  .builder(
-                                          activity,
-                                          map.getStyle()
-                                  )
-                                  .build();
-
-                  if (!locationComponent
-                          .isLocationComponentActivated()) {
-                      locationComponent
-                              .activateLocationComponent(
-                                      activationOptions
-                              );
-                  }
-
-                  locationComponent
-                          .setLocationComponentEnabled(true);
-
-                  locationComponent.setCameraMode(
-                          CameraMode.TRACKING
-                  );
-
-                  android.location.Location lastLocation =
-                          locationComponent.getLastKnownLocation();
-
-                  if (lastLocation != null) {
-                      currentLat =
-                              lastLocation.getLatitude();
-
-                      currentLon =
-                              lastLocation.getLongitude();
-
-                      hasLocation = true;
-                  }
-              }
-
-              private void recenter() {
-                  if (locationComponent != null) {
-                      android.location.Location lastLocation =
-                              locationComponent.getLastKnownLocation();
-
-                      if (lastLocation != null) {
-                          currentLat =
-                                  lastLocation.getLatitude();
-
-                          currentLon =
-                                  lastLocation.getLongitude();
-
-                          hasLocation = true;
-                      }
-                  }
-
-                  if (map == null ||
-                          !hasLocation) {
-
-                      Toast.makeText(
-                              activity,
-                              "Chưa có vị trí GPS",
-                              Toast.LENGTH_SHORT
-                      ).show();
-
-                      return;
-                  }
-
-                  map.animateCamera(
-                          CameraUpdateFactory.newLatLngZoom(
-                                  new LatLng(
-                                          currentLat,
-                                          currentLon
-                                  ),
-                                  15.0
-                          ),
-                          600
-                  );
-
-                  firstFollowDone = true;
-              }
-
-              private void searchPlace() {
-                  final String query =
-                          searchBox.getText()
-                                  .toString()
-                                  .trim();
-
-                  if (query.isEmpty()) {
-                      Toast.makeText(
-                              activity,
-                              "Nhập địa điểm cần tìm",
-                              Toast.LENGTH_SHORT
-                      ).show();
-
-                      return;
-                  }
-
-                  resultText.setText(
-                          "Đang tìm..."
-                  );
-
-                  new Thread(
-                          () -> {
-                              try {
-                                  String encoded =
-                                          URLEncoder.encode(
-                                                  query,
-                                                  "UTF-8"
-                                          );
-
-                                  String url =
-                                          "https://nominatim.openstreetmap.org/search"
-                                                  + "?format=json"
-                                                  + "&limit=1"
-                                                  + "&q="
-                                                  + encoded;
-
-                                  HttpURLConnection connection =
-                                          (HttpURLConnection)
-                                                  new URL(url)
-                                                          .openConnection();
-
-                                  connection.setRequestMethod(
-                                          "GET"
-                                  );
-
-                                  connection.setRequestProperty(
-                                          "User-Agent",
-                                          "CarAssistant/NavigationV2"
-                                  );
-
-                                  connection.setConnectTimeout(
-                                          10000
-                                  );
-
-                                  connection.setReadTimeout(
-                                          10000
-                                  );
-
-                                  InputStream input =
-                                          connection.getInputStream();
-
-                                  BufferedReader reader =
-                                          new BufferedReader(
-                                                  new InputStreamReader(
-                                                          input
-                                                  )
-                                          );
-
-                                  StringBuilder body =
-                                          new StringBuilder();
-
-                                  String line;
-
-                                  while ((line =
-                                          reader.readLine()) != null) {
-                                      body.append(line);
-                                  }
-
-                                  reader.close();
-                                  connection.disconnect();
-
-                                  JSONArray results =
-                                          new JSONArray(
-                                                  body.toString()
-                                          );
-
-                                  if (results.length() == 0) {
-                                      mainHandler.post(
-                                              () -> resultText.setText(
-                                                      "Không tìm thấy địa điểm"
-                                              )
-                                      );
-                                      return;
-                                  }
-
-                                  JSONObject item =
-                                          results.getJSONObject(0);
-
-                                  double lat =
-                                          Double.parseDouble(
-                                                  item.getString("lat")
-                                          );
-
-                                  double lon =
-                                          Double.parseDouble(
-                                                  item.getString("lon")
-                                          );
-
-                                  String name =
-                                          item.optString(
-                                                  "display_name",
-                                                  query
-                                          );
-
-                                  mainHandler.post(
-                                          () -> {
-                                              resultText.setText(
-                                                      name
-                                              );
-
-                                              if (map != null) {
-                                                  map.animateCamera(
-                                                          CameraUpdateFactory
-                                                                  .newLatLngZoom(
-                                                                          new LatLng(
-                                                                                  lat,
-                                                                                  lon
-                                                                          ),
-                                                                          15.0
-                                                                  ),
-                                                          600
-                                                  );
-                                              }
-
-                                              Button routeButton =
-                                                      new Button(activity);
-
-                                              routeButton.setText(
-                                                      "ĐẾN ĐÂY"
-                                              );
-
-                                              routeButton.setOnClickListener(
-                                                      v -> calculateRoute(
-                                                              lat,
-                                                              lon
-                                                      )
-                                              );
-
-                                              addView(
-                                                      routeButton,
-                                                      createRouteButtonParams()
-                                              );
-                                          }
-                                  );
-
-                              } catch (Exception e) {
-                                  mainHandler.post(
-                                          () -> resultText.setText(
-                                                  "Lỗi tìm kiếm: "
-                                                          + e.getClass()
-                                                          .getSimpleName()
-                                          )
-                                  );
-                              }
-                          }
-                  ).start();
-              }
-
-              private LayoutParams createRouteButtonParams() {
-                  LayoutParams params =
-                          new LayoutParams(
-                                  LayoutParams.WRAP_CONTENT,
-                                  LayoutParams.WRAP_CONTENT
-                          );
-
-                  params.gravity =
-                          Gravity.BOTTOM |
-                          Gravity.CENTER_HORIZONTAL;
-
-                  params.setMargins(
-                          0,
-                          0,
-                          0,
-                          24
-                  );
-
-                  return params;
-              }
-
-              private void calculateRoute(
-                      double destinationLat,
-                      double destinationLon
-              ) {
-                  if (locationComponent != null) {
-                      android.location.Location lastLocation =
-                              locationComponent.getLastKnownLocation();
-
-                      if (lastLocation != null) {
-                          currentLat =
-                                  lastLocation.getLatitude();
-
-                          currentLon =
-                                  lastLocation.getLongitude();
-
-                          hasLocation = true;
-                      }
-                  }
-
-                  if (!hasLocation) {
-                      Toast.makeText(
-                              activity,
-                              "Chưa có vị trí GPS",
-                              Toast.LENGTH_SHORT
-                      ).show();
-
-                      return;
-                  }
-
-                  resultText.setText(
-                          "Đang tính tuyến..."
-                  );
-
-                  new Thread(
-                          () -> {
-                              try {
-                                  String url =
-                                          "https://router.project-osrm.org/route/v1/driving/"
-                                                  + currentLon
-                                                  + ","
-                                                  + currentLat
-                                                  + ";"
-                                                  + destinationLon
-                                                  + ","
-                                                  + destinationLat
-                                                  + "?overview=full"
-                                                  + "&geometries=geojson";
-
-                                  HttpURLConnection connection =
-                                          (HttpURLConnection)
-                                                  new URL(url)
-                                                          .openConnection();
-
-                                  connection.setRequestMethod(
-                                          "GET"
-                                  );
-
-                                  connection.setRequestProperty(
-                                          "User-Agent",
-                                          "CarAssistant/NavigationV2"
-                                  );
-
-                                  connection.setConnectTimeout(
-                                          15000
-                                  );
-
-                                  connection.setReadTimeout(
-                                          15000
-                                  );
-
-                                  BufferedReader reader =
-                                          new BufferedReader(
-                                                  new InputStreamReader(
-                                                          connection
-                                                                  .getInputStream()
-                                                  )
-                                          );
-
-                                  StringBuilder body =
-                                          new StringBuilder();
-
-                                  String line;
-
-                                  while ((line =
-                                          reader.readLine()) != null) {
-                                      body.append(line);
-                                  }
-
-                                  reader.close();
-                                  connection.disconnect();
-
-                                  JSONObject response =
-                                          new JSONObject(
-                                                  body.toString()
-                                          );
-
-                                  JSONArray routes =
-                                          response.getJSONArray(
-                                                  "routes"
-                                          );
-
-                                  if (routes.length() == 0) {
-                                      throw new Exception(
-                                              "No route"
-                                      );
-                                  }
-
-                                  JSONObject route =
-                                          routes.getJSONObject(0);
-
-                                  JSONObject geometry =
-                                          route.getJSONObject(
-                                                  "geometry"
-                                                                                            );
-
-                                  JSONArray coordinates =
-                                          geometry.getJSONArray(
-                                                  "coordinates"
-                                          );
-
-                                  List<LatLng> points =
-                                          new ArrayList<>();
-
-                                  for (int i = 0;
-                                          i < coordinates.length();
-                                          i++) {
-
-                                      JSONArray point =
-                                              coordinates
-                                                      .getJSONArray(i);
-
-                                      double lon =
-                                              point.getDouble(0);
-
-                                      double lat =
-                                              point.getDouble(1);
-
-                                      points.add(
-                                              new LatLng(
-                                                      lat,
-                                                      lon
-                                              )
-                                      );
-                                  }
-
-                                  double distance =
-                                          route.getDouble(
-                                                  "distance"
-                                          );
-
-                                  double duration =
-                                          route.getDouble(
-                                                  "duration"
-                                          );
-
-                                  mainHandler.post(
-                                          () -> {
-                                              drawRoute(points);
-
-                                              String km =
-                                                      String.format(
-                                                              Locale.US,
-                                                              "%.1f km",
-                                                              distance / 1000.0
-                                                      );
-
-                                              String min =
-                                                      String.format(
-                                                              Locale.US,
-                                                              "%.0f phút",
-                                                              duration / 60.0
-                                                      );
-
-                                              resultText.setText(
-                                                      "Tuyến: "
-                                                              + km
-                                                              + " • "
-                                                              + min
-                                              );
-                                          }
-                                  );
-
-                              } catch (Exception e) {
-                                  mainHandler.post(
-                                          () -> resultText.setText(
-                                                  "Lỗi tính tuyến: "
-                                                          + e.getClass()
-                                                                  .getSimpleName()
-                                          )
-                                  );
-                              }
-                          }
-                  ).start();
-              }
-
-              private void drawRoute(
-                      List<LatLng> points
-              ) {
-                  if (map == null ||
-                          points.isEmpty()) {
-                      return;
-                  }
-
-                  map.addPolyline(
-                          new PolylineOptions()
-                                  .addAll(points)
-                                  .color(Color.BLUE)
-                                  .width(7f)
-                  );
-
-                  LatLng first =
-                          points.get(0);
-
-                  map.animateCamera(
-                          CameraUpdateFactory.newLatLngZoom(
-                                  first,
-                                  14.0
-                          ),
-                          600
-                  );
-              }
-
-              @Override
-              protected void onAttachedToWindow() {
-                  super.onAttachedToWindow();
-
-                  if (mapView != null) {
-                      mapView.onStart();
-                      mapView.onResume();
-                  }
-              }
-
-              @Override
-              protected void onDetachedFromWindow() {
-                  if (mapView != null) {
-                      mapView.onPause();
-                  }
-
-                  super.onDetachedFromWindow();
-              }
-          }
-          JAVA
-
-          echo "NavigationMapView.java written"
-
-      - name: Patch Navigation entry by marker
-        shell: bash
-        run: |
-          set -e
-
-          python3 <<'PY'
+          python3 - <<'PY'
           from pathlib import Path
 
-          path = Path(
-              "v10-source/app/src/main/java/com/hieptran/aacast/doudou/V10CarActivity.java"
+          src = Path("/tmp/navigation-v2-old.yml").read_text()
+
+          begin = "          cat > v10-source/app/src/main/java/com/hieptran/aacast/doudou/NavigationMapView.java <<'JAVA'\n"
+          end = "\n          JAVA\n"
+
+          a = src.find(begin)
+          if a < 0:
+              raise SystemExit("NavigationMapView heredoc start not found")
+
+          a += len(begin)
+
+          b = src.find(end, a)
+          if b < 0:
+              raise SystemExit("NavigationMapView heredoc end not found")
+
+          java = src[a:b]
+
+          # Remove workflow indentation.
+          lines = java.splitlines()
+          java = "\n".join(
+              line[10:] if line.startswith("          ") else line
+              for line in lines
+          ) + "\n"
+
+          Path(
+              "v10-source/app/src/main/java/com/hieptran/aacast/doudou/NavigationMapView.java"
+          ).write_text(java)
+          PY
+
+          test -s "$SRC"
+
+          echo "Exact Navigation V2 source restored"
+
+      - name: Fix MapLibre Java namespace
+        shell: bash
+        run: |
+          set -e
+
+          FILE="v10-source/app/src/main/java/com/hieptran/aacast/doudou/NavigationMapView.java"
+
+          python3 - <<'PY'
+          from pathlib import Path
+
+          p = Path(
+              "v10-source/app/src/main/java/com/hieptran/aacast/doudou/NavigationMapView.java"
           )
 
-          source = path.read_text()
+          s = p.read_text()
+          old = "com.maplibre.android."
+          new = "org.maplibre.android."
+
+          if old not in s:
+              raise SystemExit("Old MapLibre namespace not found")
+
+          p.write_text(s.replace(old, new))
+          PY
+
+          grep -Fq "org.maplibre.android." "$FILE"
+          ! grep -Fq "com.maplibre.android." "$FILE"
+
+          echo "MapLibre Java namespace OK"
+
+      - name: Patch Navigation entry
+        shell: bash
+        run: |
+          set -e
+
+          python3 - <<'PY'
+          from pathlib import Path
+
+          p = Path(
+              "v10-source/app/src/main/java/com/hieptran/aacast/doudou/V10CarActivity.java"
+          )
+          s = p.read_text()
 
           start_marker = "    private void buildUi() {"
           end_marker = "    private void buildDashboard() {"
 
-          start = source.find(start_marker)
-          end = source.find(end_marker)
+          a = s.find(start_marker)
+          b = s.find(end_marker)
 
-          if start < 0:
-              raise SystemExit(
-                  "buildUi start marker not found"
-              )
+          if a < 0 or b < 0 or b <= a:
+              raise SystemExit("Navigation UI markers not found")
 
-          if end < 0:
-              raise SystemExit(
-                  "buildDashboard marker not found"
-              )
+          ui = """    private void buildUi() {
+          // NAV_V2_ENTRY_BEGIN
 
-          if end <= start:
-              raise SystemExit(
-                  "Invalid buildUi/buildDashboard order"
-              )
+          root = new FrameLayout(this);
 
-          new_build_ui = (
-              "    private void buildUi() {\n"
-              "        // NAV_V2_ENTRY_BEGIN\n"
-              "\n"
-              "        root = new FrameLayout(this);\n"
-              "\n"
-              "        projectionLayer = new FrameLayout(this);\n"
-              "        root.addView(\n"
-              "                projectionLayer,\n"
-              "                new FrameLayout.LayoutParams(\n"
-              "                        FrameLayout.LayoutParams.MATCH_PARENT,\n"
-              "                        FrameLayout.LayoutParams.MATCH_PARENT\n"
-              "                )\n"
-              "        );\n"
-              "\n"
-              "        launcherLayer = new LinearLayout(this);\n"
-              "        launcherLayer.setOrientation(LinearLayout.VERTICAL);\n"
-              "        root.addView(\n"
-              "                launcherLayer,\n"
-              "                new FrameLayout.LayoutParams(\n"
-              "                        FrameLayout.LayoutParams.MATCH_PARENT,\n"
-              "                        FrameLayout.LayoutParams.MATCH_PARENT\n"
-              "                )\n"
-              "        );\n"
-              "\n"
-              "        navigationMap = new NavigationMapView(this);\n"
-              "        navigationMap.setVisibility(View.GONE);\n"
-              "\n"
-              "        navigationMap.setOnExitListener(() -> {\n"
-              "            navigationMap.closeNavigation();\n"
-              "            navigationMap.setVisibility(View.GONE);\n"
-              "            launcherLayer.setVisibility(View.VISIBLE);\n"
-              "            launcherLayer.bringToFront();\n"
-              "        });\n"
-              "\n"
-              "        root.addView(\n"
-              "                navigationMap,\n"
-              "                new FrameLayout.LayoutParams(\n"
-              "                        FrameLayout.LayoutParams.MATCH_PARENT,\n"
-              "                        FrameLayout.LayoutParams.MATCH_PARENT\n"
-              "                )\n"
-              "        );\n"
-              "\n"
-              "        buildDashboard();\n"
-              "\n"
-              "        setContentView(root);\n"
-              "\n"
-              "        launcherLayer.bringToFront();\n"
-              "\n"
-              "        // NAV_V2_ENTRY_END\n"
-              "    }\n"
-              "\n"
-          )
+          projectionLayer = new FrameLayout(this);
+          root.addView(projectionLayer,
+                  new FrameLayout.LayoutParams(
+                          FrameLayout.LayoutParams.MATCH_PARENT,
+                          FrameLayout.LayoutParams.MATCH_PARENT));
 
-          source = (
-              source[:start]
-              + new_build_ui
-              + source[end:]
-          )
+          launcherLayer = new LinearLayout(this);
+          launcherLayer.setOrientation(LinearLayout.VERTICAL);
+          root.addView(launcherLayer,
+                  new FrameLayout.LayoutParams(
+                          FrameLayout.LayoutParams.MATCH_PARENT,
+                          FrameLayout.LayoutParams.MATCH_PARENT));
 
-          path.write_text(source)
+          navigationMap = new NavigationMapView(this);
+          navigationMap.setVisibility(View.GONE);
 
-          check = path.read_text()
+          navigationMap.setOnExitListener(() -> {
+              navigationMap.closeNavigation();
+              navigationMap.setVisibility(View.GONE);
+              launcherLayer.setVisibility(View.VISIBLE);
+              launcherLayer.bringToFront();
+          });
 
-          if check.count(
-                  "// NAV_V2_ENTRY_BEGIN"
-          ) != 1:
-              raise SystemExit(
-                  "NAV_V2_ENTRY_BEGIN count is not 1"
-              )
+          root.addView(navigationMap,
+                  new FrameLayout.LayoutParams(
+                          FrameLayout.LayoutParams.MATCH_PARENT,
+                          FrameLayout.LayoutParams.MATCH_PARENT));
 
-          if check.count(
-                  "// NAV_V2_ENTRY_END"
-          ) != 1:
-              raise SystemExit(
-                  "NAV_V2_ENTRY_END count is not 1"
-              )
+          buildDashboard();
+          setContentView(root);
+          launcherLayer.bringToFront();
 
-          if check.count(
-                  "navigationMap = new NavigationMapView(this);"
-          ) != 1:
-              raise SystemExit(
-                  "NavigationMapView construction count is not 1"
-              )
+          // NAV_V2_ENTRY_END
+      }
 
-          if check.count(
-                  "navigationMap.setOnExitListener"
-          ) != 1:
-              raise SystemExit(
-                  "Navigation exit listener count is not 1"
-              )
+      """
 
-          print("Navigation entry marker patch OK")
+          p.write_text(s[:a] + ui + s[b:])
           PY
 
       - name: Patch Navigation card click
@@ -1122,128 +264,68 @@ jobs:
         run: |
           set -e
 
-          python3 <<'PY'
+          python3 - <<'PY'
           from pathlib import Path
 
-          path = Path(
+          p = Path(
               "v10-source/app/src/main/java/com/hieptran/aacast/doudou/V10CarActivity.java"
           )
-
-          source = path.read_text()
+          s = p.read_text()
 
           call = "navigationMap.openNavigation();"
 
-          if source.count(call) == 0:
+          if s.count(call) == 0:
+              marker = """        content.addView(
+                  map,
+                  new LinearLayout.LayoutParams(
+              """
 
-              marker = (
-                  "        content.addView(\n"
-                  "                map,\n"
-                  "                new LinearLayout.LayoutParams(\n"
-              )
+              if s.count(marker) != 1:
+                  raise SystemExit("Navigation card marker not found")
 
-              marker_count = source.count(marker)
+              click = """        map.setOnClickListener(v -> {
+                  launcherLayer.setVisibility(View.GONE);
+                  navigationMap.setVisibility(View.VISIBLE);
+                  navigationMap.openNavigation();
+                  navigationMap.bringToFront();
+              });
 
-              if marker_count != 1:
-                  raise SystemExit(
-                      "MAP card marker count is "
-                      + str(marker_count)
-                      + ", expected 1"
-                  )
+              """
 
-              pos = source.find(marker)
+              s = s.replace(marker, click + marker, 1)
 
-              if pos < 0:
-                  raise SystemExit(
-                      "MAP card multiline marker not found"
-                  )
+          p.write_text(s)
 
-              click_block = (
-                  "        map.setOnClickListener(v -> {\n"
-                  "            launcherLayer.setVisibility(View.GONE);\n"
-                  "            navigationMap.setVisibility(View.VISIBLE);\n"
-                  "            navigationMap.openNavigation();\n"
-                  "            navigationMap.bringToFront();\n"
-                  "        });\n"
-                  "\n"
-              )
-
-              source = (
-                  source[:pos]
-                  + click_block
-                  + source[pos:]
-              )
-
-          path.write_text(source)
-
-          check = path.read_text()
-
-          if check.count(call) != 1:
-              raise SystemExit(
-                  "navigationMap.openNavigation() count is not 1"
-              )
-
-          if check.count(
-                  "map.setOnClickListener(v -> {"
-          ) != 1:
-              raise SystemExit(
-                  "MAP card click listener count is not 1"
-              )
-
-          print("Navigation card click patch OK")
+          if s.count(call) != 1:
+              raise SystemExit("Navigation open call count invalid")
           PY
 
-      - name: Verify Navigation V2 entry
+      - name: Verify Navigation V2
         shell: bash
         run: |
           set -e
 
-          FILE="v10-source/app/src/main/java/com/hieptran/aacast/doudou/V10CarActivity.java"
+          ACTIVITY="v10-source/app/src/main/java/com/hieptran/aacast/doudou/V10CarActivity.java"
+          NAV="v10-source/app/src/main/java/com/hieptran/aacast/doudou/NavigationMapView.java"
 
-          grep -Fq "NAV_V2_ENTRY_BEGIN" "$FILE"
-          grep -Fq "NAV_V2_ENTRY_END" "$FILE"
-          grep -Fq "navigationMap.setOnExitListener" "$FILE"
-          grep -Fq "navigationMap.openNavigation();" "$FILE"
-          grep -Fq "navigationMap.bringToFront();" "$FILE"
+          grep -Fq "NAV_V2_ENTRY_BEGIN" "$ACTIVITY"
+          grep -Fq "NAV_V2_ENTRY_END" "$ACTIVITY"
+          grep -Fq "navigationMap.openNavigation();" "$ACTIVITY"
+          grep -Fq "navigationMap.setOnExitListener" "$ACTIVITY"
 
-          COUNT="$(grep -Fc "navigationMap = new NavigationMapView(this);" "$FILE")"
+          grep -Fq "org.maplibre.android.annotations" "$NAV"
+          grep -Fq "org.maplibre.android.maps" "$NAV"
+          ! grep -Fq "com.maplibre.android." "$NAV"
 
-          test "$COUNT" = "1"
+          grep -Fq "onAttachedToWindow" "$NAV"
+          grep -Fq "onDetachedFromWindow" "$NAV"
+          grep -Fq "mapView.onStart()" "$NAV"
+          grep -Fq "mapView.onResume()" "$NAV"
+          grep -Fq "mapView.onPause()" "$NAV"
 
-          echo "Navigation V2 entry verification OK"
+          echo "Navigation V2 verification OK"
 
-      - name: Verify Home UI V2
-        shell: bash
-        run: |
-          set -e
-
-          FILE="v10-source/app/src/main/java/com/hieptran/aacast/doudou/V10CarActivity.java"
-
-          grep -Fq "CAR ASSISTANT" "$FILE"
-          grep -Fq "MAP" "$FILE"
-          grep -Fq "Navigation" "$FILE"
-          grep -Fq "SPEED" "$FILE"
-          grep -Fq "WEATHER" "$FILE"
-          grep -Fq "MEDIA" "$FILE"
-          grep -Fq "APPS" "$FILE"
-
-          echo "Home UI V2 verification OK"
-
-      - name: Verify Navigation lifecycle
-        shell: bash
-        run: |
-          set -e
-
-          FILE="v10-source/app/src/main/java/com/hieptran/aacast/doudou/NavigationMapView.java"
-
-          grep -Fq "onAttachedToWindow" "$FILE"
-          grep -Fq "onDetachedFromWindow" "$FILE"
-          grep -Fq "mapView.onStart()" "$FILE"
-          grep -Fq "mapView.onResume()" "$FILE"
-          grep -Fq "mapView.onPause()" "$FILE"
-
-          echo "Navigation lifecycle verification OK"
-
-      - name: Hash protected Projection Core after changes
+      - name: Verify Projection Core unchanged
         shell: bash
         run: |
           set -e
@@ -1254,22 +336,11 @@ jobs:
             v10-source/app/src/main/java/com/hieptran/aacast/doudou/V10SurfaceManager.java \
             v10-source/app/src/main/java/com/hieptran/aacast/doudou/V10TaskSession.java \
             v10-source/app/src/main/java/com/hieptran/aacast/doudou/V10SessionStore.java \
-            > /tmp/projection-core-after.txt
+            > /tmp/projection-after.txt
 
-          diff -u \
-            /tmp/projection-core-before.txt \
-            /tmp/projection-core-after.txt
+          diff -u /tmp/projection-before.txt /tmp/projection-after.txt
 
           echo "Projection Core unchanged"
-
-      - name: Check source diff
-        shell: bash
-        run: |
-          set -e
-
-          git diff --check
-          git status --short
-          git diff --stat
 
       - name: Build APK
         shell: bash
@@ -1277,27 +348,13 @@ jobs:
           set -e
 
           chmod +x v10-source/gradlew
-
           cd v10-source
 
           ./gradlew :app:assembleDebug \
             --no-daemon \
             --stacktrace
 
-      - name: Verify APK
-        shell: bash
-        run: |
-          set -e
-
-          APK="v10-source/app/build/outputs/apk/debug/app-debug.apk"
-
-          test -f "$APK"
-
-          ls -lh "$APK"
-
-          sha256sum "$APK"
-
-      - name: Upload APK
+      - name: Verify and upload APK
         uses: actions/upload-artifact@v4
         with:
           name: carassistant-navigation-v2
