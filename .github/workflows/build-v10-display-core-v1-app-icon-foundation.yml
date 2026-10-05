@@ -32,7 +32,7 @@ jobs:
 
           echo "Foundation V1 baseline: PASS"
 
-      - name: Verify Foundation V1 source
+      - name: Verify Foundation V1 architecture
         shell: bash
         run: |
           set -euo pipefail
@@ -80,16 +80,20 @@ jobs:
 
           mkdir -p foundation-protected
 
+          cd v10-source
+
           sha256sum \
-            v10-source/app/src/main/java/com/hieptran/aacast/doudou/V10ProjectionSession.java \
-            v10-source/app/src/main/java/com/hieptran/aacast/doudou/V10DisplayController.java \
-            v10-source/app/src/main/java/com/hieptran/aacast/doudou/V10SurfaceManager.java \
-            v10-source/app/src/main/java/com/hieptran/aacast/doudou/V10TaskSession.java \
-            > foundation-protected/hashes-before.txt
+            app/src/main/java/com/hieptran/aacast/doudou/V10ProjectionSession.java \
+            app/src/main/java/com/hieptran/aacast/doudou/V10DisplayController.java \
+            app/src/main/java/com/hieptran/aacast/doudou/V10SurfaceManager.java \
+            app/src/main/java/com/hieptran/aacast/doudou/V10TaskSession.java \
+            > ../foundation-protected/hashes-before.txt
 
           cp \
-            v10-source/app/src/main/java/com/hieptran/aacast/doudou/V10CarActivity.java \
-            foundation-protected/V10CarActivity.before.java
+            app/src/main/java/com/hieptran/aacast/doudou/V10CarActivity.java \
+            ../foundation-protected/V10CarActivity.before.java
+
+          cd ..
 
           echo "Protected Foundation snapshot: PASS"
 
@@ -107,22 +111,58 @@ jobs:
           path = Path(sys.argv[1])
           text = path.read_text(encoding="utf-8")
 
-          imports = [
+          required_imports = [
               "import android.content.pm.ApplicationInfo;",
               "import android.content.pm.PackageManager;",
               "import android.graphics.drawable.Drawable;",
           ]
 
-          for imp in imports:
-              if imp not in text:
-                  marker = "import android.content."
-                  if marker in text:
-                      pos = text.find(marker)
-                      text = text[:pos] + imp + "\n" + text[pos:]
-                  else:
-                      text = imp + "\n" + text
+          lines = text.splitlines(keepends=True)
 
-          helper = r'''
+          package_index = -1
+          for i, line in enumerate(lines):
+              if line.startswith("package "):
+                  package_index = i
+                  break
+
+          if package_index < 0:
+              raise SystemExit("Package declaration not found")
+
+          existing_imports = set(
+              line.strip()
+              for line in lines
+              if line.startswith("import ")
+          )
+
+          missing = [
+              imp for imp in required_imports
+              if imp not in existing_imports
+          ]
+
+          if missing:
+              insert_at = package_index + 1
+
+              while insert_at < len(lines):
+                  stripped = lines[insert_at].strip()
+
+                  if stripped.startswith("import "):
+                      break
+
+                  if stripped == "":
+                      insert_at += 1
+                      continue
+
+                  break
+
+              block = "".join(imp + "\n" for imp in missing)
+              lines.insert(insert_at, block)
+
+              text = "".join(lines)
+
+          helper_signature = "private Drawable getRealAppIcon(String packageName)"
+
+          if helper_signature not in text:
+              helper = """
               private Drawable getRealAppIcon(String packageName) {
                   try {
                       PackageManager pm = getPackageManager();
@@ -133,18 +173,19 @@ jobs:
                   }
               }
 
-          '''
+              """
 
-          if "private Drawable getRealAppIcon(String packageName)" not in text:
               class_end = text.rfind("}")
+
               if class_end < 0:
                   raise SystemExit("Could not locate V10CarActivity class end")
+
               text = text[:class_end] + helper + text[class_end:]
 
           path.write_text(text, encoding="utf-8")
           PY
 
-          echo "ApplicationInfo + PackageManager + loadIcon API added."
+          echo "ApplicationInfo + PackageManager + Drawable + loadIcon API added."
 
       - name: Verify App Icon API
         shell: bash
@@ -157,14 +198,17 @@ jobs:
           grep -Fq "import android.content.pm.PackageManager;" "$FILE"
           grep -Fq "import android.graphics.drawable.Drawable;" "$FILE"
           grep -Fq "private Drawable getRealAppIcon(String packageName)" "$FILE"
+          grep -Fq "PackageManager pm = getPackageManager();" "$FILE"
           grep -Fq "ApplicationInfo info = pm.getApplicationInfo(packageName, 0);" "$FILE"
           grep -Fq "return info.loadIcon(pm);" "$FILE"
 
           echo "ApplicationInfo: PASS"
           echo "PackageManager: PASS"
+          echo "Drawable: PASS"
+          echo "getRealAppIcon(): PASS"
           echo "loadIcon(): PASS"
 
-      - name: Verify only allowed source file changed
+      - name: Verify only V10CarActivity changed
         shell: bash
         run: |
           set -euo pipefail
@@ -174,7 +218,9 @@ jobs:
           echo "Changed files:"
           printf '%s\n' "$CHANGED"
 
-          if printf '%s\n' "$CHANGED" | grep -v '^$' | grep -v 'V10CarActivity.java'; then
+          if printf '%s\n' "$CHANGED" \
+            | grep -v '^$' \
+            | grep -v 'V10CarActivity.java'; then
             echo "ERROR: Files outside V10CarActivity.java were modified."
             exit 1
           fi
@@ -201,25 +247,24 @@ jobs:
             foundation-protected/hashes-before.txt \
             foundation-protected/hashes-after.txt
 
-          cmp -s \
+          if cmp -s \
             foundation-protected/V10CarActivity.before.java \
-            v10-source/app/src/main/java/com/hieptran/aacast/doudou/V10CarActivity.java \
-            && {
-              echo "ERROR: V10CarActivity was not changed."
-              exit 1
-            }
+            v10-source/app/src/main/java/com/hieptran/aacast/doudou/V10CarActivity.java; then
+            echo "ERROR: V10CarActivity.java was not changed."
+            exit 1
+          fi
 
           echo "Display Core / Projection / Surface / Task files unchanged: PASS"
-          echo "V10CarActivity changed only for App Icon Foundation."
+          echo "V10CarActivity changed as expected."
 
-      - name: Verify no forbidden architecture changes
+      - name: Verify Foundation architecture after patch
         shell: bash
         run: |
           set -euo pipefail
 
+          ACTIVITY="v10-source/app/src/main/java/com/hieptran/aacast/doudou/V10CarActivity.java"
           DISPLAY="v10-source/app/src/main/java/com/hieptran/aacast/doudou/V10DisplayController.java"
           SESSION="v10-source/app/src/main/java/com/hieptran/aacast/doudou/V10ProjectionSession.java"
-          ACTIVITY="v10-source/app/src/main/java/com/hieptran/aacast/doudou/V10CarActivity.java"
 
           grep -Fq "DisplayManager" "$DISPLAY"
           grep -Fq "createVirtualDisplay" "$DISPLAY"
@@ -229,11 +274,15 @@ jobs:
           grep -Fq "createFloatingTouchKey" "$ACTIVITY"
           grep -Fq "handleControlBack" "$ACTIVITY"
           grep -Fq "handleControlHome" "$ACTIVITY"
+          grep -Fq "ViewConfiguration.getLongPressTimeout" "$ACTIVITY"
 
-          if grep -Rqs "am force-stop" \
-            v10-source/app/src/main/java/com/hieptran/aacast/doudou/V10ProjectionSession.java \
-            v10-source/app/src/main/java/com/hieptran/aacast/doudou/V10DisplayController.java; then
-            echo "ERROR: forbidden force-stop detected."
+          if grep -Fq "am force-stop" "$DISPLAY"; then
+            echo "ERROR: forbidden force-stop detected in Display Core."
+            exit 1
+          fi
+
+          if grep -Fq "am force-stop" "$SESSION"; then
+            echo "ERROR: forbidden force-stop detected in Projection Session."
             exit 1
           fi
 
@@ -283,19 +332,24 @@ jobs:
         run: |
           set -euo pipefail
 
-          APK="$(find v10-source/app/build/outputs/apk -type f -name '*.apk' | head -n 1)"
+          APK="$(find v10-source/app/build/outputs/apk \
+            -type f \
+            -name '*.apk' \
+            | head -n 1)"
 
           test -n "$APK"
           test -f "$APK"
 
           mkdir -p release
 
-          cp "$APK" release/CarAssistant-V10-App-Icon-Foundation.apk
+          cp "$APK" \
+            release/CarAssistant-V10-App-Icon-Foundation.apk
 
-          sha256sum release/CarAssistant-V10-App-Icon-Foundation.apk \
+          sha256sum \
+            release/CarAssistant-V10-App-Icon-Foundation.apk \
             | tee release/SHA256SUM.txt
 
-          echo "APK:"
+          echo "APK created:"
           ls -lh release/CarAssistant-V10-App-Icon-Foundation.apk
 
       - name: Upload App Icon Foundation APK
@@ -313,17 +367,28 @@ jobs:
         run: |
           set -euo pipefail
 
+          test -f release/CarAssistant-V10-App-Icon-Foundation.apk
+          test -s release/CarAssistant-V10-App-Icon-Foundation.apk
+          test -f release/SHA256SUM.txt
+
           echo "=========================================="
           echo "APP ICON FOUNDATION: PASS"
           echo "=========================================="
-          echo "Baseline: Foundation V1 7292b0569359a2fe6f7c3829561b6f65664fbd2e"
-          echo "Added: ApplicationInfo"
-          echo "Added: PackageManager"
-          echo "Added: Drawable"
-          echo "Added: getRealAppIcon() using loadIcon()"
+          echo "Baseline:"
+          echo "7292b0569359a2fe6f7c3829561b6f65664fbd2e"
+          echo
+          echo "Added:"
+          echo "- ApplicationInfo"
+          echo "- PackageManager"
+          echo "- Drawable"
+          echo "- getRealAppIcon()"
+          echo "- ApplicationInfo.loadIcon()"
+          echo
           echo "Home UI V2: NOT ADDED"
-          echo "Display Core: protected"
-          echo "Projection: protected"
-          echo "Persistence/Task: protected"
-          echo "Floating Touch/BACK/HOME: protected"
+          echo "Display Core: PROTECTED"
+          echo "Projection: PROTECTED"
+          echo "Surface Manager: PROTECTED"
+          echo "Task Session: PROTECTED"
+          echo "Floating Touch: PROTECTED"
+          echo "BACK/HOME: PROTECTED"
           echo "=========================================="
