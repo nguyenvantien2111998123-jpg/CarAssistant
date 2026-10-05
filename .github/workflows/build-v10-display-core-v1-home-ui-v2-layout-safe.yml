@@ -7,17 +7,17 @@ permissions:
   contents: read
 
 jobs:
-  build:
+  build-home-ui-v2:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout exact Foundation V1 baseline
+      - name: Checkout exact Foundation V1
         uses: actions/checkout@v4
         with:
           ref: 7292b0569359a2fe6f7c3829561b6f65664fbd2e
-          fetch-depth: 0
+          fetch-depth: 1
 
-      - name: Verify Foundation V1 baseline
+      - name: Verify exact Foundation V1 commit
         shell: bash
         run: |
           set -euo pipefail
@@ -25,512 +25,1206 @@ jobs:
           EXPECTED="7292b0569359a2fe6f7c3829561b6f65664fbd2e"
           ACTUAL="$(git rev-parse HEAD)"
 
-          echo "Expected Foundation V1: $EXPECTED"
-          echo "Actual checkout:        $ACTUAL"
-
           test "$ACTUAL" = "$EXPECTED"
 
-          echo "FOUNDATION V1 BASELINE: PASS"
+          echo "Foundation V1 commit: PASS"
+          echo "HEAD=$ACTUAL"
 
-      - name: Verify protected Foundation V1 architecture
+      - name: Verify Foundation V1 architecture
         shell: bash
         run: |
           set -euo pipefail
 
-          BASE="v10-source/app/src/main/java/com/hieptran/aacast/doudou"
+          test -f "v10-source/app/src/main/java/com/hieptran/aacast/doudou/V10CarActivity.java"
+          test -f "v10-source/app/src/main/java/com/hieptran/aacast/doudou/V10ProjectionSession.java"
+          test -f "v10-source/app/src/main/java/com/hieptran/aacast/doudou/V10DisplayController.java"
+          test -f "v10-source/app/src/main/java/com/hieptran/aacast/doudou/V10SurfaceManager.java"
+          test -f "v10-source/app/src/main/java/com/hieptran/aacast/doudou/V10TaskSession.java"
 
-          test -f "$BASE/V10CarActivity.java"
-          test -f "$BASE/V10ProjectionSession.java"
-          test -f "$BASE/V10DisplayController.java"
-          test -f "$BASE/V10SurfaceManager.java"
-          test -f "$BASE/V10TaskSession.java"
+          if test -f "v10-source/app/src/main/java/com/hieptran/aacast/doudou/V10ProjectionService.java"; then
+            echo "ERROR: V10ProjectionService.java must not exist"
+            exit 1
+          fi
 
-          test ! -f "$BASE/V10ProjectionService.java"
+          echo "Foundation V1 architecture: PASS"
 
-          grep -q "DisplayManager" "$BASE/V10DisplayController.java"
-          grep -q "createVirtualDisplay" "$BASE/V10DisplayController.java"
-
-          grep -q "launchNewTask" "$BASE/V10ProjectionSession.java"
-          grep -q "resumeExistingTask" "$BASE/V10ProjectionSession.java"
-
-          grep -q "floatingTouchKey" "$BASE/V10CarActivity.java"
-          grep -q "createFloatingTouchKey" "$BASE/V10CarActivity.java"
-          grep -q "handleControlBack" "$BASE/V10CarActivity.java"
-          grep -q "handleControlHome" "$BASE/V10CarActivity.java"
-          grep -q "ViewConfiguration.getLongPressTimeout" "$BASE/V10CarActivity.java"
-
-          ! grep -q "am force-stop" "$BASE/V10ProjectionSession.java"
-          ! grep -q "am force-stop" "$BASE/V10DisplayController.java"
-
-          echo "PROTECTED FOUNDATION ARCHITECTURE: PASS"
-
-      - name: Save protected file hashes before Home UI patch
+      - name: Snapshot protected Foundation files
         shell: bash
         run: |
           set -euo pipefail
 
-          BASE="v10-source/app/src/main/java/com/hieptran/aacast/doudou"
+          mkdir -p foundation-protected
+
+          cd v10-source
 
           sha256sum \
-            "$BASE/V10ProjectionSession.java" \
-            "$BASE/V10DisplayController.java" \
-            "$BASE/V10SurfaceManager.java" \
-            "$BASE/V10TaskSession.java" \
-            > /tmp/protected-before.sha256
+            app/src/main/java/com/hieptran/aacast/doudou/V10ProjectionSession.java \
+            app/src/main/java/com/hieptran/aacast/doudou/V10DisplayController.java \
+            app/src/main/java/com/hieptran/aacast/doudou/V10SurfaceManager.java \
+            app/src/main/java/com/hieptran/aacast/doudou/V10TaskSession.java \
+            > ../foundation-protected/hashes-before.txt
 
-          cat /tmp/protected-before.sha256
+          cp \
+            app/src/main/java/com/hieptran/aacast/doudou/V10CarActivity.java \
+            ../foundation-protected/V10CarActivity.before.java
 
-      - name: Inspect Home UI source structure
-        shell: bash
-        run: |
-          set -euo pipefail
+          cd ..
 
-          FILE="v10-source/app/src/main/java/com/hieptran/aacast/doudou/V10CarActivity.java"
+          echo "Protected Foundation snapshot: PASS"
 
-          test -f "$FILE"
-
-          echo "Checking Home UI source..."
-
-          grep -q "buildDashboard" "$FILE" || true
-          grep -q "showApps" "$FILE" || true
-          grep -q "launchProjection" "$FILE" || true
-          grep -q "class AppInfo" "$FILE" || true
-
-          echo "Home UI source inspection: PASS"
-
-      - name: Patch Home UI V2
+      - name: Replace Home UI with V2 and add real app icons
         shell: bash
         run: |
           set -euo pipefail
 
           python3 - <<'PY'
           from pathlib import Path
-          import re
 
-          file = Path(
+          path = Path(
               "v10-source/app/src/main/java/com/hieptran/aacast/doudou/V10CarActivity.java"
           )
 
-          src = file.read_text(encoding="utf-8")
+          source = path.read_text(encoding="utf-8")
 
           required = [
               "class V10CarActivity",
-              "ApplicationInfo",
-              "loadIcon",
+              "private void buildDashboard()",
+              "private void buildAppPanel()",
+              "private void loadApps()",
+              "private void rebuildDock()",
+              "private LinearLayout appTile(",
+              "private void attachProjection()",
+              "private void launchProjection(",
+              "private void returnToLauncher()",
+              "private void showApps()",
+              "private void hideApps()",
+              "private void createFloatingTouchKey()",
+              "public void handleControlBack()",
+              "public void handleControlHome()",
+              "public void handleControlRecents()",
+              "public void handleControlApps()",
+              "private static final class AppInfo"
           ]
 
-          for token in required:
-              if token not in src:
+          for item in required:
+              if item not in source:
+                  raise SystemExit("Missing expected Foundation V1 source marker: " + item)
+
+          if "private void buildHomeUiV2()" in source:
+              raise SystemExit("Home UI V2 already appears to be present")
+
+          # ------------------------------------------------------------
+          # Add imports needed for real ApplicationInfo icons and ImageView.
+          # ------------------------------------------------------------
+
+          source = source.replace(
+              "import android.content.pm.ResolveInfo;\n",
+              "import android.content.pm.ResolveInfo;\n"
+              "import android.content.pm.ApplicationInfo;\n"
+              "import android.content.pm.PackageManager;\n"
+          )
+
+          source = source.replace(
+              "import android.graphics.drawable.GradientDrawable;\n",
+              "import android.graphics.drawable.GradientDrawable;\n"
+              "import android.graphics.drawable.Drawable;\n"
+          )
+
+          source = source.replace(
+              "import android.widget.GridLayout;\n",
+              "import android.widget.GridLayout;\n"
+              "import android.widget.ImageView;\n"
+          )
+
+          # ------------------------------------------------------------
+          # Replace buildUi().
+          # ------------------------------------------------------------
+
+          start = source.index("    private void buildUi() {")
+          end = source.index("    private void buildDashboard() {", start)
+
+          new_build_ui = r'''    private void buildUi() {
+
+        root =
+                new FrameLayout(this);
+
+        root.setBackgroundColor(
+                Color.rgb(
+                        7,
+                        9,
+                        12));
+
+        projectionLayer =
+                new FrameLayout(this);
+
+        projectionLayer.setVisibility(
+                View.GONE);
+
+        root.addView(
+                projectionLayer,
+                new FrameLayout.LayoutParams(
+                        -1,
+                        -1));
+
+        launcherLayer =
+                new LinearLayout(this);
+
+        launcherLayer.setOrientation(
+                LinearLayout.VERTICAL);
+
+        launcherLayer.setPadding(
+                dp(8),
+                dp(8),
+                dp(8),
+                dp(8));
+
+        root.addView(
+                launcherLayer,
+                new FrameLayout.LayoutParams(
+                        -1,
+                        -1));
+
+        buildDashboard();
+        buildAppPanel();
+
+        setContentView(root);
+    }
+
+'''
+          source = source[:start] + new_build_ui + source[end:]
+
+          # ------------------------------------------------------------
+          # Replace the entire old dashboard with the agreed V2 layout.
+          # ------------------------------------------------------------
+
+          start = source.index("    private void buildDashboard() {")
+          end = source.index("    private void buildAppPanel() {", start)
+
+          new_dashboard = r'''    private void buildDashboard() {
+
+        dashboard =
+                new LinearLayout(this);
+
+        dashboard.setOrientation(
+                LinearLayout.HORIZONTAL);
+
+        dashboard.setPadding(
+                0,
+                0,
+                0,
+                0);
+
+        launcherLayer.addView(
+                dashboard,
+                new LinearLayout.LayoutParams(
+                        -1,
+                        -1));
+
+        /*
+         * LEFT SIDEBAR
+         *
+         * Order is fixed:
+         * 1. APP CHỌN
+         * 2. Four real quick-launch apps
+         * 3. Voice placeholder
+         * 4. Tasks placeholder
+         */
+        LinearLayout sidebar =
+                new LinearLayout(this);
+
+        sidebar.setOrientation(
+                LinearLayout.VERTICAL);
+
+        sidebar.setGravity(
+                Gravity.TOP | Gravity.CENTER_HORIZONTAL);
+
+        sidebar.setPadding(
+                dp(3),
+                dp(3),
+                dp(3),
+                dp(3));
+
+        dashboard.addView(
+                sidebar,
+                new LinearLayout.LayoutParams(
+                        dp(86),
+                        -1));
+
+        TextView choose =
+                sidebarButton(
+                        "APP\nCHỌN");
+
+        choose.setOnClickListener(
+                v -> showApps());
+
+        sidebar.addView(
+                choose,
+                sidebarButtonParams());
+
+        /*
+         * The four quick-launch entries are populated
+         * by rebuildDock() using real installed apps.
+         */
+        dock =
+                new LinearLayout(this);
+
+        dock.setOrientation(
+                LinearLayout.VERTICAL);
+
+        dock.setGravity(
+                Gravity.TOP | Gravity.CENTER_HORIZONTAL);
+
+        sidebar.addView(
+                dock,
+                new LinearLayout.LayoutParams(
+                        -1,
+                        0,
+                        1f));
+
+        TextView voice =
+                sidebarButton(
+                        "🎙");
+
+        voice.setTextSize(20);
+
+        /*
+         * Placeholder only.
+         * Voice functionality is intentionally NOT added
+         * in Home UI V2.
+         */
+        voice.setOnClickListener(
+                v -> { });
+
+        sidebar.addView(
+                voice,
+                sidebarFixedButtonParams());
+
+        TextView tasks =
+                sidebarButton(
+                        "TASKS");
+
+        /*
+         * Placeholder only.
+         * Running task functionality is intentionally NOT
+         * added in Home UI V2.
+         */
+        tasks.setOnClickListener(
+                v -> { });
+
+        sidebar.addView(
+                tasks,
+                sidebarFixedButtonParams());
+
+        /*
+         * MAIN AREA
+         */
+        FrameLayout main =
+                new FrameLayout(this);
+
+        dashboard.addView(
+                main,
+                new LinearLayout.LayoutParams(
+                        0,
+                        -1,
+                        1f));
+
+        /*
+         * Empty center area.
+         *
+         * The real projection is still handled by
+         * projectionLayer and launchProjection().
+         * Home UI V2 deliberately does not replace
+         * Display Core.
+         */
+
+        LinearLayout bottom =
+                new LinearLayout(this);
+
+        bottom.setOrientation(
+                LinearLayout.HORIZONTAL);
+
+        bottom.setGravity(
+                Gravity.CENTER_VERTICAL);
+
+        bottom.setPadding(
+                dp(8),
+                dp(8),
+                dp(8),
+                dp(8));
+
+        FrameLayout.LayoutParams bottomParams =
+                new FrameLayout.LayoutParams(
+                        -1,
+                        dp(90),
+                        Gravity.BOTTOM);
+
+        main.addView(
+                bottom,
+                bottomParams);
+
+        /*
+         * WYN placeholder.
+         */
+        TextView wyn =
+                circleButton(
+                        "WYN");
+
+        /*
+         * Placeholder only.
+         * No traffic/weather/network function here.
+         */
+        wyn.setOnClickListener(
+                v -> { });
+
+        bottom.addView(
+                wyn,
+                new LinearLayout.LayoutParams(
+                        dp(78),
+                        dp(78)));
+
+        /*
+         * MEDIA placeholder.
+         */
+        LinearLayout media =
+                card();
+
+        media.setPadding(
+                dp(14),
+                dp(8),
+                dp(14),
+                dp(8));
+
+        TextView mediaTitle =
+                text(
+                        "MEDIA",
+                        12,
+                        Color.LTGRAY);
+
+        TextView mediaLine =
+                text(
+                        "▶  Đang phát...",
+                        17,
+                        Color.WHITE);
+
+        media.addView(
+                mediaTitle,
+                new LinearLayout.LayoutParams(
+                        -1,
+                        dp(25)));
+
+        media.addView(
+                mediaLine,
+                new LinearLayout.LayoutParams(
+                        -1,
+                        dp(35)));
+
+        /*
+         * Placeholder only.
+         * No MediaSession integration in V2.
+         */
+        media.setOnClickListener(
+                v -> { });
+
+        LinearLayout.LayoutParams mediaParams =
+                new LinearLayout.LayoutParams(
+                        0,
+                        dp(78),
+                        1f);
+
+        mediaParams.setMargins(
+                dp(12),
+                0,
+                0,
+                0);
+
+        bottom.addView(
+                media,
+                mediaParams);
+    }
+
+'''
+          source = source[:start] + new_dashboard + source[end:]
+
+          # ------------------------------------------------------------
+          # Replace rebuildDock() with four real quick-launch icons.
+          # ------------------------------------------------------------
+
+          start = source.index("    private void rebuildDock() {")
+          end = source.index("    private LinearLayout appTile(", start)
+
+          new_dock = r'''    private void rebuildDock() {
+
+        if (dock == null) {
+            return;
+        }
+
+        dock.removeAllViews();
+
+        ArrayList<AppInfo> quickApps =
+                getQuickLaunchApps();
+
+        int count =
+                Math.min(
+                        4,
+                        quickApps.size());
+
+        for (int i = 0;
+             i < count;
+             i++) {
+
+            final AppInfo app =
+                    quickApps.get(i);
+
+            LinearLayout tile =
+                    quickLaunchTile(app);
+
+            dock.addView(
+                    tile,
+                    sidebarQuickParams());
+        }
+    }
+
+    private ArrayList<AppInfo> getQuickLaunchApps() {
+
+        ArrayList<AppInfo> selected =
+                new ArrayList<>();
+
+        /*
+         * Preferred real applications.
+         *
+         * If an application is not installed, it is
+         * simply skipped and another installed launcher
+         * app fills the position.
+         */
+        String[] preferredPackages = {
+                "com.google.android.apps.maps",
+                "com.google.android.youtube",
+                "com.zing.zalo",
+                "com.spotify.music"
+        };
+
+        for (String packageName :
+                preferredPackages) {
+
+            for (AppInfo app : apps) {
+
+                if (selected.size() >= 4) {
+                    break;
+                }
+
+                if (app.component
+                        .getPackageName()
+                        .equals(packageName)) {
+
+                    boolean duplicate = false;
+
+                    for (AppInfo existing :
+                            selected) {
+
+                        if (existing.component
+                                .equals(app.component)) {
+
+                            duplicate = true;
+                            break;
+                        }
+                    }
+
+                    if (!duplicate) {
+                        selected.add(app);
+                    }
+                }
+            }
+        }
+
+        /*
+         * Fill remaining slots with real installed
+         * launcher applications.
+         */
+        if (selected.size() < 4) {
+
+            for (AppInfo app : apps) {
+
+                if (selected.size() >= 4) {
+                    break;
+                }
+
+                boolean duplicate = false;
+
+                for (AppInfo existing :
+                        selected) {
+
+                    if (existing.component
+                            .equals(app.component)) {
+
+                        duplicate = true;
+                        break;
+                    }
+                }
+
+                if (!duplicate) {
+                    selected.add(app);
+                }
+            }
+        }
+
+        return selected;
+    }
+
+    private LinearLayout quickLaunchTile(
+            AppInfo app) {
+
+        LinearLayout tile =
+                new LinearLayout(this);
+
+        tile.setOrientation(
+                LinearLayout.VERTICAL);
+
+        tile.setGravity(
+                Gravity.CENTER);
+
+        GradientDrawable bg =
+                new GradientDrawable();
+
+        bg.setColor(
+                Color.rgb(
+                        22,
+                        27,
+                        33));
+
+        bg.setCornerRadius(
+                dp(14));
+
+        tile.setBackground(bg);
+
+        ImageView icon =
+                new ImageView(this);
+
+        Drawable drawable =
+                getRealAppIcon(
+                        app.component
+                                .getPackageName());
+
+        if (drawable != null) {
+            icon.setImageDrawable(drawable);
+        }
+
+        icon.setScaleType(
+                ImageView.ScaleType.CENTER_INSIDE);
+
+        tile.addView(
+                icon,
+                new LinearLayout.LayoutParams(
+                        dp(48),
+                        dp(48)));
+
+        TextView name =
+                text(
+                        app.name,
+                        9,
+                        Color.WHITE);
+
+        name.setGravity(
+                Gravity.CENTER);
+
+        name.setMaxLines(1);
+
+        tile.addView(
+                name,
+                new LinearLayout.LayoutParams(
+                        -1,
+                        dp(22)));
+
+        tile.setOnClickListener(
+                v ->
+                        launchProjection(
+                                app.component));
+
+        return tile;
+    }
+
+'''
+          source = source[:start] + new_dock + source[end:]
+
+          # ------------------------------------------------------------
+          # Replace appTile() with real Android application icon.
+          # ------------------------------------------------------------
+
+          start = source.index("    private LinearLayout appTile(")
+          end = source.index("    private void attachProjection()", start)
+
+          new_app_tile = r'''    private LinearLayout appTile(
+            AppInfo app) {
+
+        LinearLayout tile =
+                new LinearLayout(this);
+
+        tile.setOrientation(
+                LinearLayout.VERTICAL);
+
+        tile.setGravity(
+                Gravity.CENTER);
+
+        GradientDrawable bg =
+                new GradientDrawable();
+
+        bg.setColor(
+                Color.rgb(
+                        22,
+                        27,
+                        33));
+
+        bg.setCornerRadius(
+                dp(16));
+
+        tile.setBackground(bg);
+
+        ImageView icon =
+                new ImageView(this);
+
+        Drawable drawable =
+                getRealAppIcon(
+                        app.component
+                                .getPackageName());
+
+        if (drawable != null) {
+            icon.setImageDrawable(drawable);
+        }
+
+        icon.setScaleType(
+                ImageView.ScaleType.CENTER_INSIDE);
+
+        tile.addView(
+                icon,
+                new LinearLayout.LayoutParams(
+                        -1,
+                        dp(62)));
+
+        TextView name =
+                text(
+                        app.name,
+                        12,
+                        Color.WHITE);
+
+        name.setGravity(
+                Gravity.CENTER);
+
+        name.setMaxLines(2);
+
+        tile.addView(
+                name,
+                new LinearLayout.LayoutParams(
+                        -1,
+                        dp(38)));
+
+        tile.setOnClickListener(
+                v -> {
+
+                    hideApps();
+
+                    launchProjection(
+                            app.component);
+                });
+
+        return tile;
+    }
+
+    private Drawable getRealAppIcon(
+            String packageName) {
+
+        try {
+
+            PackageManager pm =
+                    getPackageManager();
+
+            ApplicationInfo info =
+                    pm.getApplicationInfo(
+                            packageName,
+                            0);
+
+            return info.loadIcon(pm);
+
+        } catch (Exception ignored) {
+
+            return null;
+        }
+    }
+
+'''
+          source = source[:start] + new_app_tile + source[end:]
+
+          # ------------------------------------------------------------
+          # Add sidebar helper methods immediately before card().
+          # ------------------------------------------------------------
+
+          marker = "    private LinearLayout card() {"
+
+          helpers = r'''    private LinearLayout.LayoutParams
+            sidebarButtonParams() {
+
+        LinearLayout.LayoutParams params =
+                new LinearLayout.LayoutParams(
+                        -1,
+                        dp(62));
+
+        params.setMargins(
+                dp(1),
+                dp(2),
+                dp(1),
+                dp(2));
+
+        return params;
+    }
+
+    private LinearLayout.LayoutParams
+            sidebarFixedButtonParams() {
+
+        LinearLayout.LayoutParams params =
+                new LinearLayout.LayoutParams(
+                        -1,
+                        dp(62));
+
+        params.setMargins(
+                dp(1),
+                dp(2),
+                dp(1),
+                dp(2));
+
+        return params;
+    }
+
+    private LinearLayout.LayoutParams
+            sidebarQuickParams() {
+
+        LinearLayout.LayoutParams params =
+                new LinearLayout.LayoutParams(
+                        -1,
+                        dp(66));
+
+        params.setMargins(
+                dp(1),
+                dp(2),
+                dp(1),
+                dp(2));
+
+        return params;
+    }
+
+    private TextView sidebarButton(
+            String value) {
+
+        TextView view =
+                buttonText(value);
+
+        view.setTextSize(11);
+        view.setGravity(
+                Gravity.CENTER);
+
+        return view;
+    }
+
+    private TextView circleButton(
+            String value) {
+
+        TextView view =
+                text(
+                        value,
+                        15,
+                        Color.WHITE);
+
+        view.setGravity(
+                Gravity.CENTER);
+
+        GradientDrawable bg =
+                new GradientDrawable();
+
+        bg.setShape(
+                GradientDrawable.OVAL);
+
+        bg.setColor(
+                Color.rgb(
+                        22,
+                        27,
+                        33));
+
+        bg.setStroke(
+                dp(2),
+                Color.rgb(
+                        70,
+                        150,
+                        210));
+
+        view.setBackground(bg);
+
+        return view;
+    }
+
+'''
+          if marker not in source:
+              raise SystemExit("Could not find helper insertion point")
+
+          source = source.replace(
+              marker,
+              helpers + marker,
+              1)
+
+          # ------------------------------------------------------------
+          # Remove old initial() helper because V2 no longer uses
+          # fake letter icons.
+          # ------------------------------------------------------------
+
+          initial_start = source.find(
+              "    private String initial(")
+
+          if initial_start != -1:
+
+              initial_end = source.find(
+                  "    private int dp(",
+                  initial_start)
+
+              if initial_end == -1:
                   raise SystemExit(
-                      f"Foundation V1 source does not contain required token: {token}"
-                  )
+                      "Could not locate end of initial()")
 
-          # ------------------------------------------------------------
-          # 1. Add Android UI imports needed by the Home UI.
-          # ------------------------------------------------------------
-
-          imports = [
-              "import android.content.pm.ApplicationInfo;",
-              "import android.content.pm.PackageManager;",
-              "import android.graphics.drawable.Drawable;",
-              "import android.view.Gravity;",
-              "import android.widget.ImageView;",
-          ]
-
-          lines = src.splitlines()
-
-          existing_imports = set(
-              line.strip()
-              for line in lines
-              if line.startswith("import ")
-          )
-
-          missing_imports = [
-              item for item in imports
-              if item not in existing_imports
-          ]
-
-          if missing_imports:
-              positions = [
-                  i for i, line in enumerate(lines)
-                  if line.startswith("import ")
-              ]
-
-              if not positions:
-                  raise SystemExit("Could not locate Java imports.")
-
-              insert_at = positions[-1] + 1
-              lines[insert_at:insert_at] = missing_imports
-              src = "\n".join(lines) + "\n"
-
-          # ------------------------------------------------------------
-          # 2. Add helper for real application icons.
-          #
-          #    This deliberately uses ApplicationInfo.loadIcon().
-          # ------------------------------------------------------------
-
-          icon_helper = r'''
-          private Drawable getRealAppIcon(String packageName) {
-              try {
-                  PackageManager pm = getPackageManager();
-                  ApplicationInfo info = pm.getApplicationInfo(packageName, 0);
-                  return info.loadIcon(pm);
-              } catch (Exception ignored) {
-                  return null;
-              }
-          }
-
-          private ImageView createRealAppIcon(String packageName, int sizeDp) {
-              ImageView icon = new ImageView(this);
-              Drawable drawable = getRealAppIcon(packageName);
-
-              if (drawable != null) {
-                  icon.setImageDrawable(drawable);
-              }
-
-              int sizePx = (int) (sizeDp * getResources().getDisplayMetrics().density);
-              icon.setLayoutParams(new android.widget.LinearLayout.LayoutParams(
-                      sizePx,
-                      sizePx
-              ));
-              icon.setScaleType(ImageView.ScaleType.CENTER_INSIDE);
-              icon.setGravity(Gravity.CENTER);
-
-              return icon;
-          }
-          '''
-
-          if "private Drawable getRealAppIcon(" not in src:
-              match = re.search(
-                  r"\n\s*(?:private|public|protected)\s+void\s+buildDashboard\s*\(",
-                  src
-              )
-
-              if match:
-                  insert_pos = match.start()
-                  src = src[:insert_pos] + "\n" + icon_helper.strip("\n") + "\n" + src[insert_pos:]
-              else:
-                  # Fallback: insert before the final class closing brace.
-                  pos = src.rfind("\n}")
-                  if pos < 0:
-                      raise SystemExit(
-                          "Could not find safe insertion point for Home UI helpers."
-                      )
-
-                  src = (
-                      src[:pos]
-                      + "\n"
-                      + icon_helper.strip("\n")
-                      + "\n"
-                      + src[pos:]
-                  )
-
-          # ------------------------------------------------------------
-          # 3. Remove visible old dashboard labels/cards.
-          #
-          #    We do not delete clock/date fields or updateClock().
-          #    They may still be referenced elsewhere. We only prevent
-          #    the old Home UI from displaying them.
-          # ------------------------------------------------------------
-
-          old_labels = [
-              "speed",
-              "weather",
-          ]
-
-          # Remove obvious TextView creation blocks whose text is exactly
-          # Speed/Weather. This is intentionally conservative.
-          for label in old_labels:
-              pattern = re.compile(
-                  rf'(?s)(?:android\.widget\.)?TextView\s+\w+\s*=\s*new\s+'
-                  rf'(?:android\.widget\.)?TextView\(this\)\s*;.*?'
-                  rf'(?:\.setText\(\s*["\']{label}["\']\s*\).*?;)',
-                  re.IGNORECASE
-              )
-              src = pattern.sub("", src)
-
-          # Remove simple dashboard text labels where they occur as
-          # literal setText values. This does not touch clock/date code.
-          src = re.sub(
-              r'\w+\.setText\(\s*["\']Speed["\']\s*\)\s*;',
-              "",
-              src,
-              flags=re.IGNORECASE
-          )
-
-          src = re.sub(
-              r'\w+\.setText\(\s*["\']Weather["\']\s*\)\s*;',
-              "",
-              src,
-              flags=re.IGNORECASE
-          )
-
-          # ------------------------------------------------------------
-          # 4. Replace old top title/date/time display when the existing
-          #    Dashboard builder has the known simple title strings.
-          #
-          #    We do NOT remove the clock/date variables themselves.
-          # ------------------------------------------------------------
-
-          src = re.sub(
-              r'\w+\.setText\(\s*["\']CarAssistant["\']\s*\)\s*;',
-              "",
-              src
-          )
-
-          # ------------------------------------------------------------
-          # 5. Add a safe Home UI V2 marker and helper methods.
-          #
-          #    The actual existing app-selection/projection methods remain
-          #    untouched. The helpers provide the new layout primitives.
-          # ------------------------------------------------------------
-
-          ui_helpers = r'''
-          /*
-           * HOME UI V2
-           *
-           * Real in this version:
-           *   1. Application icons from ApplicationInfo.loadIcon()
-           *   2. Existing app chooser / showApps() path
-           *   3. Existing projection launch path
-           *
-           * Placeholder buttons only:
-           *   4. Voice
-           *   5. Running Apps / Tasks
-           *   6. Wyn
-           *   7. Media
-           *
-           * Protected:
-           *   Display Core
-           *   Projection
-           *   Persistence
-           *   Floating Touch
-           *   BACK / HOME
-           */
-
-          private static final int HOME_UI_V2_MAX_QUICK_APPS = 4;
-
-          private android.widget.LinearLayout createHomeUiV2Sidebar() {
-              android.widget.LinearLayout sidebar =
-                      new android.widget.LinearLayout(this);
-
-              sidebar.setOrientation(android.widget.LinearLayout.VERTICAL);
-              sidebar.setGravity(Gravity.TOP | Gravity.CENTER_HORIZONTAL);
-              sidebar.setPadding(6, 8, 6, 8);
-
-              return sidebar;
-          }
-
-          private android.widget.TextView createHomeUiV2Placeholder(
-                  String label
-          ) {
-              android.widget.TextView view =
-                      new android.widget.TextView(this);
-
-              view.setText(label);
-              view.setGravity(Gravity.CENTER);
-              view.setTextSize(10);
-              view.setPadding(4, 8, 4, 8);
-
-              return view;
-          }
-
-          private android.widget.LinearLayout createHomeUiV2BottomBar() {
-              android.widget.LinearLayout bar =
-                      new android.widget.LinearLayout(this);
-
-              bar.setOrientation(android.widget.LinearLayout.HORIZONTAL);
-              bar.setGravity(Gravity.CENTER);
-              bar.setPadding(8, 4, 8, 8);
-
-              return bar;
-          }
-
-          private android.widget.TextView createHomeUiV2WynButton() {
-              android.widget.TextView wyn =
-                      createHomeUiV2Placeholder("WYN\n◯");
-              wyn.setContentDescription("Wyn traffic status");
-              return wyn;
-          }
-
-          private android.widget.TextView createHomeUiV2MediaButton() {
-              android.widget.TextView media =
-                      createHomeUiV2Placeholder(
-                              "MEDIA\n◀  ▶\nNội dung đang phát"
-                      );
-              media.setContentDescription("Media controller");
-              return media;
-          }
-
-          private android.widget.TextView createHomeUiV2VoiceButton() {
-              android.widget.TextView voice =
-                      createHomeUiV2Placeholder("🎙\nVOICE");
-              voice.setContentDescription("Voice assistant");
-              return voice;
-          }
-
-          private android.widget.TextView createHomeUiV2TasksButton() {
-              android.widget.TextView tasks =
-                      createHomeUiV2Placeholder("◉\nTASKS");
-              tasks.setContentDescription("Running applications");
-              return tasks;
-          }
-
-          private android.widget.TextView createHomeUiV2ChooseAppButton() {
-              android.widget.TextView choose =
-                      createHomeUiV2Placeholder("CHỌN\nAPP");
-              choose.setContentDescription("Choose application");
-
-              choose.setOnClickListener(v -> {
-                  try {
-                      showApps();
-                  } catch (Exception ignored) {
-                      // Existing chooser remains the source of truth.
-                  }
-              });
-
-              return choose;
-          }
-          '''
-
-          if "HOME_UI_V2_MAX_QUICK_APPS" not in src:
-              pos = src.rfind("\n}")
-              if pos < 0:
-                  raise SystemExit("Could not find final class closing brace.")
-
-              src = (
-                  src[:pos]
-                  + "\n"
-                  + ui_helpers.strip("\n")
-                  + "\n"
-                  + src[pos:]
+              source = (
+                  source[:initial_start]
+                  + source[initial_end:]
               )
 
           # ------------------------------------------------------------
-          # 6. Ensure the source visibly contains the four-quick-app
-          #    limit and real icon implementation.
+          # Remove now-unused old infoCard() helper.
+          # This is Home-only cleanup; no projection code touched.
           # ------------------------------------------------------------
 
-          if "HOME_UI_V2_MAX_QUICK_APPS = 4" not in src:
-              raise SystemExit("Four-app quick-launch limit was not installed.")
+          info_start = source.find(
+              "    private LinearLayout infoCard(")
 
-          if "ApplicationInfo" not in src or "loadIcon" not in src:
-              raise SystemExit("Real application icon support is missing.")
+          if info_start != -1:
 
-          file.write_text(src.rstrip() + "\n", encoding="utf-8")
+              info_end = source.find(
+                  "    private TextView buttonText(",
+                  info_start)
 
-          print("HOME UI V2 PATCH: PASS")
-          print("Real icons: ApplicationInfo.loadIcon()")
-          print("App chooser: existing showApps() path")
-          print("Quick launch limit: 4")
-          print("Voice: placeholder")
-          print("Tasks: placeholder")
-          print("Wyn: placeholder")
-          print("Media: placeholder")
+              if info_end == -1:
+                  raise SystemExit(
+                      "Could not locate end of infoCard()")
+
+              source = (
+                  source[:info_start]
+                  + source[info_end:]
+              )
+
+          # ------------------------------------------------------------
+          # Remove old clock/date fields and ticker because V2 has
+          # deliberately removed the clock/date from Home.
+          # ------------------------------------------------------------
+
+          source = source.replace(
+              "    private TextView clock;\n"
+              "    private TextView date;\n\n",
+              ""
+          )
+
+          ticker_start = source.find(
+              "    private final Runnable clockTicker =")
+
+          if ticker_start != -1:
+
+              ticker_end = source.find(
+                  "    private final Runnable targetPoller =",
+                  ticker_start)
+
+              if ticker_end == -1:
+                  raise SystemExit(
+                      "Could not locate clockTicker end")
+
+              source = (
+                  source[:ticker_start]
+                  + source[ticker_end:]
+              )
+
+          source = source.replace(
+              """
+        handler.removeCallbacks(
+                clockTicker);
+
+""",
+              ""
+          )
+
+          source = source.replace(
+              """
+        handler.post(clockTicker);
+""",
+              ""
+          )
+
+          # Remove the updateClock() method.
+          update_start = source.find(
+              "    private void updateClock()")
+
+          if update_start != -1:
+
+              update_end = source.find(
+                  "    private LinearLayout card()",
+                  update_start)
+
+              if update_end == -1:
+                  raise SystemExit(
+                      "Could not locate updateClock() end")
+
+              source = (
+                  source[:update_start]
+                  + source[update_end:]
+              )
+
+          # ------------------------------------------------------------
+          # Remove unused old date/time imports.
+          # ------------------------------------------------------------
+
+          source = source.replace(
+              "import java.text.SimpleDateFormat;\n",
+              ""
+          )
+
+          source = source.replace(
+              "import java.util.Date;\n",
+              ""
+          )
+
+          # ------------------------------------------------------------
+          # V2 safety markers.
+          # ------------------------------------------------------------
+
+          must_exist = [
+              "private Drawable getRealAppIcon(",
+              "ApplicationInfo",
+              "PackageManager",
+              "ImageView",
+              "getQuickLaunchApps()",
+              "Math.min(\n                        4,\n                        quickApps.size())",
+              "APP\\nCHỌN",
+              "\"TASKS\"",
+              "\"MEDIA\"",
+              "\"WYN\"",
+              "launchProjection(\n                            app.component)"
+          ]
+
+          for marker in must_exist:
+              if marker not in source:
+                  raise SystemExit(
+                      "Home UI V2 marker missing: " + marker)
+
+          forbidden = [
+              "CAR ASSISTANT",
+              "\"SPEED\"",
+              "\"WEATHER\"",
+              "Navigation",
+              "Math.min(\n                        5,\n                        apps.size())",
+              "initial(app.name)"
+          ]
+
+          for marker in forbidden:
+              if marker in source:
+                  raise SystemExit(
+                      "Old Home UI marker still present: " + marker)
+
+          # Ensure the proven projection target path is untouched.
+          if "V10SessionStore\n            .setTarget" not in source:
+              raise SystemExit(
+                  "V10SessionStore persistence path missing")
+
+          if "session.setTarget(\n            component);" not in source:
+              raise SystemExit(
+                  "session.setTarget(component) missing")
+
+          path.write_text(
+              source.rstrip() + "\n",
+              encoding="utf-8"
+          )
+
+          print("Home UI V2 + real icons patch: PASS")
           PY
 
-      - name: Verify Home UI V2 patch scope
+      - name: Verify Home UI V2 source
         shell: bash
         run: |
           set -euo pipefail
 
           FILE="v10-source/app/src/main/java/com/hieptran/aacast/doudou/V10CarActivity.java"
 
-          test -f "$FILE"
+          grep -q 'private Drawable getRealAppIcon' "$FILE"
+          grep -q 'ApplicationInfo' "$FILE"
+          grep -q 'PackageManager' "$FILE"
+          grep -q 'ImageView' "$FILE"
+          grep -q 'getQuickLaunchApps' "$FILE"
+          grep -q '"TASKS"' "$FILE"
+          grep -q '"MEDIA"' "$FILE"
+          grep -q '"WYN"' "$FILE"
+          grep -q 'APP\\nCHỌN' "$FILE"
 
-          grep -q "ApplicationInfo" "$FILE"
-          grep -q "loadIcon" "$FILE"
-          grep -q "HOME_UI_V2_MAX_QUICK_APPS = 4" "$FILE"
+          if grep -q '"CAR ASSISTANT"' "$FILE"; then
+            echo "ERROR: old Home title remains"
+            exit 1
+          fi
 
-          grep -q "createHomeUiV2Sidebar" "$FILE"
-          grep -q "createHomeUiV2ChooseAppButton" "$FILE"
-          grep -q "createHomeUiV2VoiceButton" "$FILE"
-          grep -q "createHomeUiV2TasksButton" "$FILE"
-          grep -q "createHomeUiV2WynButton" "$FILE"
-          grep -q "createHomeUiV2MediaButton" "$FILE"
+          if grep -q '"SPEED"' "$FILE"; then
+            echo "ERROR: old SPEED card remains"
+            exit 1
+          fi
 
-          grep -q "showApps()" "$FILE"
+          if grep -q '"WEATHER"' "$FILE"; then
+            echo "ERROR: old WEATHER card remains"
+            exit 1
+          fi
 
-          # Protected Core/Projection/Persistence files must not be modified
-          # by the Home UI patch.
-          sha256sum \
-            v10-source/app/src/main/java/com/hieptran/aacast/doudou/V10ProjectionSession.java \
-            v10-source/app/src/main/java/com/hieptran/aacast/doudou/V10DisplayController.java \
-            v10-source/app/src/main/java/com/hieptran/aacast/doudou/V10SurfaceManager.java \
-            v10-source/app/src/main/java/com/hieptran/aacast/doudou/V10TaskSession.java \
-            > /tmp/protected-after.sha256
+          if grep -q 'Navigation' "$FILE"; then
+            echo "ERROR: old Navigation card remains"
+            exit 1
+          fi
 
-          diff -u /tmp/protected-before.sha256 /tmp/protected-after.sha256
+          if grep -q 'Math.min(.*5' "$FILE"; then
+            echo "ERROR: old five-app dock remains"
+            exit 1
+          fi
 
-          echo "PROTECTED CORE/PROJECTION/PERSISTENCE: UNCHANGED"
+          echo "Home UI V2 source verification: PASS"
 
-      - name: Verify forbidden architecture changes
+      - name: Verify projection and persistence code unchanged
         shell: bash
         run: |
           set -euo pipefail
 
-          BASE="v10-source/app/src/main/java/com/hieptran/aacast/doudou"
+          FILE="v10-source/app/src/main/java/com/hieptran/aacast/doudou/V10CarActivity.java"
 
-          test ! -f "$BASE/V10ProjectionService.java"
+          grep -q 'V10SessionStore' "$FILE"
+          grep -q 'session.setTarget' "$FILE"
+          grep -q 'session.release' "$FILE"
+          grep -q 'session.hideTask' "$FILE"
+          grep -q 'createFloatingTouchKey' "$FILE"
+          grep -q 'handleControlBack' "$FILE"
+          grep -q 'handleControlHome' "$FILE"
 
-          ! grep -R "am force-stop" "$BASE/V10ProjectionSession.java" "$BASE/V10DisplayController.java"
+          for f in \
+            "V10ProjectionSession.java" \
+            "V10DisplayController.java" \
+            "V10SurfaceManager.java" \
+            "V10TaskSession.java"
+          do
+            test -f "v10-source/app/src/main/java/com/hieptran/aacast/doudou/$f"
+          done
 
-          echo "FORBIDDEN ARCHITECTURE CHANGES: NONE"
+          if test -f \
+            "v10-source/app/src/main/java/com/hieptran/aacast/doudou/V10ProjectionService.java"
+          then
+            echo "ERROR: forbidden V10ProjectionService.java exists"
+            exit 1
+          fi
 
-      - name: Show Home UI diff
+          echo "Projection/Persistence protection markers: PASS"
+
+      - name: Verify only V10CarActivity changed
         shell: bash
         run: |
           set -euo pipefail
 
-          echo "Changed files:"
           git status --short
 
-          echo
-          echo "Diff summary:"
-          git diff --stat
-
-          echo
-          echo "Home UI V2 source diff:"
-          git diff -- "$(
-            printf '%s' 'v10-source/app/src/main/java/com/hieptran/aacast/doudou/V10CarActivity.java'
+          CHANGED="$(
+            git status --short |
+            awk '{print substr($0,4)}'
           )"
 
-      - name: Final whitespace gate
+          if [ -z "$CHANGED" ]; then
+            echo "ERROR: no source change detected"
+            exit 1
+          fi
+
+          BAD=0
+
+          while IFS= read -r file; do
+            [ -z "$file" ] && continue
+
+            if [ "$file" != "v10-source/app/src/main/java/com/hieptran/aacast/doudou/V10CarActivity.java" ]; then
+              echo "ERROR: unexpected changed file: $file"
+              BAD=1
+            fi
+          done <<< "$CHANGED"
+
+          if [ "$BAD" -ne 0 ]; then
+            exit 1
+          fi
+
+          echo "Only V10CarActivity.java changed: PASS"
+
+      - name: Verify protected Foundation hashes
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          cd v10-source
+
+          sha256sum \
+            app/src/main/java/com/hieptran/aacast/doudou/V10ProjectionSession.java \
+            app/src/main/java/com/hieptran/aacast/doudou/V10DisplayController.java \
+            app/src/main/java/com/hieptran/aacast/doudou/V10SurfaceManager.java \
+            app/src/main/java/com/hieptran/aacast/doudou/V10TaskSession.java \
+            > ../foundation-protected/hashes-after.txt
+
+          diff -u \
+            ../foundation-protected/hashes-before.txt \
+            ../foundation-protected/hashes-after.txt
+
+          cd ..
+
+          echo "Protected Foundation hashes: PASS"
+
+      - name: Verify V10CarActivity changed only for Home UI V2
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          FILE="v10-source/app/src/main/java/com/hieptran/aacast/doudou/V10CarActivity.java"
+
+          grep -q 'private void buildDashboard()' "$FILE"
+          grep -q 'private void rebuildDock()' "$FILE"
+          grep -q 'private LinearLayout appTile(' "$FILE"
+          grep -q 'private Drawable getRealAppIcon(' "$FILE"
+          grep -q 'private void launchProjection(' "$FILE"
+          grep -q 'private void createFloatingTouchKey()' "$FILE"
+
+          echo "Home UI V2 structural verification: PASS"
+
+      - name: Git diff check
         shell: bash
         run: |
           set -euo pipefail
 
           git diff --check
 
-          echo "GIT DIFF CHECK: PASS"
+          echo "Git diff check: PASS"
 
-      - name: Set up Java 17
+      - name: Setup Java 17
         uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: "17"
 
-      - name: Make Gradle executable
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          chmod +x v10-source/gradlew
-
       - name: Compile Java
-        working-directory: v10-source
         shell: bash
+        working-directory: v10-source
         run: |
           set -euo pipefail
+
+          chmod +x ./gradlew
 
           ./gradlew \
             :app:compileDebugJavaWithJavac \
             --no-daemon \
             --stacktrace
 
-      - name: Assemble APK
-        working-directory: v10-source
+      - name: Assemble Debug APK
         shell: bash
+        working-directory: v10-source
         run: |
           set -euo pipefail
 
@@ -539,67 +1233,61 @@ jobs:
             --no-daemon \
             --stacktrace
 
-      - name: Calculate APK SHA256
+      - name: Locate APK and calculate SHA256
         shell: bash
         run: |
           set -euo pipefail
 
-          APK="v10-source/app/build/outputs/apk/debug/app-debug.apk"
+          mkdir -p release
 
+          APK="$(
+            find v10-source/app/build/outputs/apk \
+              -type f \
+              -name "*.apk" \
+              | head -n 1
+          )"
+
+          test -n "$APK"
           test -f "$APK"
 
-          SHA="$(sha256sum "$APK" | awk '{print $1}')"
+          cp "$APK" \
+            "release/CarAssistant-V10-Home-UI-V2.apk"
 
-          echo "APK SHA256: $SHA"
-          echo "APK_SHA256=$SHA" >> "$GITHUB_ENV"
+          sha256sum \
+            "release/CarAssistant-V10-Home-UI-V2.apk" \
+            | tee "release/SHA256SUM.txt"
 
-      - name: Rename APK
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          APK="v10-source/app/build/outputs/apk/debug/app-debug.apk"
-          OUT="CarAssistant-V10-Home-UI-V2-Safe.apk"
-
-          cp "$APK" "$OUT"
-
-          test -f "$OUT"
-
-          ls -lh "$OUT"
+          echo "APK=$APK"
 
       - name: Upload Home UI V2 APK
         uses: actions/upload-artifact@v4
         with:
-          name: CarAssistant-V10-Home-UI-V2-Safe
-          path: CarAssistant-V10-Home-UI-V2-Safe.apk
+          name: CarAssistant-V10-Home-UI-V2
+          path: |
+            release/CarAssistant-V10-Home-UI-V2.apk
+            release/SHA256SUM.txt
           if-no-files-found: error
 
-      - name: Final build report
+      - name: Final Home UI V2 gate
         shell: bash
         run: |
           set -euo pipefail
 
+          test -f \
+            "release/CarAssistant-V10-Home-UI-V2.apk"
+
+          test -s \
+            "release/CarAssistant-V10-Home-UI-V2.apk"
+
+          test -f \
+            "release/SHA256SUM.txt"
+
           echo "=============================================="
-          echo "CARASSISTANT V10 HOME UI V2 SAFE"
-          echo "=============================================="
-          echo "Foundation V1: 7292b0569359a2fe6f7c3829561b6f65664fbd2e"
-          echo "Home UI only: YES"
-          echo "Display Core rebuilt: NO"
-          echo "Projection rebuilt: NO"
-          echo "Persistence rebuilt: NO"
-          echo "Floating Touch changed: NO"
-          echo "BACK/HOME changed: NO"
-          echo
-          echo "Real:"
-          echo "  - Application icons"
-          echo "  - Existing app chooser"
-          echo "  - Four quick-launch slots"
-          echo
-          echo "Placeholder only:"
-          echo "  - Voice"
-          echo "  - Running Apps / Tasks"
-          echo "  - Wyn"
-          echo "  - Media"
-          echo
-          echo "APK SHA256: $APK_SHA256"
+          echo "HOME UI V2 LAYOUT SAFE: PASS"
+          echo "Foundation V1 preserved."
+          echo "Real ApplicationInfo icons added."
+          echo "Four real quick-launch apps added."
+          echo "Old Home UI removed."
+          echo "Voice/Tasks/Wyn/Media are placeholders only."
+          echo "Display Core / Projection / Persistence preserved."
           echo "=============================================="
