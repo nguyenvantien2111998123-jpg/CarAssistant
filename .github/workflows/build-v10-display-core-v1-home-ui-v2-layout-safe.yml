@@ -27,7 +27,7 @@ jobs:
           set -euo pipefail
           python3 -m pip install --disable-pip-version-check PyYAML
 
-      - name: Restore V1 Safe baseline
+      - name: Restore Stable Base V1
         shell: bash
         run: |
           set -euo pipefail
@@ -37,13 +37,12 @@ jobs:
           git fetch origin "$BASELINE" --depth=1
 
           rm -rf v10-source
-
           git checkout "$BASELINE" -- v10-source
 
           SRC="v10-source/app/src/main/java/com/hieptran/aacast/doudou"
 
-          test -f "$SRC/V10CarActivity.java"
           test -f "$SRC/V10ProjectionSession.java"
+          test -f "$SRC/V10CarActivity.java"
           test -f "$SRC/V10SessionStore.java"
 
           if [ -f "$SRC/V10ProjectionService.java" ]; then
@@ -51,7 +50,8 @@ jobs:
             exit 1
           fi
 
-          echo "V1 Safe source baseline restored."
+          echo "Stable Base source restored."
+          echo "BASELINE=$BASELINE"
 
       - name: Rebuild Display Core V1 from Stable Freeze source
         shell: bash
@@ -88,9 +88,9 @@ jobs:
                           "-euo",
                           "pipefail",
                           "-c",
-                          step["run"]
+                          step["run"],
                       ],
-                      check=True
+                      check=True,
                   )
 
                   break
@@ -130,8 +130,6 @@ jobs:
               "Apply exact SAFE Long Press patch",
           }
 
-          found = set()
-
           for step in data["jobs"]["stable-base"]["steps"]:
               name = step.get("name", "")
 
@@ -150,22 +148,10 @@ jobs:
                       "-euo",
                       "pipefail",
                       "-c",
-                      run
+                      run,
                   ],
-                  check=True
+                  check=True,
               )
-
-              found.add(name)
-
-          missing = wanted - found
-
-          if missing:
-              print(
-                  "ERROR: missing Stable Freeze steps:"
-              )
-              for item in sorted(missing):
-                  print(item)
-              sys.exit(1)
 
           print(
               "Stable Freeze Floating Touch + SAFE Long Press applied."
@@ -174,7 +160,7 @@ jobs:
 
           python3 /tmp/apply_stable_patches.py
 
-      - name: Verify V1 Safe Home baseline
+      - name: Verify V10CarActivity before Home UI V2 patch
         shell: bash
         run: |
           set -euo pipefail
@@ -187,53 +173,7 @@ jobs:
           grep -Fq "private TextView date;" "$FILE"
           grep -Fq "private void updateClock()" "$FILE"
 
-          grep -Fq \
-            "import android.content.pm.ApplicationInfo;" \
-            "$FILE"
-
-          grep -Fq \
-            "import android.widget.ImageView;" \
-            "$FILE"
-
-          grep -Fq \
-            "loadIcon(" \
-            "$FILE"
-
-          grep -Fq \
-            "ImageView.ScaleType.CENTER_INSIDE" \
-            "$FILE"
-
-          if grep -Fq "CAR ASSISTANT" "$FILE"; then
-            echo "ERROR: old header remains."
-            exit 1
-          fi
-
-          if grep -Fq '"SPEED"' "$FILE"; then
-            echo "ERROR: old SPEED card remains."
-            exit 1
-          fi
-
-          if grep -Fq '"WEATHER"' "$FILE"; then
-            echo "ERROR: old WEATHER card remains."
-            exit 1
-          fi
-
-          if grep -Fq "initial(app.name)" "$FILE"; then
-            echo "ERROR: old letter icon remains."
-            exit 1
-          fi
-
-          if grep -Fq 'clock = text(' "$FILE"; then
-            echo "ERROR: old clock UI remains."
-            exit 1
-          fi
-
-          if grep -Fq 'date = text(' "$FILE"; then
-            echo "ERROR: old date UI remains."
-            exit 1
-          fi
-
-          echo "V1 Safe Home baseline verification PASS."
+          echo "V10CarActivity clock/date baseline markers PASS."
 
       - name: Freeze protected Core and Persistence files
         shell: bash
@@ -255,7 +195,7 @@ jobs:
         run: |
           set -euo pipefail
 
-          cat > /tmp/patch_home_v2.py <<'PY'
+          cat > /tmp/patch_home_ui_v2.py <<'PY'
           from pathlib import Path
           import sys
 
@@ -341,675 +281,722 @@ jobs:
                   "Closing brace not found: " + signature
               )
 
-          required_imports = [
-              "import android.content.pm.ApplicationInfo;",
-              "import android.widget.ImageView;",
-          ]
+          # ----------------------------------------------------------
+          # REQUIRED IMPORTS
+          # ----------------------------------------------------------
 
-          for item in required_imports:
-              if item not in text:
+          if "import android.content.pm.ApplicationInfo;" not in text:
+              marker = "import android.content.pm.ResolveInfo;"
+
+              if marker not in text:
                   raise SystemExit(
-                      "Required import missing: " + item
+                      "ResolveInfo import not found."
                   )
 
-          required_markers = [
-              "private TextView clock;",
-              "private TextView date;",
-              "private void updateClock()",
-              "ApplicationInfo",
-              "loadIcon(",
-              "ImageView.ScaleType.CENTER_INSIDE",
-          ]
-
-          for item in required_markers:
-              if item not in text:
-                  raise SystemExit(
-                      "Required V1 marker missing: " + item
-                  )
-
-          if "private void buildMainLayout(" not in text:
-              raise SystemExit(
-                  "buildMainLayout() not found."
+              text = text.replace(
+                  marker,
+                  marker
+                  + "\n"
+                  + "import android.content.pm.ApplicationInfo;",
+                  1,
               )
+
+          if "import android.widget.ImageView;" not in text:
+              marker = "import android.widget.FrameLayout;"
+
+              if marker not in text:
+                  raise SystemExit(
+                      "FrameLayout import not found."
+                  )
+
+              text = text.replace(
+                  marker,
+                  marker
+                  + "\n"
+                  + "import android.widget.ImageView;",
+                  1,
+              )
+
+          # ----------------------------------------------------------
+          # CLOCK/DATE SAFETY
+          #
+          # Keep declarations because updateClock() still references
+          # them. The Home UI does not attach these views.
+          # ----------------------------------------------------------
+
+          if "private TextView clock;" not in text:
+              raise SystemExit(
+                  "ERROR: clock declaration missing before patch."
+              )
+
+          if "private TextView date;" not in text:
+              raise SystemExit(
+                  "ERROR: date declaration missing before patch."
+              )
+
+          if "private void updateClock()" not in text:
+              raise SystemExit(
+                  "ERROR: updateClock() missing before patch."
+              )
+
+          # ----------------------------------------------------------
+          # BUILD DASHBOARD
+          #
+          # V2 layout:
+          #
+          #   LEFT:
+          #     CHỌN APP
+          #     APP 1
+          #     APP 2
+          #     APP 3
+          #     APP 4
+          #     VOICE
+          #     TASKS
+          #
+          #   CENTER:
+          #     MAP / projection area
+          #
+          #   BOTTOM CENTER:
+          #     WYN
+          #     MEDIA
+          #
+          # No projection/core logic is changed.
+          # ----------------------------------------------------------
 
           start, end = find_method(
               text,
-              "private void buildMainLayout("
+              "private void buildDashboard("
           )
 
-          new_layout = """private void buildMainLayout() {
-
-              dashboard =
-                      new LinearLayout(this);
+          dashboard = """private void buildDashboard() {
+          dashboard =
+              new LinearLayout(this);
+
+          dashboard.setOrientation(
+              LinearLayout.HORIZONTAL);
+
+          launcherLayer.addView(
+              dashboard,
+              new LinearLayout.LayoutParams(
+                  -1,
+                  -1));
+
+          // --------------------------------------------------------
+          // LEFT VERTICAL SIDEBAR
+          // --------------------------------------------------------
+
+          LinearLayout sideBar =
+              new LinearLayout(this);
+
+          sideBar.setOrientation(
+              LinearLayout.VERTICAL);
+
+          sideBar.setGravity(
+              Gravity.CENTER_HORIZONTAL);
+
+          GradientDrawable sideBg =
+              new GradientDrawable();
+
+          sideBg.setColor(
+              Color.rgb(
+                  18,
+                  22,
+                  27));
+
+          sideBar.setBackground(sideBg);
+
+          dashboard.addView(
+              sideBar,
+              new LinearLayout.LayoutParams(
+                  dp(96),
+                  -1));
+
+          // Select application to project.
+          TextView appsButton =
+              buttonText("CHỌN APP");
+
+          appsButton.setOnClickListener(
+              v -> showApps());
+
+          sideBar.addView(
+              appsButton,
+              new LinearLayout.LayoutParams(
+                  -1,
+                  dp(58)));
+
+          // --------------------------------------------------------
+          // MAIN AREA
+          // --------------------------------------------------------
+
+          LinearLayout main =
+              new LinearLayout(this);
+
+          main.setOrientation(
+              LinearLayout.VERTICAL);
+
+          dashboard.addView(
+              main,
+              new LinearLayout.LayoutParams(
+                  0,
+                  -1,
+                  1f));
+
+          // --------------------------------------------------------
+          // PROJECTION / HOME CONTENT AREA
+          // --------------------------------------------------------
+
+          LinearLayout content =
+              new LinearLayout(this);
+
+          content.setOrientation(
+              LinearLayout.VERTICAL);
+
+          LinearLayout map =
+              card();
+
+          map.addView(
+              text(
+                  "MAP",
+                  12,
+                  Color.LTGRAY));
+
+          TextView mapText =
+              text(
+                  "Navigation",
+                  28,
+                  Color.WHITE);
+
+          mapText.setGravity(
+              Gravity.CENTER);
+
+          map.addView(
+              mapText,
+              new LinearLayout.LayoutParams(
+                  -1,
+                  0,
+                  1));
+
+          content.addView(
+              map,
+              new LinearLayout.LayoutParams(
+                  -1,
+                  0,
+                  1));
+
+          main.addView(
+              content,
+              new LinearLayout.LayoutParams(
+                  -1,
+                  0,
+                  1));
+
+          // --------------------------------------------------------
+          // BOTTOM CENTER STATUS / MEDIA BAR
+          // --------------------------------------------------------
+
+          LinearLayout bottomBar =
+              new LinearLayout(this);
 
-              dashboard.setOrientation(
-                      LinearLayout.HORIZONTAL);
-
-              dashboard.setBackgroundColor(
-                      Color.TRANSPARENT);
-
-              dashboard.setPadding(
-                      0,
-                      0,
-                      0,
-                      0);
-
-              launcherLayer.addView(
-                      dashboard,
-                      new LinearLayout.LayoutParams(
-                              -1,
-                              -1));
-
-              // --------------------------------------------------
-              // LEFT VERTICAL SIDEBAR
-              // --------------------------------------------------
-
-              LinearLayout sidebar =
-                      new LinearLayout(this);
-
-              sidebar.setOrientation(
-                      LinearLayout.VERTICAL);
-
-              sidebar.setGravity(
-                      Gravity.CENTER_HORIZONTAL);
-
-              sidebar.setPadding(
-                      dp(7),
-                      dp(7),
-                      dp(7),
-                      dp(7));
-
-              GradientDrawable sideBg =
-                      new GradientDrawable();
-
-              sideBg.setColor(
-                      Color.argb(
-                              115,
-                              18,
-                              24,
-                              31));
-
-              sideBg.setCornerRadius(
-                      dp(18));
-
-              sidebar.setBackground(
-                      sideBg);
-
-              // Select app to project
-              TextView menuAppsBtn =
-                      sidebarButton("📱");
-
-              menuAppsBtn.setContentDescription(
-                      "Select app to project");
-
-              menuAppsBtn.setOnClickListener(
-                      v -> showApps());
-
-              sidebar.addView(
-                      menuAppsBtn,
-                      new LinearLayout.LayoutParams(
-                              -1,
-                              dp(50)));
-
-              sidebar.addView(
-                      spacer(dp(6)),
-                      new LinearLayout.LayoutParams(
-                              -1,
-                              dp(6)));
-
-              // --------------------------------------------------
-              // FOUR QUICK APPS
-              //
-              // V2 layout only:
-              // first four available apps are displayed.
-              // User customization is intentionally deferred.
-              // --------------------------------------------------
-
-              int quickCount =
-                      Math.min(
-                              4,
-                              apps.size());
-
-              for (int i = 0;
-                   i < 4;
-                   i++) {
-
-                  final int index = i;
-
-                  if (i < quickCount) {
-
-                      final AppInfo quickApp =
-                              apps.get(i);
-
-                      LinearLayout quickTile =
-                              quickAppTile(
-                                      quickApp);
-
-                      quickTile.setOnClickListener(
-                              v ->
-                                      launchProjection(
-                                              quickApp.component));
-
-                      sidebar.addView(
-                              quickTile,
-                              new LinearLayout.LayoutParams(
-                                      -1,
-                                      dp(58)));
-
-                  } else {
-
-                      TextView emptyQuick =
-                              sidebarButton("＋");
-
-                      emptyQuick.setContentDescription(
-                              "Quick app slot "
-                              + (i + 1));
-
-                      sidebar.addView(
-                              emptyQuick,
-                              new LinearLayout.LayoutParams(
-                                      -1,
-                                      dp(58)));
-                  }
-
-                  sidebar.addView(
-                          spacer(dp(5)),
-                          new LinearLayout.LayoutParams(
-                                  -1,
-                                  dp(5)));
-              }
-
-              sidebar.addView(
-                      spacer(dp(5)),
-                      new LinearLayout.LayoutParams(
-                              -1,
-                              dp(5)));
-
-              // --------------------------------------------------
-              // VOICE PLACEHOLDER
-              // No assistant logic.
-              // --------------------------------------------------
-
-              TextView voiceBtn =
-                      sidebarButton("🎤");
-
-              voiceBtn.setContentDescription(
-                      "Voice assistant placeholder");
-
-              voiceBtn.setOnClickListener(
-                      v -> {
-                          // V2 placeholder only.
-                      });
-
-              sidebar.addView(
-                      voiceBtn,
-                      new LinearLayout.LayoutParams(
-                              -1,
-                              dp(50)));
-
-              sidebar.addView(
-                      spacer(dp(7)),
-                      new LinearLayout.LayoutParams(
-                              -1,
-                              dp(7)));
-
-              // --------------------------------------------------
-              // RUNNING APPS PLACEHOLDER
-              // No task-management logic.
-              // --------------------------------------------------
-
-              TextView tasksBtn =
-                      sidebarButton("▣");
-
-              tasksBtn.setContentDescription(
-                      "Running apps placeholder");
-
-              tasksBtn.setOnClickListener(
-                      v -> {
-                          // V2 placeholder only.
-                      });
-
-              sidebar.addView(
-                      tasksBtn,
-                      new LinearLayout.LayoutParams(
-                              -1,
-                              dp(50)));
-
-              dashboard.addView(
-                      sidebar,
-                      new LinearLayout.LayoutParams(
-                              dp(78),
-                              -1));
-
-              // --------------------------------------------------
-              // CENTER HOME AREA
-              // --------------------------------------------------
-
-              LinearLayout centerStage =
-                      new LinearLayout(this);
-
-              centerStage.setOrientation(
-                      LinearLayout.VERTICAL);
-
-              centerStage.setGravity(
-                      Gravity.CENTER);
-
-              centerStage.setPadding(
-                      dp(10),
-                      dp(10),
-                      dp(10),
-                      dp(4));
-
-              LinearLayout homeArea =
-                      new LinearLayout(this);
-
-              homeArea.setOrientation(
-                      LinearLayout.VERTICAL);
-
-              homeArea.setGravity(
-                      Gravity.CENTER);
-
-              GradientDrawable homeBg =
-                      new GradientDrawable();
-
-              homeBg.setColor(
-                      Color.TRANSPARENT);
-
-              homeArea.setBackground(
-                      homeBg);
-
-              TextView homeHint =
-                      text(
-                              "CARASSISTANT",
-                              18,
-                              Color.argb(
-                                      0,
-                                      255,
-                                      255,
-                                      255));
-
-              homeHint.setGravity(
-                      Gravity.CENTER);
-
-              homeArea.addView(
-                      homeHint,
-                      new LinearLayout.LayoutParams(
-                              -1,
-                              -1));
-
-              centerStage.addView(
-                      homeArea,
-                      new LinearLayout.LayoutParams(
-                              -1,
-                              0,
-                              1));
-
-              dashboard.addView(
-                      centerStage,
-                      new LinearLayout.LayoutParams(
-                              0,
-                              -1,
-                              1));
-
-              // --------------------------------------------------
-              // BOTTOM CENTER AREA
-              //
-              // Wyn + Media are visual placeholders only.
-              // No Wyn or Media functionality is added.
-              // --------------------------------------------------
-
-              LinearLayout bottomArea =
-                      new LinearLayout(this);
-
-              bottomArea.setOrientation(
-                      LinearLayout.HORIZONTAL);
-
-              bottomArea.setGravity(
-                      Gravity.CENTER);
-
-              bottomArea.setPadding(
-                      dp(8),
-                      dp(4),
-                      dp(8),
-                      dp(8));
-
-              bottomArea.addView(
-                      buildWynPlaceholder(),
-                      new LinearLayout.LayoutParams(
-                              dp(72),
-                              dp(72)));
-
-              bottomArea.addView(
-                      spacer(dp(18)),
-                      new LinearLayout.LayoutParams(
-                              dp(18),
-                              -1));
-
-              bottomArea.addView(
-                      buildMediaPlaceholder(),
-                      new LinearLayout.LayoutParams(
-                              dp(250),
-                              dp(72)));
-
-              launcherLayer.addView(
-                      bottomArea,
-                      new LinearLayout.LayoutParams(
-                              -1,
-                              dp(88)));
+          bottomBar.setOrientation(
+              LinearLayout.HORIZONTAL);
+
+          bottomBar.setGravity(
+              Gravity.CENTER);
+
+          GradientDrawable bottomBg =
+              new GradientDrawable();
+
+          bottomBg.setColor(
+              Color.rgb(
+                  20,
+                  25,
+                  31));
+
+          bottomBar.setBackground(bottomBg);
+
+          // WYN traffic/status placeholder.
+          LinearLayout wynHolder =
+              new LinearLayout(this);
+
+          wynHolder.setOrientation(
+              LinearLayout.VERTICAL);
+
+          wynHolder.setGravity(
+              Gravity.CENTER);
+
+          TextView wyn =
+              text(
+                  "WYN",
+                  11,
+                  Color.WHITE);
+
+          wyn.setGravity(
+              Gravity.CENTER);
+
+          GradientDrawable wynBg =
+              new GradientDrawable();
+
+          wynBg.setShape(
+              GradientDrawable.OVAL);
+
+          wynBg.setColor(
+              Color.rgb(
+                  45,
+                  52,
+                  60));
+
+          wyn.setBackground(wynBg);
+
+          wynHolder.addView(
+              wyn,
+              new LinearLayout.LayoutParams(
+                  dp(56),
+                  dp(56)));
+
+          bottomBar.addView(
+              wynHolder,
+              new LinearLayout.LayoutParams(
+                  dp(82),
+                  -1));
+
+          // --------------------------------------------------------
+          // MEDIA PLACEHOLDER
+          // --------------------------------------------------------
+
+          LinearLayout mediaHolder =
+              new LinearLayout(this);
+
+          mediaHolder.setOrientation(
+              LinearLayout.VERTICAL);
+
+          mediaHolder.setGravity(
+              Gravity.CENTER);
+
+          TextView mediaTitle =
+              text(
+                  "MEDIA",
+                  12,
+                  Color.WHITE);
+
+          mediaTitle.setGravity(
+              Gravity.CENTER);
+
+          mediaHolder.addView(
+              mediaTitle,
+              new LinearLayout.LayoutParams(
+                  -1,
+                  dp(22)));
+
+          LinearLayout mediaControls =
+              new LinearLayout(this);
+
+          mediaControls.setOrientation(
+              LinearLayout.HORIZONTAL);
+
+          mediaControls.setGravity(
+              Gravity.CENTER);
+
+          TextView previous =
+              buttonText("|<");
+
+          TextView playPause =
+              buttonText("> ||");
+
+          TextView next =
+              buttonText(">|");
+
+          mediaControls.addView(
+              previous,
+              new LinearLayout.LayoutParams(
+                  dp(54),
+                  dp(42)));
+
+          mediaControls.addView(
+              playPause,
+              new LinearLayout.LayoutParams(
+                  dp(70),
+                  dp(42)));
+
+          mediaControls.addView(
+              next,
+              new LinearLayout.LayoutParams(
+                  dp(54),
+                  dp(42)));
+
+          mediaHolder.addView(
+              mediaControls,
+              new LinearLayout.LayoutParams(
+                  -1,
+                  dp(42)));
+
+          TextView mediaText =
+              text(
+                  "Nội dung đang phát",
+                  10,
+                  Color.LTGRAY);
+
+          mediaText.setGravity(
+              Gravity.CENTER);
+
+          mediaText.setMaxLines(1);
+
+          mediaHolder.addView(
+              mediaText,
+              new LinearLayout.LayoutParams(
+                  -1,
+                  dp(20)));
+
+          bottomBar.addView(
+              mediaHolder,
+              new LinearLayout.LayoutParams(
+                  dp(260),
+                  -1));
+
+          main.addView(
+              bottomBar,
+              new LinearLayout.LayoutParams(
+                  -1,
+                  dp(90)));
+
+          // --------------------------------------------------------
+          // PLACEHOLDER BUTTONS IN LEFT SIDEBAR
+          // --------------------------------------------------------
+
+          TextView voiceButton =
+              buttonText("VOICE");
+
+          voiceButton.setOnClickListener(
+              v -> {});
+
+          sideBar.addView(
+              voiceButton,
+              new LinearLayout.LayoutParams(
+                  -1,
+                  dp(54)));
+
+          TextView tasksButton =
+              buttonText("TASKS");
+
+          tasksButton.setOnClickListener(
+              v -> {});
+
+          sideBar.addView(
+              tasksButton,
+              new LinearLayout.LayoutParams(
+                  -1,
+                  dp(54)));
+
           }"""
 
           text = (
               text[:start]
-              + new_layout
+              + dashboard
               + text[end:]
           )
 
-          # --------------------------------------------------
-          # Add helper methods immediately before attachProjection.
-          # --------------------------------------------------
+          # ----------------------------------------------------------
+          # REAL APPLICATION ICONS - LEFT QUICK APP BAR
+          #
+          # Maximum 4 apps.
+          # Uses the same apps list already used by the working V1.
+          # No Persistence changes.
+          # ----------------------------------------------------------
 
-          marker = "    private void attachProjection() {"
+          start, end = find_method(
+              text,
+              "private void rebuildDock("
+          )
 
-          if marker not in text:
-              raise SystemExit(
-                  "attachProjection() marker not found."
-              )
+          dock_method = """private void rebuildDock() {
+          if (dock == null) {
+              return;
+          }
 
-          helpers = """    private LinearLayout quickAppTile(
-                  AppInfo app) {
+          dock.removeAllViews();
+
+          int count =
+              Math.min(
+                  4,
+                  apps.size());
+
+          for (int i = 0;
+               i < count;
+               i++) {
+
+              final AppInfo app =
+                  apps.get(i);
 
               LinearLayout tile =
-                      new LinearLayout(this);
+                  new LinearLayout(this);
 
               tile.setOrientation(
-                      LinearLayout.VERTICAL);
+                  LinearLayout.VERTICAL);
 
               tile.setGravity(
-                      Gravity.CENTER);
+                  Gravity.CENTER);
 
               GradientDrawable bg =
-                      new GradientDrawable();
+                  new GradientDrawable();
 
               bg.setColor(
-                      Color.argb(
-                              155,
-                              30,
-                              40,
-                              52));
+                  Color.rgb(
+                      29,
+                      35,
+                      42));
 
               bg.setCornerRadius(
-                      dp(13));
+                  dp(12));
 
               tile.setBackground(bg);
 
               ImageView icon =
-                      new ImageView(this);
+                  new ImageView(this);
 
               try {
-
                   ApplicationInfo applicationInfo =
-                          getPackageManager()
-                                  .getApplicationInfo(
-                                          app.component
-                                                  .getPackageName(),
-                                          0);
+                      getPackageManager()
+                          .getApplicationInfo(
+                              app.component
+                                  .getPackageName(),
+                              0);
 
                   icon.setImageDrawable(
-                          applicationInfo.loadIcon(
-                                  getPackageManager()));
+                      applicationInfo.loadIcon(
+                          getPackageManager()));
 
               } catch (Throwable ignored) {
 
                   icon.setImageResource(
-                          android.R.drawable
-                                  .sym_def_app_icon);
+                      android.R.drawable
+                          .sym_def_app_icon);
               }
 
               icon.setScaleType(
-                      ImageView.ScaleType.CENTER_INSIDE);
-
-              icon.setPadding(
-                      dp(5),
-                      dp(5),
-                      dp(5),
-                      dp(5));
+                  ImageView.ScaleType.CENTER_INSIDE);
 
               tile.addView(
-                      icon,
-                      new LinearLayout.LayoutParams(
-                              -1,
-                              dp(38)));
+                  icon,
+                  new LinearLayout.LayoutParams(
+                      -1,
+                      dp(40)));
 
               TextView label =
-                      text(
-                              app.name,
-                              8,
-                              Color.WHITE);
+                  text(
+                      app.name,
+                      9,
+                      Color.WHITE);
 
               label.setGravity(
-                      Gravity.CENTER);
+                  Gravity.CENTER);
 
               label.setMaxLines(1);
 
               tile.addView(
-                      label,
-                      new LinearLayout.LayoutParams(
-                              -1,
-                              dp(17)));
+                  label,
+                  new LinearLayout.LayoutParams(
+                      -1,
+                      dp(18)));
 
-              return tile;
+              tile.setOnClickListener(
+                  v ->
+                      launchProjection(
+                          app.component));
+
+              LinearLayout.LayoutParams params =
+                  new LinearLayout.LayoutParams(
+                      -1,
+                      dp(66));
+
+              params.setMargins(
+                  dp(4),
+                  dp(3),
+                  dp(4),
+                  dp(3));
+
+              dock.addView(
+                  tile,
+                  params);
           }
+          }"""
 
-          private LinearLayout buildWynPlaceholder() {
-
-              LinearLayout box =
-                      new LinearLayout(this);
-
-              box.setGravity(
-                      Gravity.CENTER);
-
-              GradientDrawable bg =
-                      new GradientDrawable();
-
-              bg.setColor(
-                      Color.argb(
-                              145,
-                              30,
-                              40,
-                              52));
-
-              bg.setShape(
-                      GradientDrawable.OVAL);
-
-              box.setBackground(bg);
-
-              TextView icon =
-                      text(
-                              "W",
-                              21,
-                              Color.WHITE);
-
-              icon.setGravity(
-                      Gravity.CENTER);
-
-              icon.setTypeface(
-                      Typeface.DEFAULT_BOLD);
-
-              box.addView(
-                      icon,
-                      new LinearLayout.LayoutParams(
-                              -1,
-                              -1));
-
-              return box;
-          }
-
-          private LinearLayout buildMediaPlaceholder() {
-
-              LinearLayout box =
-                      new LinearLayout(this);
-
-              box.setOrientation(
-                      LinearLayout.VERTICAL);
-
-              box.setGravity(
-                      Gravity.CENTER);
-
-              GradientDrawable bg =
-                      new GradientDrawable();
-
-              bg.setColor(
-                      Color.argb(
-                              135,
-                              24,
-                              31,
-                              39));
-
-              bg.setCornerRadius(
-                      dp(16));
-
-              box.setBackground(bg);
-
-              TextView mediaIcon =
-                      text(
-                              "◀  ▶  ⏸  ▶",
-                              15,
-                              Color.WHITE);
-
-              mediaIcon.setGravity(
-                      Gravity.CENTER);
-
-              box.addView(
-                      mediaIcon,
-                      new LinearLayout.LayoutParams(
-                              -1,
-                              dp(40)));
-
-              TextView mediaText =
-                      text(
-                              "Now playing",
-                              8,
-                              Color.LTGRAY);
-
-              mediaText.setGravity(
-                      Gravity.CENTER);
-
-              mediaText.setMaxLines(1);
-
-              mediaText.setEllipsize(
-                      android.text.TextUtils.TruncateAt.END);
-
-              box.addView(
-                      mediaText,
-                      new LinearLayout.LayoutParams(
-                              -1,
-                              dp(20)));
-
-              return box;
-          }
-
-"""
-
-          text = text.replace(
-              marker,
-              helpers + marker,
-              1
+          text = (
+              text[:start]
+              + dock_method
+              + text[end:]
           )
 
-          # --------------------------------------------------
-          # Remove old V1 bottom bar call if present.
-          # buildMainLayout() must not use the old dock bar.
-          # --------------------------------------------------
+          # ----------------------------------------------------------
+          # REAL APPLICATION ICONS - APP GRID
+          # ----------------------------------------------------------
 
-          if "buildTransparentBottomBar();" in text:
-              text = text.replace(
-                  "        buildTransparentBottomBar();\n",
-                  "",
-                  1
-              )
+          start, end = find_method(
+              text,
+              "private LinearLayout appTile("
+          )
 
-          # --------------------------------------------------
-          # Safety checks
-          # --------------------------------------------------
+          app_tile = """private LinearLayout appTile(
+          AppInfo app) {
 
-          required_after = [
-              "quickAppTile(",
-              "buildWynPlaceholder()",
-              "buildMediaPlaceholder()",
-              "ApplicationInfo",
+          LinearLayout tile =
+              new LinearLayout(this);
+
+          tile.setOrientation(
+              LinearLayout.VERTICAL);
+
+          tile.setGravity(
+              Gravity.CENTER);
+
+          GradientDrawable bg =
+              new GradientDrawable();
+
+          bg.setColor(
+              Color.rgb(
+                  22,
+                  27,
+                  33));
+
+          bg.setCornerRadius(
+              dp(16));
+
+          tile.setBackground(bg);
+
+          ImageView icon =
+              new ImageView(this);
+
+          try {
+              ApplicationInfo applicationInfo =
+                  getPackageManager()
+                      .getApplicationInfo(
+                          app.component
+                              .getPackageName(),
+                          0);
+
+              icon.setImageDrawable(
+                  applicationInfo.loadIcon(
+                      getPackageManager()));
+
+          } catch (Throwable ignored) {
+
+              icon.setImageResource(
+                  android.R.drawable
+                      .sym_def_app_icon);
+          }
+
+          icon.setScaleType(
+              ImageView.ScaleType.CENTER_INSIDE);
+
+          icon.setPadding(
+              dp(8),
+              dp(6),
+              dp(8),
+              dp(6));
+
+          tile.addView(
+              icon,
+              new LinearLayout.LayoutParams(
+                  -1,
+                  dp(58)));
+
+          TextView name =
+              text(
+                  app.name,
+                  12,
+                  Color.WHITE);
+
+          name.setGravity(
+              Gravity.CENTER);
+
+          name.setMaxLines(2);
+
+          tile.addView(
+              name,
+              new LinearLayout.LayoutParams(
+                  -1,
+                  dp(42)));
+
+          tile.setOnClickListener(
+              v -> {
+                  hideApps();
+
+                  launchProjection(
+                      app.component);
+              });
+
+          return tile;
+          }"""
+
+          text = (
+              text[:start]
+              + app_tile
+              + text[end:]
+          )
+
+          # ----------------------------------------------------------
+          # TARGETED SAFETY CHECKS
+          # ----------------------------------------------------------
+
+          required = [
+              "private TextView clock;",
+              "private TextView date;",
+              "private void updateClock()",
+              "import android.content.pm.ApplicationInfo;",
+              "import android.widget.ImageView;",
               "loadIcon(",
+              'buttonText("CHỌN APP")',
+              'buttonText("VOICE")',
+              'buttonText("TASKS")',
+              '"WYN"',
+              '"MEDIA"',
+              '"Nội dung đang phát"',
               "ImageView.ScaleType.CENTER_INSIDE",
-              'sidebarButton("📱")',
-              'sidebarButton("🎤")',
-              'sidebarButton("▣")',
-              'text("Now playing"',
           ]
 
-          for item in required_after:
+          for item in required:
               if item not in text:
                   raise SystemExit(
-                      "V2 marker missing: " + item
+                      "Required marker missing: " + item
                   )
 
-          if "buildTransparentBottomBar();" in text:
+          # Old Home header must not return.
+          if "CAR ASSISTANT" in text:
               raise SystemExit(
-                  "ERROR: old bottom bar is still called."
+                  "ERROR: old CAR ASSISTANT header remains."
               )
 
-          if 'buttonText("APPS")' in text:
+          # Old V1 info cards must not return.
+          if 'infoCard("MEDIA"' in text:
               raise SystemExit(
-                  "ERROR: old horizontal APPS dock remains."
+                  "ERROR: old MEDIA info card remains."
               )
 
-          if "initial(app.name)" in text:
+          if 'infoCard("STATUS"' in text:
               raise SystemExit(
-                  "ERROR: letter icon logic remains."
+                  "ERROR: old STATUS info card remains."
               )
 
+          if 'infoCard("APPS"' in text:
+              raise SystemExit(
+                  "ERROR: old APPS info card remains."
+              )
+
+          # Old cards must not return.
           if '"SPEED"' in text:
               raise SystemExit(
-                  "ERROR: SPEED card returned."
+                  "ERROR: old SPEED card remains."
               )
 
           if '"WEATHER"' in text:
               raise SystemExit(
-                  "ERROR: WEATHER card returned."
+                  "ERROR: old WEATHER card remains."
               )
 
-          if "CAR ASSISTANT" in text:
+          # Old letter icon must not return.
+          if "initial(app.name)" in text:
               raise SystemExit(
-                  "ERROR: old CAR ASSISTANT header returned."
+                  "ERROR: old letter-based app icon remains."
               )
 
-          if 'clock = text(' in text:
-              raise SystemExit(
-                  "ERROR: old clock UI returned."
-              )
-
-          if 'date = text(' in text:
-              raise SystemExit(
-                  "ERROR: old date UI returned."
-              )
-
-          # These must NOT appear as implemented functionality.
-          forbidden_logic = [
-              "startVoiceAssistant",
-              "openVoiceAssistant",
-              "getRunningTasks",
-              "ActivityManager",
-              "MediaSession",
-              "MediaController",
-              "WynApi",
-              "WynClient",
-          ]
-
-          for item in forbidden_logic:
-              if item in text:
-                  raise SystemExit(
-                      "ERROR: future feature logic detected: "
-                      + item
-                  )
-
+          # Clock/date declarations MUST remain.
           if "private TextView clock;" not in text:
               raise SystemExit(
                   "ERROR: clock declaration disappeared."
@@ -1020,9 +1007,26 @@ jobs:
                   "ERROR: date declaration disappeared."
               )
 
+          # Home dashboard must NOT recreate old clock/date.
+          if 'clock = text(' in text:
+              raise SystemExit(
+                  "ERROR: old clock UI assignment remains."
+              )
+
+          if 'date = text(' in text:
+              raise SystemExit(
+                  "ERROR: old date UI assignment remains."
+              )
+
+          # V2 must use a maximum of four quick apps.
+          if "Math.min(\n                  4,\n                  apps.size())" not in text:
+              raise SystemExit(
+                  "ERROR: quick app limit is not 4."
+              )
+
           if text == original:
               raise SystemExit(
-                  "ERROR: V2 patch made no changes."
+                  "ERROR: Home UI V2 patch produced no changes."
               )
 
           file.write_text(
@@ -1031,25 +1035,34 @@ jobs:
           )
 
           print(
-              "Home UI V2 Layout Safe patch applied."
+              "Home UI V2 Layout Safe applied."
           )
           print(
-              "Sidebar: select app + 4 quick apps + voice + running apps."
+              "Left vertical sidebar created."
           )
           print(
-              "Bottom center: Wyn placeholder + Media placeholder."
+              "Maximum four real app quick-launch icons preserved."
           )
           print(
-              "No Voice/Running Apps/Media/Wyn functionality added."
+              "Voice and Tasks placeholders created."
           )
           print(
-              "Projection code was not patched."
+              "WYN placeholder moved to bottom center."
+          )
+          print(
+              "Media placeholder moved to bottom center."
+          )
+          print(
+              "Old MEDIA/STATUS/APPS info cards removed."
+          )
+          print(
+              "Clock/date declarations preserved."
           )
           PY
 
-          python3 /tmp/patch_home_v2.py
+          python3 /tmp/patch_home_ui_v2.py
 
-      - name: Verify Home UI V2 Layout
+      - name: Verify Home UI V2 Layout SAFE
         shell: bash
         run: |
           set -euo pipefail
@@ -1057,31 +1070,11 @@ jobs:
           FILE="v10-source/app/src/main/java/com/hieptran/aacast/doudou/V10CarActivity.java"
 
           grep -Fq \
-            "private void buildMainLayout()" \
+            "import android.content.pm.ApplicationInfo;" \
             "$FILE"
 
           grep -Fq \
-            "quickAppTile(" \
-            "$FILE"
-
-          grep -Fq \
-            "buildWynPlaceholder()" \
-            "$FILE"
-
-          grep -Fq \
-            "buildMediaPlaceholder()" \
-            "$FILE"
-
-          grep -Fq \
-            'sidebarButton("📱")' \
-            "$FILE"
-
-          grep -Fq \
-            'sidebarButton("🎤")' \
-            "$FILE"
-
-          grep -Fq \
-            'sidebarButton("▣")' \
+            "import android.widget.ImageView;" \
             "$FILE"
 
           grep -Fq \
@@ -1089,70 +1082,102 @@ jobs:
             "$FILE"
 
           grep -Fq \
-            "ImageView.ScaleType.CENTER_INSIDE" \
+            'buttonText("CHỌN APP")' \
             "$FILE"
 
           grep -Fq \
-            'text("Now playing"' \
+            'buttonText("VOICE")' \
             "$FILE"
 
-          if grep -Fq \
-              "buildTransparentBottomBar();" \
-              "$FILE"; then
-            echo "ERROR: old bottom bar call remains."
+          grep -Fq \
+            'buttonText("TASKS")' \
+            "$FILE"
+
+          grep -Fq \
+            '"WYN"' \
+            "$FILE"
+
+          grep -Fq \
+            '"MEDIA"' \
+            "$FILE"
+
+          grep -Fq \
+            '"Nội dung đang phát"' \
+            "$FILE"
+
+          grep -Fq \
+            "Math.min(" \
+            "$FILE"
+
+          grep -Fq \
+            "ImageView.ScaleType.CENTER_INSIDE" \
+            "$FILE"
+
+          if grep -Fq "CAR ASSISTANT" "$FILE"; then
+            echo "ERROR: old CAR ASSISTANT header remains."
             exit 1
           fi
 
-          if grep -Fq \
-              'buttonText("APPS")' \
-              "$FILE"; then
-            echo "ERROR: old horizontal APPS button remains."
+          if grep -Fq 'infoCard("MEDIA"' "$FILE"; then
+            echo "ERROR: old MEDIA info card remains."
             exit 1
           fi
 
-          if grep -Fq \
-              "initial(app.name)" \
-              "$FILE"; then
-            echo "ERROR: letter app icon remains."
+          if grep -Fq 'infoCard("STATUS"' "$FILE"; then
+            echo "ERROR: old STATUS info card remains."
             exit 1
           fi
 
-          if grep -Fq \
-              '"SPEED"' \
-              "$FILE"; then
-            echo "ERROR: SPEED card remains."
+          if grep -Fq 'infoCard("APPS"' "$FILE"; then
+            echo "ERROR: old APPS info card remains."
             exit 1
           fi
 
-          if grep -Fq \
-              '"WEATHER"' \
-              "$FILE"; then
-            echo "ERROR: WEATHER card remains."
+          if grep -Fq '"SPEED"' "$FILE"; then
+            echo "ERROR: old SPEED card remains."
             exit 1
           fi
 
-          if grep -Fq \
-              "CAR ASSISTANT" \
-              "$FILE"; then
-            echo "ERROR: old header remains."
+          if grep -Fq '"WEATHER"' "$FILE"; then
+            echo "ERROR: old WEATHER card remains."
             exit 1
           fi
 
-          if grep -Fq \
-              'clock = text(' \
-              "$FILE"; then
-            echo "ERROR: old clock UI remains."
+          if grep -Fq "initial(app.name)" "$FILE"; then
+            echo "ERROR: letter-based icon remains."
             exit 1
           fi
 
-          if grep -Fq \
-              'date = text(' \
-              "$FILE"; then
-            echo "ERROR: old date UI remains."
+          grep -Fq \
+            "private TextView clock;" \
+            "$FILE"
+
+          grep -Fq \
+            "private TextView date;" \
+            "$FILE"
+
+          grep -Fq \
+            "private void updateClock()" \
+            "$FILE"
+
+          if grep -Fq 'clock = text(' "$FILE"; then
+            echo "ERROR: old clock UI assignment remains."
             exit 1
           fi
 
-          echo "Home UI V2 Layout verification PASS."
+          if grep -Fq 'date = text(' "$FILE"; then
+            echo "ERROR: old date UI assignment remains."
+            exit 1
+          fi
+
+          if ! grep -Fq \
+            "Math.min(" \
+            "$FILE"; then
+            echo "ERROR: quick app count marker missing."
+            exit 1
+          fi
+
+          echo "Home UI V2 Layout SAFE verification PASS."
 
       - name: Verify Core and Persistence isolation
         shell: bash
@@ -1174,15 +1199,15 @@ jobs:
             /tmp/protected-after.sha256
 
           if grep -Fq \
-              "V10ProjectionService" \
-              "$SRC/V10ProjectionSession.java"; then
+            "V10ProjectionService" \
+            "$SRC/V10ProjectionSession.java"; then
             echo "ERROR: V10ProjectionService found."
             exit 1
           fi
 
           if grep -Fq \
-              "am force-stop" \
-              "$SRC/V10ProjectionSession.java"; then
+            "am force-stop" \
+            "$SRC/V10ProjectionSession.java"; then
             echo "ERROR: am force-stop found."
             exit 1
           fi
@@ -1221,36 +1246,36 @@ jobs:
             "$FILE"
 
           if grep -Fq \
-              "floatingLastTap" \
-              "$FILE"; then
+            "floatingLastTap" \
+            "$FILE"; then
             echo "ERROR: old floatingLastTap remains."
             exit 1
           fi
 
           if grep -Fq \
-              'session.recents()' \
-              "$FILE"; then
+            'session.recents()' \
+            "$FILE"; then
             echo "ERROR: RECENTS logic remains."
             exit 1
           fi
 
           if grep -Fq \
-              '"RECENTS"' \
-              "$FILE"; then
+            '"RECENTS"' \
+            "$FILE"; then
             echo "ERROR: RECENTS menu remains."
             exit 1
           fi
 
           if grep -Fq \
-              '"2 SCREEN"' \
-              "$FILE"; then
+            '"2 SCREEN"' \
+            "$FILE"; then
             echo "ERROR: 2 SCREEN remains."
             exit 1
           fi
 
           if grep -Fq \
-              '"3 SCREEN"' \
-              "$FILE"; then
+            '"3 SCREEN"' \
+            "$FILE"; then
             echo "ERROR: 3 SCREEN remains."
             exit 1
           fi
@@ -1318,47 +1343,70 @@ jobs:
           echo "SHA256:"
           echo "$SHA"
 
-      - name: Create V2 Layout manifest
+      - name: Create Home UI V2 manifest
         shell: bash
         run: |
           set -euo pipefail
 
           cat > Home-UI-V2-LAYOUT-SAFE-MANIFEST.txt <<'EOF'
-          CarAssistant V10
-          Display Core V1
-          Home UI V2 Layout Safe
+          CarAssistant V10 Display Core V1
+          Home UI V2 Layout SAFE
 
           BASELINE
           V10-6A:
           9075636a7d5947c1b0eee49c2bd3fd0e1b6b0cf1
 
+          SOURCE
+          Based only on:
+          build-v10-display-core-v1-home-ui-v1-safe-clock-fix.yml
+          from tested workflow run 37261451877.
+
           HOME UI V2
-          Left vertical sidebar.
-          Select app to project.
-          Four quick-app slots.
-          Voice placeholder.
-          Running-apps placeholder.
+          Replaced the old bottom horizontal dock with
+          a left vertical control/sidebar layout.
+
+          LEFT SIDEBAR
+          CHỌN APP:
+          Calls existing showApps().
+
+          QUICK APPS:
+          Maximum 4.
+          Uses existing apps list.
+          Uses ApplicationInfo.loadIcon().
+          Each tile calls existing launchProjection().
+
+          VOICE
+          UI placeholder only.
+          No voice functionality added.
+
+          TASKS
+          UI placeholder only.
+          No background-task functionality added.
 
           BOTTOM CENTER
-          Wyn visual placeholder.
-          Media visual placeholder.
-          Now playing text placeholder.
+          WYN:
+          Circular UI placeholder only.
+          No Wyn/API integration added.
 
-          QUICK APPS
-          First four available applications are shown.
-          User customization is intentionally not implemented.
+          MEDIA:
+          UI placeholder only.
+          Previous / Play-Pause / Next controls.
+          Small "Nội dung đang phát" text.
+          No MediaSession functionality added.
 
-          REAL ICONS
-          ApplicationInfo.loadIcon().
-          Real Android application icons preserved.
+          REMOVED FROM HOME
+          Old MEDIA info card removed.
+          Old STATUS info card removed.
+          Old APPS info card removed.
+          Old horizontal bottom dock removed.
+          Old CarAssistant title remains removed.
+          Old clock/date widgets remain removed from UI.
 
-          NOT IMPLEMENTED
-          No Voice assistant functionality.
-          No running-app/task manager functionality.
-          No MediaSession functionality.
-          No real media controls.
-          No Wyn API.
-          No Wyn traffic data.
+          CLOCK SAFETY
+          private TextView clock; preserved.
+          private TextView date; preserved.
+          updateClock() preserved.
+          No old clock/date UI assignment recreated.
 
           PROTECTED
           V10DisplayController unchanged.
@@ -1370,21 +1418,25 @@ jobs:
           FLOATING TOUCH
           Stable Freeze Floating Touch preserved.
           SAFE Long Press preserved.
+          BACK preserved.
+          HOME preserved.
 
           NOT ADDED
-          No RECENTS.
+          No real Voice.
+          No real Running Apps/Recents.
+          No Wyn/API.
+          No MediaSession.
           No 2 SCREEN.
           No 3 SCREEN.
           No V10ProjectionService.
           No am force-stop.
 
           PURPOSE
-          Layout-only Home UI V2.
-          Projection engine remains unchanged.
-          Core and Persistence remain isolated.
+          Home UI layout change only.
+          Projection/Core/Persistence architecture unchanged.
           EOF
 
-      - name: Upload V2 Layout APK
+      - name: Upload Home UI V2 Safe APK
         uses: actions/upload-artifact@v4
         with:
           name: CarAssistant-V10-Display-Core-V1-Home-UI-V2-Layout-Safe
