@@ -41,6 +41,7 @@ public final class V10CarActivity
             new Handler(Looper.getMainLooper());
 
     private FrameLayout root;
+    private NavigationMapView navigationMap;
     private FrameLayout projectionLayer;
     private LinearLayout launcherLayer;
     private LinearLayout dashboard;
@@ -145,6 +146,9 @@ public final class V10CarActivity
     public void onResume() {
 
         super.onResume();
+if (navigationMap != null) {
+    navigationMap.onHostResume();
+}
 
         resumed = true;
 
@@ -180,6 +184,10 @@ public final class V10CarActivity
 
         root =
                 new FrameLayout(this);
+navigationMap = new NavigationMapView(this);
+root.addView(
+        navigationMap,
+        new FrameLayout.LayoutParams(-1, -1));
 
         root.setBackgroundColor(
                 Color.rgb(
@@ -189,6 +197,10 @@ public final class V10CarActivity
 
         projectionLayer =
                 new FrameLayout(this);
+navigationMap = new NavigationMapView(this);
+root.addView(
+        navigationMap,
+        new FrameLayout.LayoutParams(-1, -1));
 
         projectionLayer.setVisibility(
                 View.GONE);
@@ -1151,6 +1163,9 @@ private void hideFloatingMenu() {
                 targetPoller);
 
         super.onPause();
+if (navigationMap != null) {
+    navigationMap.onHostPause();
+}
     }
 
     @Override
@@ -1170,6 +1185,10 @@ private void hideFloatingMenu() {
 
     @Override
     public void onDestroy() {
+if (navigationMap != null) {
+    navigationMap.onHostDestroy();
+    navigationMap = null;
+}
 
         resumed = false;
 
