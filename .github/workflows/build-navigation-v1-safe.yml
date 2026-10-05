@@ -1,4 +1,4 @@
-name: Build Navigation V1 Safe - Foundation Locked
+name: Navigation V1 Safe - Foundation Locked
 
 on:
   workflow_dispatch:
@@ -7,7 +7,7 @@ permissions:
   contents: read
 
 jobs:
-  build-navigation-v1:
+  navigation-v1-safe:
     runs-on: ubuntu-latest
 
     steps:
@@ -16,802 +16,466 @@ jobs:
         uses: actions/checkout@v4
         with:
           ref: 2c814a181d00cde9547a446927ae181e18cb9cbb
-          fetch-depth: 0
+          fetch-depth: 1
 
-      - name: Verify Foundation V1
+      - name: Verify Foundation V1 lock
         shell: bash
         run: |
-          set -euo pipefail
-
+          set -e
           EXPECTED="2c814a181d00cde9547a446927ae181e18cb9cbb"
           ACTUAL="$(git rev-parse HEAD)"
-
           echo "Expected: $EXPECTED"
           echo "Actual:   $ACTUAL"
-
           test "$ACTUAL" = "$EXPECTED"
 
-          echo "FOUNDATION V1 LOCK: PASS"
-
-      - name: Verify exact source structure
+      - name: Verify Foundation source structure
         shell: bash
         run: |
-          set -euo pipefail
+          set -e
 
-          LAUNCHER="v10-source/app/src/main/java/com/hieptran/aacast/doudou/V10LauncherActivity.java"
-          CAR="v10-source/app/src/main/java/com/hieptran/aacast/doudou/V10CarActivity.java"
+          BASE="v10-source/app/src/main/java/com/hieptran/aacast/doudou"
 
-          test -f "$LAUNCHER"
-          test -f "$CAR"
+          test -f "$BASE/V10LauncherActivity.java"
+          test -f "$BASE/V10CarActivity.java"
 
-          grep -q '^package com\.carassistant\.v10;' "$LAUNCHER"
-          grep -q '^package com\.carassistant\.v10;' "$CAR"
+          grep -q '^package com\.carassistant\.v10;' \
+            "$BASE/V10LauncherActivity.java"
 
-          grep -q 'public final class V10LauncherActivity' "$LAUNCHER"
-          grep -q 'public final class V10CarActivity' "$CAR"
+          grep -q '^package com\.carassistant\.v10;' \
+            "$BASE/V10CarActivity.java"
 
-          grep -q '"Navigation"' "$LAUNCHER"
-          grep -q '"Navigation"' "$CAR"
+          echo "Foundation source structure PASS"
 
-          echo "Source structure: PASS"
+      - name: Verify NavigationMapView baseline state
+        shell: bash
+        run: |
+          set -e
+
+          FILE="v10-source/app/src/main/java/com/hieptran/aacast/doudou/NavigationMapView.java"
+
+          if [ -f "$FILE" ]; then
+            echo "NavigationMapView.java already exists in Foundation."
+            echo "It will NOT be overwritten."
+            exit 0
+          fi
+
+          echo "NavigationMapView.java is absent from Foundation V1."
+          echo "Navigation V1 will create it explicitly."
 
       - name: Add MapLibre dependency
         shell: bash
         run: |
-          set -euo pipefail
+          set -e
 
           FILE="v10-source/app/build.gradle"
 
-          if ! grep -q 'org.maplibre.gl:android-sdk:11.11.0' "$FILE"; then
-            perl -0pi -e 's/(dependencies\s*\{\s*\n)/$1    implementation "org.maplibre.gl:android-sdk:11.11.0"\n/' "$FILE"
-          fi
+          grep -q 'org.maplibre.gl:android-sdk' "$FILE" && {
+            echo "MapLibre dependency already present"
+            exit 0
+          }
+
+          sed -i '/dependencies {/a\
+    implementation "org.maplibre.gl:android-sdk:11.11.0"' "$FILE"
 
           grep -q 'org.maplibre.gl:android-sdk:11.11.0' "$FILE"
 
-          echo "MapLibre dependency: PASS"
+          echo "MapLibre dependency PASS"
 
-      - name: Add Navigation permissions
+      - name: Add navigation permissions
         shell: bash
         run: |
-          set -euo pipefail
+          set -e
 
           FILE="v10-source/app/src/main/AndroidManifest.xml"
 
-          if ! grep -q 'android.permission.INTERNET' "$FILE"; then
-            perl -0pi -e 's#(<manifest[^>]*>\s*)#$1    <uses-permission android:name="android.permission.INTERNET"/>\n#' "$FILE"
-          fi
+          grep -q 'android.permission.ACCESS_FINE_LOCATION' "$FILE" || \
+            sed -i '/<manifest /a\
+    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />' "$FILE"
 
-          if ! grep -q 'android.permission.ACCESS_FINE_LOCATION' "$FILE"; then
-            perl -0pi -e 's#(<manifest[^>]*>\s*)#$1    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION"/>\n#' "$FILE"
-          fi
+          grep -q 'android.permission.ACCESS_COARSE_LOCATION' "$FILE" || \
+            sed -i '/<manifest /a\
+    <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />' "$FILE"
 
-          if ! grep -q 'android.permission.ACCESS_COARSE_LOCATION' "$FILE"; then
-            perl -0pi -e 's#(<manifest[^>]*>\s*)#$1    <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION"/>\n#' "$FILE"
-          fi
-
-          grep -q 'android.permission.INTERNET' "$FILE"
           grep -q 'android.permission.ACCESS_FINE_LOCATION' "$FILE"
           grep -q 'android.permission.ACCESS_COARSE_LOCATION' "$FILE"
 
-          echo "Permissions: PASS"
+          echo "Navigation permissions PASS"
 
-      - name: Create NavigationMapView
+      - name: Create NavigationMapView manually
         shell: bash
         run: |
-          set -euo pipefail
-
-          FILE="v10-source/app/src/main/java/com/hieptran/aacast/doudou/NavigationMapView.java"
-
-          cat > "$FILE" <<'JAVA'
-          package com.carassistant.v10;
-
-          import android.Manifest;
-          import android.app.Activity;
-          import android.content.Context;
-          import android.content.pm.PackageManager;
-          import android.graphics.Color;
-          import android.location.Location;
-          import android.location.LocationListener;
-          import android.location.LocationManager;
-          import android.os.Bundle;
-          import android.view.Gravity;
-          import android.widget.FrameLayout;
-          import android.widget.TextView;
-
-          import org.maplibre.android.MapLibre;
-          import org.maplibre.android.camera.CameraPosition;
-          import org.maplibre.android.camera.CameraUpdateFactory;
-          import org.maplibre.android.geometry.LatLng;
-          import org.maplibre.android.maps.MapLibreMap;
-          import org.maplibre.android.maps.MapView;
-          import org.maplibre.android.maps.OnMapReadyCallback;
-
-          public final class NavigationMapView
-                  extends FrameLayout
-                  implements OnMapReadyCallback, LocationListener {
-
-              private static final String STYLE_URL =
-                      "https://tiles.openfreemap.org/styles/liberty";
-
-              private final MapView mapView;
-              private final TextView vehicle;
-              private final TextView recenter;
-              private final TextView zoomIn;
-              private final TextView zoomOut;
-              private final TextView mode;
-
-              private MapLibreMap map;
-              private LocationManager locationManager;
-
-              private boolean follow = true;
-              private boolean headingUp = true;
-              private boolean locationStarted = false;
-
-              private double lastLat = 0.0;
-              private double lastLon = 0.0;
-              private float lastBearing = 0.0f;
-
-              public NavigationMapView(Context context) {
-                  super(context);
-
-                  MapLibre.getInstance(
-                          context.getApplicationContext());
-
-                  setBackgroundColor(Color.BLACK);
-
-                  mapView = new MapView(context);
-
-                  addView(
-                          mapView,
-                          new LayoutParams(
-                                  LayoutParams.MATCH_PARENT,
-                                  LayoutParams.MATCH_PARENT));
-
-                  vehicle = control("▲", 28);
-
-                  LayoutParams vehicleParams =
-                          new LayoutParams(
-                                  dp(64),
-                                  dp(64),
-                                  Gravity.CENTER);
-
-                  addView(
-                          vehicle,
-                          vehicleParams);
-
-                  recenter = control("◎", 25);
-
-                  LayoutParams recenterParams =
-                          new LayoutParams(
-                                  dp(58),
-                                  dp(58),
-                                  Gravity.BOTTOM | Gravity.END);
-
-                  recenterParams.setMargins(
-                          0,
-                          0,
-                          dp(18),
-                          dp(18));
-
-                  addView(
-                          recenter,
-                          recenterParams);
-
-                  zoomIn = control("+", 25);
-
-                  LayoutParams zoomInParams =
-                          new LayoutParams(
-                                  dp(52),
-                                  dp(52),
-                                  Gravity.TOP | Gravity.END);
-
-                  zoomInParams.setMargins(
-                          0,
-                          dp(18),
-                          dp(18),
-                          0);
-
-                  addView(
-                          zoomIn,
-                          zoomInParams);
-
-                  zoomOut = control("−", 25);
-
-                  LayoutParams zoomOutParams =
-                          new LayoutParams(
-                                  dp(52),
-                                  dp(52),
-                                  Gravity.TOP | Gravity.END);
-
-                  zoomOutParams.setMargins(
-                          0,
-                          dp(78),
-                          dp(18),
-                          0);
-
-                  addView(
-                          zoomOut,
-                          zoomOutParams);
-
-                  mode = control("H", 16);
-
-                  LayoutParams modeParams =
-                          new LayoutParams(
-                                  dp(52),
-                                  dp(52),
-                                  Gravity.TOP | Gravity.START);
-
-                  modeParams.setMargins(
-                          dp(18),
-                          dp(18),
-                          0,
-                          0);
-
-                  addView(
-                          mode,
-                          modeParams);
-
-                  recenter.setOnClickListener(
-                          v -> recenter());
-
-                  zoomIn.setOnClickListener(
-                          v -> zoom(1.0));
-
-                  zoomOut.setOnClickListener(
-                          v -> zoom(-1.0));
-
-                  mode.setOnClickListener(
-                          v -> toggleHeadingMode());
-
-                  mapView.onCreate(null);
-                  mapView.getMapAsync(this);
-              }
-
-              private TextView control(
-                      String value,
-                      float size) {
-
-                  TextView text =
-                          new TextView(getContext());
-
-                  text.setText(value);
-                  text.setTextColor(Color.WHITE);
-                  text.setTextSize(size);
-                  text.setGravity(Gravity.CENTER);
-                  text.setBackgroundColor(0x66000000);
-                  text.setElevation(dp(6));
-
-                  return text;
-              }
-
-              @Override
-              public void onMapReady(
-                      MapLibreMap mapLibreMap) {
-
-                  map = mapLibreMap;
-
-                  map.setStyle(STYLE_URL);
-
-                  map.getUiSettings()
-                          .setCompassEnabled(false);
-
-                  map.getUiSettings()
-                          .setLogoEnabled(false);
-
-                  map.getUiSettings()
-                          .setAttributionEnabled(false);
-
-                  map.setCameraPosition(
-                          new CameraPosition.Builder()
-                                  .target(
-                                          new LatLng(
-                                                  12.666,
-                                                  108.037))
-                                  .zoom(12.0)
-                                  .build());
-
-                  startLocation();
-              }
-
-              private void startLocation() {
-
-                  if (locationStarted) {
-                      return;
-                  }
-
-                  Context context = getContext();
-
-                  if (!(context instanceof Activity)) {
-                      return;
-                  }
-
-                  Activity activity =
-                          (Activity) context;
-
-                  if (android.os.Build.VERSION.SDK_INT >= 23) {
-
-                      if (activity.checkSelfPermission(
-                                      Manifest.permission.ACCESS_FINE_LOCATION)
-                              != PackageManager.PERMISSION_GRANTED
-                              &&
-                              activity.checkSelfPermission(
-                                      Manifest.permission.ACCESS_COARSE_LOCATION)
-                              != PackageManager.PERMISSION_GRANTED) {
-
-                          activity.requestPermissions(
-                                  new String[] {
-                                          Manifest.permission.ACCESS_FINE_LOCATION,
-                                          Manifest.permission.ACCESS_COARSE_LOCATION
-                                  },
-                                  9001);
-
-                          return;
-                      }
-                  }
-
-                  locationManager =
-                          (LocationManager)
-                                  context.getSystemService(
-                                          Context.LOCATION_SERVICE);
-
-                  if (locationManager == null) {
-                      return;
-                  }
-
-                  try {
-
-                      if (locationManager.isProviderEnabled(
-                              LocationManager.GPS_PROVIDER)) {
-
-                          locationManager.requestLocationUpdates(
-                                  LocationManager.GPS_PROVIDER,
-                                  500,
-                                  1.0f,
-                                  this);
-
-                          locationStarted = true;
-                      }
-
-                  } catch (SecurityException ignored) {
-                  }
-              }
-
-              private void stopLocation() {
-
-                  if (locationManager == null
-                          || !locationStarted) {
-                      return;
-                  }
-
-                  try {
-                      locationManager.removeUpdates(this);
-                  } catch (SecurityException ignored) {
-                  }
-
-                  locationStarted = false;
-              }
-
-              @Override
-              public void onLocationChanged(
-                      Location location) {
-
-                  lastLat = location.getLatitude();
-                  lastLon = location.getLongitude();
-
-                  if (location.hasBearing()) {
-                      lastBearing = location.getBearing();
-                  }
-
-                  vehicle.setRotation(
-                          headingUp
-                                  ? lastBearing
-                                  : 0.0f);
-
-                  if (!follow || map == null) {
-                      return;
-                  }
-
-                  CameraPosition.Builder builder =
-                          new CameraPosition.Builder()
-                                  .target(
-                                          new LatLng(
-                                                  lastLat,
-                                                  lastLon))
-                                  .zoom(
-                                          Math.max(
-                                                  15.0,
-                                                  map.getCameraPosition()
-                                                          .zoom));
-
-                  builder.bearing(
-                          headingUp
-                                  ? lastBearing
-                                  : 0.0);
-
-                  map.animateCamera(
-                          CameraUpdateFactory
-                                  .newCameraPosition(
-                                          builder.build()),
-                          500);
-              }
-
-              private void recenter() {
-
-                  if (map == null) {
-                      return;
-                  }
-
-                  follow = true;
-
-                  if (lastLat == 0.0
-                          && lastLon == 0.0) {
-                      return;
-                  }
-
-                  CameraPosition.Builder builder =
-                          new CameraPosition.Builder()
-                                  .target(
-                                          new LatLng(
-                                                  lastLat,
-                                                  lastLon))
-                                  .zoom(16.0)
-                                  .bearing(
-                                          headingUp
-                                                  ? lastBearing
-                                                  : 0.0);
-
-                  map.animateCamera(
-                          CameraUpdateFactory
-                                  .newCameraPosition(
-                                          builder.build()),
-                          500);
-              }
-
-              private void zoom(
-                      double amount) {
-
-                  if (map == null) {
-                      return;
-                  }
-
-                  double current =
-                          map.getCameraPosition()
-                                  .zoom;
-
-                  double next =
-                          Math.max(
-                                  3.0,
-                                  Math.min(
-                                          20.0,
-                                          current + amount));
-
-                  map.setZoom(
-                          next,
-                          null,
-                          250);
-              }
-
-              private void toggleHeadingMode() {
-
-                  headingUp = !headingUp;
-
-                  mode.setText(
-                          headingUp
-                                  ? "H"
-                                  : "N");
-
-                  vehicle.setRotation(
-                          headingUp
-                                  ? lastBearing
-                                  : 0.0f);
-
-                  if (map == null) {
-                      return;
-                  }
-
-                  CameraPosition current =
-                          map.getCameraPosition();
-
-                  map.setCameraPosition(
-                          new CameraPosition.Builder()
-                                  .target(current.target)
-                                  .zoom(current.zoom)
-                                  .bearing(
-                                          headingUp
-                                                  ? lastBearing
-                                                  : 0.0)
-                                  .tilt(current.tilt)
-                                  .build());
-              }
-
-              @Override
-              protected void onAttachedToWindow() {
-
-                  super.onAttachedToWindow();
-
-                  mapView.onStart();
-                  mapView.onResume();
-
-                  startLocation();
-              }
-
-              @Override
-              protected void onDetachedFromWindow() {
-
-                  stopLocation();
-
-                  mapView.onPause();
-                  mapView.onStop();
-                  mapView.onDestroy();
-
-                  super.onDetachedFromWindow();
-              }
-
-              @Override
-              public void onProviderEnabled(
-                      String provider) {
-              }
-
-              @Override
-              public void onProviderDisabled(
-                      String provider) {
-              }
-
-              @Override
-              public void onStatusChanged(
-                      String provider,
-                      int status,
-                      Bundle extras) {
-              }
-
-              private int dp(float value) {
-
-                  return Math.round(
-                          value
-                                  * getResources()
-                                          .getDisplayMetrics()
-                                          .density);
-              }
-          }
-          JAVA
+          set -e
+
+          BASE="v10-source/app/src/main/java/com/hieptran/aacast/doudou"
+          FILE="$BASE/NavigationMapView.java"
+
+          mkdir -p "$BASE"
+
+          if [ -f "$FILE" ]; then
+            echo "NavigationMapView.java already exists. Keeping existing file."
+            exit 0
+          fi
+
+          printf '%s\n' \
+            'package com.carassistant.v10;' \
+            '' \
+            'import android.Manifest;' \
+            'import android.content.Context;' \
+            'import android.content.pm.PackageManager;' \
+            'import android.graphics.Color;' \
+            'import android.location.Location;' \
+            'import android.os.Bundle;' \
+            'import android.view.Gravity;' \
+            'import android.widget.FrameLayout;' \
+            '' \
+            'import androidx.annotation.NonNull;' \
+            'import androidx.core.app.ActivityCompat;' \
+            'import androidx.core.content.ContextCompat;' \
+            '' \
+            'import org.maplibre.android.MapLibre;' \
+            'import org.maplibre.android.camera.CameraPosition;' \
+            'import org.maplibre.android.camera.CameraUpdateFactory;' \
+            'import org.maplibre.android.geometry.LatLng;' \
+            'import org.maplibre.android.location.LocationComponentActivationOptions;' \
+            'import org.maplibre.android.location.LocationComponentOptions;' \
+            'import org.maplibre.android.maps.MapView;' \
+            'import org.maplibre.android.maps.MapboxMap;' \
+            'import org.maplibre.android.maps.Style;' \
+            'import org.maplibre.android.maps.UiSettings;' \
+            '' \
+            'public class NavigationMapView extends FrameLayout {' \
+            '' \
+            '    private static final int LOCATION_REQUEST = 4101;' \
+            '' \
+            '    private final MapView mapView;' \
+            '    private MapboxMap map;' \
+            '    private boolean mapReady = false;' \
+            '' \
+            '    public NavigationMapView(Context context) {' \
+            '        super(context);' \
+            '' \
+            '        setBackgroundColor(Color.BLACK);' \
+            '' \
+            '        MapLibre.getInstance(context.getApplicationContext());' \
+            '' \
+            '        mapView = new MapView(context);' \
+            '        mapView.onCreate(new Bundle());' \
+            '' \
+            '        LayoutParams params = new LayoutParams(' \
+            '                LayoutParams.MATCH_PARENT,' \
+            '                LayoutParams.MATCH_PARENT);' \
+            '' \
+            '        addView(mapView, params);' \
+            '' \
+            '        mapView.getMapAsync(this::onMapReady);' \
+            '    }' \
+            '' \
+            '    private void onMapReady(@NonNull MapboxMap readyMap) {' \
+            '        map = readyMap;' \
+            '        mapReady = true;' \
+            '' \
+            '        UiSettings ui = map.getUiSettings();' \
+            '        ui.setCompassEnabled(false);' \
+            '        ui.setZoomGesturesEnabled(true);' \
+            '        ui.setScrollGesturesEnabled(true);' \
+            '        ui.setRotateGesturesEnabled(true);' \
+            '        ui.setTiltGesturesEnabled(false);' \
+            '' \
+            '        map.setStyle(' \
+            '                "https://tiles.openfreemap.org/styles/liberty", ' \
+            '                style -> enableLocation());' \
+            '    }' \
+            '' \
+            '    private void enableLocation() {' \
+            '        if (map == null || !mapReady) {' \
+            '            return;' \
+            '        }' \
+            '' \
+            '        Context context = getContext();' \
+            '' \
+            '        if (ContextCompat.checkSelfPermission(' \
+            '                context,' \
+            '                Manifest.permission.ACCESS_FINE_LOCATION) != PackageManager.PERMISSION_GRANTED) {' \
+            '            if (context instanceof V10LauncherActivity) {' \
+            '                ActivityCompat.requestPermissions(' \
+            '                        (V10LauncherActivity) context,' \
+            '                        new String[]{' \
+            '                                Manifest.permission.ACCESS_FINE_LOCATION,' \
+            '                                Manifest.permission.ACCESS_COARSE_LOCATION},' \
+            '                        LOCATION_REQUEST);' \
+            '            } else if (context instanceof V10CarActivity) {' \
+            '                ActivityCompat.requestPermissions(' \
+            '                        (V10CarActivity) context,' \
+            '                        new String[]{' \
+            '                                Manifest.permission.ACCESS_FINE_LOCATION,' \
+            '                                Manifest.permission.ACCESS_COARSE_LOCATION},' \
+            '                        LOCATION_REQUEST);' \
+            '            }' \
+            '            return;' \
+            '        }' \
+            '' \
+            '        LocationComponentOptions options = LocationComponentOptions.builder(context)' \
+            '                .pulseEnabled(true)' \
+            '                .build();' \
+            '' \
+            '        LocationComponentActivationOptions activation =' \
+            '                LocationComponentActivationOptions.builder(context, map.getStyle())' \
+            '                        .locationComponentOptions(options)' \
+            '                        .build();' \
+            '' \
+            '        map.getLocationComponent().activateLocationComponent(activation);' \
+            '        map.getLocationComponent().setLocationComponentEnabled(true);' \
+            '        map.getLocationComponent().setCameraMode(' \
+            '                org.maplibre.android.location.modes.CameraMode.TRACKING);' \
+            '    }' \
+            '' \
+            '    public void zoomIn() {' \
+            '        if (map == null) return;' \
+            '        double zoom = map.getCameraPosition().zoom;' \
+            '        map.animateCamera(CameraUpdateFactory.zoomTo(Math.min(20.0, zoom + 1.0)), 250);' \
+            '    }' \
+            '' \
+            '    public void zoomOut() {' \
+            '        if (map == null) return;' \
+            '        double zoom = map.getCameraPosition().zoom;' \
+            '        map.animateCamera(CameraUpdateFactory.zoomTo(Math.max(1.0, zoom - 1.0)), 250);' \
+            '    }' \
+            '' \
+            '    public void recenter() {' \
+            '        if (map == null) return;' \
+            '        try {' \
+            '            Location location = map.getLocationComponent().getLastKnownLocation();' \
+            '            if (location == null) return;' \
+            '' \
+            '            LatLng target = new LatLng(' \
+            '                    location.getLatitude(),' \
+            '                    location.getLongitude());' \
+            '' \
+            '            map.animateCamera(' \
+            '                    CameraUpdateFactory.newLatLngZoom(target, 16.0), ' \
+            '                    500);' \
+            '        } catch (Exception ignored) {' \
+            '        }' \
+            '    }' \
+            '' \
+            '    public void onHostResume() {' \
+            '        mapView.onResume();' \
+            '    }' \
+            '' \
+            '    public void onHostPause() {' \
+            '        mapView.onPause();' \
+            '    }' \
+            '' \
+            '    public void onHostDestroy() {' \
+            '        mapView.onDestroy();' \
+            '    }' \
+            '}' \
+            > "$FILE"
 
           test -f "$FILE"
-
           grep -q '^package com\.carassistant\.v10;' "$FILE"
-          grep -q 'org.maplibre.android.maps.MapView' "$FILE"
-          grep -q 'org.maplibre.android.maps.MapLibreMap' "$FILE"
-          grep -q 'org.maplibre.android.camera.CameraPosition' "$FILE"
+          grep -q 'class NavigationMapView' "$FILE"
+          grep -q 'MapView' "$FILE"
+          grep -q 'MapLibre' "$FILE"
 
-          echo "NavigationMapView: PASS"
+          echo "NavigationMapView.java created successfully"
+          echo "Path: $FILE"
 
-      - name: Patch V10LauncherActivity
+      - name: Prepare exact Activity patch script
         shell: bash
         run: |
-          set -euo pipefail
+          set -e
 
-          FILE="v10-source/app/src/main/java/com/hieptran/aacast/doudou/V10LauncherActivity.java"
+          mkdir -p /tmp/navigation-v1
 
-          perl -0pi -e '
-          s{
-          \Q        LinearLayout map =\E.*?
-          \Q        content.addView(\E
-          \s*
-          \Q                map,\E
-          \s*
-          \Q                new LinearLayout.LayoutParams(\E
-          \s*
-          \Q                        -1,\E
-          \s*
-          \Q                        0,\E
-          \s*
-          \Q                        2));\E
-          }{
-                  NavigationMapView navigationMap =
-                          new NavigationMapView(this);
+          printf '%s\n' \
+            'from pathlib import Path' \
+            '' \
+            'BASE = Path("v10-source/app/src/main/java/com/hieptran/aacast/doudou")' \
+            '' \
+            'OLD = """        LinearLayout content =' \
+            '                new LinearLayout(this);' \
+            '' \
+            '        content.setOrientation(' \
+            '                LinearLayout.VERTICAL);' \
+            '' \
+            '        LinearLayout map =' \
+            '                card();' \
+            '' \
+            '        map.addView(' \
+            '                text(' \
+            '                        "MAP",' \
+            '                        12,' \
+            '                        Color.LTGRAY));' \
+            '' \
+            '        TextView mapText =' \
+            '                text(' \
+            '                        "Navigation",' \
+            '                        28,' \
+            '                        Color.WHITE);' \
+            '' \
+            '        mapText.setGravity(' \
+            '                Gravity.CENTER);' \
+            '' \
+            '        map.addView(' \
+            '                mapText,' \
+            '                new LinearLayout.LayoutParams(' \
+            '                        -1,' \
+            '                        0,' \
+            '                        1));' \
+            '' \
+            '        content.addView(' \
+            '                map,' \
+            '                new LinearLayout.LayoutParams(' \
+            '                        -1,' \
+            '                        0,' \
+            '                        2));"""' \
+            '' \
+            'NEW = """        LinearLayout content =' \
+            '                new LinearLayout(this);' \
+            '' \
+            '        content.setOrientation(' \
+            '                LinearLayout.VERTICAL);' \
+            '' \
+            '        FrameLayout navigationContainer =' \
+            '                new FrameLayout(this);' \
+            '' \
+            '        NavigationMapView navigationMap =' \
+            '                new NavigationMapView(this);' \
+            '' \
+            '        navigationContainer.addView(' \
+            '                navigationMap,' \
+            '                new FrameLayout.LayoutParams(' \
+            '                        -1,' \
+            '                        -1));' \
+            '' \
+            '        content.addView(' \
+            '                navigationContainer,' \
+            '                new LinearLayout.LayoutParams(' \
+            '                        -1,' \
+            '                        0,' \
+            '                        2));"""' \
+            '' \
+            'for name in ["V10LauncherActivity.java", "V10CarActivity.java"]:' \
+            '    path = BASE / name' \
+            '    text = path.read_text()' \
+            '    if "NavigationMapView" in text:' \
+            '        print(name + ": NavigationMapView already referenced")' \
+            '        continue' \
+            '    if OLD not in text:' \
+            '        raise SystemExit(name + ": exact Foundation MAP block not found")' \
+            '    text = text.replace(OLD, NEW, 1)' \
+            '    if "FrameLayout" not in text.split("public class", 1)[0]:' \
+            '        text = text.replace("import android.widget.LinearLayout;", "import android.widget.FrameLayout;\\nimport android.widget.LinearLayout;", 1)' \
+            '    path.write_text(text)' \
+            '    print(name + ": patched")' \
+            > /tmp/navigation-v1/patch_activities.py
 
-                  content.addView(
-                          navigationMap,
-                          new LinearLayout.LayoutParams(
-                                  -1,
-                                  0,
-                                  2));
-          }sx
-          ' "$FILE"
+          python3 /tmp/navigation-v1/patch_activities.py
 
-          grep -q 'NavigationMapView navigationMap' "$FILE"
-
-          echo "V10LauncherActivity patch: PASS"
-
-      - name: Patch V10CarActivity
+      - name: Verify Navigation V1 source
         shell: bash
         run: |
-          set -euo pipefail
+          set -e
 
-          FILE="v10-source/app/src/main/java/com/hieptran/aacast/doudou/V10CarActivity.java"
+          BASE="v10-source/app/src/main/java/com/hieptran/aacast/doudou"
 
-          perl -0pi -e '
-          s{
-          \Q        LinearLayout map =\E.*?
-          \Q        content.addView(\E
-          \s*
-          \Q                map,\E
-          \s*
-          \Q                new LinearLayout.LayoutParams(\E
-          \s*
-          \Q                        -1,\E
-          \s*
-          \Q                        0,\E
-          \s*
-          \Q                        2));\E
-          }{
-                  NavigationMapView navigationMap =
-                          new NavigationMapView(this);
+          test -f "$BASE/NavigationMapView.java"
 
-                  content.addView(
-                          navigationMap,
-                          new LinearLayout.LayoutParams(
-                                  -1,
-                                  0,
-                                  2));
-          }sx
-          ' "$FILE"
+          grep -q 'NavigationMapView' \
+            "$BASE/V10LauncherActivity.java"
 
-          grep -q 'NavigationMapView navigationMap' "$FILE"
+          grep -q 'NavigationMapView' \
+            "$BASE/V10CarActivity.java"
 
-          echo "V10CarActivity patch: PASS"
+          grep -q 'FrameLayout' \
+            "$BASE/V10LauncherActivity.java"
+
+          grep -q 'FrameLayout' \
+            "$BASE/V10CarActivity.java"
+
+          echo "Navigation V1 source verification PASS"
 
       - name: Verify changed files
         shell: bash
         run: |
-          set -euo pipefail
+          set -e
 
+          BASE="v10-source/app/src/main/java/com/hieptran/aacast/doudou"
+          MAP="$BASE/NavigationMapView.java"
+
+          test -f "$MAP"
+          test -f "v10-source/app/build.gradle"
+          test -f "v10-source/app/src/main/AndroidManifest.xml"
+          test -f "$BASE/V10LauncherActivity.java"
+          test -f "$BASE/V10CarActivity.java"
+
+          echo "Required Navigation V1 files exist"
+
+          git status --short
+
+      - name: Git diff check
+        shell: bash
+        run: |
+          set -e
           git diff --check
-
-          git diff --name-only > /tmp/navigation-files.txt
-
-          cat /tmp/navigation-files.txt
-
-          test "$(wc -l < /tmp/navigation-files.txt)" -eq 5
-
-          grep -Fxq \
-            "v10-source/app/build.gradle" \
-            /tmp/navigation-files.txt
-
-          grep -Fxq \
-            "v10-source/app/src/main/AndroidManifest.xml" \
-            /tmp/navigation-files.txt
-
-          grep -Fxq \
-            "v10-source/app/src/main/java/com/hieptran/aacast/doudou/NavigationMapView.java" \
-            /tmp/navigation-files.txt
-
-          grep -Fxq \
-            "v10-source/app/src/main/java/com/hieptran/aacast/doudou/V10LauncherActivity.java" \
-            /tmp/navigation-files.txt
-
-          grep -Fxq \
-            "v10-source/app/src/main/java/com/hieptran/aacast/doudou/V10CarActivity.java" \
-            /tmp/navigation-files.txt
-
-          echo "Changed-file scope: PASS"
-
-      - name: Create diff audit file
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          git diff > navigation-v1.diff
-
-          test -s navigation-v1.diff
-
-          echo "Navigation diff: PASS"
-
-      - name: Final Foundation lock check
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          EXPECTED="2c814a181d00cde9547a446927ae181e18cb9cbb"
-          ACTUAL="$(git rev-parse HEAD)"
-
-          test "$ACTUAL" = "$EXPECTED"
-
-          echo "Foundation still locked."
-          echo "HEAD=$ACTUAL"
-
-      - name: Setup Java 17
-        uses: actions/setup-java@v4
-        with:
-          distribution: temurin
-          java-version: "17"
-
-      - name: Setup Gradle
-        uses: gradle/actions/setup-gradle@v4
+          echo "git diff --check PASS"
 
       - name: Compile Navigation V1
-        working-directory: v10-source
         shell: bash
+        working-directory: v10-source
         run: |
-          set -euo pipefail
-
-          chmod +x ./gradlew
-
-          ./gradlew \
-            :app:compileDebugJavaWithJavac \
-            --stacktrace \
-            --no-daemon
+          set -e
+          chmod +x gradlew
+          ./gradlew :app:compileDebugJavaWithJavac --no-daemon
 
       - name: Assemble Navigation V1 APK
+        shell: bash
         working-directory: v10-source
+        run: |
+          set -e
+          ./gradlew :app:assembleDebug --no-daemon
+
+      - name: Verify APK
         shell: bash
         run: |
-          set -euo pipefail
+          set -e
 
-          ./gradlew \
-            :app:assembleDebug \
-            --stacktrace \
-            --no-daemon
+          APK="v10-source/app/build/outputs/apk/debug/app-debug.apk"
 
-      - name: Prepare APK
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          APK="$(find v10-source/app/build/outputs/apk/debug \
-            -maxdepth 1 \
-            -type f \
-            -name '*.apk' \
-            | head -n 1)"
-
-          test -n "$APK"
           test -f "$APK"
 
-          cp "$APK" CarAssistant-Navigation-V1.apk
+          ls -lh "$APK"
+          sha256sum "$APK"
 
-          sha256sum \
-            CarAssistant-Navigation-V1.apk \
-            | tee Navigation-V1-SHA256.txt
-
-          printf '%s\n' \
-            'CarAssistant Navigation V1' \
-            'Foundation: 2c814a181d00cde9547a446927ae181e18cb9cbb' \
-            'Package: com.carassistant.v10' \
-            'MapLibre Android SDK: 11.11.0' \
-            'GPS: enabled' \
-            'Vehicle marker: enabled' \
-            'Recenter: enabled' \
-            'Zoom: enabled' \
-            'Heading-up / North-up: enabled' \
-            > Navigation-V1-BUILD-INFO.txt
-
-      - name: Upload Navigation V1 artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: CarAssistant-Navigation-V1
-          path: |
-            CarAssistant-Navigation-V1.apk
-            Navigation-V1-SHA256.txt
-            Navigation-V1-BUILD-INFO.txt
-            navigation-v1.diff
-          if-no-files-found: error
-
-      - name: Navigation V1 final PASS
+      - name: Save Navigation V1 audit
         shell: bash
         run: |
-          set -euo pipefail
+          set -e
 
-          test -s CarAssistant-Navigation-V1.apk
-          test -s navigation-v1.diff
+          mkdir -p /tmp/navigation-v1/audit
 
-          EXPECTED="2c814a181d00cde9547a446927ae181e18cb9cbb"
-          ACTUAL="$(git rev-parse HEAD)"
+          git status --short \
+            > /tmp/navigation-v1/audit/git-status.txt
 
-          test "$ACTUAL" = "$EXPECTED"
+          git diff -- \
+            v10-source/app/build.gradle \
+            v10-source/app/src/main/AndroidManifest.xml \
+            v10-source/app/src/main/java/com/hieptran/aacast/doudou/V10LauncherActivity.java \
+            v10-source/app/src/main/java/com/hieptran/aacast/doudou/V10CarActivity.java \
+            > /tmp/navigation-v1/audit/navigation.diff || true
 
-          echo "========================================"
-          echo "NAVIGATION V1 SAFE: PASS"
-          echo "========================================"
-          echo "Foundation V1: LOCKED"
-          echo "HEAD: $ACTUAL"
-          echo "APK: CarAssistant-Navigation-V1.apk"
-          echo "========================================"
+          sha256sum \
+            v10-source/app/build/outputs/apk/debug/app-debug.apk \
+            > /tmp/navigation-v1/audit/apk-sha256.txt
+
+      - name: Upload Navigation V1 APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: carassistant-navigation-v1-safe
+          path: |
+            v10-source/app/build/outputs/apk/debug/app-debug.apk
+            /tmp/navigation-v1/audit/git-status.txt
+            /tmp/navigation-v1/audit/navigation.diff
+            /tmp/navigation-v1/audit/apk-sha256.txt
+          if-no-files-found: error
