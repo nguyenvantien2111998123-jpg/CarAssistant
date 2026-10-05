@@ -39,7 +39,10 @@ jobs:
           test -f "$SRC/V10SessionStore.java"
 
           ACTUAL="$(git rev-parse HEAD)"
-          test "$ACTUAL" = "2c814a181d00cde9547a446927ae181e18cb9cbb"
+          if [ "$ACTUAL" != "2c814a181d00cde9547a446927ae181e18cb9cbb" ]; then
+            echo "ERROR: Foundation commit mismatch: $ACTUAL"
+            exit 1
+          fi
 
           sha256sum \
             "$SRC/V10ProjectionSession.java" \
@@ -49,7 +52,7 @@ jobs:
             "$SRC/V10SessionStore.java" \
             > /tmp/core-before.sha256
 
-          echo "Foundation source PASS."
+          echo "PASS: Foundation source and lock."
 
       - name: Add MapLibre and location permissions
         shell: bash
@@ -61,8 +64,6 @@ jobs:
 
           test -f "$GRADLE"
           test -f "$MANIFEST"
-
-          grep -Fq "dependencies" "$GRADLE"
 
           if ! grep -Fq "org.maplibre.gl:android-sdk:11.11.0" "$GRADLE"; then
             printf '%s\n' \
@@ -88,15 +89,28 @@ jobs:
               "$MANIFEST"
           fi
 
-          grep -Fq \
+          if ! grep -Fq \
             "org.maplibre.gl:android-sdk:11.11.0" \
-            "$GRADLE"
+            "$GRADLE"; then
+            echo "ERROR: MapLibre dependency missing."
+            exit 1
+          fi
 
-          grep -Fq \
+          if ! grep -Fq \
             "android.permission.ACCESS_FINE_LOCATION" \
-            "$MANIFEST"
+            "$MANIFEST"; then
+            echo "ERROR: FINE location permission missing."
+            exit 1
+          fi
 
-          echo "Navigation dependency/permissions PASS."
+          if ! grep -Fq \
+            "android.permission.ACCESS_COARSE_LOCATION" \
+            "$MANIFEST"; then
+            echo "ERROR: COARSE location permission missing."
+            exit 1
+          fi
+
+          echo "PASS: Navigation dependency and permissions."
 
       - name: Create NavigationMapView
         shell: bash
@@ -302,11 +316,21 @@ jobs:
           }
           EOF
 
-          grep -Fq \
+          if ! grep -Fq \
             "class NavigationMapView" \
-            "$SRC/NavigationMapView.java"
+            "$SRC/NavigationMapView.java"; then
+            echo "ERROR: NavigationMapView was not created."
+            exit 1
+          fi
 
-          echo "NavigationMapView PASS."
+          if ! grep -Fq \
+            "https://tiles.openfreemap.org/styles/liberty" \
+            "$SRC/NavigationMapView.java"; then
+            echo "ERROR: Navigation style missing."
+            exit 1
+          fi
+
+          echo "PASS: NavigationMapView."
 
       - name: Patch Home UI V2 and transparent Navigation overlay
         shell: bash
@@ -367,7 +391,8 @@ jobs:
           '    if new.split("\n")[1] not in s:' \
           '        s=s.replace(old,new,1)' \
           '' \
-          's=s.replace("    private FrameLayout root;","    private FrameLayout root;\n    private NavigationMapView navigationMap;",1)' \
+          'if "private NavigationMapView navigationMap;" not in s:' \
+          '    s=s.replace("    private FrameLayout root;","    private FrameLayout root;\n    private NavigationMapView navigationMap;",1)' \
           '' \
           'helpers="""' \
           '    private LinearLayout.LayoutParams sidebarButtonParams() {' \
@@ -454,7 +479,7 @@ jobs:
           '        sidebar.setPadding(dp(3),dp(3),dp(3),dp(3));' \
           '        dashboard.addView(sidebar,new LinearLayout.LayoutParams(dp(88),-1));' \
           '' \
-          '        TextView choose=sidebarButton("APP\nCHỌN");' \
+          '        TextView choose=sidebarButton("APP CHỌN");' \
           '        choose.setOnClickListener(v->showApps());' \
           '        sidebar.addView(choose,sidebarButtonParams());' \
           '' \
@@ -623,7 +648,7 @@ jobs:
           python3 \
             /tmp/carassistant-patch/patch.py
 
-          echo "Home UI V2 + Navigation overlay patch PASS."
+          echo "PASS: Home UI V2 + Navigation overlay patch."
 
       - name: Verify architecture
         shell: bash
@@ -633,59 +658,93 @@ jobs:
           SRC="v10-source/app/src/main/java/com/hieptran/aacast/doudou"
           FILE="$SRC/V10CarActivity.java"
 
-          grep -Fq \
+          check() {
+            local label="$1"
+            local pattern="$2"
+            local file="$3"
+
+            if grep -Fq "$pattern" "$file"; then
+              echo "PASS: $label"
+            else
+              echo "ERROR: $label"
+              echo "Missing: $pattern"
+              echo "File: $file"
+              exit 1
+            fi
+          }
+
+          check \
+            "NavigationMapView field" \
             "private NavigationMapView navigationMap;" \
             "$FILE"
 
-          grep -Fq \
+          check \
+            "NavigationMapView creation" \
             "navigationMap=new NavigationMapView(this);" \
             "$FILE"
 
-          grep -Fq \
-            "root.addView(" \
+          check \
+            "Transparent root" \
+            "root.setBackgroundColor(Color.TRANSPARENT);" \
             "$FILE"
 
-          grep -Fq \
-            "Color.TRANSPARENT" \
+          check \
+            "Transparent launcher overlay" \
+            "launcherLayer.setBackgroundColor(Color.TRANSPARENT);" \
             "$FILE"
 
-          grep -Fq \
+          check \
+            "Transparent dashboard" \
+            "dashboard.setBackgroundColor(Color.TRANSPARENT);" \
+            "$FILE"
+
+          check \
+            "Quick launch limit 4" \
             "Math.min(4,q.size())" \
             "$FILE"
 
-          grep -Fq \
+          check \
+            "Real application icon" \
             "info.loadIcon(pm)" \
             "$FILE"
 
-          grep -Fq \
-            'sidebarButton("APP' \
+          check \
+            "Home APP selector" \
+            'sidebarButton("APP CHỌN")' \
             "$FILE"
 
-          grep -Fq \
+          check \
+            "Home TASKS control" \
             '"TASKS"' \
             "$FILE"
 
-          grep -Fq \
+          check \
+            "Home MEDIA card" \
             '"MEDIA"' \
             "$FILE"
 
-          grep -Fq \
+          check \
+            "Home WYN control" \
             '"WYN"' \
             "$FILE"
 
-          grep -Fq \
+          check \
+            "Navigation resume lifecycle" \
             "navigationMap.onHostResume()" \
             "$FILE"
 
-          grep -Fq \
+          check \
+            "Navigation pause lifecycle" \
             "navigationMap.onHostPause()" \
             "$FILE"
 
-          grep -Fq \
+          check \
+            "Navigation destroy lifecycle" \
             "navigationMap.onHostDestroy()" \
             "$FILE"
 
-          grep -Fq \
+          check \
+            "Navigation style" \
             "https://tiles.openfreemap.org/styles/liberty" \
             "$SRC/NavigationMapView.java"
 
@@ -693,23 +752,27 @@ jobs:
             echo "ERROR: old Home title remains."
             exit 1
           fi
+          echo "PASS: old Home title removed."
 
           if grep -Fq '"SPEED"' "$FILE"; then
             echo "ERROR: old SPEED card remains."
             exit 1
           fi
+          echo "PASS: old SPEED card removed."
 
           if grep -Fq '"WEATHER"' "$FILE"; then
             echo "ERROR: old WEATHER card remains."
             exit 1
           fi
+          echo "PASS: old WEATHER card removed."
 
           if grep -Fq 'initial(app.name)' "$FILE"; then
             echo "ERROR: old letter icons remain."
             exit 1
           fi
+          echo "PASS: old letter icons removed."
 
-          echo "Home UI + Navigation architecture PASS."
+          echo "Architecture verification PASS."
 
       - name: Verify Projection Persistence Floating Touch
         shell: bash
@@ -727,25 +790,43 @@ jobs:
             "$SRC/V10SessionStore.java" \
             > /tmp/core-after.sha256
 
-          diff -u \
+          if ! diff -u \
             /tmp/core-before.sha256 \
-            /tmp/core-after.sha256
+            /tmp/core-after.sha256; then
+            echo "ERROR: Protected Foundation core files changed."
+            exit 1
+          fi
 
-          grep -Fq \
-            "createFloatingTouchKey()" \
-            "$FILE"
+          echo "PASS: Projection/Persistence core SHA unchanged."
 
-          grep -Fq \
-            "floatingDownTime" \
-            "$FILE"
+          check() {
+            local label="$1"
+            local pattern="$2"
 
-          grep -Fq \
-            'addFloatingMenuButton("BACK"' \
-            "$FILE"
+            if grep -Fq "$pattern" "$FILE"; then
+              echo "PASS: $label"
+            else
+              echo "ERROR: $label"
+              echo "Missing: $pattern"
+              exit 1
+            fi
+          }
 
-          grep -Fq \
-            'addFloatingMenuButton("HOME"' \
-            "$FILE"
+          check \
+            "Floating Touch creation" \
+            "createFloatingTouchKey()"
+
+          check \
+            "Floating Touch timing" \
+            "floatingDownTime"
+
+          check \
+            "Floating BACK" \
+            'addFloatingMenuButton("BACK"'
+
+          check \
+            "Floating HOME" \
+            'addFloatingMenuButton("HOME"'
 
           echo "Projection/Persistence/Floating Touch protection PASS."
 
@@ -756,7 +837,7 @@ jobs:
 
           git diff --check
 
-          echo "git diff --check PASS."
+          echo "PASS: git diff --check."
 
       - name: Compile
         working-directory: v10-source
@@ -771,7 +852,7 @@ jobs:
             :app:compileDebugJavaWithJavac \
             --stacktrace
 
-          echo "Java compile PASS."
+          echo "PASS: Java compile."
 
       - name: Assemble APK
         working-directory: v10-source
@@ -784,7 +865,7 @@ jobs:
             :app:assembleDebug \
             --stacktrace
 
-          echo "APK assemble PASS."
+          echo "PASS: APK assemble."
 
       - name: Package APK
         shell: bash
@@ -811,7 +892,7 @@ jobs:
           test -s \
             CarAssistant-Navigation-V1-Home-UI-V2-Overlay-Safe.apk
 
-          echo "APK package PASS."
+          echo "PASS: APK package."
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
