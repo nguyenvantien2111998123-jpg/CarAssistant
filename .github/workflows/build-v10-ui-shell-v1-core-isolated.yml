@@ -1,481 +1,496 @@
-name: Validate Car Assistant V10 Home UI - No Patch
+name: Build V10 Display Core V1 + Home UI V1 Safe
 
 on:
   workflow_dispatch:
-    inputs:
-      verbose:
-        description: 'Enable verbose logging'
-        required: false
-        default: false
-        type: boolean
 
 permissions:
   contents: read
 
 jobs:
-  validate:
+  build:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
 
     steps:
-      - name: 📦 Checkout repository
+      - name: Checkout main
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
-      - name: 🔍 Setup environment
+      - name: Restore exact V10-6A baseline
         shell: bash
         run: |
           set -euo pipefail
-          echo "=== Build Environment ==="
-          echo "Java:"
-          java -version 2>&1 | head -3
-          echo "Python:"
-          python3 --version
-          echo "Git:"
-          git --version
+          BASELINE="9075636a7d5947c1b0eee49c2bd3fd0e1b6b0cf1"
 
-      - name: ✅ Verify project structure
+          git fetch --no-tags origin main
+          git cat-file -e "${BASELINE}^{commit}"
+
+          rm -rf v10-source
+          git archive "${BASELINE}" v10-source | tar -x
+
+          test -f v10-source/app/src/main/java/com/hieptran/aacast/doudou/V10CarActivity.java
+
+          echo "BASELINE_OK=${BASELINE}"
+
+      - name: Check required source workflows
         shell: bash
         run: |
           set -euo pipefail
-          
-          echo "📁 Checking V10 source layout..."
-          
-          BASE_PATH="v10-source/app/src/main/java/com/hieptran/aacast/doudou"
-          
-          # Core files to verify
-          declare -A files=(
-            ["V10CarActivity.java"]="Main Activity - Home UI"
-            ["V10ProjectionSession.java"]="Projection Engine"
-            ["V10SessionStore.java"]="Session Persistence"
-            ["V10ControlReceiver.java"]="Control Receiver"
-            ["V10LauncherActivity.java"]="Launcher Activity"
-            ["V10InputController.java"]="Input Controller"
+
+          test -f .github/workflows/build-v10-display-core-v1.yml
+          test -f .github/workflows/build-v10-6a-floating-key-fix.yml
+          test -f .github/workflows/build-v10-display-core-v1-floating-touch-longpress-safe.yml
+
+          echo "SOURCE_WORKFLOWS_OK"
+
+      - name: Rebuild Display Core V1 from known-good workflow
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          python3 -c '
+          import yaml, subprocess, sys
+
+          path=".github/workflows/build-v10-display-core-v1.yml"
+          data=yaml.safe_load(open(path, encoding="utf-8"))
+
+          wanted={
+              "Create V10 Display Core classes",
+              "Replace V10ProjectionSession with Core V1 bridge",
+              "Patch V10CarActivity lifecycle and HOME",
+          }
+
+          found=set()
+
+          for step in data["jobs"]["build"]["steps"]:
+              name=step.get("name","")
+              if name not in wanted:
+                  continue
+
+              found.add(name)
+              script=step.get("run")
+              if not script:
+                  raise SystemExit("Missing run block: "+name)
+
+              if "${{" in script:
+                  raise SystemExit("GitHub expression found in source step: "+name)
+
+              print("EXECUTING:", name)
+              subprocess.run(
+                  ["bash","-euo","pipefail","-c",script],
+                  check=True
+              )
+
+          missing=wanted-found
+          if missing:
+              raise SystemExit("Missing Display Core steps: "+str(sorted(missing)))
+
+          print("DISPLAY_CORE_V1_OK")
+          '
+
+      - name: Apply known-good V10-6A Floating Touch base
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          python3 -c '
+          import yaml, subprocess, sys
+
+          path=".github/workflows/build-v10-6a-floating-key-fix.yml"
+          data=yaml.safe_load(open(path, encoding="utf-8"))
+
+          wanted={
+              "Patch V10CarActivity - imports",
+              "Patch V10CarActivity - fields",
+              "Patch V10CarActivity - create floating key call",
+              "Patch V10CarActivity - floating key implementation",
+          }
+
+          found=set()
+
+          for step in data["jobs"]["build"]["steps"]:
+              name=step.get("name","")
+              if name not in wanted:
+                  continue
+
+              found.add(name)
+              script=step.get("run")
+              if not script:
+                  raise SystemExit("Missing run block: "+name)
+
+              if "${{" in script:
+                  raise SystemExit("GitHub expression found in source step: "+name)
+
+              print("EXECUTING:", name)
+              subprocess.run(
+                  ["bash","-euo","pipefail","-c",script],
+                  check=True
+              )
+
+          missing=wanted-found
+          if missing:
+              raise SystemExit("Missing Floating Touch steps: "+str(sorted(missing)))
+
+          print("FLOATING_TOUCH_BASE_OK")
+          '
+
+      - name: Apply known-good SAFE Long Press listener
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          python3 -c '
+          import yaml, subprocess, sys
+
+          path=".github/workflows/build-v10-display-core-v1-floating-touch-longpress-safe.yml"
+          data=yaml.safe_load(open(path, encoding="utf-8"))
+
+          wanted={
+              "Replace the entire Floating Touch listener with SAFE long-press version"
+          }
+
+          found=set()
+
+          for step in data["jobs"]["build"]["steps"]:
+              name=step.get("name","")
+              if name not in wanted:
+                  continue
+
+              found.add(name)
+              script=step.get("run")
+              if not script:
+                  raise SystemExit("Missing run block: "+name)
+
+              if "${{" in script:
+                  raise SystemExit("GitHub expression found in source step: "+name)
+
+              print("EXECUTING:", name)
+              subprocess.run(
+                  ["bash","-euo","pipefail","-c",script],
+                  check=True
+              )
+
+          missing=wanted-found
+          if missing:
+              raise SystemExit("Missing SAFE Long Press step: "+str(sorted(missing)))
+
+          print("SAFE_LONG_PRESS_OK")
+          '
+
+      - name: Remove obsolete 2-screen and 3-screen helpers
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          python3 -c '
+          from pathlib import Path
+          import re
+
+          p=Path("v10-source/app/src/main/java/com/hieptran/aacast/doudou/V10CarActivity.java")
+          s=p.read_text(encoding="utf-8")
+
+          def remove_method(src, name):
+              pattern=r"(?ms)^[ \t]*(?:private|protected|public)?[ \t]*(?:static[ \t]+)?(?:void|boolean|int|long|float|double|String|[A-Za-z0-9_<>,.? ]+)[ \t]+"+re.escape(name)+r"[ \t]*\([^;{}]*\)[ \t]*\{"
+
+              m=re.search(pattern, src)
+              if not m:
+                  return src
+
+              start=m.start()
+              brace=src.find("{",m.start(),m.end())
+              depth=0
+              i=brace
+
+              while i<len(src):
+                  if src[i]=="{":
+                      depth+=1
+                  elif src[i]=="}":
+                      depth-=1
+                      if depth==0:
+                          end=i+1
+                          while end<len(src) and src[end] in " \t\r\n":
+                              end+=1
+                          return src[:start]+src[end:]
+                  i+=1
+
+              raise RuntimeError("Unclosed method: "+name)
+
+          for method_name in [
+              "switchToTwoScreen",
+              "switchToThreeScreen"
+          ]:
+              s=remove_method(s,method_name)
+
+          p.write_text(s,encoding="utf-8")
+
+          print("OBSOLETE_SCREEN_HELPERS_REMOVED")
+          '
+
+      - name: Freeze Display Core and Persistence hashes
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          mkdir -p /tmp/v10-protected-before
+
+          for f in \
+            v10-source/app/src/main/java/com/hieptran/aacast/doudou/V10ProjectionSession.java \
+            v10-source/app/src/main/java/com/hieptran/aacast/doudou/V10DisplayController.java \
+            v10-source/app/src/main/java/com/hieptran/aacast/doudou/V10SurfaceManager.java \
+            v10-source/app/src/main/java/com/hieptran/aacast/doudou/V10TaskSession.java \
+            v10-source/app/src/main/java/com/hieptran/aacast/doudou/V10SessionStore.java \
+            v10-source/app/src/main/java/com/hieptran/aacast/doudou/V10InputController.java \
+            v10-source/app/src/main/java/com/hieptran/aacast/doudou/RootView.java
+          do
+            test -f "$f"
+            sha256sum "$f"
+          done > /tmp/v10-protected-before/hashes.txt
+
+          cp /tmp/v10-protected-before/hashes.txt /tmp/v10-protected-before/hashes-reference.txt
+
+          echo "PROTECTED_HASHES_FROZEN"
+          cat /tmp/v10-protected-before/hashes.txt
+
+      - name: Patch Home UI only
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          python3 -c '
+          from pathlib import Path
+          import subprocess
+          import re
+
+          target=Path("v10-source/app/src/main/java/com/hieptran/aacast/doudou/V10CarActivity.java")
+
+          current=target.read_text(encoding="utf-8")
+
+          result=subprocess.run(
+              [
+                  "git",
+                  "show",
+                  "main:v10-source/app/src/main/java/com/hieptran/aacast/doudou/V10CarActivity.java"
+              ],
+              capture_output=True,
+              text=True,
+              check=True
           )
-          
-          echo ""
-          for file in "${!files[@]}"; do
-            desc="${files[$file]}"
-            if [ -f "$BASE_PATH/$file" ]; then
-              size=$(wc -c < "$BASE_PATH/$file")
-              lines=$(wc -l < "$BASE_PATH/$file")
-              printf "✓ %-35s %s (%d lines, %d bytes)\n" "$file" "$desc" "$lines" "$size"
-            else
-              echo "❌ MISSING: $file - $desc"
-              exit 1
-            fi
-          done
-          
-          echo ""
-          echo "✅ All core source files verified"
 
-      - name: 🔎 Validate V10CarActivity.java
+          source=result.stdout
+
+          def find_method(src,name):
+              pattern=r"(?m)^[ \t]*(?:private|protected|public)[ \t]+(?:static[ \t]+)?[A-Za-z0-9_<>,.? \[\]]+[ \t]+"+re.escape(name)+r"[ \t]*\([^;{}]*\)[ \t]*\{"
+
+              m=re.search(pattern,src)
+              if not m:
+                  raise RuntimeError("Cannot find method: "+name)
+
+              brace=src.find("{",m.start(),m.end())
+              depth=0
+              i=brace
+              in_string=False
+              quote=""
+              escape=False
+              line_comment=False
+              block_comment=False
+
+              while i<len(src):
+                  c=src[i]
+                  n=src[i+1] if i+1<len(src) else ""
+
+                  if line_comment:
+                      if c=="\n":
+                          line_comment=False
+                  elif block_comment:
+                      if c=="*" and n=="/":
+                          block_comment=False
+                          i+=1
+                  elif in_string:
+                      if escape:
+                          escape=False
+                      elif c=="\\":
+                          escape=True
+                      elif c==quote:
+                          in_string=False
+                  else:
+                      if c=="/" and n=="/":
+                          line_comment=True
+                          i+=1
+                      elif c=="/" and n=="*":
+                          block_comment=True
+                          i+=1
+                      elif c in "\"'":
+                          in_string=True
+                          quote=c
+                      elif c=="{":
+                          depth+=1
+                      elif c=="}":
+                          depth-=1
+                          if depth==0:
+                              return m.start(),i+1
+
+                  i+=1
+
+              raise RuntimeError("Unclosed method: "+name)
+
+          methods=[
+              "buildUi",
+              "buildMainLayout",
+              "buildTransparentBottomBar",
+              "sidebarButton",
+              "spacer",
+              "buttonText",
+              "text",
+              "initial",
+              "dp"
+          ]
+
+          replacements=[]
+
+          for name in methods:
+              a,b=find_method(source,name)
+              replacements.append((a,b,source[a:b],name))
+
+          for a,b,body,name in sorted(replacements,reverse=True):
+              ca,cb=find_method(current,name)
+              current=current[:ca]+body+current[cb:]
+
+          if "private LinearLayout bottomBar;" not in current:
+              anchor="private LinearLayout mainLayout;"
+              if anchor in current:
+                  current=current.replace(
+                      anchor,
+                      anchor+"\\n    private LinearLayout bottomBar;",
+                      1
+                  )
+              else:
+                  raise RuntimeError("Could not find UI field anchor")
+
+          target.write_text(current,encoding="utf-8")
+
+          print("HOME_UI_PATCH_OK")
+          '
+
+      - name: Verify Core and Persistence files unchanged
         shell: bash
         run: |
           set -euo pipefail
-          
-          FILE="v10-source/app/src/main/java/com/hieptran/aacast/doudou/V10CarActivity.java"
-          
-          echo "📋 Analyzing V10CarActivity.java..."
-          echo ""
-          
-          # Check package declaration
-          echo "Package check:"
-          if grep -q "^package com.carassistant.v10" "$FILE"; then
-            package=$(grep "^package" "$FILE")
-            echo "  ✓ $package"
-          else
-            echo "  ❌ Package declaration not found or incorrect"
+
+          mkdir -p /tmp/v10-protected-after
+
+          for f in \
+            v10-source/app/src/main/java/com/hieptran/aacast/doudou/V10ProjectionSession.java \
+            v10-source/app/src/main/java/com/hieptran/aacast/doudou/V10DisplayController.java \
+            v10-source/app/src/main/java/com/hieptran/aacast/doudou/V10SurfaceManager.java \
+            v10-source/app/src/main/java/com/hieptran/aacast/doudou/V10TaskSession.java \
+            v10-source/app/src/main/java/com/hieptran/aacast/doudou/V10SessionStore.java \
+            v10-source/app/src/main/java/com/hieptran/aacast/doudou/V10InputController.java \
+            v10-source/app/src/main/java/com/hieptran/aacast/doudou/RootView.java
+          do
+            test -f "$f"
+            sha256sum "$f"
+          done > /tmp/v10-protected-after/hashes.txt
+
+          diff -u \
+            /tmp/v10-protected-before/hashes.txt \
+            /tmp/v10-protected-after/hashes.txt
+
+          echo "CORE_PERSISTENCE_PROTECTED_OK"
+
+      - name: Verify final source safety
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          ACTIVITY="v10-source/app/src/main/java/com/hieptran/aacast/doudou/V10CarActivity.java"
+
+          test -f "$ACTIVITY"
+
+          if grep -nE \
+            'session\.recents\(\)|"RECENTS"|"2 SCREEN"|"3 SCREEN"|switchToTwoScreen|switchToThreeScreen|V10ProjectionService|am force-stop' \
+            "$ACTIVITY"
+          then
+            echo "UNSAFE_LEGACY_CODE_FOUND"
             exit 1
           fi
-          
-          echo ""
-          echo "Class declaration:"
-          if grep -q "public final class V10CarActivity" "$FILE"; then
-            echo "  ✓ V10CarActivity found"
-          else
-            echo "  ❌ Class not found"
-            exit 1
-          fi
-          
-          echo ""
-          echo "Key imports:"
-          imports=(
-            "android.widget.LinearLayout"
-            "android.widget.FrameLayout"
-            "android.widget.TextView"
-            "android.graphics.Color"
-            "android.os.Handler"
-            "android.os.Looper"
-            "com.google.android.apps.auto.sdk.CarActivity"
-          )
-          
-          for imp in "${imports[@]}"; do
-            if grep -q "import.*$imp" "$FILE"; then
-              echo "  ✓ $imp"
-            else
-              echo "  ⚠ Missing: $imp"
-            fi
-          done
-          
-          echo ""
-          echo "✅ V10CarActivity.java structure valid"
 
-      - name: 📊 Validate core UI methods
-        shell: bash
-        run: |
-          set -euo pipefail
-          
-          FILE="v10-source/app/src/main/java/com/hieptran/aacast/doudou/V10CarActivity.java"
-          
-          echo "🎨 Checking UI methods..."
-          echo ""
-          
-          declare -A methods=(
-            ["buildUi"]="Build main UI"
-            ["buildDashboard"]="Build dashboard (Home UI)"
-            ["buildAppPanel"]="Build app selector panel"
-            ["onCreate"]="Activity lifecycle"
-            ["onResume"]="Activity lifecycle"
-            ["onPause"]="Activity lifecycle"
-            ["onDestroy"]="Activity cleanup"
-            ["loadApps"]="App loading"
-            ["rebuildDock"]="Dock rebuild"
-            ["launchProjection"]="Projection launch"
-            ["handleControlHome"]="Home button handler"
-            ["handleControlBack"]="Back button handler"
-          )
-          
-          missing=()
-          for method in "${!methods[@]}"; do
-            desc="${methods[$method]}"
-            if grep -q "private void $method\|public void $method" "$FILE"; then
-              echo "  ✓ $method() - $desc"
-            else
-              echo "  ❌ $method() - $desc [MISSING]"
-              missing+=("$method")
-            fi
-          done
-          
-          echo ""
-          if [ ${#missing[@]} -eq 0 ]; then
-            echo "✅ All core UI methods present"
-          else
-            echo "❌ Missing methods: ${missing[*]}"
+          if grep -RInE \
+            'am force-stop|session\.recents\(\)|"RECENTS"|switchToTwoScreen|switchToThreeScreen' \
+            v10-source/app/src/main/java/com/hieptran/aacast/doudou/V10ProjectionSession.java \
+            v10-source/app/src/main/java/com/hieptran/aacast/doudou/V10DisplayController.java \
+            v10-source/app/src/main/java/com/hieptran/aacast/doudou/V10SurfaceManager.java \
+            v10-source/app/src/main/java/com/hieptran/aacast/doudou/V10TaskSession.java \
+            v10-source/app/src/main/java/com/hieptran/aacast/doudou/V10SessionStore.java \
+            v10-source/app/src/main/java/com/hieptran/aacast/doudou/V10InputController.java \
+            v10-source/app/src/main/java/com/hieptran/aacast/doudou/RootView.java
+          then
+            echo "UNSAFE_CORE_CODE_FOUND"
             exit 1
           fi
 
-      - name: 🎯 Validate field declarations
+          echo "FINAL_SOURCE_SAFETY_OK"
+
+      - name: Compile Java
+        shell: bash
+        working-directory: v10-source
+        run: |
+          set -euo pipefail
+          chmod +x ./gradlew
+          ./gradlew --no-daemon --stacktrace compileDebugJavaWithJavac
+
+      - name: Assemble APK
+        shell: bash
+        working-directory: v10-source
+        run: |
+          set -euo pipefail
+          ./gradlew --no-daemon --stacktrace assembleDebug
+
+      - name: Locate APK
         shell: bash
         run: |
           set -euo pipefail
-          
-          FILE="v10-source/app/src/main/java/com/hieptran/aacast/doudou/V10CarActivity.java"
-          
-          echo "📦 Checking field declarations..."
-          echo ""
-          
-          declare -A fields=(
-            ["FrameLayout root"]="Root container"
-            ["FrameLayout projectionLayer"]="Projection layer"
-            ["LinearLayout launcherLayer"]="Launcher layer"
-            ["LinearLayout dashboard"]="Dashboard (Home)"
-            ["LinearLayout appPanel"]="App panel"
-            ["LinearLayout dock"]="Dock"
-            ["TextView clock"]="Clock display"
-            ["TextView date"]="Date display"
-            ["TextureView textureView"]="Texture for projection"
-            ["V10ProjectionSession session"]="Projection session"
-            ["Handler handler"]="Main handler"
-          )
-          
-          missing=()
-          for field in "${!fields[@]}"; do
-            desc="${fields[$field]}"
-            if grep -q "private $field" "$FILE"; then
-              echo "  ✓ $field - $desc"
-            else
-              echo "  ⚠ $field - $desc [NOT FOUND]"
-              missing+=("$field")
-            fi
-          done
-          
-          echo ""
-          if [ ${#missing[@]} -le 2 ]; then
-            echo "✅ Field declarations validated (${#fields[@]} expected)"
-          else
-            echo "⚠ Some fields missing: ${#missing[@]} missing"
-          fi
 
-      - name: 📐 Analyze buildDashboard() structure
+          APK="$(find v10-source -type f -name '*.apk' | head -n 1)"
+
+          test -n "$APK"
+          test -f "$APK"
+
+          echo "APK_PATH=$APK" >> "$GITHUB_ENV"
+          echo "APK_FOUND=$APK"
+
+      - name: SHA256 APK
         shell: bash
         run: |
           set -euo pipefail
-          
-          FILE="v10-source/app/src/main/java/com/hieptran/aacast/doudou/V10CarActivity.java"
-          
-          echo "🔬 Analyzing buildDashboard() method..."
-          echo ""
-          
-          # Extract buildDashboard method (approximate)
-          if grep -q "private void buildDashboard()" "$FILE"; then
-            echo "✓ buildDashboard() exists"
-            
-            # Check for UI components within buildDashboard
-            components=(
-              "LinearLayout"
-              "TextView"
-              "setOrientation"
-              "setPadding"
-              "addView"
-              "setGravity"
-            )
-            
-            echo ""
-            echo "UI components used:"
-            for comp in "${components[@]}"; do
-              count=$(awk '/private void buildDashboard/,/^    \}/' "$FILE" | grep -c "$comp" || true)
-              if [ "$count" -gt 0 ]; then
-                echo "  ✓ $comp ($count uses)"
-              fi
-            done
-            
-            echo ""
-            echo "✅ buildDashboard() structure looks good"
-          else
-            echo "❌ buildDashboard() not found"
-            exit 1
-          fi
 
-      - name: 🎨 Check UI framework compatibility
-        shell: bash
-        run: |
-          set -euo pipefail
-          
-          FILE="v10-source/app/src/main/java/com/hieptran/aacast/doudou/V10CarActivity.java"
-          
-          echo "🚗 Checking Android UI framework..."
-          echo ""
-          
-          frameworks=(
-            "CarActivity"
-            "LinearLayout"
-            "FrameLayout"
-            "TextView"
-            "GridLayout"
-            "ScrollView"
-            "GradientDrawable"
-            "Gravity"
-            "Handler"
-            "Looper"
-          )
-          
-          echo "Required Android framework classes:"
-          missing_fw=()
-          for fw in "${frameworks[@]}"; do
-            if grep -q "$fw" "$FILE"; then
-              echo "  ✓ $fw"
-            else
-              echo "  ⚠ $fw"
-              missing_fw+=("$fw")
-            fi
-          done
-          
-          echo ""
-          if [ ${#missing_fw[@]} -eq 0 ]; then
-            echo "✅ All framework classes available"
-          else
-            echo "⚠ Missing framework classes may need to be added"
-          fi
+          sha256sum "$APK_PATH" | tee v10-apk-sha256.txt
 
-      - name: 📈 Generate validation report
-        shell: bash
-        run: |
-          set -euo pipefail
-          
-          FILE="v10-source/app/src/main/java/com/hieptran/aacast/doudou/V10CarActivity.java"
-          
-          # Get file stats
-          lines=$(wc -l < "$FILE")
-          size=$(du -h "$FILE" | cut -f1)
-          methods=$(grep -c "private void\|public void\|private.*get\|private.*set" "$FILE" || true)
-          
-          cat > /tmp/validation_report.txt <<REPORT
-╔════════════════════════════════════════════════════════════════════════════╗
-║       Car Assistant V10 - Home UI Validation Report                         ║
-║       (Validate-Only - No Source Modification)                              ║
-╚════════════════════════════════════════════════════════════════════════════╝
-
-📋 FILE STATISTICS:
-  • V10CarActivity.java
-    - Lines: $lines
-    - Size: $size
-    - Methods: $methods
-    - Status: ✅ VALID
-
-🏗️ PROJECT STRUCTURE:
-  ✅ Package: com.carassistant.v10
-  ✅ Base Path: v10-source/app/src/main/java/com/hieptran/aacast/doudou/
-  ✅ Core Files: V10CarActivity, V10ProjectionSession, V10SessionStore
-  ✅ Class: V10CarActivity extends CarActivity
-
-🎨 HOME UI COMPONENTS (buildDashboard):
-  ✅ Layout System:
-     - FrameLayout: root container
-     - LinearLayout: launcher & dashboard layers
-     - GridLayout: potential grid layout (future use)
-  
-  ✅ Visual Elements:
-     - TextView: clock & date display
-     - LinearLayout: dashboard, dock, panels
-     - GradientDrawable: backgrounds & styling
-  
-  ✅ Color Scheme Support:
-     - Color.rgb() usage for dynamic colors
-     - Gravity alignment system
-     - Padding & margin system
-
-🔌 CORE METHODS PRESENT:
-  ✅ buildUi() - Main UI setup
-  ✅ buildDashboard() - Home UI (THIS IS TARGET)
-  ✅ buildAppPanel() - App selector
-  ✅ onCreate() - Initialization
-  ✅ onResume() - Resume handling
-  ✅ onPause() - Pause handling
-  ✅ onDestroy() - Cleanup
-  ✅ loadApps() - App loading
-  ✅ launchProjection() - Projection engine
-  ✅ handleControlHome() - Home button
-  ✅ handleControlBack() - Back button
-
-🧩 ANDROID FRAMEWORK:
-  ✅ CarActivity (Android Auto SDK)
-  ✅ LinearLayout
-  ✅ FrameLayout
-  ✅ TextView
-  ✅ GridLayout
-  ✅ ScrollView
-  ✅ GradientDrawable
-  ✅ Handler/Looper (Threading)
-  ✅ Color (Color manipulation)
-  ✅ Typeface (Font support)
-
-🔒 DISPLAY CORE V1 INTEGRATION:
-  ✅ V10ProjectionSession present
-  ✅ V10SessionStore present
-  ✅ V10InputController present
-  ✅ Projection lifecycle intact
-  ✅ Touch input handling present
-
-📊 HOME UI READINESS:
-  Status: ✅ READY FOR DESIGN IMPLEMENTATION
-  
-  Current State:
-  • Base structure: ✅ Complete
-  • Layout system: ✅ Ready
-  • Color support: ✅ Ready
-  • View hierarchy: ✅ Correct
-  
-  Next Steps (NOT IN THIS WORKFLOW):
-  • Update buildDashboard() with new design
-  • Add custom logo & backgrounds
-  • Implement glass/translucent panels
-  • Add icon loading from apps
-  • Design left sidebar
-  • Design bottom media bar
-  • Design center area (map placeholder)
-  
-  NOT MODIFIED (Protected):
-  ✅ Display Core V1 - Untouched
-  ✅ Task Persistence - Untouched
-  ✅ Floating Touch - Untouched
-  ✅ Projection System - Untouched
-
-🎯 VALIDATION RESULTS:
-  Errors:    0
-  Warnings:  0
-  Info:      All checks passed
-  
-  OVERALL: ✅ PASS
-
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-Generated: $(date -u +"%Y-%m-%d %H:%M:%S UTC")
-Workflow: Validate Car Assistant V10 Home UI - No Patch
-Status: VALIDATION COMPLETE - READY FOR NEXT PHASE
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-REPORT
-          
-          cat /tmp/validation_report.txt
-          cp /tmp/validation_report.txt ./VALIDATION_REPORT.txt
-
-      - name: 📤 Upload validation artifacts
+      - name: Upload APK
         uses: actions/upload-artifact@v4
-        if: always()
         with:
-          name: validation-report
+          name: CarAssistant-V10-DisplayCoreV1-HomeUIV1-Safe
           path: |
-            VALIDATION_REPORT.txt
-          retention-days: 30
+            ${{ env.APK_PATH }}
+            v10-apk-sha256.txt
+          if-no-files-found: error
 
-      - name: ✅ Validation complete summary
+      - name: Final build report
         shell: bash
         run: |
-          cat << "EOF"
-          
-╔════════════════════════════════════════════════════════════════════════════╗
-║                    ✅ VALIDATION COMPLETE - SUCCESS                        ║
-╚════════════════════════════════════════════════════════════════════════════╝
+          set -euo pipefail
 
-🎯 What was validated:
-   ✓ Project structure
-   ✓ V10CarActivity.java integrity
-   ✓ Package declaration
-   ✓ All core UI methods present
-   ✓ Field declarations
-   ✓ buildDashboard() method structure
-   ✓ Android framework compatibility
-   ✓ Display Core V1 integration
-   ✓ Source code NOT modified
-
-📊 Key Findings:
-   • V10CarActivity.java: ✅ VALID
-   • buildDashboard() method: ✅ PRESENT & READY
-   • Display Core V1: ✅ PROTECTED (Untouched)
-   • Task Persistence: ✅ PROTECTED (Untouched)
-   • Floating Touch: ✅ PROTECTED (Untouched)
-
-🚀 Ready For:
-   ✓ Manual Home UI design implementation
-   ✓ New buildDashboard() method design
-   ✓ Logo + Background integration
-   ✓ Glass panel styling
-   ✓ Left sidebar design
-   ✓ Bottom media bar design
-   ✓ Center map area placeholder
-   
-❌ NOT INCLUDED (Separate Phase):
-   - Voice control integration
-   - Real Waze/Maps API
-   - Real Media API
-   - Task manager features
-   - App logic updates
-   - Data binding
-
-📝 NEXT STEPS:
-   1. Manually update buildDashboard() in V10CarActivity.java
-   2. Add new logo & background resources
-   3. Test Home UI in development
-   4. Re-run this validation workflow
-   5. Once stable, merge to main
-   6. Then add functional features in future phases
-
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-This workflow is VALIDATE-ONLY. No source code was modified.
-All core systems (Display Core V1, Task Persistence, Floating Touch) remain
-completely untouched and operational.
-
-Status: READY FOR NEXT PHASE ✅
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-          
-EOF
+          echo "========================================"
+          echo "CARASSISTANT V10 SAFE BUILD COMPLETE"
+          echo "========================================"
+          echo "Baseline: 9075636a7d5947c1b0eee49c2bd3fd0e1b6b0cf1"
+          echo "Display Core V1: OK"
+          echo "Floating Touch: OK"
+          echo "Long Press: OK"
+          echo "Home UI V1: OK"
+          echo "Core/Persistence protection: OK"
+          echo "Java compile: OK"
+          echo "APK assemble: OK"
+          echo "APK: $APK_PATH"
+          echo "SHA256:"
+          cat v10-apk-sha256.txt
+          echo "========================================"
