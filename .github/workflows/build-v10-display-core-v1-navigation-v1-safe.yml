@@ -23,7 +23,7 @@ jobs:
           fetch-depth: 1
 
       # ============================================================
-      # 2. VERIFY BASELINE BEFORE PATCH
+      # 2. VERIFY EXACT BASELINE
       # ============================================================
 
       - name: Verify Exact Baseline
@@ -38,10 +38,10 @@ jobs:
           EXPECTED_SHA="d26c2d2f67bd801d9835071ed5c0afe323dd2fa9"
           ACTUAL_SHA="$(git hash-object "$FILE")"
 
-          echo "EXPECTED:"
+          echo "Expected SHA:"
           echo "$EXPECTED_SHA"
 
-          echo "ACTUAL:"
+          echo "Actual SHA:"
           echo "$ACTUAL_SHA"
 
           test "$ACTUAL_SHA" = "$EXPECTED_SHA"
@@ -49,10 +49,10 @@ jobs:
           echo "EXACT BASELINE: PASS"
 
       # ============================================================
-      # 3. VERIFY PROTECTED PROJECTION / PERSISTENCE FILES
+      # 3. VERIFY PROTECTED ARCHITECTURE
       # ============================================================
 
-      - name: Verify Protected Architecture
+      - name: Verify Protected Projection Core
         shell: bash
         run: |
           set -euo pipefail
@@ -78,19 +78,14 @@ jobs:
           test "$(git hash-object "$BASE/V10TaskSession.java")" \
             = "fce2f5cf06c5bd10782a87397aace8676493b6b7"
 
-          echo "PROTECTED ARCHITECTURE: PASS"
+          echo "PROTECTED PROJECTION CORE: PASS"
 
       # ============================================================
-      # 4. PATCH ONLY V10CarActivity.java
+      # 4. PATCH NAVIGATION V1
       #
-      # Navigation V1:
-      #   HOME Navigation card
-      #        ↓
-      #   Destination Panel
-      #        ↓
-      #   Google Maps navigation intent
-      #
-      # No projection-core patch.
+      # IMPORTANT:
+      # No python3 -c with nested shell quotes.
+      # The Python program is supplied through a quoted heredoc.
       # ============================================================
 
       - name: Patch Navigation V1
@@ -100,39 +95,69 @@ jobs:
 
           FILE="v10-source/app/src/main/java/com/hieptran/aacast/doudou/V10CarActivity.java"
 
-          python3 -c 'from pathlib import Path
-          p=Path("'"$FILE"'")
-          s=p.read_text()
+          python3 <<'PY'
+          from pathlib import Path
 
-          s=s.replace(
-              "import android.content.Intent;\n",
-              "import android.content.Intent;\nimport android.net.Uri;\n"
+          file_path = Path(
+              "v10-source/app/src/main/java/com/hieptran/aacast/doudou/V10CarActivity.java"
           )
 
-          s=s.replace(
-              "import android.view.View;\n",
-              "import android.view.View;\nimport android.widget.EditText;\n"
-          )
+          source = file_path.read_text()
 
-          s=s.replace(
-              "    private LinearLayout dock;\n",
-              "    private LinearLayout dock;\n    private LinearLayout navigationPanel;\n"
-          )
+          # --------------------------------------------------------
+          # Add imports
+          # --------------------------------------------------------
 
-          old="""        mapText.setGravity(
+          if "import android.net.Uri;" not in source:
+              source = source.replace(
+                  "import android.content.Intent;\n",
+                  "import android.content.Intent;\n"
+                  "import android.net.Uri;\n",
+                  1
+              )
+
+          if "import android.widget.EditText;" not in source:
+              source = source.replace(
+                  "import android.widget.GridLayout;\n",
+                  "import android.widget.GridLayout;\n"
+                  "import android.widget.EditText;\n",
+                  1
+              )
+
+          # --------------------------------------------------------
+          # Add Navigation panel field
+          # --------------------------------------------------------
+
+          field_marker = """    private LinearLayout dock;
+    private TextureView textureView;"""
+
+          field_replacement = """    private LinearLayout dock;
+    private LinearLayout navigationPanel;
+    private TextureView textureView;"""
+
+          if "private LinearLayout navigationPanel;" not in source:
+              if field_marker not in source:
+                  raise SystemExit(
+                      "ERROR: field marker not found"
+                  )
+
+              source = source.replace(
+                  field_marker,
+                  field_replacement,
+                  1
+              )
+
+          # --------------------------------------------------------
+          # Make existing Navigation card clickable
+          # --------------------------------------------------------
+
+          click_marker = """        mapText.setGravity(
                 Gravity.CENTER);
 
         map.addView(
-                mapText,
-                new LinearLayout.LayoutParams(
-                        -1,
-                        0,
-                        1));
+                mapText,"""
 
-        content.addView(
-                map,"""
-
-          new="""        mapText.setGravity(
+          click_replacement = """        mapText.setGravity(
                 Gravity.CENTER);
 
         map.setOnClickListener(
@@ -141,23 +166,27 @@ jobs:
         map.setClickable(true);
 
         map.addView(
-                mapText,
-                new LinearLayout.LayoutParams(
-                        -1,
-                        0,
-                        1));
+                mapText,"""
 
-        content.addView(
-                map,"""
+          if "map.setOnClickListener(" not in source:
+              if click_marker not in source:
+                  raise SystemExit(
+                      "ERROR: Navigation card marker not found"
+                  )
 
-          if old not in s:
-              raise SystemExit("Navigation card marker not found")
+              source = source.replace(
+                  click_marker,
+                  click_replacement,
+                  1
+              )
 
-          s=s.replace(old,new,1)
+          # --------------------------------------------------------
+          # Add Navigation methods before buildAppPanel()
+          # --------------------------------------------------------
 
-          marker="    private void buildAppPanel() {"
+          method_marker = """    private void buildAppPanel() {"""
 
-          method=r'''    private void showNavigationPanel() {
+          navigation_methods = r'''    private void showNavigationPanel() {
 
         if (navigationPanel != null) {
             return;
@@ -472,46 +501,68 @@ jobs:
 
 '''
 
-          if marker not in s:
-              raise SystemExit("buildAppPanel marker not found")
+          if "private void showNavigationPanel()" not in source:
+              if method_marker not in source:
+                  raise SystemExit(
+                      "ERROR: buildAppPanel marker not found"
+                  )
 
-          s=s.replace(marker,method+marker,1)
+              source = source.replace(
+                  method_marker,
+                  navigation_methods + method_marker,
+                  1
+              )
 
-          s=s.replace(
-              "        appPanel = null;\n        dock = null;\n",
-              "        appPanel = null;\n        dock = null;\n        navigationPanel = null;\n"
-          )
+          file_path.write_text(source)
 
-          p.write_text(s)
-          print("Navigation V1 patch: PASS")'
+          print("Navigation V1 source patch: PASS")
+          PY
 
       # ============================================================
-      # 5. VERIFY PATCH SCOPE
+      # 5. VERIFY PATCH CONTENT
       # ============================================================
 
-      - name: Verify Navigation Patch Scope
+      - name: Verify Navigation V1 Patch
         shell: bash
         run: |
           set -euo pipefail
 
           FILE="v10-source/app/src/main/java/com/hieptran/aacast/doudou/V10CarActivity.java"
 
-          test -f "$FILE"
+          grep -Fq "import android.net.Uri;" "$FILE"
+          grep -Fq "import android.widget.EditText;" "$FILE"
+          grep -Fq "private LinearLayout navigationPanel;" "$FILE"
+          grep -Fq "map.setOnClickListener(" "$FILE"
+          grep -Fq "showNavigationPanel()" "$FILE"
+          grep -Fq "hideNavigationPanel()" "$FILE"
+          grep -Fq "startNavigationTo(" "$FILE"
+          grep -Fq "openNavigationApp()" "$FILE"
+          grep -Fq "google.navigation:q=" "$FILE"
+          grep -Fq "com.google.android.apps.maps" "$FILE"
 
-          grep -Fq 'showNavigationPanel()' "$FILE"
-          grep -Fq 'hideNavigationPanel()' "$FILE"
-          grep -Fq 'startNavigationTo(' "$FILE"
-          grep -Fq 'openNavigationApp()' "$FILE"
-          grep -Fq 'google.navigation:q=' "$FILE"
-          grep -Fq 'com.google.android.apps.maps' "$FILE"
-          grep -Fq 'map.setOnClickListener' "$FILE"
-          grep -Fq 'EditText' "$FILE"
-          grep -Fq 'android.net.Uri' "$FILE"
-
-          echo "Navigation V1 markers: PASS"
+          echo "NAVIGATION V1 PATCH: PASS"
 
       # ============================================================
-      # 6. VERIFY PROTECTED FILES STILL EXACT
+      # 6. VERIFY ONLY V10CarActivity.java CHANGED
+      # ============================================================
+
+      - name: Verify Patch Scope
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          CHANGED="$(git diff --name-only)"
+
+          echo "Changed files:"
+          echo "$CHANGED"
+
+          test "$CHANGED" = \
+            "v10-source/app/src/main/java/com/hieptran/aacast/doudou/V10CarActivity.java"
+
+          echo "PATCH SCOPE: PASS"
+
+      # ============================================================
+      # 7. VERIFY PROTECTED FILES AFTER PATCH
       # ============================================================
 
       - name: Verify Projection Core Still Exact
@@ -533,18 +584,12 @@ jobs:
           test "$(git hash-object "$BASE/V10TaskSession.java")" \
             = "fce2f5cf06c5bd10782a87397aace8676493b6b7"
 
-          CHANGED="$(git diff --name-only)"
+          test ! -f "$BASE/V10ProjectionService.java"
 
-          echo "Changed files:"
-          echo "$CHANGED"
-
-          test "$CHANGED" = \
-            "v10-source/app/src/main/java/com/hieptran/aacast/doudou/V10CarActivity.java"
-
-          echo "PATCH SCOPE: PASS"
+          echo "PROJECTION CORE: UNCHANGED"
 
       # ============================================================
-      # 7. JAVA SYNTAX / COMPILE
+      # 8. SETUP JAVA
       # ============================================================
 
       - name: Setup Java 17
@@ -552,6 +597,10 @@ jobs:
         with:
           distribution: temurin
           java-version: "17"
+
+      # ============================================================
+      # 9. PREPARE GRADLE
+      # ============================================================
 
       - name: Prepare Gradle
         shell: bash
@@ -561,7 +610,11 @@ jobs:
 
           chmod +x ./gradlew
 
-          echo "Gradle prepared: PASS"
+          echo "GRADLE PREPARE: PASS"
+
+      # ============================================================
+      # 10. COMPILE JAVA
+      # ============================================================
 
       - name: Compile Navigation V1
         shell: bash
@@ -574,10 +627,10 @@ jobs:
             --no-daemon \
             --stacktrace
 
-          echo "NAVIGATION V1 JAVA COMPILE: PASS"
+          echo "JAVA COMPILE: PASS"
 
       # ============================================================
-      # 8. ASSEMBLE APK
+      # 11. BUILD APK
       # ============================================================
 
       - name: Assemble Navigation V1 APK
@@ -591,13 +644,13 @@ jobs:
             --no-daemon \
             --stacktrace
 
-          echo "NAVIGATION V1 APK ASSEMBLE: PASS"
+          echo "APK ASSEMBLE: PASS"
 
       # ============================================================
-      # 9. CREATE APK + SHA256
+      # 12. PREPARE ARTIFACT
       # ============================================================
 
-      - name: Create Navigation V1 Release
+      - name: Prepare Navigation V1 Artifact
         shell: bash
         run: |
           set -euo pipefail
@@ -605,14 +658,14 @@ jobs:
           rm -rf /tmp/carassistant-navigation-v1
           mkdir -p /tmp/carassistant-navigation-v1
 
-          APK="$(
-            find v10-source/app/build/outputs/apk \
-              -type f \
-              -name "*.apk" \
-              | head -n 1
-          )"
+          APK="$(find \
+            v10-source/app/build/outputs/apk \
+            -type f \
+            -name "*.apk" \
+            | head -n 1)"
 
           test -n "$APK"
+          test -f "$APK"
 
           cp "$APK" \
             /tmp/carassistant-navigation-v1/CarAssistant-V10-Navigation-V1.apk
@@ -625,10 +678,10 @@ jobs:
           test -s \
             /tmp/carassistant-navigation-v1/CarAssistant-V10-Navigation-V1.apk
 
-          echo "Navigation V1 release: PASS"
+          echo "ARTIFACT PREPARE: PASS"
 
       # ============================================================
-      # 10. UPLOAD APK
+      # 13. UPLOAD APK
       # ============================================================
 
       - name: Upload Navigation V1 APK
@@ -641,10 +694,10 @@ jobs:
           if-no-files-found: error
 
       # ============================================================
-      # 11. FINAL
+      # 14. FINAL PASS
       # ============================================================
 
-      - name: Navigation V1 PASS
+      - name: Navigation V1 Final PASS
         shell: bash
         run: |
           set -euo pipefail
@@ -653,34 +706,18 @@ jobs:
             /tmp/carassistant-navigation-v1/CarAssistant-V10-Navigation-V1.apk
 
           echo ""
-          echo "================================================"
-          echo "CARASSISTANT V10 - NAVIGATION V1 PASS"
-          echo "================================================"
-          echo ""
-          echo "Baseline:"
-          echo "  EXACT LOCKED BASELINE"
-          echo ""
-          echo "Projection Core:"
-          echo "  UNCHANGED"
-          echo ""
-          echo "Persistence:"
-          echo "  UNCHANGED"
-          echo ""
-          echo "Home Navigation:"
-          echo "  CLICKABLE"
-          echo ""
-          echo "Destination Panel:"
-          echo "  ADDED"
-          echo ""
-          echo "Google Maps Navigation Intent:"
-          echo "  ADDED"
-          echo ""
-          echo "Fallback Generic Map Intent:"
-          echo "  ADDED"
-          echo ""
-          echo "APK:"
-          echo "  CREATED"
-          echo ""
-          echo "================================================"
+          echo "=============================================="
+          echo "CARASSISTANT V10 NAVIGATION V1"
+          echo "=============================================="
+          echo "Baseline: EXACT LOCKED BASELINE"
+          echo "Projection Core: UNCHANGED"
+          echo "Persistence Core: UNCHANGED"
+          echo "Changed Source: V10CarActivity.java ONLY"
+          echo "Navigation Card: CLICKABLE"
+          echo "Destination Panel: ENABLED"
+          echo "Google Maps Intent: ENABLED"
+          echo "Generic Map Fallback: ENABLED"
+          echo "APK: CREATED"
+          echo "=============================================="
           echo "NAVIGATION V1 READY FOR TEST"
-          echo "================================================"
+          echo "=============================================="
