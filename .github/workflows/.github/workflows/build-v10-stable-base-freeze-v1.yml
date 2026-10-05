@@ -1,0 +1,336 @@
+name: Build CarAssistant V10 Stable Base Freeze V1
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  stable-base:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Install PyYAML
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -m pip install --disable-pip-version-check PyYAML
+
+      - name: Restore exact V10-6A baseline
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          BASELINE="9075636a7d5947c1b0eee49c2bd3fd0e1b6b0cf1"
+
+          git fetch origin "$BASELINE" --depth=1
+
+          rm -rf v10-source
+
+          git checkout "$BASELINE" -- v10-source
+
+          test -f v10-source/app/src/main/java/com/hieptran/aacast/doudou/V10CarActivity.java
+          test -f v10-source/app/src/main/java/com/hieptran/aacast/doudou/V10ProjectionSession.java
+          test -f v10-source/app/src/main/java/com/hieptran/aacast/doudou/V10SessionStore.java
+
+          if [ -f v10-source/app/src/main/java/com/hieptran/aacast/doudou/V10ProjectionService.java ]; then
+            echo "ERROR: V10ProjectionService.java exists in baseline"
+            exit 1
+          fi
+
+          echo "Exact V10-6A baseline restored."
+
+      - name: Verify exact V10-6A baseline
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          SRC="v10-source/app/src/main/java/com/hieptran/aacast/doudou"
+
+          grep -Fq "DisplayManager" "$SRC/V10ProjectionSession.java"
+          grep -Fq "createVirtualDisplay" "$SRC/V10ProjectionSession.java"
+          grep -Fq "RootShellSession" "$SRC/V10ProjectionSession.java"
+          grep -Fq "public void onStop()" "$SRC/V10CarActivity.java"
+
+          if grep -Fq "V10ProjectionService" "$SRC/V10ProjectionSession.java"; then
+            echo "ERROR: ProjectionService marker detected"
+            exit 1
+          fi
+
+          echo "V10-6A baseline verification PASSED."
+
+      - name: Rebuild exact Display Core V1
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          python3 -c 'import yaml,subprocess; p=".github/workflows/build-v10-display-core-v1.yml"; d=yaml.safe_load(open(p,encoding="utf-8")); ss=d["jobs"]["build"]["steps"]; found=False; [(print("CORE > "+s.get("name","unnamed")),subprocess.run(["bash","-euo","pipefail","-c",s["run"]],check=True)) for s in ss if (not found and "run" in s and not s.get("uses")) or (s.get("name")=="__NEVER__")]; print("Display Core V1 source workflow loaded.")'
+
+      - name: Rebuild Display Core V1 from exact source workflow
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          python3 -c 'import yaml,subprocess; d=yaml.safe_load(open(".github/workflows/build-v10-display-core-v1.yml",encoding="utf-8")); ss=d["jobs"]["build"]["steps"]; selected=[]; stop=False; [(selected.append(s), (globals().__setitem__("stop",True))) for s in ss if not stop and "run" in s and not s.get("uses") and (s.get("name")!="Build V10 Display Core V1" or not selected)]; [ (print("CORE > "+s.get("name","unnamed")),subprocess.run(["bash","-euo","pipefail","-c",s["run"]],check=True)) for s in selected ]'
+
+      - name: Recover deleted Floating Touch workflow from Git history
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          DELETED_COMMIT="6abfbe6a498a738c012a10cb13f98e285cdb8017"
+          PATCH_PATH=".github/workflows/build-v10-display-core-v1-floating-touch-fixed.yml"
+
+          git fetch origin "$DELETED_COMMIT" --depth=2
+
+          PARENT="$(git rev-list --parents -n 1 "$DELETED_COMMIT" | awk '{print $2}')"
+
+          test -n "$PARENT"
+
+          git show "$PARENT:$PATCH_PATH" > /tmp/floating-touch-fixed.yml
+
+          test -s /tmp/floating-touch-fixed.yml
+
+          echo "Recovered deleted Floating Touch workflow."
+          echo "Parent commit: $PARENT"
+
+      - name: Apply exact historical Floating Touch patch
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          python3 -c 'import yaml,subprocess; d=yaml.safe_load(open("/tmp/floating-touch-fixed.yml",encoding="utf-8")); s=next((x for x in d["jobs"]["build"]["steps"] if x.get("name")=="Patch V10CarActivity with Floating Touch only"),None); raise SystemExit("Floating Touch patch step not found") if s is None else subprocess.run(["bash","-euo","pipefail","-c",s["run"]],check=True)'
+
+      - name: Recover exact SAFE Long Press patch
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          python3 -c 'import yaml; d=yaml.safe_load(open(".github/workflows/build-v10-display-core-v1-floating-touch-longpress-safe.yml",encoding="utf-8")); s=next((x for x in d["jobs"]["build"]["steps"] if x.get("name")=="Replace the entire Floating Touch listener with SAFE long-press version"),None); raise SystemExit("SAFE Long Press step not found") if s is None else open("/tmp/safe-longpress.sh","w",encoding="utf-8").write(s["run"])'
+
+          test -s /tmp/safe-longpress.sh
+
+          echo "Recovered exact SAFE Long Press patch."
+
+      - name: Apply exact SAFE Long Press patch
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          FILE="v10-source/app/src/main/java/com/hieptran/aacast/doudou/V10CarActivity.java"
+
+          test -f "$FILE"
+
+          bash -euo pipefail /tmp/safe-longpress.sh
+
+          test -f "$FILE"
+
+          echo "SAFE Long Press patch applied."
+
+      - name: Verify Stable Base source
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          SRC="v10-source/app/src/main/java/com/hieptran/aacast/doudou"
+          ACTIVITY="$SRC/V10CarActivity.java"
+          SESSION="$SRC/V10ProjectionSession.java"
+          CONTROLLER="$SRC/V10DisplayController.java"
+          TASK="$SRC/V10TaskSession.java"
+
+          test -f "$ACTIVITY"
+          test -f "$SESSION"
+          test -f "$CONTROLLER"
+          test -f "$TASK"
+          test -f "$SRC/V10SurfaceManager.java"
+
+          grep -Fq "private TextView floatingTouchKey;" "$ACTIVITY"
+          grep -Fq "createFloatingTouchKey();" "$ACTIVITY"
+          grep -Fq "private void createFloatingTouchKey()" "$ACTIVITY"
+
+          grep -Fq "floatingDownTime = SystemClock.uptimeMillis();" "$ACTIVITY"
+          grep -Fq "ViewConfiguration.getLongPressTimeout()" "$ACTIVITY"
+
+          grep -Fq 'addFloatingMenuButton("BACK"' "$ACTIVITY"
+          grep -Fq 'addFloatingMenuButton("HOME"' "$ACTIVITY"
+
+          grep -Fq "handleControlBack();" "$ACTIVITY"
+          grep -Fq "handleControlHome();" "$ACTIVITY"
+
+          grep -Fq "floatingDragging" "$ACTIVITY"
+
+          grep -Fq "DisplayManager" "$SESSION"
+          grep -Fq "createVirtualDisplay" "$SESSION"
+          grep -Fq "RootShellSession" "$SESSION"
+
+          grep -Fq "createVirtualDisplay" "$CONTROLLER"
+          grep -Fq -- "--activity-reorder-to-front" "$CONTROLLER"
+
+          grep -Fq "enum State" "$TASK"
+          grep -Fq "ACTIVE" "$TASK"
+          grep -Fq "HIDDEN" "$TASK"
+          grep -Fq "CLOSED" "$TASK"
+
+          if grep -Fq "floatingLastTap" "$ACTIVITY"; then
+            echo "ERROR: legacy floatingLastTap remains"
+            exit 1
+          fi
+
+          if grep -Fq "session.recents()" "$ACTIVITY"; then
+            echo "ERROR: RECENTS logic detected"
+            exit 1
+          fi
+
+          if grep -Fq '"RECENTS"' "$ACTIVITY"; then
+            echo "ERROR: RECENTS menu detected"
+            exit 1
+          fi
+
+          if grep -Fq '"2 SCREEN"' "$ACTIVITY"; then
+            echo "ERROR: 2 SCREEN logic detected"
+            exit 1
+          fi
+
+          if grep -Fq '"3 SCREEN"' "$ACTIVITY"; then
+            echo "ERROR: 3 SCREEN logic detected"
+            exit 1
+          fi
+
+          if grep -Fq "setLayoutModeExternal(" "$ACTIVITY"; then
+            echo "ERROR: external layout patch detected"
+            exit 1
+          fi
+
+          if grep -Fq "V10ProjectionService" "$SESSION"; then
+            echo "ERROR: V10ProjectionService detected"
+            exit 1
+          fi
+
+          if grep -Fq "am force-stop" "$SESSION"; then
+            echo "ERROR: force-stop detected"
+            exit 1
+          fi
+
+          echo "======================================"
+          echo "STABLE BASE SOURCE VERIFICATION PASSED"
+          echo "======================================"
+
+      - name: Compile Java
+        working-directory: v10-source
+        shell: bash
+        run: |
+          set -euo pipefail
+          chmod +x ./gradlew
+          ./gradlew --no-daemon --stacktrace compileDebugJavaWithJavac
+
+      - name: Assemble Stable Base APK
+        working-directory: v10-source
+        shell: bash
+        run: |
+          set -euo pipefail
+          ./gradlew --no-daemon --stacktrace assembleDebug
+
+      - name: Create Stable Base manifest
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          mkdir -p stable-base
+
+          cat > stable-base/STABLE-BASE.txt <<'EOF'
+          CarAssistant V10 Stable Base V1
+
+          BASE:
+          V10-6A
+
+          DISPLAY:
+          Display Core V1
+
+          TOUCH:
+          Floating Touch
+
+          TOUCH BEHAVIOR:
+          Drag
+          Position persistence
+          Short press = floating menu
+          BACK
+          HOME
+          Long press = HOME
+
+          EXCLUDED:
+          RECENTS
+          2 SCREEN
+          3 SCREEN
+          V10ProjectionService
+          am force-stop
+
+          SOURCE BASELINE:
+          9075636a7d5947c1b0eee49c2bd3fd0e1b6b0cf1
+
+          FLOATING TOUCH PATCH:
+          Historical workflow recovered from commit 6abfbe6a498a738c012a10cb13f98e285cdb8017
+
+          PURPOSE:
+          This source is the frozen base for all future feature patches.
+
+          RULE:
+          Future feature workflows must patch this Stable Base and must not
+          rewrite Display Core, ProjectionSession, TaskSession, or Floating
+          Touch unless explicitly required and separately tested.
+          EOF
+
+          cat stable-base/STABLE-BASE.txt
+
+      - name: Package frozen Stable Base source
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          rm -rf v10-source/.gradle
+          rm -rf v10-source/app/build
+
+          zip -qr stable-base/CarAssistant-V10-Stable-Base-V1-source.zip v10-source
+
+          sha256sum stable-base/CarAssistant-V10-Stable-Base-V1-source.zip \
+            > stable-base/CarAssistant-V10-Stable-Base-V1-source.sha256
+
+          echo "Stable Base source package:"
+          cat stable-base/CarAssistant-V10-Stable-Base-V1-source.sha256
+
+      - name: Calculate APK SHA256
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          APK="$(find v10-source/app/build/outputs/apk/debug -type f -name '*.apk' -print -quit)"
+
+          test -n "$APK"
+          test -f "$APK"
+
+          sha256sum "$APK" | tee stable-base/CarAssistant-V10-Stable-Base-V1-apk.sha256
+
+      - name: Upload Stable Base artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: CarAssistant-V10-Stable-Base-V1
+          path: |
+            v10-source/app/build/outputs/apk/debug/*.apk
+            stable-base/STABLE-BASE.txt
+            stable-base/CarAssistant-V10-Stable-Base-V1-source.zip
+            stable-base/CarAssistant-V10-Stable-Base-V1-source.sha256
+            stable-base/CarAssistant-V10-Stable-Base-V1-apk.sha256
+          if-no-files-found: error
+          retention-days: 30
