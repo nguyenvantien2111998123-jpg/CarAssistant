@@ -1,4 +1,517 @@
-- name: Commit Navigation V1 source to main safely
+name: Promote and Lock Navigation V1
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  promote-navigation-v1:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Home UI V2 baseline
+        uses: actions/checkout@v4
+        with:
+          ref: 2c814a181d00cde9547a446927ae181e18cb9cbb
+          fetch-depth: 1
+
+      - name: Verify exact baseline
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          EXPECTED="2c814a181d00cde9547a446927ae181e18cb9cbb"
+          ACTUAL="$(git rev-parse HEAD)"
+
+          echo "EXPECTED=$EXPECTED"
+          echo "ACTUAL=$ACTUAL"
+
+          test "$ACTUAL" = "$EXPECTED"
+
+          echo "BASELINE CHECK: PASS"
+
+      - name: Setup Java 17
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Verify project
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          test -f v10-source/gradlew
+          test -f v10-source/app/build.gradle
+          test -f v10-source/app/src/main/AndroidManifest.xml
+          test -f v10-source/app/src/main/java/com/hieptran/aacast/doudou/V10CarActivity.java
+
+          echo "PROJECT CHECK: PASS"
+
+      - name: Capture protected core hashes
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          SRC="v10-source/app/src/main/java/com/hieptran/aacast/doudou"
+
+          sha256sum \
+            "$SRC/V10ProjectionSession.java" \
+            "$SRC/V10DisplayController.java" \
+            "$SRC/V10SurfaceManager.java" \
+            "$SRC/V10TaskSession.java" \
+            "$SRC/V10SessionStore.java" \
+            > /tmp/core-before.sha256
+
+          echo "PROTECTED CORE HASH: PASS"
+
+      - name: Add Navigation dependency
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          FILE="v10-source/app/build.gradle"
+
+          if ! grep -Fq 'org.maplibre.gl:android-sdk:11.11.0' "$FILE"; then
+            sed -i \
+              '/^[[:space:]]*dependencies[[:space:]]*{/a\    implementation "org.maplibre.gl:android-sdk:11.11.0"' \
+              "$FILE"
+          fi
+
+          grep -Fq \
+            'org.maplibre.gl:android-sdk:11.11.0' \
+            "$FILE"
+
+          echo "MAPLIBRE: PASS"
+
+      - name: Add location permissions
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          FILE="v10-source/app/src/main/AndroidManifest.xml"
+
+          if ! grep -Fq \
+            'android.permission.ACCESS_FINE_LOCATION' \
+            "$FILE"; then
+
+            sed -i \
+              '/<manifest /a\    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />' \
+              "$FILE"
+          fi
+
+          if ! grep -Fq \
+            'android.permission.ACCESS_COARSE_LOCATION' \
+            "$FILE"; then
+
+            sed -i \
+              '/<manifest /a\    <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />' \
+              "$FILE"
+          fi
+
+          grep -Fq \
+            'android.permission.ACCESS_FINE_LOCATION' \
+            "$FILE"
+
+          grep -Fq \
+            'android.permission.ACCESS_COARSE_LOCATION' \
+            "$FILE"
+
+          echo "LOCATION PERMISSIONS: PASS"
+
+      - name: Create NavigationMapView
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          SRC="v10-source/app/src/main/java/com/hieptran/aacast/doudou"
+          FILE="$SRC/NavigationMapView.java"
+
+          printf '%s\n' \
+            'package com.carassistant.v10;' \
+            '' \
+            'import android.Manifest;' \
+            'import android.app.Activity;' \
+            'import android.content.Context;' \
+            'import android.content.pm.PackageManager;' \
+            'import android.graphics.Color;' \
+            'import android.location.Location;' \
+            'import android.os.Bundle;' \
+            'import android.widget.FrameLayout;' \
+            '' \
+            'import org.maplibre.android.MapLibre;' \
+            'import org.maplibre.android.camera.CameraUpdateFactory;' \
+            'import org.maplibre.android.geometry.LatLng;' \
+            'import org.maplibre.android.location.LocationComponentActivationOptions;' \
+            'import org.maplibre.android.location.LocationComponentOptions;' \
+            'import org.maplibre.android.maps.MapLibreMap;' \
+            'import org.maplibre.android.maps.MapView;' \
+            'import org.maplibre.android.maps.UiSettings;' \
+            '' \
+            'public final class NavigationMapView extends FrameLayout {' \
+            '' \
+            '    private static final int LOCATION_REQUEST = 4101;' \
+            '    private final MapView mapView;' \
+            '    private MapLibreMap map;' \
+            '' \
+            '    public NavigationMapView(Context context) {' \
+            '        super(context);' \
+            '        setBackgroundColor(Color.BLACK);' \
+            '        MapLibre.getInstance(context.getApplicationContext());' \
+            '        mapView = new MapView(context);' \
+            '        mapView.onCreate(new Bundle());' \
+            '        addView(mapView, new LayoutParams(-1, -1));' \
+            '        mapView.getMapAsync(this::onMapReady);' \
+            '    }' \
+            '' \
+            '    private void onMapReady(MapLibreMap readyMap) {' \
+            '        map = readyMap;' \
+            '        UiSettings ui = map.getUiSettings();' \
+            '        ui.setCompassEnabled(false);' \
+            '        ui.setZoomGesturesEnabled(true);' \
+            '        ui.setScrollGesturesEnabled(true);' \
+            '        ui.setRotateGesturesEnabled(true);' \
+            '        ui.setTiltGesturesEnabled(false);' \
+            '        map.setStyle("https://tiles.openfreemap.org/styles/liberty", style -> enableLocation());' \
+            '    }' \
+            '' \
+            '    private void enableLocation() {' \
+            '        if (map == null) return;' \
+            '        Context context = getContext();' \
+            '        if (context == null) return;' \
+            '' \
+            '        if (context.checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION)' \
+            '                != PackageManager.PERMISSION_GRANTED) {' \
+            '            if (context instanceof Activity) {' \
+            '                ((Activity) context).requestPermissions(' \
+            '                        new String[]{' \
+            '                                Manifest.permission.ACCESS_FINE_LOCATION,' \
+            '                                Manifest.permission.ACCESS_COARSE_LOCATION},' \
+            '                        LOCATION_REQUEST);' \
+            '            }' \
+            '            return;' \
+            '        }' \
+            '' \
+            '        LocationComponentOptions options =' \
+            '                LocationComponentOptions.builder(context)' \
+            '                        .pulseEnabled(true)' \
+            '                        .build();' \
+            '' \
+            '        LocationComponentActivationOptions activation =' \
+            '                LocationComponentActivationOptions.builder(context, map.getStyle())' \
+            '                        .locationComponentOptions(options)' \
+            '                        .build();' \
+            '' \
+            '        map.getLocationComponent().activateLocationComponent(activation);' \
+            '        map.getLocationComponent().setLocationComponentEnabled(true);' \
+            '    }' \
+            '' \
+            '    public void zoomIn() {' \
+            '        if (map == null) return;' \
+            '        double z = map.getCameraPosition().zoom;' \
+            '        map.animateCamera(CameraUpdateFactory.zoomTo(Math.min(20.0, z + 1.0)), 250);' \
+            '    }' \
+            '' \
+            '    public void zoomOut() {' \
+            '        if (map == null) return;' \
+            '        double z = map.getCameraPosition().zoom;' \
+            '        map.animateCamera(CameraUpdateFactory.zoomTo(Math.max(1.0, z - 1.0)), 250);' \
+            '    }' \
+            '' \
+            '    public void recenter() {' \
+            '        if (map == null) return;' \
+            '        try {' \
+            '            Location location = map.getLocationComponent().getLastKnownLocation();' \
+            '            if (location == null) return;' \
+            '            map.animateCamera(' \
+            '                    CameraUpdateFactory.newLatLngZoom(' \
+            '                            new LatLng(location.getLatitude(), location.getLongitude()),' \
+            '                            16.0),' \
+            '                    500);' \
+            '        } catch (Exception ignored) {' \
+            '        }' \
+            '    }' \
+            '' \
+            '    public void onHostResume() {' \
+            '        mapView.onResume();' \
+            '    }' \
+            '' \
+            '    public void onHostPause() {' \
+            '        mapView.onPause();' \
+            '    }' \
+            '' \
+            '    public void onHostDestroy() {' \
+            '        mapView.onDestroy();' \
+            '    }' \
+            '}' \
+            > "$FILE"
+
+          test -f "$FILE"
+          grep -Fq 'class NavigationMapView' "$FILE"
+          grep -Fq 'MapLibreMap' "$FILE"
+          grep -Fq 'MapView' "$FILE"
+          grep -Fq 'https://tiles.openfreemap.org/styles/liberty' "$FILE"
+
+          echo "NAVIGATION MAP VIEW: PASS"
+
+      - name: Patch V10CarActivity Navigation
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          FILE="v10-source/app/src/main/java/com/hieptran/aacast/doudou/V10CarActivity.java"
+
+          grep -Fq 'public final class V10CarActivity' "$FILE"
+          grep -Fq 'private void buildUi()' "$FILE"
+          grep -Fq 'private void buildDashboard()' "$FILE"
+
+          if ! grep -Fq 'NavigationMapView navigationMap' "$FILE"; then
+            python3 - "$FILE" <<'PY'
+from pathlib import Path
+import sys
+
+p = Path(sys.argv[1])
+s = p.read_text(encoding="utf-8")
+
+if "NavigationMapView navigationMap;" not in s:
+    marker = "private FrameLayout root;"
+    if marker not in s:
+        raise SystemExit("ERROR: root marker not found")
+    s = s.replace(
+        marker,
+        marker + "\n    private NavigationMapView navigationMap;",
+        1
+    )
+
+if "navigationMap = new NavigationMapView(this);" not in s:
+    marker = "private void buildUi() {"
+    pos = s.find(marker)
+    if pos < 0:
+        raise SystemExit("ERROR: buildUi not found")
+
+    brace = s.find("{", pos)
+    if brace < 0:
+        raise SystemExit("ERROR: buildUi brace not found")
+
+    insert = """
+        navigationMap = new NavigationMapView(this);
+        root.addView(
+                navigationMap,
+                new FrameLayout.LayoutParams(-1, -1));
+"""
+    s = s[:brace + 1] + insert + s[brace + 1:]
+
+if "navigationMap.onHostResume();" not in s:
+    marker = "public void onResume()"
+    pos = s.find(marker)
+    if pos < 0:
+        raise SystemExit("ERROR: onResume not found")
+
+    brace = s.find("{", pos)
+    if brace < 0:
+        raise SystemExit("ERROR: onResume brace not found")
+
+    s = s[:brace + 1] + """
+        if (navigationMap != null) {
+            navigationMap.onHostResume();
+        }
+""" + s[brace + 1:]
+
+if "navigationMap.onHostPause();" not in s:
+    marker = "public void onPause()"
+    pos = s.find(marker)
+    if pos < 0:
+        raise SystemExit("ERROR: onPause not found")
+
+    brace = s.find("{", pos)
+    if brace < 0:
+        raise SystemExit("ERROR: onPause brace not found")
+
+    s = s[:brace + 1] + """
+        if (navigationMap != null) {
+            navigationMap.onHostPause();
+        }
+""" + s[brace + 1:]
+
+if "navigationMap.onHostDestroy();" not in s:
+    marker = "public void onDestroy()"
+    pos = s.find(marker)
+    if pos < 0:
+        raise SystemExit("ERROR: onDestroy not found")
+
+    brace = s.find("{", pos)
+    if brace < 0:
+        raise SystemExit("ERROR: onDestroy brace not found")
+
+    s = s[:brace + 1] + """
+        if (navigationMap != null) {
+            navigationMap.onHostDestroy();
+            navigationMap = null;
+        }
+""" + s[brace + 1:]
+
+p.write_text(s.rstrip() + "\n", encoding="utf-8")
+print("V10CarActivity PATCH PASS")
+PY
+          fi
+
+          grep -Fq \
+            'NavigationMapView navigationMap' \
+            "$FILE"
+
+          grep -Fq \
+            'navigationMap = new NavigationMapView(this);' \
+            "$FILE"
+
+          grep -Fq \
+            'navigationMap.onHostResume();' \
+            "$FILE"
+
+          grep -Fq \
+            'navigationMap.onHostPause();' \
+            "$FILE"
+
+          grep -Fq \
+            'navigationMap.onHostDestroy();' \
+            "$FILE"
+
+          echo "CAR ACTIVITY NAVIGATION: PASS"
+
+      - name: Verify Navigation source
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          SRC="v10-source/app/src/main/java/com/hieptran/aacast/doudou"
+
+          test -f "$SRC/NavigationMapView.java"
+
+          grep -Fq \
+            'private NavigationMapView navigationMap;' \
+            "$SRC/V10CarActivity.java"
+
+          grep -Fq \
+            'navigationMap = new NavigationMapView(this);' \
+            "$SRC/V10CarActivity.java"
+
+          grep -Fq \
+            'navigationMap.onHostResume();' \
+            "$SRC/V10CarActivity.java"
+
+          grep -Fq \
+            'navigationMap.onHostPause();' \
+            "$SRC/V10CarActivity.java"
+
+          grep -Fq \
+            'navigationMap.onHostDestroy();' \
+            "$SRC/V10CarActivity.java"
+
+          echo "NAVIGATION SOURCE: PASS"
+
+      - name: Verify Home UI V2
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          FILE="v10-source/app/src/main/java/com/hieptran/aacast/doudou/V10CarActivity.java"
+
+          grep -Fq 'APP CHỌN' "$FILE"
+          grep -Fq 'TASKS' "$FILE"
+          grep -Fq 'MEDIA' "$FILE"
+          grep -Fq 'WYN' "$FILE"
+
+          echo "HOME UI V2: PASS"
+
+      - name: Verify protected core unchanged
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          SRC="v10-source/app/src/main/java/com/hieptran/aacast/doudou"
+
+          sha256sum \
+            "$SRC/V10ProjectionSession.java" \
+            "$SRC/V10DisplayController.java" \
+            "$SRC/V10SurfaceManager.java" \
+            "$SRC/V10TaskSession.java" \
+            "$SRC/V10SessionStore.java" \
+            > /tmp/core-after.sha256
+
+          cmp \
+            /tmp/core-before.sha256 \
+            /tmp/core-after.sha256
+
+          echo "PROTECTED CORE: UNCHANGED"
+
+      - name: YAML and source diff check
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          git diff --check
+
+          echo "SOURCE DIFF CHECK: PASS"
+          echo ""
+          git status --short
+
+      - name: Compile
+        working-directory: v10-source
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          chmod +x ./gradlew
+
+          ./gradlew \
+            :app:compileDebugJavaWithJavac \
+            --no-daemon \
+            --stacktrace
+
+          echo "JAVA COMPILE: PASS"
+
+      - name: Assemble APK
+        working-directory: v10-source
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          ./gradlew \
+            :app:assembleDebug \
+            --no-daemon \
+            --stacktrace
+
+          echo "APK ASSEMBLE: PASS"
+
+      - name: Create Navigation V1 lock package
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          APK="v10-source/app/build/outputs/apk/debug/app-debug.apk"
+
+          test -f "$APK"
+
+          cp \
+            "$APK" \
+            CarAssistant-Navigation-V1-Baseline.apk
+
+          sha256sum \
+            CarAssistant-Navigation-V1-Baseline.apk \
+            > CarAssistant-Navigation-V1-Baseline.sha256
+
+          printf '%s\n' \
+            "SOURCE_BASE=2c814a181d00cde9547a446927ae181e18cb9cbb" \
+            "FEATURE=Navigation V1" \
+            "HOME_UI=V2" \
+            "PROJECTION_CORE=UNCHANGED" \
+            "BUILD=:app:assembleDebug" \
+            > CarAssistant-Navigation-V1-Baseline.txt
+
+          echo "LOCK PACKAGE: PASS"
+
+      - name: Promote Navigation V1 safely
         shell: bash
         run: |
           set -euo pipefail
@@ -14,32 +527,26 @@
             v10-source/app/src/main/java/com/hieptran/aacast/doudou/NavigationMapView.java \
             v10-source/app/src/main/java/com/hieptran/aacast/doudou/V10CarActivity.java
 
-          if git diff --cached --quiet; then
-            echo "ERROR: No Navigation source changes staged."
+          git diff --cached --quiet && {
+            echo "ERROR: Nothing to commit."
             exit 1
-          fi
-
-          echo "Navigation V1 staged changes:"
-          git diff --cached --stat
+          }
 
           git commit \
             -m "Lock Navigation V1 baseline"
 
-          echo "Local Navigation commit:"
+          echo "LOCAL NAVIGATION COMMIT:"
           git rev-parse HEAD
 
-          echo "Fetching current remote main..."
-          git fetch origin main --depth=64
+          git fetch origin main --depth=128
 
-          echo "Verifying baseline is an ancestor of remote main..."
           git merge-base \
             --is-ancestor \
             "$BASELINE" \
             origin/main
 
-          echo "PASS: Remote main contains Home UI V2 baseline."
+          echo "REMOTE MAIN CONTAINS BASELINE: PASS"
 
-          echo "Checking whether remote main changed V10 source..."
           if ! git diff \
             --quiet \
             "$BASELINE" \
@@ -48,9 +555,7 @@
             v10-source
           then
             echo "ERROR: Remote main contains V10 source changes."
-            echo "Navigation V1 promotion stopped to protect the source."
-            echo ""
-            echo "Remote V10 source changes:"
+            echo "Promotion stopped to protect the source."
             git diff --name-only \
               "$BASELINE" \
               origin/main \
@@ -59,25 +564,47 @@
             exit 1
           fi
 
-          echo "PASS: Remote main has no V10 source changes."
+          echo "REMOTE V10 SOURCE CHECK: PASS"
 
-          echo "Rebasing Navigation V1 commit onto current main..."
           GIT_EDITOR=true \
-            git rebase \
-            origin/main
+            git rebase origin/main
 
-          echo "PASS: Navigation V1 rebased onto current main."
-
-          echo "Final commit after rebase:"
-          git rev-parse HEAD
-
-          echo "Final source diff against remote main:"
-          git diff \
-            --stat \
-            origin/main...HEAD \
-            -- \
-            v10-source
+          echo "REBASE: PASS"
 
           git push origin HEAD:main
 
-          echo "PASS: Navigation V1 source pushed to main."
+          echo "NAVIGATION V1 PROMOTE: PASS"
+
+      - name: Final Navigation V1 lock confirmation
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          NEW_COMMIT="$(git rev-parse HEAD)"
+
+          echo "=============================================="
+          echo "CARASSISTANT NAVIGATION V1"
+          echo "BASELINE LOCK: PASS"
+          echo "=============================================="
+          echo ""
+          echo "HOME UI V2:"
+          echo "2c814a181d00cde9547a446927ae181e18cb9cbb"
+          echo ""
+          echo "NAVIGATION V1 COMMIT:"
+          echo "$NEW_COMMIT"
+          echo ""
+          echo "PROJECTION CORE: UNCHANGED"
+          echo "HOME UI V2: PRESERVED"
+          echo "NAVIGATION V1: LOCKED"
+          echo "=============================================="
+
+      - name: Upload Navigation V1 baseline
+        uses: actions/upload-artifact@v4
+        with:
+          name: CarAssistant-Navigation-V1-Baseline-Lock
+          path: |
+            CarAssistant-Navigation-V1-Baseline.apk
+            CarAssistant-Navigation-V1-Baseline.sha256
+            CarAssistant-Navigation-V1-Baseline.txt
+          if-no-files-found: error
+          retention-days: 90
