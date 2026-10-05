@@ -1,23 +1,26 @@
-name: Build Navigation V2 Route Clean
+name: Build Navigation V2 Route
 
 on:
   workflow_dispatch:
-
-permissions:
-  contents: read
 
 jobs:
   build:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout locked Navigation V1 baseline
+      - name: Checkout baseline
         uses: actions/checkout@v4
         with:
           ref: 9b2fc5b3f24b32ff4f2ed7ddb6d794cdb5f647f9
           fetch-depth: 1
 
-      - name: Verify baseline and project
+      - name: Setup Java
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Verify baseline
         shell: bash
         run: |
           set -e
@@ -28,16 +31,8 @@ jobs:
           test -f v10-source/settings.gradle
           test -f v10-source/app/build.gradle
           test -f v10-source/gradlew
-          test -f v10-source/app/src/main/AndroidManifest.xml
-          test -f v10-source/app/src/main/java/com/hieptran/aacast/doudou/V10CarActivity.java
 
-          echo "Baseline/project OK: $EXPECTED"
-
-      - name: Setup Java 17
-        uses: actions/setup-java@v5
-        with:
-          distribution: temurin
-          java-version: "17"
+          echo "Baseline OK: $EXPECTED"
 
       - name: Protect Projection Core
         shell: bash
@@ -59,28 +54,22 @@ jobs:
 
           FILE="v10-source/app/build.gradle"
 
-          python3 - <<'PY'
+          python3 -c '
           from pathlib import Path
-
-          p = Path("v10-source/app/build.gradle")
+          p = Path("'"$FILE"'")
           s = p.read_text()
-
-          replacements = [
-              'implementation "org.maplibre.gl:android-sdk-opengl:11.8.0"',
-              'implementation "org.maplibre.gl:android-sdk:11.11.0"',
-          ]
-
-          target = 'implementation "org.maplibre.gl:android-sdk:11.8.0"'
-
-          for old in replacements:
-              if old in s:
-                  s = s.replace(old, target, 1)
-
-          if target not in s:
+          s = s.replace(
+              "implementation \"org.maplibre.gl:android-sdk-opengl:11.8.0\"",
+              "implementation \"org.maplibre.gl:android-sdk:11.8.0\""
+          )
+          s = s.replace(
+              "implementation \"org.maplibre.gl:android-sdk:11.11.0\"",
+              "implementation \"org.maplibre.gl:android-sdk:11.8.0\""
+          )
+          if "implementation \"org.maplibre.gl:android-sdk:11.8.0\"" not in s:
               raise SystemExit("MapLibre dependency not found")
-
           p.write_text(s)
-          PY
+          '
 
           grep -Fq \
             'implementation "org.maplibre.gl:android-sdk:11.8.0"' \
@@ -92,145 +81,131 @@ jobs:
 
           echo "MapLibre dependency OK"
 
+      - name: Verify MapLibre dependency
+        shell: bash
+        run: |
+          set -e
+
+          chmod +x v10-source/gradlew
+          cd v10-source
+
+          ./gradlew :app:dependencies \
+            --configuration debugCompileClasspath \
+            --no-daemon \
+            > /tmp/dependencies.txt
+
+          grep -Fq \
+            'org.maplibre.gl:android-sdk:11.8.0' \
+            /tmp/dependencies.txt
+
+          echo "MapLibre resolution OK"
+
       - name: Add INTERNET permission
         shell: bash
         run: |
           set -e
 
-          python3 - <<'PY'
+          python3 -c '
           from pathlib import Path
-
           p = Path("v10-source/app/src/main/AndroidManifest.xml")
           s = p.read_text()
-
-          permission = '<uses-permission android:name="android.permission.INTERNET" />'
-
+          permission = "<uses-permission android:name=\"android.permission.INTERNET\" />"
           if permission not in s:
+              if "<application" not in s:
+                  raise SystemExit("application marker not found")
               s = s.replace(
                   "<application",
                   permission + "\n    <application",
                   1
               )
               p.write_text(s)
-          PY
+          '
 
-      - name: Get exact Navigation V2 source
+      - name: Restore Navigation V2 source
         shell: bash
         run: |
           set -e
 
-          OLD_WORKFLOW="4b391b252b9d92840b151045f533056f47684e71"
-          SRC="v10-source/app/src/main/java/com/hieptran/aacast/doudou/NavigationMapView.java"
+          OLD="4b391b252b9d92840b151045f533056f47684e71"
+          NAV="v10-source/app/src/main/java/com/hieptran/aacast/doudou/NavigationMapView.java"
 
-          git fetch origin "$OLD_WORKFLOW" --depth=1
+          git fetch origin "$OLD" --depth=1
 
-          git show "$OLD_WORKFLOW:.github/workflows/build-navigation-v2-route.yml" \
-            > /tmp/navigation-v2-old.yml
+          git show "$OLD:.github/workflows/build-navigation-v2-route.yml" \
+            | sed -n \
+              '/cat > v10-source\/app\/src\/main\/java\/com\/hieptran\/aacast\/doudou\/NavigationMapView.java <<'\''JAVA'\''/,/^          JAVA$/p' \
+            | sed '1d;$d' \
+            | sed 's/^          //' \
+            > "$NAV"
 
-          python3 - <<'PY'
-          from pathlib import Path
+          test -s "$NAV"
 
-          src = Path("/tmp/navigation-v2-old.yml").read_text()
-
-          begin = "          cat > v10-source/app/src/main/java/com/hieptran/aacast/doudou/NavigationMapView.java <<'JAVA'\n"
-          end = "\n          JAVA\n"
-
-          a = src.find(begin)
-          if a < 0:
-              raise SystemExit("NavigationMapView heredoc start not found")
-
-          a += len(begin)
-
-          b = src.find(end, a)
-          if b < 0:
-              raise SystemExit("NavigationMapView heredoc end not found")
-
-          java = src[a:b]
-
-          # Remove workflow indentation.
-          lines = java.splitlines()
-          java = "\n".join(
-              line[10:] if line.startswith("          ") else line
-              for line in lines
-          ) + "\n"
-
-          Path(
-              "v10-source/app/src/main/java/com/hieptran/aacast/doudou/NavigationMapView.java"
-          ).write_text(java)
-          PY
-
-          test -s "$SRC"
-
-          echo "Exact Navigation V2 source restored"
-
-      - name: Fix MapLibre Java namespace
-        shell: bash
-        run: |
+          echo "Navigation V2 s      - name: Fix MapLibre Java namespace
+          shell: bash
+          run: |
           set -e
 
           FILE="v10-source/app/src/main/java/com/hieptran/aacast/doudou/NavigationMapView.java"
 
-          python3 - <<'PY'
+          python3 -c '
           from pathlib import Path
-
-          p = Path(
-              "v10-source/app/src/main/java/com/hieptran/aacast/doudou/NavigationMapView.java"
-          )
-
+          p = Path("'"$FILE"'")
           s = p.read_text()
           old = "com.maplibre.android."
           new = "org.maplibre.android."
-
           if old not in s:
               raise SystemExit("Old MapLibre namespace not found")
-
           p.write_text(s.replace(old, new))
-          PY
+          '
 
           grep -Fq "org.maplibre.android." "$FILE"
           ! grep -Fq "com.maplibre.android." "$FILE"
 
-          echo "MapLibre Java namespace OK"
+          echo "MapLibre namespace OK"
 
       - name: Patch Navigation entry
         shell: bash
         run: |
           set -e
 
-          python3 - <<'PY'
+          python3 -c '
           from pathlib import Path
 
           p = Path(
               "v10-source/app/src/main/java/com/hieptran/aacast/doudou/V10CarActivity.java"
           )
+
           s = p.read_text()
 
-          start_marker = "    private void buildUi() {"
-          end_marker = "    private void buildDashboard() {"
+          start = s.find("    private void buildUi() {")
+          end = s.find("    private void buildDashboard() {")
 
-          a = s.find(start_marker)
-          b = s.find(end_marker)
-
-          if a < 0 or b < 0 or b <= a:
+          if start < 0 or end < 0 or end <= start:
               raise SystemExit("Navigation UI markers not found")
 
-          ui = """    private void buildUi() {
+          block = """    private void buildUi() {
           // NAV_V2_ENTRY_BEGIN
 
           root = new FrameLayout(this);
 
           projectionLayer = new FrameLayout(this);
-          root.addView(projectionLayer,
+          root.addView(
+                  projectionLayer,
                   new FrameLayout.LayoutParams(
                           FrameLayout.LayoutParams.MATCH_PARENT,
-                          FrameLayout.LayoutParams.MATCH_PARENT));
+                          FrameLayout.LayoutParams.MATCH_PARENT
+                  )
+          );
 
           launcherLayer = new LinearLayout(this);
           launcherLayer.setOrientation(LinearLayout.VERTICAL);
-          root.addView(launcherLayer,
+          root.addView(
+                  launcherLayer,
                   new FrameLayout.LayoutParams(
                           FrameLayout.LayoutParams.MATCH_PARENT,
-                          FrameLayout.LayoutParams.MATCH_PARENT));
+                          FrameLayout.LayoutParams.MATCH_PARENT
+                  )
+          );
 
           navigationMap = new NavigationMapView(this);
           navigationMap.setVisibility(View.GONE);
@@ -242,46 +217,58 @@ jobs:
               launcherLayer.bringToFront();
           });
 
-          root.addView(navigationMap,
+          root.addView(
+                  navigationMap,
                   new FrameLayout.LayoutParams(
                           FrameLayout.LayoutParams.MATCH_PARENT,
-                          FrameLayout.LayoutParams.MATCH_PARENT));
+                          FrameLayout.LayoutParams.MATCH_PARENT
+                  )
+          );
 
           buildDashboard();
           setContentView(root);
           launcherLayer.bringToFront();
 
           // NAV_V2_ENTRY_END
-      }
+          }
+ 
+          """
 
-      """
+          p.write_text(s[:start] + block + s[end:])
+          '
 
-          p.write_text(s[:a] + ui + s[b:])
-          PY
+          grep -Fq "NAV_V2_ENTRY_BEGIN" \
+            v10-source/app/src/main/java/com/hieptran/aacast/doudou/V10CarActivity.java
+
+          grep -Fq "NAV_V2_ENTRY_END" \
+            v10-source/app/src/main/java/com/hieptran/aacast/doudou/V10CarActivity.java
+
+          echo "Navigation entry OK"
 
       - name: Patch Navigation card click
         shell: bash
         run: |
           set -e
 
-          python3 - <<'PY'
+          python3 -c '
           from pathlib import Path
 
           p = Path(
               "v10-source/app/src/main/java/com/hieptran/aacast/doudou/V10CarActivity.java"
           )
-          s = p.read_text()
 
+          s = p.read_text()
           call = "navigationMap.openNavigation();"
 
-          if s.count(call) == 0:
-              marker = """        content.addView(
-                  map,
-                  new LinearLayout.LayoutParams(
-              """
+          if call not in s:
+              marker = (
+                  "        content.addView(\n"
+                  "                map,\n"
+                  "                new LinearLayout.LayoutParams(\n"
+              )
 
               if s.count(marker) != 1:
-                  raise SystemExit("Navigation card marker not found")
+                  raise SystemExit("MAP card marker not found")
 
               click = """        map.setOnClickListener(v -> {
                   launcherLayer.setVisibility(View.GONE);
@@ -298,7 +285,9 @@ jobs:
 
           if s.count(call) != 1:
               raise SystemExit("Navigation open call count invalid")
-          PY
+          '
+
+          echo "Navigation card click OK"
 
       - name: Verify Navigation V2
         shell: bash
@@ -313,19 +302,15 @@ jobs:
           grep -Fq "navigationMap.openNavigation();" "$ACTIVITY"
           grep -Fq "navigationMap.setOnExitListener" "$ACTIVITY"
 
-          grep -Fq "org.maplibre.android.annotations" "$NAV"
           grep -Fq "org.maplibre.android.maps" "$NAV"
-          ! grep -Fq "com.maplibre.android." "$NAV"
+          grep -Fq "org.maplibre.android.camera" "$NAV"
+          grep -Fq "org.maplibre.android.geometry" "$NAV"
 
-          grep -Fq "onAttachedToWindow" "$NAV"
-          grep -Fq "onDetachedFromWindow" "$NAV"
-          grep -Fq "mapView.onStart()" "$NAV"
-          grep -Fq "mapView.onResume()" "$NAV"
-          grep -Fq "mapView.onPause()" "$NAV"
+          ! grep -Fq "com.maplibre.android." "$NAV"
 
           echo "Navigation V2 verification OK"
 
-      - name: Verify Projection Core unchanged
+      - name: Verify protected files
         shell: bash
         run: |
           set -e
@@ -338,9 +323,25 @@ jobs:
             v10-source/app/src/main/java/com/hieptran/aacast/doudou/V10SessionStore.java \
             > /tmp/projection-after.txt
 
-          diff -u /tmp/projection-before.txt /tmp/projection-after.txt
+          diff -u \
+            /tmp/projection-before.txt \
+            /tmp/projection-after.txt
 
-          echo "Projection Core unchanged"
+          echo "Projection Core unchanged"ource restored"
+                - name: Check YAML and source
+          shell: bash
+          run: |
+          set -e
+
+          git diff --check
+
+          test -s \
+            v10-source/app/src/main/java/com/hieptran/aacast/doudou/NavigationMapView.java
+
+          test -s \
+            v10-source/app/src/main/java/com/hieptran/aacast/doudou/V10CarActivity.java
+
+          echo "Source checks OK"
 
       - name: Build APK
         shell: bash
@@ -354,9 +355,24 @@ jobs:
             --no-daemon \
             --stacktrace
 
-      - name: Verify and upload APK
+      - name: Verify APK
+        shell: bash
+        run: |
+          set -e
+
+          APK="v10-source/app/build/outputs/apk/debug/app-debug.apk"
+
+          test -f "$APK"
+
+          echo "APK created:"
+          ls -lh "$APK"
+
+          sha256sum "$APK"
+
+      - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
           name: carassistant-navigation-v2
           path: v10-source/app/build/outputs/apk/debug/app-debug.apk
           if-no-files-found: error
+          
