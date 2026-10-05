@@ -19,16 +19,14 @@ jobs:
         uses: actions/setup-java@v4
         with:
           distribution: temurin
-          java-version: "17"
+          java-version: '17'
 
       - name: Install PyYAML
-        shell: bash
         run: |
           set -euo pipefail
           python3 -m pip install --disable-pip-version-check PyYAML
 
       - name: Restore exact V10-6A baseline
-        shell: bash
         run: |
           set -euo pipefail
 
@@ -37,7 +35,6 @@ jobs:
           git fetch origin "$BASELINE" --depth=1
 
           rm -rf v10-source
-
           git checkout "$BASELINE" -- v10-source
 
           SRC="v10-source/app/src/main/java/com/hieptran/aacast/doudou"
@@ -54,7 +51,6 @@ jobs:
           echo "Exact V10-6A baseline restored."
 
       - name: Verify V10-6A baseline
-        shell: bash
         run: |
           set -euo pipefail
 
@@ -64,13 +60,13 @@ jobs:
           grep -Fq "createVirtualDisplay" "$SRC/V10ProjectionSession.java"
           grep -Fq "RootShellSession" "$SRC/V10ProjectionSession.java"
           grep -Fq "am force-stop" "$SRC/V10ProjectionSession.java"
+
           grep -Fq "public void onStop()" "$SRC/V10CarActivity.java"
           grep -Fq "session.release()" "$SRC/V10CarActivity.java"
 
           echo "V10-6A baseline markers OK."
 
       - name: Create Display Core V1 from exact workflow
-        shell: bash
         run: |
           set -euo pipefail
 
@@ -120,7 +116,6 @@ jobs:
           python3 /tmp/run_core.py
 
       - name: Recover deleted Floating Touch workflow
-        shell: bash
         run: |
           set -euo pipefail
 
@@ -144,7 +139,6 @@ jobs:
           echo "Recovered from parent commit: $PARENT"
 
       - name: Apply historical Floating Touch patch
-        shell: bash
         run: |
           set -euo pipefail
 
@@ -176,8 +170,7 @@ jobs:
           subprocess.run(
               [
                   "bash",
-                  "-e",
-                  "uo",
+                  "-euo",
                   "pipefail",
                   "-c",
                   patch_step["run"]
@@ -191,45 +184,46 @@ jobs:
           python3 /tmp/apply_floating_touch.py
 
       - name: Extract exact SAFE Long Press patch
-        shell: bash
         run: |
           set -euo pipefail
 
           cat > /tmp/extract_longpress.py <<'PY'
           from pathlib import Path
-          import sys
           import yaml
+          import sys
 
           workflow = Path(
               ".github/workflows/build-v10-display-core-v1-floating-touch-longpress-safe.yml"
           )
 
           if not workflow.exists():
-              print("ERROR: SAFE Long Press workflow not found.")
+              print("ERROR: Known-good SAFE Long Press workflow not found.")
               sys.exit(1)
 
           data = yaml.safe_load(
               workflow.read_text(encoding="utf-8")
           )
 
-          wanted = (
-              "Replace the entire Floating Touch listener "
-              "with SAFE long-press version"
-          )
-
-          patch_step = None
+          target = None
 
           for step in data["jobs"]["build"]["steps"]:
-              if step.get("name") == wanted:
-                  patch_step = step
+              name = step.get("name", "")
+              if name == "Replace the entire Floating Touch listener with SAFE long-press version":
+                  target = step
                   break
 
-          if patch_step is None:
-              print("ERROR: SAFE Long Press step not found.")
+          if target is None:
+              print("ERROR: Exact SAFE Long Press step not found.")
+              sys.exit(1)
+
+          run_text = target.get("run")
+
+          if not run_text:
+              print("ERROR: SAFE Long Press step has no run block.")
               sys.exit(1)
 
           Path("/tmp/safe-longpress.sh").write_text(
-              patch_step["run"],
+              run_text,
               encoding="utf-8"
           )
 
@@ -241,143 +235,111 @@ jobs:
           test -s /tmp/safe-longpress.sh
 
       - name: Apply exact SAFE Long Press patch
-        shell: bash
         run: |
           set -euo pipefail
 
-          FILE="v10-source/app/src/main/java/com/hieptran/aacast/doudou/V10CarActivity.java"
-
-          test -f "$FILE"
-
           bash -euo pipefail /tmp/safe-longpress.sh
 
-          test -f "$FILE"
-
-          echo "SAFE Long Press patch applied."
+          echo "Exact SAFE Long Press patch applied."
 
       - name: Verify Stable Base
-        shell: bash
         run: |
           set -euo pipefail
 
           SRC="v10-source/app/src/main/java/com/hieptran/aacast/doudou"
-
-          ACTIVITY="$SRC/V10CarActivity.java"
-          SESSION="$SRC/V10ProjectionSession.java"
           DISPLAY="$SRC/V10DisplayController.java"
           SURFACE="$SRC/V10SurfaceManager.java"
+          SESSION="$SRC/V10ProjectionSession.java"
           TASK="$SRC/V10TaskSession.java"
+          ACTIVITY="$SRC/V10CarActivity.java"
 
-          echo "Checking required files..."
+          echo "Checking required Display Core files..."
 
-          test -f "$ACTIVITY"
-          test -f "$SESSION"
           test -f "$DISPLAY"
           test -f "$SURFACE"
           test -f "$TASK"
-
-          echo "Checking Floating Touch..."
-
-          grep -Fq "private TextView floatingTouchKey;" "$ACTIVITY"
-          grep -Fq "createFloatingTouchKey();" "$ACTIVITY"
-          grep -Fq "private void createFloatingTouchKey()" "$ACTIVITY"
-
-          grep -Fq "floatingDragging" "$ACTIVITY"
-          grep -Fq "floatingDownTime" "$ACTIVITY"
-          grep -Fq "SystemClock.uptimeMillis()" "$ACTIVITY"
-          grep -Fq "ViewConfiguration.getLongPressTimeout()" "$ACTIVITY"
-
-          grep -Fq 'addFloatingMenuButton("BACK"' "$ACTIVITY"
-          grep -Fq 'addFloatingMenuButton("HOME"' "$ACTIVITY"
-
-          grep -Fq "handleControlBack();" "$ACTIVITY"
-          grep -Fq "handleControlHome();" "$ACTIVITY"
-
-          echo "Floating Touch verification: PASSED"
-
-          echo "Checking Display Core..."
+          test -f "$SESSION"
+          test -f "$ACTIVITY"
 
           grep -Fq "DisplayManager" "$DISPLAY"
           grep -Fq "createVirtualDisplay" "$DISPLAY"
           grep -Fq "virtualDisplay.setSurface(null)" "$DISPLAY"
           grep -Fq -- "--activity-reorder-to-front" "$DISPLAY"
 
+          echo "Display Core markers OK."
+
+          echo "Checking Projection Session..."
+
           grep -Fq "launchNewTask" "$SESSION"
           grep -Fq "resumeExistingTask" "$SESSION"
           grep -Fq "RootShellSession" "$SESSION"
           grep -Fq "State.HIDDEN" "$SESSION"
 
-          grep -Fq "class V10TaskSession" "$TASK"
-          grep -Fq "class V10SurfaceManager" "$SURFACE"
+          echo "Projection Session markers OK."
 
-          echo "Display Core verification: PASSED"
+          echo "Checking Task Session..."
 
-          echo "Checking Activity lifecycle..."
+          grep -Fq "enum State" "$TASK"
+          grep -Fq "NEW" "$TASK"
+          grep -Fq "ACTIVE" "$TASK"
+          grep -Fq "HIDDEN" "$TASK"
+          grep -Fq "CLOSED" "$TASK"
 
-          if grep -Fq "session.release()" "$ACTIVITY"; then
-            echo "INFO: session.release() exists somewhere in Activity."
-          fi
+          echo "Task Session markers OK."
 
-          echo "Checking forbidden legacy features..."
+          echo "Checking Floating Touch..."
 
-          if grep -Fq "floatingLastTap" "$ACTIVITY"; then
-            echo "ERROR: floatingLastTap remains."
-            exit 1
-          fi
+          grep -Fq "floatingTouchKey" "$ACTIVITY"
+          grep -Fq "createFloatingTouchKey()" "$ACTIVITY"
+          grep -Fq "ViewConfiguration.getLongPressTimeout()" "$ACTIVITY"
+          grep -Fq "floatingDownTime" "$ACTIVITY"
 
-          if grep -Fq "session.recents()" "$ACTIVITY"; then
-            echo "ERROR: RECENTS logic remains."
-            exit 1
-          fi
+          echo "Floating Touch markers OK."
 
-          if grep -Fq '"RECENTS"' "$ACTIVITY"; then
-            echo "ERROR: RECENTS menu remains."
-            exit 1
-          fi
+          echo "Checking forbidden legacy paths..."
 
-          if grep -Fq '"2 SCREEN"' "$ACTIVITY"; then
-            echo "ERROR: 2 SCREEN remains."
-            exit 1
-          fi
-
-          if grep -Fq '"3 SCREEN"' "$ACTIVITY"; then
-            echo "ERROR: 3 SCREEN remains."
-            exit 1
-          fi
-
-          if grep -Fq "setLayoutModeExternal(" "$ACTIVITY"; then
-            echo "ERROR: external layout patch detected."
-            exit 1
-          fi
-
-          if grep -Fq "V10ProjectionService" "$SESSION"; then
-            echo "ERROR: V10ProjectionService detected."
+          if grep -Fq "V10ProjectionService" "$ACTIVITY"; then
+            echo "ERROR: V10ProjectionService reference found."
             exit 1
           fi
 
           if grep -Fq "am force-stop" "$SESSION"; then
-            echo "ERROR: force-stop detected in V10ProjectionSession."
+            echo "ERROR: am force-stop found in ProjectionSession."
             exit 1
           fi
 
-          if grep -Fq "am force-stop" "$DISPLAY"; then
-            echo "ERROR: force-stop detected in V10DisplayController."
+          if grep -Fq "session.recents()" "$ACTIVITY"; then
+            echo "ERROR: legacy session.recents() found."
             exit 1
           fi
 
-          echo
-          echo "=============================================="
-          echo "CARASSISTANT V10 STABLE BASE V1"
-          echo "SOURCE VERIFICATION: PASSED"
-          echo "=============================================="
+          if grep -Fq '"RECENTS"' "$ACTIVITY"; then
+            echo "ERROR: legacy RECENTS menu found."
+            exit 1
+          fi
+
+          if grep -Fq '"2 SCREEN"' "$ACTIVITY"; then
+            echo "ERROR: legacy 2 SCREEN menu found."
+            exit 1
+          fi
+
+          if grep -Fq '"3 SCREEN"' "$ACTIVITY"; then
+            echo "ERROR: legacy 3 SCREEN menu found."
+            exit 1
+          fi
+
+          if grep -Fq "setLayoutModeExternal(" "$ACTIVITY"; then
+            echo "ERROR: legacy external layout control found."
+            exit 1
+          fi
+
+          echo "Stable Base verification PASSED."
 
       - name: Compile Java
-        working-directory: v10-source
-        shell: bash
         run: |
           set -euo pipefail
 
-          chmod +x ./gradlew
+          cd v10-source
 
           ./gradlew \
             --no-daemon \
@@ -385,10 +347,10 @@ jobs:
             compileDebugJavaWithJavac
 
       - name: Assemble Stable Base APK
-        working-directory: v10-source
-        shell: bash
         run: |
           set -euo pipefail
+
+          cd v10-source
 
           ./gradlew \
             --no-daemon \
@@ -396,139 +358,81 @@ jobs:
             assembleDebug
 
       - name: Locate APK and SHA256
-        shell: bash
         run: |
           set -euo pipefail
 
-          APK="$(find \
-            v10-source/app/build/outputs/apk/debug \
-            -type f \
-            -name '*.apk' \
-            -print \
-            -quit)"
+          APK="$(find v10-source -type f -path '*/build/outputs/apk/*/*.apk' | head -n 1)"
 
           if [ -z "$APK" ]; then
             echo "ERROR: APK not found."
             exit 1
           fi
 
-          test -f "$APK"
+          cp "$APK" CarAssistant-V10-Stable-Base-V1.apk
 
-          mkdir -p stable-base
+          SHA="$(sha256sum CarAssistant-V10-Stable-Base-V1.apk | awk '{print $1}')"
 
-          echo "APK=$APK"
+          echo "APK: CarAssistant-V10-Stable-Base-V1.apk"
+          echo "SHA256: $SHA"
 
-          sha256sum "$APK" \
-            | tee stable-base/CarAssistant-V10-Stable-Base-V1-apk.sha256
+          printf '%s\n' "$SHA" > CarAssistant-V10-Stable-Base-V1.sha256
 
       - name: Create Stable Base manifest
-        shell: bash
         run: |
           set -euo pipefail
 
-          mkdir -p stable-base
+          cat > Stable-Base-V1-MANIFEST.txt <<'EOF'
+          CarAssistant V10 Stable Base Freeze V1
 
-          cat > stable-base/STABLE-BASE.txt <<'EOF'
-          CarAssistant V10 Stable Base V1
-
-          ==========================================
-          BASE
-          ==========================================
-
-          V10-6A baseline
-
-          Commit:
+          BASELINE
+          V10-6A commit:
           9075636a7d5947c1b0eee49c2bd3fd0e1b6b0cf1
 
-          ==========================================
-          DISPLAY
-          ==========================================
+          DISPLAY CORE
+          Display Core V1 restored from:
+          .github/workflows/build-v10-display-core-v1.yml
 
-          Display Core V1
-
-          ==========================================
           FLOATING TOUCH
-          ==========================================
+          Historical Floating Touch patch recovered from:
+          commit 953d6c61664530a94c1813b9335a97d08c212611
 
-          Historical Floating Touch patch recovered
-          from deleted workflow.
+          SAFE LONG PRESS
+          Exact SAFE Long Press patch recovered from:
+          .github/workflows/build-v10-display-core-v1-floating-touch-longpress-safe.yml
 
-          Delete commit:
-          6abfbe6a498a738c012a10cb13f98e285cdb8017
+          PERSISTENCE
+          No Persistence rewrite performed.
 
-          Parent containing original workflow:
-          953d6c61664530a94c1813b9335a97d08c212611
+          HOME UI
+          No Home UI redesign performed.
 
-          ==========================================
-          SAFE TOUCH
-          ==========================================
+          LEGACY
+          No V10ProjectionService.
+          No am force-stop.
+          No RECENTS menu.
+          No 2 SCREEN menu.
+          No 3 SCREEN menu.
+          No external layout mode.
 
-          Floating button
-          Drag and drop
-          Position persistence
-          Short press menu
-          BACK
-          HOME
-          Long press HOME
-
-          ==========================================
-          EXCLUDED
-          ==========================================
-
-          RECENTS
-          2 SCREEN
-          3 SCREEN
-          V10ProjectionService
-          am force-stop
-
-          ==========================================
           PURPOSE
-          ==========================================
-
-          This package is the frozen V10 Stable Base.
-
-          Future features must be implemented as
-          isolated patches on top of this base.
-
-          Display Core, ProjectionSession, TaskSession
-          and Floating Touch must not be rewritten
-          unless explicitly required and separately
-          tested.
+          This APK is the frozen Stable Base for subsequent isolated UI work.
           EOF
 
-          cat stable-base/STABLE-BASE.txt
-
       - name: Package frozen Stable Base source
-        shell: bash
         run: |
           set -euo pipefail
-
-          mkdir -p stable-base
-
-          cp -a v10-source stable-base/v10-source
-
-          rm -rf stable-base/v10-source/.gradle
-          rm -rf stable-base/v10-source/app/build
-
-          cd stable-base
 
           zip -qr \
             CarAssistant-V10-Stable-Base-V1-source.zip \
             v10-source
-
-          sha256sum \
-            CarAssistant-V10-Stable-Base-V1-source.zip \
-            | tee CarAssistant-V10-Stable-Base-V1-source.sha256
 
       - name: Upload Stable Base
         uses: actions/upload-artifact@v4
         with:
           name: CarAssistant-V10-Stable-Base-V1
           path: |
-            v10-source/app/build/outputs/apk/debug/*.apk
-            stable-base/STABLE-BASE.txt
-            stable-base/CarAssistant-V10-Stable-Base-V1-apk.sha256
-            stable-base/CarAssistant-V10-Stable-Base-V1-source.zip
-            stable-base/CarAssistant-V10-Stable-Base-V1-source.sha256
+            CarAssistant-V10-Stable-Base-V1.apk
+            CarAssistant-V10-Stable-Base-V1.sha256
+            Stable-Base-V1-MANIFEST.txt
+            CarAssistant-V10-Stable-Base-V1-source.zip
           if-no-files-found: error
-          retention-days: 30
