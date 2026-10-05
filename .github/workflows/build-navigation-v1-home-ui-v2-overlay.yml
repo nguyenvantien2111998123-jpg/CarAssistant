@@ -1,1592 +1,824 @@
 name: CarAssistant V10 - Navigation V1 + Home UI V2 Transparent Overlay Safe
 
 on:
-workflow_dispatch:
+  workflow_dispatch:
 
 permissions:
-contents: read
+  contents: read
 
 jobs:
-build:
-runs-on: ubuntu-latest
-timeout-minutes: 40
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
 
-steps:
-  - name: Checkout repository
-    uses: actions/checkout@v4
+    steps:
+      - name: Checkout exact Foundation
+        uses: actions/checkout@v4
+        with:
+          ref: 2c814a181d00cde9547a446927ae181e18cb9cbb
+          fetch-depth: 1
 
-  - name: Set up JDK 17
-    uses: actions/setup-java@v4
-    with:
-      distribution: temurin
-      java-version: '17'
+      - name: Setup Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
 
-  - name: Restore Navigation V1 Foundation
-    shell: bash
-    run: |
-      set -euo pipefail
+      - name: Verify Foundation source
+        shell: bash
+        run: |
+          set -euo pipefail
 
-      BASELINE="2c814a181d00cde9547a446927ae181e18cb9cbb"
+          SRC="v10-source/app/src/main/java/com/hieptran/aacast/doudou"
 
-      git fetch origin "$BASELINE" --depth=1
+          test -f "$SRC/V10CarActivity.java"
+          test -f "$SRC/V10ProjectionSession.java"
+          test -f "$SRC/V10DisplayController.java"
+          test -f "$SRC/V10SurfaceManager.java"
+          test -f "$SRC/V10TaskSession.java"
+          test -f "$SRC/V10SessionStore.java"
 
-      rm -rf v10-source
-      git checkout "$BASELINE" -- v10-source
+          ACTUAL="$(git rev-parse HEAD)"
+          test "$ACTUAL" = "2c814a181d00cde9547a446927ae181e18cb9cbb"
 
-      SRC="v10-source/app/src/main/java/com/hieptran/aacast/doudou"
+          sha256sum \
+            "$SRC/V10ProjectionSession.java" \
+            "$SRC/V10DisplayController.java" \
+            "$SRC/V10SurfaceManager.java" \
+            "$SRC/V10TaskSession.java" \
+            "$SRC/V10SessionStore.java" \
+            > /tmp/core-before.sha256
 
-      test -f "$SRC/V10CarActivity.java"
-      test -f "$SRC/V10ProjectionSession.java"
-      test -f "$SRC/V10DisplayController.java"
-      test -f "$SRC/V10SurfaceManager.java"
-      test -f "$SRC/V10TaskSession.java"
-      test -f "$SRC/V10SessionStore.java"
+          echo "Foundation source PASS."
 
-      echo "Foundation source PASS."
-      echo "BASELINE=$BASELINE"
+      - name: Add MapLibre and location permissions
+        shell: bash
+        run: |
+          set -euo pipefail
 
-  - name: Protect Foundation Core
-    shell: bash
-    run: |
-      set -euo pipefail
+          GRADLE="v10-source/app/build.gradle"
+          MANIFEST="v10-source/app/src/main/AndroidManifest.xml"
 
-      SRC="v10-source/app/src/main/java/com/hieptran/aacast/doudou"
+          test -f "$GRADLE"
+          test -f "$MANIFEST"
 
-      sha256sum \
-        "$SRC/V10ProjectionSession.java" \
-        "$SRC/V10DisplayController.java" \
-        "$SRC/V10SurfaceManager.java" \
-        "$SRC/V10TaskSession.java" \
-        "$SRC/V10SessionStore.java" \
-        > /tmp/core-before.sha256
+          grep -Fq "dependencies" "$GRADLE"
 
-  - name: Add MapLibre dependency
-    shell: bash
-    run: |
-      set -euo pipefail
+          if ! grep -Fq "org.maplibre.gl:android-sdk:11.11.0" "$GRADLE"; then
+            printf '%s\n' \
+              'implementation "org.maplibre.gl:android-sdk:11.11.0"' \
+              > /tmp/maplibre.line
 
-      FILE="v10-source/app/build.gradle"
+            sed -i \
+              '/^[[:space:]]*dependencies[[:space:]]*{/r /tmp/maplibre.line' \
+              "$GRADLE"
+          fi
 
-      test -f "$FILE"
+          if ! grep -Fq \
+            'android.permission.ACCESS_FINE_LOCATION' \
+            "$MANIFEST"; then
 
-      grep -Fq "dependencies" "$FILE"
+            printf '%s\n' \
+              '<uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />' \
+              '<uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />' \
+              > /tmp/location.permissions
 
-      if ! grep -Fq "org.maplibre.gl:android-sdk:11.11.0" "$FILE"; then
-        sed -i '/dependencies[[:space:]]*{/a\
-implementation "org.maplibre.gl:android-sdk:11.11.0"' "$FILE"
-      fi
+            sed -i \
+              '/<manifest/r /tmp/location.permissions' \
+              "$MANIFEST"
+          fi
 
-      grep -Fq \
-        'org.maplibre.gl:android-sdk:11.11.0' \
-        "$FILE"
+          grep -Fq \
+            "org.maplibre.gl:android-sdk:11.11.0" \
+            "$GRADLE"
 
-      echo "MapLibre dependency PASS."
+          grep -Fq \
+            "android.permission.ACCESS_FINE_LOCATION" \
+            "$MANIFEST"
 
-  - name: Add Navigation location permissions
-    shell: bash
-    run: |
-      set -euo pipefail
+          echo "Navigation dependency/permissions PASS."
 
-      FILE="v10-source/app/src/main/AndroidManifest.xml"
+      - name: Create NavigationMapView
+        shell: bash
+        run: |
+          set -euo pipefail
 
-      test -f "$FILE"
+          SRC="v10-source/app/src/main/java/com/hieptran/aacast/doudou"
 
-      if ! grep -Fq \
-        'android.permission.ACCESS_FINE_LOCATION' \
-        "$FILE"; then
-        sed -i '/<manifest/a\
-<uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />\
-<uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />' "$FILE"
-      fi
+          cat > "$SRC/NavigationMapView.java" <<'EOF'
+          package com.carassistant.v10;
 
-      grep -Fq \
-        'android.permission.ACCESS_FINE_LOCATION' \
-        "$FILE"
+          import android.Manifest;
+          import android.app.Activity;
+          import android.content.Context;
+          import android.content.pm.PackageManager;
+          import android.graphics.Color;
+          import android.location.Location;
+          import android.os.Bundle;
+          import android.widget.FrameLayout;
 
-      grep -Fq \
-        'android.permission.ACCESS_COARSE_LOCATION' \
-        "$FILE"
+          import org.maplibre.android.MapLibre;
+          import org.maplibre.android.camera.CameraUpdateFactory;
+          import org.maplibre.android.geometry.LatLng;
+          import org.maplibre.android.location.LocationComponentActivationOptions;
+          import org.maplibre.android.location.LocationComponentOptions;
+          import org.maplibre.android.maps.MapLibreMap;
+          import org.maplibre.android.maps.MapView;
+          import org.maplibre.android.maps.UiSettings;
 
-      echo "Location permissions PASS."
+          public final class NavigationMapView extends FrameLayout {
 
-  - name: Create NavigationMapView
-    shell: bash
-    run: |
-      set -euo pipefail
+              private static final int LOCATION_REQUEST = 4101;
 
-      SRC="v10-source/app/src/main/java/com/hieptran/aacast/doudou"
+              private final MapView mapView;
+              private MapLibreMap map;
 
-      cat > "$SRC/NavigationMapView.java" <<'EOF'
-      package com.carassistant.v10;
+              public NavigationMapView(Context context) {
+                  super(context);
 
-      import android.Manifest;
-      import android.app.Activity;
-      import android.content.Context;
-      import android.content.pm.PackageManager;
-      import android.graphics.Color;
-      import android.location.Location;
-      import android.os.Bundle;
-      import android.widget.FrameLayout;
+                  setBackgroundColor(Color.BLACK);
 
-      import org.maplibre.android.MapLibre;
-      import org.maplibre.android.camera.CameraUpdateFactory;
-      import org.maplibre.android.geometry.LatLng;
-      import org.maplibre.android.location.LocationComponentActivationOptions;
-      import org.maplibre.android.location.LocationComponentOptions;
-      import org.maplibre.android.maps.MapLibreMap;
-      import org.maplibre.android.maps.MapView;
-      import org.maplibre.android.maps.UiSettings;
+                  MapLibre.getInstance(
+                          context.getApplicationContext());
 
-      public final class NavigationMapView extends FrameLayout {
+                  mapView = new MapView(context);
 
-          private static final int LOCATION_REQUEST = 4101;
+                  mapView.onCreate(
+                          new Bundle());
 
-          private final MapView mapView;
-          private MapLibreMap map;
+                  addView(
+                          mapView,
+                          new LayoutParams(
+                                  LayoutParams.MATCH_PARENT,
+                                  LayoutParams.MATCH_PARENT));
 
-          public NavigationMapView(Context context) {
-              super(context);
-
-              setBackgroundColor(Color.BLACK);
-
-              MapLibre.getInstance(
-                      context.getApplicationContext());
-
-              mapView = new MapView(context);
-              mapView.onCreate(new Bundle());
-
-              LayoutParams params =
-                      new LayoutParams(
-                              LayoutParams.MATCH_PARENT,
-                              LayoutParams.MATCH_PARENT);
-
-              addView(mapView, params);
-
-              mapView.getMapAsync(
-                      this::onMapReady);
-          }
-
-          private void onMapReady(
-                  MapLibreMap readyMap) {
-
-              map = readyMap;
-
-              UiSettings ui =
-                      map.getUiSettings();
-
-              ui.setCompassEnabled(false);
-              ui.setZoomGesturesEnabled(true);
-              ui.setScrollGesturesEnabled(true);
-              ui.setRotateGesturesEnabled(true);
-              ui.setTiltGesturesEnabled(false);
-
-              map.setStyle(
-                      "https://tiles.openfreemap.org/styles/liberty",
-                      style -> enableLocation());
-          }
-
-          private void enableLocation() {
-
-              if (map == null) {
-                  return;
+                  mapView.getMapAsync(
+                          this::onMapReady);
               }
 
-              Context context = getContext();
+              private void onMapReady(
+                      MapLibreMap readyMap) {
 
-              if (context == null) {
-                  return;
+                  map = readyMap;
+
+                  UiSettings ui =
+                          map.getUiSettings();
+
+                  ui.setCompassEnabled(false);
+                  ui.setZoomGesturesEnabled(true);
+                  ui.setScrollGesturesEnabled(true);
+                  ui.setRotateGesturesEnabled(true);
+                  ui.setTiltGesturesEnabled(false);
+
+                  map.setStyle(
+                          "https://tiles.openfreemap.org/styles/liberty",
+                          style -> enableLocation());
               }
 
-              if (context.checkSelfPermission(
-                      Manifest.permission.ACCESS_FINE_LOCATION)
-                      != PackageManager.PERMISSION_GRANTED) {
+              private void enableLocation() {
 
-                  if (context instanceof Activity) {
-                      ((Activity) context).requestPermissions(
-                              new String[]{
-                                      Manifest.permission.ACCESS_FINE_LOCATION,
-                                      Manifest.permission.ACCESS_COARSE_LOCATION},
-                              LOCATION_REQUEST);
-                  }
-
-                  return;
-              }
-
-              LocationComponentOptions options =
-                      LocationComponentOptions.builder(context)
-                              .pulseEnabled(true)
-                              .build();
-
-              LocationComponentActivationOptions activation =
-                      LocationComponentActivationOptions.builder(
-                              context,
-                              map.getStyle())
-                              .locationComponentOptions(options)
-                              .build();
-
-              map.getLocationComponent()
-                      .activateLocationComponent(
-                              activation);
-
-              map.getLocationComponent()
-                      .setLocationComponentEnabled(true);
-          }
-
-          public void zoomIn() {
-
-              if (map == null) {
-                  return;
-              }
-
-              double zoom =
-                      map.getCameraPosition().zoom;
-
-              map.animateCamera(
-                      CameraUpdateFactory.zoomTo(
-                              Math.min(20.0, zoom + 1.0)),
-                      250);
-          }
-
-          public void zoomOut() {
-
-              if (map == null) {
-                  return;
-              }
-
-              double zoom =
-                      map.getCameraPosition().zoom;
-
-              map.animateCamera(
-                      CameraUpdateFactory.zoomTo(
-                              Math.max(1.0, zoom - 1.0)),
-                      250);
-          }
-
-          public void recenter() {
-
-              if (map == null) {
-                  return;
-              }
-
-              try {
-                  Location location =
-                          map.getLocationComponent()
-                                  .getLastKnownLocation();
-
-                  if (location == null) {
+                  if (map == null) {
                       return;
                   }
 
-                  LatLng target =
-                          new LatLng(
-                                  location.getLatitude(),
-                                  location.getLongitude());
+                  Context context =
+                          getContext();
+
+                  if (context == null) {
+                      return;
+                  }
+
+                  if (context.checkSelfPermission(
+                          Manifest.permission.ACCESS_FINE_LOCATION)
+                          != PackageManager.PERMISSION_GRANTED) {
+
+                      if (context instanceof Activity) {
+                          ((Activity) context).requestPermissions(
+                                  new String[]{
+                                          Manifest.permission.ACCESS_FINE_LOCATION,
+                                          Manifest.permission.ACCESS_COARSE_LOCATION
+                                  },
+                                  LOCATION_REQUEST);
+                      }
+
+                      return;
+                  }
+
+                  LocationComponentOptions options =
+                          LocationComponentOptions
+                                  .builder(context)
+                                  .pulseEnabled(true)
+                                  .build();
+
+                  LocationComponentActivationOptions activation =
+                          LocationComponentActivationOptions
+                                  .builder(
+                                          context,
+                                          map.getStyle())
+                                  .locationComponentOptions(options)
+                                  .build();
+
+                  map.getLocationComponent()
+                          .activateLocationComponent(
+                                  activation);
+
+                  map.getLocationComponent()
+                          .setLocationComponentEnabled(true);
+              }
+
+              public void zoomIn() {
+
+                  if (map == null) {
+                      return;
+                  }
+
+                  double zoom =
+                          map.getCameraPosition().zoom;
 
                   map.animateCamera(
-                          CameraUpdateFactory.newLatLngZoom(
-                                  target,
-                                  16.0),
-                          500);
-
-              } catch (Exception ignored) {
-              }
-          }
-
-          public void onHostResume() {
-              mapView.onResume();
-          }
-
-          public void onHostPause() {
-              mapView.onPause();
-          }
-
-          public void onHostDestroy() {
-              mapView.onDestroy();
-          }
-      }
-      EOF
-
-      test -s "$SRC/NavigationMapView.java"
-
-      grep -Fq \
-        'https://tiles.openfreemap.org/styles/liberty' \
-        "$SRC/NavigationMapView.java"
-
-      echo "NavigationMapView created."
-
-  - name: Patch V10CarActivity to Navigation background + transparent Home overlay
-    shell: bash
-    run: |
-      set -euo pipefail
-
-      FILE="v10-source/app/src/main/java/com/hieptran/aacast/doudou/V10CarActivity.java"
-
-      test -f "$FILE"
-
-      python3 - <<'PY'
-      from pathlib import Path
-
-      file = Path(
-          "v10-source/app/src/main/java/com/hieptran/aacast/doudou/V10CarActivity.java"
-      )
-
-      text = file.read_text(encoding="utf-8")
-
-      def method(source, signature):
-          start = source.find(signature)
-
-          if start < 0:
-              raise SystemExit(
-                  "METHOD NOT FOUND: " + signature
-              )
-
-          brace = source.find("{", start)
-
-          if brace < 0:
-              raise SystemExit(
-                  "OPENING BRACE NOT FOUND: " + signature
-              )
-
-          depth = 0
-          quote = False
-          escape = False
-          line_comment = False
-          block_comment = False
-
-          i = brace
-
-          while i < len(source):
-              c = source[i]
-              n = source[i + 1] if i + 1 < len(source) else ""
-
-              if line_comment:
-                  if c == "\n":
-                      line_comment = False
-
-              elif block_comment:
-                  if c == "*" and n == "/":
-                      block_comment = False
-                      i += 1
-
-              elif quote:
-                  if escape:
-                      escape = False
-                  elif c == "\\":
-                      escape = True
-                  elif c == '"':
-                      quote = False
-
-              else:
-                  if c == "/" and n == "/":
-                      line_comment = True
-                      i += 1
-                  elif c == "/" and n == "*":
-                      block_comment = True
-                      i += 1
-                  elif c == '"':
-                      quote = True
-                  elif c == "{":
-                      depth += 1
-                  elif c == "}":
-                      depth -= 1
-                      if depth == 0:
-                          return start, i + 1
-
-              i += 1
-
-          raise SystemExit(
-              "CLOSING BRACE NOT FOUND: " + signature
-          )
-
-      # ----------------------------------------------------------
-      # IMPORTS
-      # ----------------------------------------------------------
-
-      if "import android.content.pm.ApplicationInfo;" not in text:
-          text = text.replace(
-              "import android.content.pm.ResolveInfo;",
-              "import android.content.pm.ResolveInfo;\n"
-              "import android.content.pm.ApplicationInfo;",
-              1
-          )
-
-      if "import android.widget.ImageView;" not in text:
-          text = text.replace(
-              "import android.widget.FrameLayout;",
-              "import android.widget.FrameLayout;\n"
-              "import android.widget.ImageView;",
-              1
-          )
-
-      # ----------------------------------------------------------
-      # FIELD
-      # ----------------------------------------------------------
-
-      if "private NavigationMapView navigationMap;" not in text:
-          marker = "private FrameLayout projectionLayer;"
-
-          text = text.replace(
-              marker,
-              marker
-              + "\n"
-              + "    private NavigationMapView navigationMap;",
-              1
-          )
-
-      # ----------------------------------------------------------
-      # BUILD UI
-      #
-      # FrameLayout order:
-      #
-      #   0 = Navigation full-screen
-      #   1 = Home UI transparent overlay
-      #   2 = Projection layer when needed
-      #
-      # ----------------------------------------------------------
-
-      start, end = method(
-          text,
-          "private void buildUi("
-      )
-
-      build_ui = r'''private void buildUi() {
-
-          root =
-                  new FrameLayout(this);
-
-          root.setBackgroundColor(
-                  Color.TRANSPARENT);
-
-          // ----------------------------------------------------
-          // NAVIGATION = FULL SCREEN BACKGROUND
-          // ----------------------------------------------------
-
-          navigationMap =
-                  new NavigationMapView(this);
-
-          FrameLayout.LayoutParams
-                  navigationParams =
-                  new FrameLayout.LayoutParams(
-                          -1,
-                          -1);
-
-          root.addView(
-                  navigationMap,
-                  navigationParams);
-
-          // ----------------------------------------------------
-          // EXISTING PROJECTION LAYER
-          // ----------------------------------------------------
-
-          projectionLayer =
-                  new FrameLayout(this);
-
-          projectionLayer.setVisibility(
-                  View.GONE);
-
-          root.addView(
-                  projectionLayer,
-                  new FrameLayout.LayoutParams(
-                          -1,
-                          -1));
-
-          // ----------------------------------------------------
-          // HOME UI V2 = TRANSPARENT OVERLAY
-          // ----------------------------------------------------
-
-          launcherLayer =
-                  new LinearLayout(this);
-
-          launcherLayer.setOrientation(
-                  LinearLayout.VERTICAL);
-
-          launcherLayer.setPadding(
-                  dp(18),
-                  dp(12),
-                  dp(18),
-                  dp(8));
-
-          launcherLayer.setBackgroundColor(
-                  Color.TRANSPARENT);
-
-          FrameLayout.LayoutParams
-                  overlayParams =
-                  new FrameLayout.LayoutParams(
-                          -1,
-                          -1);
-
-          root.addView(
-                  launcherLayer,
-                  overlayParams);
-
-          buildDashboard();
-          buildAppPanel();
-
-          setContentView(root);
-      }'''
-
-      text = text[:start] + build_ui + text[end:]
-
-      # ----------------------------------------------------------
-      # BUILD DASHBOARD
-      #
-      # No MAP card.
-      # No opaque Home background.
-      # Navigation is underneath this view.
-      # ----------------------------------------------------------
-
-      start, end = method(
-          text,
-          "private void buildDashboard("
-      )
-
-      dashboard = r'''private void buildDashboard() {
-
-          dashboard =
-                  new LinearLayout(this);
-
-          dashboard.setOrientation(
-                  LinearLayout.HORIZONTAL);
-
-          dashboard.setBackgroundColor(
-                  Color.TRANSPARENT);
-
-          launcherLayer.addView(
-                  dashboard,
-                  new LinearLayout.LayoutParams(
-                          -1,
-                          -1));
-
-          // ----------------------------------------------------
-          // LEFT TRANSPARENT SIDEBAR
-          // ----------------------------------------------------
-
-          LinearLayout sideBar =
-                  new LinearLayout(this);
-
-          sideBar.setOrientation(
-                  LinearLayout.VERTICAL);
-
-          sideBar.setGravity(
-                  Gravity.CENTER_HORIZONTAL);
-
-          sideBar.setBackgroundColor(
-                  Color.TRANSPARENT);
-
-          dashboard.addView(
-                  sideBar,
-                  new LinearLayout.LayoutParams(
-                          dp(96),
-                          -1));
-
-          TextView appsButton =
-                  buttonText("CHỌN APP");
-
-          appsButton.setOnClickListener(
-                  v -> showApps());
-
-          sideBar.addView(
-                  appsButton,
-                  new LinearLayout.LayoutParams(
-                          -1,
-                          dp(62)));
-
-          // ----------------------------------------------------
-          // QUICK APP DOCK
-          // ----------------------------------------------------
-
-          dock =
-                  new LinearLayout(this);
-
-          dock.setOrientation(
-                  LinearLayout.VERTICAL);
-
-          dock.setGravity(
-                  Gravity.TOP);
-
-          dock.setBackgroundColor(
-                  Color.TRANSPARENT);
-
-          sideBar.addView(
-                  dock,
-                  new LinearLayout.LayoutParams(
-                          -1,
-                          0,
-                          1f));
-
-          TextView voiceButton =
-                  buttonText("VOICE");
-
-          voiceButton.setOnClickListener(
-                  v -> {});
-
-          sideBar.addView(
-                  voiceButton,
-                  new LinearLayout.LayoutParams(
-                          -1,
-                          dp(62)));
-
-          TextView tasksButton =
-                  buttonText("TASKS");
-
-          tasksButton.setOnClickListener(
-                  v -> {});
-
-          sideBar.addView(
-                  tasksButton,
-                  new LinearLayout.LayoutParams(
-                          -1,
-                          dp(62)));
-
-          // ----------------------------------------------------
-          // MAIN TRANSPARENT AREA
-          //
-          // Deliberately contains NO MAP CARD.
-          // NavigationMapView is underneath the whole UI.
-          // ----------------------------------------------------
-
-          LinearLayout main =
-                  new LinearLayout(this);
-
-          main.setOrientation(
-                  LinearLayout.VERTICAL);
-
-          main.setBackgroundColor(
-                  Color.TRANSPARENT);
-
-          dashboard.addView(
-                  main,
-                  new LinearLayout.LayoutParams(
-                          0,
-                          -1,
-                          1f));
-
-          SpaceHolder spacer =
-                  new SpaceHolder(this);
-
-          main.addView(
-                  spacer,
-                  new LinearLayout.LayoutParams(
-                          -1,
-                          0,
-                          1f));
-
-          // ----------------------------------------------------
-          // BOTTOM FLOATING STATUS BAR
-          // ----------------------------------------------------
-
-          LinearLayout bottomBar =
-                  new LinearLayout(this);
-
-          bottomBar.setOrientation(
-                  LinearLayout.HORIZONTAL);
-
-          bottomBar.setGravity(
-                  Gravity.CENTER_VERTICAL);
-
-          bottomBar.setPadding(
-                  dp(6),
-                  dp(4),
-                  dp(6),
-                  dp(4));
-
-          bottomBar.setBackgroundColor(
-                  Color.TRANSPARENT);
-
-          TextView wyn =
-                  circleButton("WYN");
-
-          bottomBar.addView(
-                  wyn,
-                  new LinearLayout.LayoutParams(
-                          dp(62),
-                          dp(62)));
-
-          TextView media =
-                  buttonText("MEDIA");
-
-          bottomBar.addView(
-                  media,
-                  new LinearLayout.LayoutParams(
-                          dp(110),
-                          dp(52)));
-
-          main.addView(
-                  bottomBar,
-                  new LinearLayout.LayoutParams(
-                          -1,
-                          dp(76)));
-
-          // Keep placeholders transparent.
-          // No MediaSession or API is introduced here.
-      }'''
-
-      # SpaceHolder is replaced later with plain View.
-      dashboard = dashboard.replace(
-          "SpaceHolder spacer =\n                      new SpaceHolder(this);",
-          "View spacer = new View(this);"
-      )
-
-      text = text[:start] + dashboard + text[end:]
-
-      # ----------------------------------------------------------
-      # QUICK APPS
-      # ----------------------------------------------------------
-
-      start, end = method(
-          text,
-          "private void rebuildDock("
-      )
-
-      dock_method = r'''private void rebuildDock() {
-
-          if (dock == null) {
-              return;
-          }
-
-          dock.removeAllViews();
-
-          int count =
-                  Math.min(
-                          4,
-                          apps.size());
-
-          for (int i = 0;
-               i < count;
-               i++) {
-
-              final AppInfo app =
-                      apps.get(i);
-
-              LinearLayout tile =
-                      new LinearLayout(this);
-
-              tile.setOrientation(
-                      LinearLayout.VERTICAL);
-
-              tile.setGravity(
-                      Gravity.CENTER);
-
-              GradientDrawable bg =
-                      new GradientDrawable();
-
-              bg.setColor(
-                      Color.rgb(
-                              29,
-                              35,
-                              42));
-
-              bg.setCornerRadius(
-                      dp(12));
-
-              tile.setBackground(bg);
-
-              ImageView icon =
-                      new ImageView(this);
-
-              try {
-                  ApplicationInfo info =
-                          getPackageManager()
-                                  .getApplicationInfo(
-                                          app.component
-                                                  .getPackageName(),
-                                          0);
-
-                  icon.setImageDrawable(
-                          info.loadIcon(
-                                  getPackageManager()));
-
-              } catch (Throwable ignored) {
-
-                  icon.setImageResource(
-                          android.R.drawable
-                                  .sym_def_app_icon);
+                          CameraUpdateFactory.zoomTo(
+                                  Math.min(
+                                          20.0,
+                                          zoom + 1.0)),
+                          250);
               }
 
-              icon.setScaleType(
-                      ImageView.ScaleType.CENTER_INSIDE);
+              public void zoomOut() {
 
-              tile.addView(
-                      icon,
-                      new LinearLayout.LayoutParams(
-                              -1,
-                              dp(40)));
+                  if (map == null) {
+                      return;
+                  }
 
-              TextView label =
-                      text(
-                              app.name,
-                              9,
-                              Color.WHITE);
+                  double zoom =
+                          map.getCameraPosition().zoom;
 
-              label.setGravity(
-                      Gravity.CENTER);
+                  map.animateCamera(
+                          CameraUpdateFactory.zoomTo(
+                                  Math.max(
+                                          1.0,
+                                          zoom - 1.0)),
+                          250);
+              }
 
-              label.setMaxLines(1);
+              public void recenter() {
 
-              tile.addView(
-                      label,
-                      new LinearLayout.LayoutParams(
-                              -1,
-                              dp(18)));
+                  if (map == null) {
+                      return;
+                  }
 
-              tile.setOnClickListener(
-                      v ->
-                              launchProjection(
-                                      app.component));
+                  try {
+                      Location location =
+                              map.getLocationComponent()
+                                      .getLastKnownLocation();
 
-              LinearLayout.LayoutParams params =
-                      new LinearLayout.LayoutParams(
-                              -1,
-                              dp(66));
+                      if (location == null) {
+                          return;
+                      }
 
-              params.setMargins(
-                      dp(2),
-                      dp(3),
-                      dp(2),
-                      dp(3));
+                      map.animateCamera(
+                              CameraUpdateFactory
+                                      .newLatLngZoom(
+                                              new LatLng(
+                                                      location.getLatitude(),
+                                                      location.getLongitude()),
+                                              16.0),
+                              500);
 
-              dock.addView(
-                      tile,
-                      params);
+                  } catch (Exception ignored) {
+                  }
+              }
+
+              public void onHostResume() {
+                  mapView.onResume();
+              }
+
+              public void onHostPause() {
+                  mapView.onPause();
+              }
+
+              public void onHostDestroy() {
+                  mapView.onDestroy();
+              }
           }
-      }'''
-
-      text = text[:start] + dock_method + text[end:]
-
-      # ----------------------------------------------------------
-      # APP TILE WITH REAL ICON
-      # ----------------------------------------------------------
-
-      start, end = method(
-          text,
-          "private LinearLayout appTile("
-      )
-
-      app_tile = r'''private LinearLayout appTile(
-              AppInfo app) {
-
-          LinearLayout tile =
-                  new LinearLayout(this);
-
-          tile.setOrientation(
-                  LinearLayout.VERTICAL);
-
-          tile.setGravity(
-                  Gravity.CENTER);
-
-          GradientDrawable bg =
-                  new GradientDrawable();
-
-          bg.setColor(
-                  Color.rgb(
-                          22,
-                          27,
-                          33));
-
-          bg.setCornerRadius(
-                  dp(16));
-
-          tile.setBackground(bg);
-
-          ImageView icon =
-                  new ImageView(this);
-
-          try {
-              ApplicationInfo info =
-                      getPackageManager()
-                              .getApplicationInfo(
-                                      app.component
-                                              .getPackageName(),
-                                      0);
-
-              icon.setImageDrawable(
-                      info.loadIcon(
-                              getPackageManager()));
-
-          } catch (Throwable ignored) {
-
-              icon.setImageResource(
-                      android.R.drawable
-                              .sym_def_app_icon);
-          }
-
-          icon.setScaleType(
-                  ImageView.ScaleType.CENTER_INSIDE);
-
-          icon.setPadding(
-                  dp(8),
-                  dp(6),
-                  dp(8),
-                  dp(6));
-
-          tile.addView(
-                  icon,
-                  new LinearLayout.LayoutParams(
-                          -1,
-                          dp(58)));
-
-          TextView name =
-                  text(
-                          app.name,
-                          12,
-                          Color.WHITE);
-
-          name.setGravity(
-                  Gravity.CENTER);
-
-          name.setMaxLines(2);
-
-          tile.addView(
-                  name,
-                  new LinearLayout.LayoutParams(
-                          -1,
-                          dp(42)));
-
-          tile.setOnClickListener(
-                  v -> {
-
-                      hideApps();
-
-                      launchProjection(
-                              app.component);
-                  });
-
-          return tile;
-      }'''
-
-      text = text[:start] + app_tile + text[end:]
-
-      # ----------------------------------------------------------
-      # LAUNCH PROJECTION
-      #
-      # Navigation remains background when Home is visible.
-      # Projection still takes over only when an app is selected.
-      # ----------------------------------------------------------
-
-      start, end = method(
-          text,
-          "private void launchProjection("
-      )
-
-      launch = r'''private void launchProjection(
-              ComponentName component) {
-
-          if (component == null
-                  || session == null) {
-
-              return;
-          }
-
-          if (activeTarget != null
-                  && !activeTarget.equals(component)) {
-
-              session.release();
-          }
-
-          activeTarget =
-                  component;
-
-          V10SessionStore
-                  .setTarget(
-                          this,
-                          component);
-
-          launcherLayer
-                  .setVisibility(
-                          View.GONE);
-
-          appPanel
-                  .setVisibility(
-                          View.GONE);
-
-          projectionLayer
-                  .setVisibility(
-                          View.VISIBLE);
-
-          session.setTarget(
-                  component);
-      }'''
-
-      text = text[:start] + launch + text[end:]
-
-      # ----------------------------------------------------------
-      # RETURN TO HOME
-      # ----------------------------------------------------------
-
-      start, end = method(
-          text,
-          "private void returnToLauncher("
-      )
-
-      ret = r'''private void returnToLauncher() {
-
-          if (session != null
-                  && session.isActive()) {
-
-              session.hideTask();
-          }
-
-          projectionLayer
-                  .setVisibility(
-                          View.GONE);
-
-          launcherLayer
-                  .setVisibility(
-                          View.VISIBLE);
-
-          dashboard
-                  .setVisibility(
-                          View.VISIBLE);
-
-          appPanel
-                  .setVisibility(
-                          View.GONE);
-      }'''
-
-      text = text[:start] + ret + text[end:]
-
-      # ----------------------------------------------------------
-      # APP PANEL
-      # ----------------------------------------------------------
-
-      text = text.replace(
-          "appPanel.setBackgroundColor(\n                Color.rgb(\n                        7,\n                        9,\n                        12));",
-          "appPanel.setBackgroundColor(\n                Color.TRANSPARENT);"
-      )
-
-      # ----------------------------------------------------------
-      # REQUIRED CHECKS
-      # ----------------------------------------------------------
-
-      required = [
-          "private NavigationMapView navigationMap;",
-          "navigationMap =",
-          "new NavigationMapView(this)",
-          "Color.TRANSPARENT",
-          "Math.min(",
-          "ApplicationInfo",
-          "ImageView",
-          "loadIcon(",
-          'buttonText("CHỌN APP")',
-          'buttonText("VOICE")',
-          'buttonText("TASKS")',
-          '"WYN"',
-          '"MEDIA"',
-          "private void buildUi()",
-          "private void buildDashboard()",
-          "private void rebuildDock()",
-          "private LinearLayout appTile(",
-          "private void launchProjection(",
-          "private void returnToLauncher("
-      ]
-
-      for marker in required:
-          if marker not in text:
-              raise SystemExit(
-                  "REQUIRED MARKER MISSING: "
-                  + marker
-              )
-
-      # Old Home MAP card must not exist.
-      if '"Navigation"' in text:
-          raise SystemExit(
-              "ERROR: old Navigation Home card remains."
-          )
-
-      if 'text("MAP"' in text:
-          raise SystemExit(
-              "ERROR: old MAP card remains."
-          )
-
-      if "infoCard(" in text:
-          raise SystemExit(
-              "ERROR: old information cards remain."
-          )
-
-      if "initial(app.name)" in text:
-          raise SystemExit(
-              "ERROR: old letter icons remain."
-          )
-
-      file.write_text(
-          text,
-          encoding="utf-8"
-      )
-
-      print(
-          "Navigation background + transparent Home overlay patch PASS."
-      )
-      PY
-
-      grep -Fq \
-        "private NavigationMapView navigationMap;" \
-        "$FILE"
-
-      grep -Fq \
-        "new NavigationMapView(this)" \
-        "$FILE"
-
-      grep -Fq \
-        "Color.TRANSPARENT" \
-        "$FILE"
-
-      if grep -Fq \
-        'text("MAP"' \
-        "$FILE"; then
-        echo "ERROR: MAP card still exists."
-        exit 1
-      fi
-
-      if grep -Fq \
-        'initial(app.name)' \
-        "$FILE"; then
-        echo "ERROR: letter icon still exists."
-        exit 1
-      fi
-
-      echo "CarActivity architecture patch PASS."
-
-  - name: Add Navigation lifecycle
-    shell: bash
-    run: |
-      set -euo pipefail
-
-      FILE="v10-source/app/src/main/java/com/hieptran/aacast/doudou/V10CarActivity.java"
-
-      grep -Fq \
-        "public void onPause()" \
-        "$FILE"
-
-      grep -Fq \
-        "public void onDestroy()" \
-        "$FILE"
-
-      python3 - <<'PY'
-      from pathlib import Path
-
-      p = Path(
-          "v10-source/app/src/main/java/com/hieptran/aacast/doudou/V10CarActivity.java"
-      )
-
-      s = p.read_text(encoding="utf-8")
-
-      pause = s.find(
-          "public void onPause()"
-      )
-
-      if pause < 0:
-          raise SystemExit(
-              "onPause not found"
-          )
-
-      brace = s.find("{", pause)
-
-      depth = 0
-      end = -1
-
-      for i in range(brace, len(s)):
-          if s[i] == "{":
-              depth += 1
-          elif s[i] == "}":
-              depth -= 1
-              if depth == 0:
-                  end = i + 1
-                  break
-
-      if end < 0:
-          raise SystemExit(
-              "onPause end not found"
-          )
-
-      block = s[pause:end]
-
-      if "navigationMap.onHostPause();" not in block:
-          block = block.replace(
-              "super.onPause();",
-              "if (navigationMap != null) {\n"
-              "            navigationMap.onHostPause();\n"
-              "        }\n\n"
-              "        super.onPause();",
-              1
-          )
-
-      s = s[:pause] + block + s[end:]
-
-      destroy = s.find(
-          "public void onDestroy()"
-      )
-
-      if destroy < 0:
-          raise SystemExit(
-              "onDestroy not found"
-          )
-
-      brace = s.find("{", destroy)
-
-      depth = 0
-      end = -1
-
-      for i in range(brace, len(s)):
-          if s[i] == "{":
-              depth += 1
-          elif s[i] == "}":
-              depth -= 1
-              if depth == 0:
-                  end = i + 1
-                  break
-
-      if end < 0:
-          raise SystemExit(
-              "onDestroy end not found"
-          )
-
-      block = s[destroy:end]
-
-      if "navigationMap.onHostDestroy();" not in block:
-          block = block.replace(
-              "if (session != null) {",
-              "if (navigationMap != null) {\n"
-              "            navigationMap.onHostDestroy();\n"
-              "            navigationMap = null;\n"
-              "        }\n\n"
-              "        if (session != null) {",
-              1
-          )
-
-      s = s[:destroy] + block + s[end:]
-
-      p.write_text(
-          s,
-          encoding="utf-8"
-      )
-
-      print(
-          "Navigation lifecycle PASS."
-      )
-      PY
-
-  - name: Verify final source architecture
-    shell: bash
-    run: |
-      set -euo pipefail
-
-      SRC="v10-source/app/src/main/java/com/hieptran/aacast/doudou"
-
-      test -f "$SRC/NavigationMapView.java"
-      test -f "$SRC/V10CarActivity.java"
-
-      grep -Fq \
-        'https://tiles.openfreemap.org/styles/liberty' \
-        "$SRC/NavigationMapView.java"
-
-      grep -Fq \
-        "private NavigationMapView navigationMap;" \
-        "$SRC/V10CarActivity.java"
-
-      grep -Fq \
-        "new NavigationMapView(this)" \
-        "$SRC/V10CarActivity.java"
-
-      grep -Fq \
-        "Math.min(" \
-        "$SRC/V10CarActivity.java"
-
-      grep -Fq \
-        "loadIcon(" \
-        "$SRC/V10CarActivity.java"
-
-      grep -Fq \
-        'buttonText("CHỌN APP")' \
-        "$SRC/V10CarActivity.java"
-
-      grep -Fq \
-        'buttonText("VOICE")' \
-        "$SRC/V10CarActivity.java"
-
-      grep -Fq \
-        'buttonText("TASKS")' \
-        "$SRC/V10CarActivity.java"
-
-      grep -Fq \
-        '"WYN"' \
-        "$SRC/V10CarActivity.java"
-
-      grep -Fq \
-        '"MEDIA"' \
-        "$SRC/V10CarActivity.java"
-
-      if grep -Fq \
-        'text("MAP"' \
-        "$SRC/V10CarActivity.java"; then
-        echo "ERROR: Home MAP card remains."
-        exit 1
-      fi
-
-      if grep -Fq \
-        'initial(app.name)' \
-        "$SRC/V10CarActivity.java"; then
-        echo "ERROR: letter app icons remain."
-        exit 1
-      fi
-
-      if grep -Fq \
-        '"SPEED"' \
-        "$SRC/V10CarActivity.java"; then
-        echo "ERROR: old SPEED card remains."
-        exit 1
-      fi
-
-      if grep -Fq \
-        '"WEATHER"' \
-        "$SRC/V10CarActivity.java"; then
-        echo "ERROR: old WEATHER card remains."
-        exit 1
-      fi
-
-      echo "Final architecture verification PASS."
-
-  - name: Verify Foundation Core unchanged
-    shell: bash
-    run: |
-      set -euo pipefail
-
-      SRC="v10-source/app/src/main/java/com/hieptran/aacast/doudou"
-
-      sha256sum \
-        "$SRC/V10ProjectionSession.java" \
-        "$SRC/V10DisplayController.java" \
-        "$SRC/V10SurfaceManager.java" \
-        "$SRC/V10TaskSession.java" \
-        "$SRC/V10SessionStore.java" \
-        > /tmp/core-after.sha256
-
-      diff -u \
-        /tmp/core-before.sha256 \
-        /tmp/core-after.sha256
-
-      if grep -Fq \
-        "V10ProjectionService" \
-        "$SRC/V10ProjectionSession.java"; then
-        echo "ERROR: V10ProjectionService detected."
-        exit 1
-      fi
-
-      if grep -Fq \
-        "am force-stop" \
-        "$SRC/V10ProjectionSession.java"; then
-        echo "ERROR: force-stop detected."
-        exit 1
-      fi
-
-      echo "Foundation Core isolation PASS."
-
-  - name: Verify Floating Touch integrity
-    shell: bash
-    run: |
-      set -euo pipefail
-
-      FILE="v10-source/app/src/main/java/com/hieptran/aacast/doudou/V10CarActivity.java"
-
-      grep -Fq \
-        "createFloatingTouchKey()" \
-        "$FILE"
-
-      grep -Fq \
-        "floatingDownTime" \
-        "$FILE"
-
-      grep -Fq \
-        "ViewConfiguration.getLongPressTimeout()" \
-        "$FILE"
-
-      grep -Fq \
-        'addFloatingMenuButton("BACK"' \
-        "$FILE"
-
-      grep -Fq \
-        'addFloatingMenuButton("HOME"' \
-        "$FILE"
-
-      if grep -Fq \
-        '"RECENTS"' \
-        "$FILE"; then
-        echo "ERROR: RECENTS menu returned."
-        exit 1
-      fi
-
-      if grep -Fq \
-        '"2 SCREEN"' \
-        "$FILE"; then
-        echo "ERROR: 2 SCREEN returned."
-        exit 1
-      fi
-
-      if grep -Fq \
-        '"3 SCREEN"' \
-        "$FILE"; then
-        echo "ERROR: 3 SCREEN returned."
-        exit 1
-      fi
-
-      echo "Floating Touch integrity PASS."
-
-  - name: Validate Java syntax markers
-    working-directory: v10-source
-    shell: bash
-    run: |
-      set -euo pipefail
-
-      chmod +x ./gradlew
-
-      ./gradlew \
-        --no-daemon \
-        --stacktrace \
-        compileDebugJavaWithJavac
-
-  - name: Assemble APK
-    working-directory: v10-source
-    shell: bash
-    run: |
-      set -euo pipefail
-
-      ./gradlew \
-        --no-daemon \
-        --stacktrace \
-        assembleDebug
-
-  - name: Verify APK
-    shell: bash
-    run: |
-      set -euo pipefail
-
-      APK="$(
-        find v10-source \
-          -type f \
-          -path '*/build/outputs/apk/*/*.apk' \
-          -print \
-          -quit
-      )"
-
-      if [ -z "$APK" ]; then
-        echo "ERROR: APK not found."
-        exit 1
-      fi
-
-      cp \
-        "$APK" \
-        CarAssistant-Navigation-V1-Home-UI-V2-Overlay-Safe.apk
-
-      sha256sum \
-        CarAssistant-Navigation-V1-Home-UI-V2-Overlay-Safe.apk \
-        > CarAssistant-Navigation-V1-Home-UI-V2-Overlay-Safe.sha256
-
-      echo "APK:"
-      echo "CarAssistant-Navigation-V1-Home-UI-V2-Overlay-Safe.apk"
-
-      echo "SHA256:"
-      cat \
-        CarAssistant-Navigation-V1-Home-UI-V2-Overlay-Safe.sha256
-
-  - name: Git diff check
-    shell: bash
-    run: |
-      set -euo pipefail
-
-      git diff --check
-
-      echo "git diff --check PASS."
-
-  - name: Create build manifest
-    shell: bash
-    run: |
-      set -euo pipefail
-
-      cat > Navigation-Home-UI-V2-Overlay-SAFE-MANIFEST.txt <<'EOF'
-      CarAssistant V10
-      Navigation V1 + Home UI V2 Transparent Overlay SAFE
-
-      FOUNDATION
-      2c814a181d00cde9547a446927ae181e18cb9cbb
-
-      ARCHITECTURE
-
-      Layer 0:
-      NavigationMapView
-      Full-screen MATCH_PARENT background.
-
-      Layer 1:
-      Home UI V2
-      Transparent floating overlay.
-
-      Layer 2:
-      Existing V10 projection layer.
-
-      NAVIGATION
-
-      MapLibre Android SDK 11.11.0.
-      OpenFreeMap Liberty style.
-      GPS location component.
-      Zoom gestures.
-      Scroll gestures.
-      Rotate gestures.
-
-      HOME UI V2
-
-      Transparent sidebar.
-      CHỌN APP.
-      Maximum 4 quick apps.
-      Real Android application icons.
-      VOICE placeholder.
-      TASKS placeholder.
-      WYN placeholder.
-      MEDIA placeholder.
-
-      IMPORTANT
-
-      No opaque Home MAP card.
-      No fake Navigation card.
-      Navigation is the actual background map.
-
-      PROTECTED
-
-      V10ProjectionSession unchanged.
-      V10DisplayController unchanged.
-      V10SurfaceManager unchanged.
-      V10TaskSession unchanged.
-      V10SessionStore unchanged.
-
-      FLOATING TOUCH
-
-      Existing SAFE Floating Touch preserved.
-      BACK preserved.
-      HOME preserved.
-      No RECENTS menu.
-      No 2 SCREEN.
-      No 3 SCREEN.
-
-      NOT IMPLEMENTED
-
-      Real Voice.
-      Real MediaSession.
-      WYN API.
-      Running Apps/Recents.
-      Split screen.
-
-      BUILD
-
-      compileDebugJavaWithJavac PASS.
-      assembleDebug PASS.
-      Core isolation PASS.
-      git diff --check PASS.
-      EOF
-
-  - name: Upload APK
-    uses: actions/upload-artifact@v4
-    with:
-      name: CarAssistant-Navigation-V1-Home-UI-V2-Overlay-Safe
-      path: |
-        CarAssistant-Navigation-V1-Home-UI-V2-Overlay-Safe.apk
-        CarAssistant-Navigation-V1-Home-UI-V2-Overlay-Safe.sha256
-        Navigation-Home-UI-V2-Overlay-SAFE-MANIFEST.txt
-      if-no-files-found: error
-      retention-days: 14
+          EOF
+
+          grep -Fq \
+            "class NavigationMapView" \
+            "$SRC/NavigationMapView.java"
+
+          echo "NavigationMapView PASS."
+
+      - name: Patch Home UI V2 and transparent Navigation overlay
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          rm -rf /tmp/carassistant-patch
+          mkdir -p /tmp/carassistant-patch
+
+          printf '%s\n' \
+          'from pathlib import Path' \
+          '' \
+          'P=Path("v10-source/app/src/main/java/com/hieptran/aacast/doudou/V10CarActivity.java")' \
+          's=P.read_text(encoding="utf-8")' \
+          '' \
+          'def method(sig):' \
+          '    a=s.find(sig)' \
+          '    if a<0:' \
+          '        raise RuntimeError("METHOD NOT FOUND: "+sig)' \
+          '    b=s.find("{",a)' \
+          '    if b<0:' \
+          '        raise RuntimeError("OPEN BRACE NOT FOUND: "+sig)' \
+          '    depth=0' \
+          '    for i in range(b,len(s)):' \
+          '        if s[i]=="{":' \
+          '            depth+=1' \
+          '        elif s[i]=="}":' \
+          '            depth-=1' \
+          '            if depth==0:' \
+          '                return a,i+1' \
+          '    raise RuntimeError("METHOD END NOT FOUND: "+sig)' \
+          '' \
+          'def replace(sig,new):' \
+          '    global s' \
+          '    a,b=method(sig)' \
+          '    s=s[:a]+new.rstrip()+"\n"+s[b:]' \
+          '' \
+          'def require(x):' \
+          '    if x not in s:' \
+          '        raise RuntimeError("FOUNDATION MARKER MISSING: "+x)' \
+          '' \
+          'require("public final class V10CarActivity")' \
+          'require("private void buildUi()")' \
+          'require("private void buildDashboard()")' \
+          'require("private void rebuildDock()")' \
+          'require("private LinearLayout appTile(")' \
+          'require("public void onResume()")' \
+          'require("public void onPause()")' \
+          'require("public void onDestroy()")' \
+          '' \
+          'imports=[' \
+          '("import android.content.pm.ResolveInfo;","import android.content.pm.ResolveInfo;\nimport android.content.pm.ApplicationInfo;\nimport android.content.pm.PackageManager;"),' \
+          '("import android.graphics.drawable.GradientDrawable;","import android.graphics.drawable.GradientDrawable;\nimport android.graphics.drawable.Drawable;"),' \
+          '("import android.widget.GridLayout;","import android.widget.GridLayout;\nimport android.widget.ImageView;")' \
+          ']' \
+          '' \
+          'for old,new in imports:' \
+          '    if new.split("\n")[1] not in s:' \
+          '        s=s.replace(old,new,1)' \
+          '' \
+          's=s.replace("    private FrameLayout root;","    private FrameLayout root;\n    private NavigationMapView navigationMap;",1)' \
+          '' \
+          'helpers="""' \
+          '    private LinearLayout.LayoutParams sidebarButtonParams() {' \
+          '        LinearLayout.LayoutParams p=new LinearLayout.LayoutParams(-1,dp(62));' \
+          '        p.setMargins(dp(1),dp(2),dp(1),dp(2));' \
+          '        return p;' \
+          '    }' \
+          '' \
+          '    private LinearLayout.LayoutParams sidebarFixedButtonParams() {' \
+          '        LinearLayout.LayoutParams p=new LinearLayout.LayoutParams(-1,dp(62));' \
+          '        p.setMargins(dp(1),dp(2),dp(1),dp(2));' \
+          '        return p;' \
+          '    }' \
+          '' \
+          '    private LinearLayout.LayoutParams sidebarQuickParams() {' \
+          '        LinearLayout.LayoutParams p=new LinearLayout.LayoutParams(-1,dp(66));' \
+          '        p.setMargins(dp(1),dp(2),dp(1),dp(2));' \
+          '        return p;' \
+          '    }' \
+          '' \
+          '    private TextView sidebarButton(String value) {' \
+          '        TextView v=buttonText(value);' \
+          '        v.setTextSize(11);' \
+          '        v.setGravity(Gravity.CENTER);' \
+          '        return v;' \
+          '    }' \
+          '' \
+          '    private TextView circleButton(String value) {' \
+          '        TextView v=text(value,15,Color.WHITE);' \
+          '        v.setGravity(Gravity.CENTER);' \
+          '        GradientDrawable g=new GradientDrawable();' \
+          '        g.setShape(GradientDrawable.OVAL);' \
+          '        g.setColor(Color.rgb(22,27,33));' \
+          '        g.setStroke(dp(2),Color.rgb(70,150,210));' \
+          '        v.setBackground(g);' \
+          '        return v;' \
+          '    }' \
+          '"""' \
+          '' \
+          'if "private LinearLayout.LayoutParams sidebarButtonParams()" not in s:' \
+          '    s=s.replace("    private LinearLayout card()",helpers+"\n    private LinearLayout card()",1)' \
+          '' \
+          'buildui="""' \
+          '    private void buildUi() {' \
+          '        root=new FrameLayout(this);' \
+          '        root.setBackgroundColor(Color.TRANSPARENT);' \
+          '' \
+          '        navigationMap=new NavigationMapView(this);' \
+          '        root.addView(' \
+          '                navigationMap,' \
+          '                new FrameLayout.LayoutParams(-1,-1));' \
+          '' \
+          '        projectionLayer=new FrameLayout(this);' \
+          '        projectionLayer.setVisibility(View.GONE);' \
+          '        root.addView(' \
+          '                projectionLayer,' \
+          '                new FrameLayout.LayoutParams(-1,-1));' \
+          '' \
+          '        launcherLayer=new LinearLayout(this);' \
+          '        launcherLayer.setOrientation(LinearLayout.VERTICAL);' \
+          '        launcherLayer.setPadding(dp(18),dp(12),dp(18),dp(8));' \
+          '        launcherLayer.setBackgroundColor(Color.TRANSPARENT);' \
+          '        root.addView(' \
+          '                launcherLayer,' \
+          '                new FrameLayout.LayoutParams(-1,-1));' \
+          '' \
+          '        buildDashboard();' \
+          '        buildAppPanel();' \
+          '        setContentView(root);' \
+          '    }' \
+          '"""' \
+          '' \
+          'dashboard="""' \
+          '    private void buildDashboard() {' \
+          '        dashboard=new LinearLayout(this);' \
+          '        dashboard.setOrientation(LinearLayout.HORIZONTAL);' \
+          '        dashboard.setGravity(Gravity.CENTER_VERTICAL);' \
+          '        dashboard.setBackgroundColor(Color.TRANSPARENT);' \
+          '        launcherLayer.addView(dashboard,new LinearLayout.LayoutParams(-1,-1));' \
+          '' \
+          '        LinearLayout sidebar=new LinearLayout(this);' \
+          '        sidebar.setOrientation(LinearLayout.VERTICAL);' \
+          '        sidebar.setGravity(Gravity.TOP|Gravity.CENTER_HORIZONTAL);' \
+          '        sidebar.setPadding(dp(3),dp(3),dp(3),dp(3));' \
+          '        dashboard.addView(sidebar,new LinearLayout.LayoutParams(dp(88),-1));' \
+          '' \
+          '        TextView choose=sidebarButton("APP\nCHỌN");' \
+          '        choose.setOnClickListener(v->showApps());' \
+          '        sidebar.addView(choose,sidebarButtonParams());' \
+          '' \
+          '        dock=new LinearLayout(this);' \
+          '        dock.setOrientation(LinearLayout.VERTICAL);' \
+          '        dock.setGravity(Gravity.TOP|Gravity.CENTER_HORIZONTAL);' \
+          '        sidebar.addView(dock,new LinearLayout.LayoutParams(-1,0,1f));' \
+          '' \
+          '        TextView voice=sidebarButton("🎙");' \
+          '        voice.setTextSize(20);' \
+          '        voice.setOnClickListener(v->{});' \
+          '        sidebar.addView(voice,sidebarFixedButtonParams());' \
+          '' \
+          '        TextView tasks=sidebarButton("TASKS");' \
+          '        tasks.setOnClickListener(v->{});' \
+          '        sidebar.addView(tasks,sidebarFixedButtonParams());' \
+          '' \
+          '        FrameLayout main=new FrameLayout(this);' \
+          '        dashboard.addView(main,new LinearLayout.LayoutParams(0,-1,1f));' \
+          '' \
+          '        LinearLayout bottom=new LinearLayout(this);' \
+          '        bottom.setGravity(Gravity.CENTER_VERTICAL);' \
+          '        bottom.setPadding(dp(8),dp(8),dp(8),dp(8));' \
+          '        main.addView(bottom,new FrameLayout.LayoutParams(-1,dp(88),Gravity.BOTTOM));' \
+          '' \
+          '        TextView wyn=circleButton("WYN");' \
+          '        wyn.setOnClickListener(v->{});' \
+          '        bottom.addView(wyn,new LinearLayout.LayoutParams(dp(78),dp(78)));' \
+          '' \
+          '        LinearLayout media=card();' \
+          '        media.setPadding(dp(14),dp(7),dp(14),dp(7));' \
+          '        media.addView(text("MEDIA",12,Color.LTGRAY),new LinearLayout.LayoutParams(-1,dp(25)));' \
+          '        media.addView(text("▶  Đang phát...",17,Color.WHITE),new LinearLayout.LayoutParams(-1,dp(35)));' \
+          '        media.setOnClickListener(v->{});' \
+          '        LinearLayout.LayoutParams mp=new LinearLayout.LayoutParams(0,dp(78),1f);' \
+          '        mp.setMargins(dp(12),0,0,0);' \
+          '        bottom.addView(media,mp);' \
+          '    }' \
+          '"""' \
+          '' \
+          'dock="""' \
+          '    private void rebuildDock() {' \
+          '        if(dock==null)return;' \
+          '        dock.removeAllViews();' \
+          '        ArrayList<AppInfo> q=getQuickLaunchApps();' \
+          '        int n=Math.min(4,q.size());' \
+          '        for(int i=0;i<n;i++) {' \
+          '            dock.addView(quickLaunchTile(q.get(i)),sidebarQuickParams());' \
+          '        }' \
+          '    }' \
+          '' \
+          '    private ArrayList<AppInfo> getQuickLaunchApps() {' \
+          '        ArrayList<AppInfo> out=new ArrayList<>();' \
+          '        String[] p={' \
+          '                "com.google.android.apps.maps",' \
+          '                "com.google.android.youtube",' \
+          '                "com.zing.zalo",' \
+          '                "com.spotify.music"' \
+          '        };' \
+          '        for(String x:p) {' \
+          '            for(AppInfo a:apps) {' \
+          '                if(x.equals(a.component.getPackageName())) {' \
+          '                    out.add(a);' \
+          '                    break;' \
+          '                }' \
+          '            }' \
+          '            if(out.size()==4)break;' \
+          '        }' \
+          '        if(out.size()<4) {' \
+          '            for(AppInfo a:apps) {' \
+          '                boolean duplicate=false;' \
+          '                for(AppInfo b:out) {' \
+          '                    if(b.component.equals(a.component)) duplicate=true;' \
+          '                }' \
+          '                if(!duplicate)out.add(a);' \
+          '                if(out.size()==4)break;' \
+          '            }' \
+          '        }' \
+          '        return out;' \
+          '    }' \
+          '' \
+          '    private LinearLayout quickLaunchTile(AppInfo app) {' \
+          '        LinearLayout t=new LinearLayout(this);' \
+          '        t.setOrientation(LinearLayout.VERTICAL);' \
+          '        t.setGravity(Gravity.CENTER);' \
+          '        GradientDrawable g=new GradientDrawable();' \
+          '        g.setColor(Color.rgb(22,27,33));' \
+          '        g.setCornerRadius(dp(14));' \
+          '        t.setBackground(g);' \
+          '        ImageView i=new ImageView(this);' \
+          '        Drawable d=getRealAppIcon(app.component.getPackageName());' \
+          '        if(d!=null)i.setImageDrawable(d);' \
+          '        i.setScaleType(ImageView.ScaleType.CENTER_INSIDE);' \
+          '        t.addView(i,new LinearLayout.LayoutParams(dp(42),dp(42)));' \
+          '        TextView n=text(app.name,8,Color.WHITE);' \
+          '        n.setGravity(Gravity.CENTER);' \
+          '        n.setMaxLines(1);' \
+          '        t.addView(n,new LinearLayout.LayoutParams(-1,dp(18)));' \
+          '        t.setOnClickListener(v->launchProjection(app.component));' \
+          '        return t;' \
+          '    }' \
+          '' \
+          '    private Drawable getRealAppIcon(String packageName) {' \
+          '        try {' \
+          '            PackageManager pm=getPackageManager();' \
+          '            ApplicationInfo i=pm.getApplicationInfo(packageName,0);' \
+          '            return i.loadIcon(pm);' \
+          '        } catch(Exception e) {' \
+          '            return null;' \
+          '        }' \
+          '    }' \
+          '"""' \
+          '' \
+          'apptile="""' \
+          '    private LinearLayout appTile(AppInfo app) {' \
+          '        LinearLayout t=new LinearLayout(this);' \
+          '        t.setOrientation(LinearLayout.VERTICAL);' \
+          '        t.setGravity(Gravity.CENTER);' \
+          '        GradientDrawable g=new GradientDrawable();' \
+          '        g.setColor(Color.rgb(22,27,33));' \
+          '        g.setCornerRadius(dp(16));' \
+          '        t.setBackground(g);' \
+          '        ImageView i=new ImageView(this);' \
+          '        Drawable d=getRealAppIcon(app.component.getPackageName());' \
+          '        if(d!=null)i.setImageDrawable(d);' \
+          '        i.setScaleType(ImageView.ScaleType.CENTER_INSIDE);' \
+          '        t.addView(i,new LinearLayout.LayoutParams(-1,dp(64)));' \
+          '        TextView n=text(app.name,12,Color.WHITE);' \
+          '        n.setGravity(Gravity.CENTER);' \
+          '        n.setMaxLines(2);' \
+          '        t.addView(n,new LinearLayout.LayoutParams(-1,dp(38)));' \
+          '        t.setOnClickListener(v->{hideApps();launchProjection(app.component);});' \
+          '        return t;' \
+          '    }' \
+          '"""' \
+          '' \
+          'replace("    private void buildUi()",buildui)' \
+          'replace("    private void buildDashboard()",dashboard)' \
+          'replace("    private void rebuildDock()",dock)' \
+          'replace("    private LinearLayout appTile(",apptile)' \
+          '' \
+          'a,b=method("    private void buildAppPanel()")' \
+          'block=s[a:b]' \
+          'block=block.replace("appPanel.setBackgroundColor(\n                Color.rgb(\n                        7,\n                        9,\n                        12));","appPanel.setBackgroundColor(Color.TRANSPARENT);")' \
+          's=s[:a]+block+s[b:]' \
+          '' \
+          'def add_after(sig,needle,insert):' \
+          '    global s' \
+          '    a,b=method(sig)' \
+          '    block=s[a:b]' \
+          '    if insert not in block:' \
+          '        block=block.replace(needle,needle+"\n\n        "+insert,1)' \
+          '        s=s[:a]+block+s[b:]' \
+          '' \
+          'add_after("public void onResume()","attachProjection();","if (navigationMap != null) navigationMap.onHostResume();")' \
+          'add_after("public void onPause()","super.onPause();","if (navigationMap != null) navigationMap.onHostPause();")' \
+          'add_after("public void onDestroy()","resumed = false;","if (navigationMap != null) { navigationMap.onHostDestroy(); navigationMap = null; }")' \
+          '' \
+          'P.write_text(s.rstrip()+"\n",encoding="utf-8")' \
+          'print("PATCH PASS")' \
+          > /tmp/carassistant-patch/patch.py
+
+          python3 -m py_compile \
+            /tmp/carassistant-patch/patch.py
+
+          python3 \
+            /tmp/carassistant-patch/patch.py
+
+          echo "Home UI V2 + Navigation overlay patch PASS."
+
+      - name: Verify architecture
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          SRC="v10-source/app/src/main/java/com/hieptran/aacast/doudou"
+          FILE="$SRC/V10CarActivity.java"
+
+          grep -Fq \
+            "private NavigationMapView navigationMap;" \
+            "$FILE"
+
+          grep -Fq \
+            "navigationMap=new NavigationMapView(this);" \
+            "$FILE"
+
+          grep -Fq \
+            "root.addView(" \
+            "$FILE"
+
+          grep -Fq \
+            "Color.TRANSPARENT" \
+            "$FILE"
+
+          grep -Fq \
+            "Math.min(4,q.size())" \
+            "$FILE"
+
+          grep -Fq \
+            "info.loadIcon(pm)" \
+            "$FILE"
+
+          grep -Fq \
+            'sidebarButton("APP' \
+            "$FILE"
+
+          grep -Fq \
+            '"TASKS"' \
+            "$FILE"
+
+          grep -Fq \
+            '"MEDIA"' \
+            "$FILE"
+
+          grep -Fq \
+            '"WYN"' \
+            "$FILE"
+
+          grep -Fq \
+            "navigationMap.onHostResume()" \
+            "$FILE"
+
+          grep -Fq \
+            "navigationMap.onHostPause()" \
+            "$FILE"
+
+          grep -Fq \
+            "navigationMap.onHostDestroy()" \
+            "$FILE"
+
+          grep -Fq \
+            "https://tiles.openfreemap.org/styles/liberty" \
+            "$SRC/NavigationMapView.java"
+
+          if grep -Fq '"CAR ASSISTANT"' "$FILE"; then
+            echo "ERROR: old Home title remains."
+            exit 1
+          fi
+
+          if grep -Fq '"SPEED"' "$FILE"; then
+            echo "ERROR: old SPEED card remains."
+            exit 1
+          fi
+
+          if grep -Fq '"WEATHER"' "$FILE"; then
+            echo "ERROR: old WEATHER card remains."
+            exit 1
+          fi
+
+          if grep -Fq 'initial(app.name)' "$FILE"; then
+            echo "ERROR: old letter icons remain."
+            exit 1
+          fi
+
+          echo "Home UI + Navigation architecture PASS."
+
+      - name: Verify Projection Persistence Floating Touch
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          SRC="v10-source/app/src/main/java/com/hieptran/aacast/doudou"
+          FILE="$SRC/V10CarActivity.java"
+
+          sha256sum \
+            "$SRC/V10ProjectionSession.java" \
+            "$SRC/V10DisplayController.java" \
+            "$SRC/V10SurfaceManager.java" \
+            "$SRC/V10TaskSession.java" \
+            "$SRC/V10SessionStore.java" \
+            > /tmp/core-after.sha256
+
+          diff -u \
+            /tmp/core-before.sha256 \
+            /tmp/core-after.sha256
+
+          grep -Fq \
+            "createFloatingTouchKey()" \
+            "$FILE"
+
+          grep -Fq \
+            "floatingDownTime" \
+            "$FILE"
+
+          grep -Fq \
+            'addFloatingMenuButton("BACK"' \
+            "$FILE"
+
+          grep -Fq \
+            'addFloatingMenuButton("HOME"' \
+            "$FILE"
+
+          echo "Projection/Persistence/Floating Touch protection PASS."
+
+      - name: Git diff safety
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          git diff --check
+
+          echo "git diff --check PASS."
+
+      - name: Compile
+        working-directory: v10-source
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          chmod +x ./gradlew
+
+          ./gradlew \
+            --no-daemon \
+            :app:compileDebugJavaWithJavac \
+            --stacktrace
+
+          echo "Java compile PASS."
+
+      - name: Assemble APK
+        working-directory: v10-source
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          ./gradlew \
+            --no-daemon \
+            :app:assembleDebug \
+            --stacktrace
+
+          echo "APK assemble PASS."
+
+      - name: Package APK
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          APK="$(
+            find v10-source/app/build/outputs/apk \
+              -type f \
+              -name "*.apk" \
+              | head -n 1
+          )"
+
+          test -n "$APK"
+
+          cp \
+            "$APK" \
+            CarAssistant-Navigation-V1-Home-UI-V2-Overlay-Safe.apk
+
+          sha256sum \
+            CarAssistant-Navigation-V1-Home-UI-V2-Overlay-Safe.apk \
+            > CarAssistant-Navigation-V1-Home-UI-V2-Overlay-Safe.sha256
+
+          test -s \
+            CarAssistant-Navigation-V1-Home-UI-V2-Overlay-Safe.apk
+
+          echo "APK package PASS."
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: CarAssistant-Navigation-V1-Home-UI-V2-Overlay-Safe
+          path: |
+            CarAssistant-Navigation-V1-Home-UI-V2-Overlay-Safe.apk
+            CarAssistant-Navigation-V1-Home-UI-V2-Overlay-Safe.sha256
+          if-no-files-found: error
+          retention-days: 14
