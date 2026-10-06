@@ -1,4 +1,4 @@
-name: CarAssistant V10 - Navigation V1 Patch 1 Auto Follow + Home UI V2 Overlay
+name: CarAssistant V10 - Navigation V1 Patch 1 Auto-follow Recenter
 
 on:
   workflow_dispatch:
@@ -12,38 +12,67 @@ jobs:
     timeout-minutes: 40
 
     steps:
-      - name: Checkout exact Foundation
+
+      # ============================================================
+      # 1. CHECKOUT MAIN
+      # ============================================================
+      - name: Checkout current main Navigation V1
         uses: actions/checkout@v4
         with:
-          ref: 2c814a181d00cde9547a446927ae181e18cb9cbb
+          ref: main
           fetch-depth: 1
 
+      # ============================================================
+      # 2. JAVA
+      # ============================================================
       - name: Setup Java 17
         uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: '17'
 
-      - name: Verify Foundation source
+      # ============================================================
+      # 3. VERIFY CURRENT MAIN SOURCE
+      # ============================================================
+      - name: Verify current main Navigation V1 source
         shell: bash
         run: |
           set -euo pipefail
 
-          SRC="v10-source/app/src/main/java/com/hieptran/aacast/doudou"
+          SRC="navigation-v1-source"
+          JAVA_SRC="$SRC/app/src/main/java/com/hieptran/aacast/doudou"
+          NAV_SRC="$SRC/app/src/main/java/com/carassistant/v10/NavigationMapView.java"
+          ACTIVITY="$JAVA_SRC/V10CarActivity.java"
 
-          test -f "$SRC/V10CarActivity.java"
-          test -f "$SRC/V10ProjectionSession.java"
-          test -f "$SRC/V10DisplayController.java"
-          test -f "$SRC/V10SurfaceManager.java"
-          test -f "$SRC/V10TaskSession.java"
-          test -f "$SRC/V10SessionStore.java"
+          test -d "$SRC"
+          test -f "$SRC/settings.gradle"
+          test -f "$SRC/build.gradle"
+          test -f "$SRC/app/build.gradle"
+          test -f "$SRC/gradlew"
 
-          ACTUAL="$(git rev-parse HEAD)"
+          test -f "$ACTIVITY"
+          test -f "$NAV_SRC"
 
-          if [ "$ACTUAL" != "2c814a181d00cde9547a446927ae181e18cb9cbb" ]; then
-            echo "ERROR: Foundation commit mismatch: $ACTUAL"
-            exit 1
-          fi
+          test -f "$JAVA_SRC/V10ProjectionSession.java"
+          test -f "$JAVA_SRC/V10DisplayController.java"
+          test -f "$JAVA_SRC/V10SurfaceManager.java"
+          test -f "$JAVA_SRC/V10TaskSession.java"
+          test -f "$JAVA_SRC/V10SessionStore.java"
+
+          echo "PASS: navigation-v1-source exists on main."
+          echo "PASS: NavigationMapView exists."
+          echo "PASS: V10CarActivity exists."
+          echo "PASS: protected Projection/Persistence files exist."
+
+      # ============================================================
+      # 4. PROTECTED CORE HASH BEFORE PATCH
+      # ============================================================
+      - name: Lock protected Projection and Persistence core
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          SRC="navigation-v1-source/app/src/main/java/com/hieptran/aacast/doudou"
 
           sha256sum \
             "$SRC/V10ProjectionSession.java" \
@@ -53,74 +82,86 @@ jobs:
             "$SRC/V10SessionStore.java" \
             > /tmp/core-before.sha256
 
-          echo "PASS: Foundation source and lock."
+          echo "PASS: Protected core SHA recorded."
 
-      - name: Add MapLibre and location permissions
+      # ============================================================
+      # 5. VERIFY BASELINE UI BEFORE PATCH
+      #    Chỉ kiểm tra, KHÔNG sửa Home UI.
+      # ============================================================
+      - name: Verify Home UI V2 and transparent overlay baseline
         shell: bash
         run: |
           set -euo pipefail
 
-          GRADLE="v10-source/app/build.gradle"
-          MANIFEST="v10-source/app/src/main/AndroidManifest.xml"
+          ACTIVITY="navigation-v1-source/app/src/main/java/com/hieptran/aacast/doudou/V10CarActivity.java"
 
-          test -f "$GRADLE"
-          test -f "$MANIFEST"
+          grep -Fq "NavigationMapView" "$ACTIVITY"
+          grep -Fq "projectionLayer" "$ACTIVITY"
+          grep -Fq "launcherLayer" "$ACTIVITY"
 
-          if ! grep -Fq "org.maplibre.gl:android-sdk:11.11.0" "$GRADLE"; then
-            printf '%s\n' \
-              'implementation "org.maplibre.gl:android-sdk:11.11.0"' \
-              > /tmp/maplibre.line
+          grep -Fq "APP CHỌN" "$ACTIVITY"
+          grep -Fq "TASKS" "$ACTIVITY"
+          grep -Fq "MEDIA" "$ACTIVITY"
 
-            sed -i \
-              '/^[[:space:]]*dependencies[[:space:]]*{/r /tmp/maplibre.line' \
-              "$GRADLE"
-          fi
+          grep -Fq "Math.min(4" "$ACTIVITY"
 
-          if ! grep -Fq \
-            "android.permission.ACCESS_FINE_LOCATION" \
-            "$MANIFEST"; then
+          python3 - "$ACTIVITY" <<'PY'
+          from pathlib import Path
+          import sys
 
-            printf '%s\n' \
-              '<uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />' \
-              '<uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />' \
-              > /tmp/location.permissions
+          p = Path(sys.argv[1])
+          s = p.read_text(encoding="utf-8")
+          n = "".join(s.split())
 
-            sed -i \
-              '/<manifest/r /tmp/location.permissions' \
-              "$MANIFEST"
-          fi
+          required = [
+              "dashboard.setBackgroundColor(Color.TRANSPARENT);",
+              "projectionLayer.setBackgroundColor(Color.TRANSPARENT);",
+              "launcherLayer.setBackgroundColor(Color.TRANSPARENT);"
+          ]
 
-          if ! grep -Fq \
-            "org.maplibre.gl:android-sdk:11.11.0" \
-            "$GRADLE"; then
-            echo "ERROR: MapLibre dependency missing."
-            exit 1
-          fi
+          for item in required:
+              if item not in n:
+                  raise SystemExit("ERROR: Missing transparent UI marker: " + item)
 
-          if ! grep -Fq \
-            "android.permission.ACCESS_FINE_LOCATION" \
-            "$MANIFEST"; then
-            echo "ERROR: FINE location permission missing."
-            exit 1
-          fi
+          print("PASS: Home UI V2 + transparent overlay markers.")
+          PY
 
-          if ! grep -Fq \
-            "android.permission.ACCESS_COARSE_LOCATION" \
-            "$MANIFEST"; then
-            echo "ERROR: COARSE location permission missing."
-            exit 1
-          fi
-
-          echo "PASS: Navigation dependency and permissions."
-
-      - name: Create NavigationMapView with Patch 1 Auto-follow
+      # ============================================================
+      # 6. SAVE BASELINE NAVIGATION SOURCE
+      # ============================================================
+      - name: Save Navigation V1 source before Patch 1
         shell: bash
         run: |
           set -euo pipefail
 
-          SRC="v10-source/app/src/main/java/com/hieptran/aacast/doudou"
+          NAV_SRC="navigation-v1-source/app/src/main/java/com/carassistant/v10/NavigationMapView.java"
 
-          cat > "$SRC/NavigationMapView.java" <<'EOF'
+          cp "$NAV_SRC" /tmp/NavigationMapView.before.java
+
+          echo "PASS: Navigation V1 source snapshot saved."
+
+      # ============================================================
+      # 7. PATCH 1
+      #
+      # CHỈ SỬA NavigationMapView.java
+      #
+      # Không:
+      # - sửa V10CarActivity
+      # - sửa Home UI
+      # - sửa overlay
+      # - sửa Projection Core
+      # - tạo UI layer mới
+      # ============================================================
+      - name: Apply Patch 1 Auto-follow and Recenter
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          NAV_SRC="navigation-v1-source/app/src/main/java/com/carassistant/v10/NavigationMapView.java"
+
+          test -f "$NAV_SRC"
+
+          cat > "$NAV_SRC" <<'EOF'
           package com.carassistant.v10;
 
           import android.Manifest;
@@ -129,7 +170,10 @@ jobs:
           import android.content.pm.PackageManager;
           import android.graphics.Color;
           import android.location.Location;
+          import android.location.LocationListener;
+          import android.location.LocationManager;
           import android.os.Bundle;
+          import android.os.Looper;
           import android.widget.FrameLayout;
 
           import org.maplibre.android.MapLibre;
@@ -137,7 +181,6 @@ jobs:
           import org.maplibre.android.geometry.LatLng;
           import org.maplibre.android.location.LocationComponentActivationOptions;
           import org.maplibre.android.location.LocationComponentOptions;
-          import org.maplibre.android.location.modes.CameraMode;
           import org.maplibre.android.maps.MapLibreMap;
           import org.maplibre.android.maps.MapView;
           import org.maplibre.android.maps.UiSettings;
@@ -145,12 +188,50 @@ jobs:
           public final class NavigationMapView extends FrameLayout {
 
               private static final int LOCATION_REQUEST = 4101;
+              private static final long AUTO_FOLLOW_INTERVAL_MS = 1000L;
+              private static final float AUTO_FOLLOW_MIN_DISTANCE_METERS = 5.0f;
 
               private final MapView mapView;
+              private final LocationManager locationManager;
 
               private MapLibreMap map;
 
               private boolean autoFollow = true;
+              private boolean locationUpdatesStarted = false;
+              private Location lastAutoFollowLocation;
+
+              private final LocationListener navigationLocationListener =
+                      new LocationListener() {
+
+                          @Override
+                          public void onLocationChanged(Location location) {
+                              if (location == null) {
+                                  return;
+                              }
+
+                              if (!autoFollow || map == null) {
+                                  return;
+                              }
+
+                              if (lastAutoFollowLocation != null
+                                      && location.distanceTo(lastAutoFollowLocation)
+                                      < AUTO_FOLLOW_MIN_DISTANCE_METERS) {
+                                  return;
+                              }
+
+                              lastAutoFollowLocation = new Location(location);
+
+                              followLocation(location);
+                          }
+
+                          @Override
+                          public void onProviderEnabled(String provider) {
+                          }
+
+                          @Override
+                          public void onProviderDisabled(String provider) {
+                          }
+                      };
 
               public NavigationMapView(Context context) {
                   super(context);
@@ -159,6 +240,10 @@ jobs:
 
                   MapLibre.getInstance(
                           context.getApplicationContext());
+
+                  locationManager =
+                          (LocationManager) context.getSystemService(
+                                  Context.LOCATION_SERVICE);
 
                   mapView = new MapView(context);
 
@@ -189,6 +274,17 @@ jobs:
                   ui.setRotateGesturesEnabled(true);
                   ui.setTiltGesturesEnabled(false);
 
+                  map.setOnCameraMoveStartedListener(
+                          reason -> {
+                              if (reason
+                                      == MapLibreMap
+                                      .OnCameraMoveStartedListener
+                                      .REASON_API_GESTURE) {
+
+                                  autoFollow = false;
+                              }
+                          });
+
                   map.setStyle(
                           "https://tiles.openfreemap.org/styles/liberty",
                           style -> enableLocation());
@@ -212,7 +308,6 @@ jobs:
                           != PackageManager.PERMISSION_GRANTED) {
 
                       if (context instanceof Activity) {
-
                           ((Activity) context).requestPermissions(
                                   new String[]{
                                           Manifest.permission.ACCESS_FINE_LOCATION,
@@ -245,12 +340,171 @@ jobs:
                   map.getLocationComponent()
                           .setLocationComponentEnabled(true);
 
-                  if (autoFollow) {
+                  startLocationUpdates();
+                  autoFollowToLastKnownLocation();
+              }
 
-                      map.getLocationComponent()
-                              .setCameraMode(
-                                      CameraMode.TRACKING);
+              private void startLocationUpdates() {
+
+                  if (locationUpdatesStarted) {
+                      return;
                   }
+
+                  if (locationManager == null) {
+                      return;
+                  }
+
+                  Context context =
+                          getContext();
+
+                  if (context == null) {
+                      return;
+                  }
+
+                  if (context.checkSelfPermission(
+                          Manifest.permission.ACCESS_FINE_LOCATION)
+                          != PackageManager.PERMISSION_GRANTED
+                          && context.checkSelfPermission(
+                          Manifest.permission.ACCESS_COARSE_LOCATION)
+                          != PackageManager.PERMISSION_GRANTED) {
+                      return;
+                  }
+
+                  try {
+                      if (locationManager.isProviderEnabled(
+                              LocationManager.GPS_PROVIDER)) {
+
+                          locationManager.requestLocationUpdates(
+                                  LocationManager.GPS_PROVIDER,
+                                  AUTO_FOLLOW_INTERVAL_MS,
+                                  AUTO_FOLLOW_MIN_DISTANCE_METERS,
+                                  navigationLocationListener,
+                                  Looper.getMainLooper());
+                      }
+
+                      if (locationManager.isProviderEnabled(
+                              LocationManager.NETWORK_PROVIDER)) {
+
+                          locationManager.requestLocationUpdates(
+                                  LocationManager.NETWORK_PROVIDER,
+                                  AUTO_FOLLOW_INTERVAL_MS,
+                                  AUTO_FOLLOW_MIN_DISTANCE_METERS,
+                                  navigationLocationListener,
+                                  Looper.getMainLooper());
+                      }
+
+                      locationUpdatesStarted = true;
+
+                  } catch (SecurityException ignored) {
+                  } catch (Exception ignored) {
+                  }
+              }
+
+              private void stopLocationUpdates() {
+
+                  if (!locationUpdatesStarted) {
+                      return;
+                  }
+
+                  if (locationManager == null) {
+                      return;
+                  }
+
+                  try {
+                      locationManager.removeUpdates(
+                              navigationLocationListener);
+                  } catch (Exception ignored) {
+                  }
+
+                  locationUpdatesStarted = false;
+              }
+
+              private void autoFollowToLastKnownLocation() {
+
+                  if (!autoFollow || map == null) {
+                      return;
+                  }
+
+                  try {
+                      Location location =
+                              map.getLocationComponent()
+                                      .getLastKnownLocation();
+
+                      if (location != null) {
+                          lastAutoFollowLocation =
+                                  new Location(location);
+
+                          followLocation(location);
+                          return;
+                      }
+                  } catch (Exception ignored) {
+                  }
+
+                  try {
+                      if (locationManager == null) {
+                          return;
+                      }
+
+                      Context context =
+                              getContext();
+
+                      if (context == null) {
+                          return;
+                      }
+
+                      if (context.checkSelfPermission(
+                              Manifest.permission.ACCESS_FINE_LOCATION)
+                              != PackageManager.PERMISSION_GRANTED
+                              && context.checkSelfPermission(
+                              Manifest.permission.ACCESS_COARSE_LOCATION)
+                              != PackageManager.PERMISSION_GRANTED) {
+                          return;
+                      }
+
+                      Location location = null;
+
+                      try {
+                          location =
+                                  locationManager.getLastKnownLocation(
+                                          LocationManager.GPS_PROVIDER);
+                      } catch (Exception ignored) {
+                      }
+
+                      if (location == null) {
+                          try {
+                              location =
+                                      locationManager.getLastKnownLocation(
+                                              LocationManager.NETWORK_PROVIDER);
+                          } catch (Exception ignored) {
+                          }
+                      }
+
+                      if (location != null) {
+                          lastAutoFollowLocation =
+                                  new Location(location);
+
+                          followLocation(location);
+                      }
+
+                  } catch (SecurityException ignored) {
+                  } catch (Exception ignored) {
+                  }
+              }
+
+              private void followLocation(
+                      Location location) {
+
+                  if (map == null || location == null) {
+                      return;
+                  }
+
+                  map.animateCamera(
+                          CameraUpdateFactory
+                                  .newLatLng(
+                                          new LatLng(
+                                                  location.getLatitude(),
+                                                  location.getLongitude())),
+                          350);
               }
 
               public void zoomIn() {
@@ -268,8 +522,6 @@ jobs:
                                           20.0,
                                           zoom + 1.0)),
                           250);
-
-                  disableAutoFollow();
               }
 
               public void zoomOut() {
@@ -287,8 +539,6 @@ jobs:
                                           1.0,
                                           zoom - 1.0)),
                           250);
-
-                  disableAutoFollow();
               }
 
               public void recenter() {
@@ -297,25 +547,51 @@ jobs:
                       return;
                   }
 
-                  try {
+                  autoFollow = true;
 
+                  try {
                       Location location =
                               map.getLocationComponent()
                                       .getLastKnownLocation();
+
+                      if (location == null
+                              && locationManager != null) {
+
+                          Context context =
+                                  getContext();
+
+                          if (context != null
+                                  && (context.checkSelfPermission(
+                                  Manifest.permission.ACCESS_FINE_LOCATION)
+                                  == PackageManager.PERMISSION_GRANTED
+                                  || context.checkSelfPermission(
+                                  Manifest.permission.ACCESS_COARSE_LOCATION)
+                                  == PackageManager.PERMISSION_GRANTED)) {
+
+                              try {
+                                  location =
+                                          locationManager.getLastKnownLocation(
+                                                  LocationManager.GPS_PROVIDER);
+                              } catch (Exception ignored) {
+                              }
+
+                              if (location == null) {
+                                  try {
+                                      location =
+                                              locationManager.getLastKnownLocation(
+                                                      LocationManager.NETWORK_PROVIDER);
+                                  } catch (Exception ignored) {
+                                  }
+                              }
+                          }
+                      }
 
                       if (location == null) {
                           return;
                       }
 
-                      autoFollow = true;
-
-                      if (map.getLocationComponent()
-                              .isLocationComponentActivated()) {
-
-                          map.getLocationComponent()
-                                  .setCameraMode(
-                                          CameraMode.TRACKING);
-                      }
+                      lastAutoFollowLocation =
+                              new Location(location);
 
                       map.animateCamera(
                               CameraUpdateFactory
@@ -330,987 +606,188 @@ jobs:
                   }
               }
 
-              private void disableAutoFollow() {
-
-                  autoFollow = false;
-
-                  if (map == null) {
-                      return;
-                  }
-
-                  try {
-
-                      if (map.getLocationComponent()
-                              .isLocationComponentActivated()) {
-
-                          map.getLocationComponent()
-                                  .setCameraMode(
-                                          CameraMode.NONE);
-                      }
-
-                  } catch (Exception ignored) {
-                  }
-              }
-
-              public boolean isAutoFollowEnabled() {
-                  return autoFollow;
-              }
-
               public void onHostResume() {
                   mapView.onResume();
+
+                  if (map != null) {
+                      startLocationUpdates();
+
+                      if (autoFollow) {
+                          autoFollowToLastKnownLocation();
+                      }
+                  }
               }
 
               public void onHostPause() {
+                  stopLocationUpdates();
                   mapView.onPause();
               }
 
               public void onHostDestroy() {
+                  stopLocationUpdates();
                   mapView.onDestroy();
               }
           }
           EOF
 
-          if ! grep -Fq \
-            "class NavigationMapView" \
-            "$SRC/NavigationMapView.java"; then
-            echo "ERROR: NavigationMapView was not created."
-            exit 1
-          fi
+          echo "PASS: Patch 1 source applied to NavigationMapView only."
 
-          if ! grep -Fq \
-            "CameraMode.TRACKING" \
-            "$SRC/NavigationMapView.java"; then
-            echo "ERROR: Auto-follow CameraMode missing."
-            exit 1
-          fi
-
-          if ! grep -Fq \
-            "public void recenter()" \
-            "$SRC/NavigationMapView.java"; then
-            echo "ERROR: Recenter missing."
-            exit 1
-          fi
-
-          echo "PASS: Navigation V1 Patch 1."
-
-      - name: Patch Home UI V2 and transparent Navigation overlay
+      # ============================================================
+      # 8. VERIFY PATCH SCOPE
+      # ============================================================
+      - name: Verify Patch 1 changed only Navigation layer
         shell: bash
         run: |
           set -euo pipefail
 
-          rm -rf /tmp/carassistant-patch
-          mkdir -p /tmp/carassistant-patch
+          git diff --name-only > /tmp/changed-files.txt
 
-          cat > /tmp/carassistant-patch/patch.py <<'PY'
+          echo "Changed files:"
+          cat /tmp/changed-files.txt
+
+          if grep -Fxq \
+            "navigation-v1-source/app/src/main/java/com/carassistant/v10/NavigationMapView.java" \
+            /tmp/changed-files.txt; then
+            :
+          else
+            echo "ERROR: NavigationMapView.java was not changed."
+            exit 1
+          fi
+
+          CHANGED_COUNT="$(wc -l < /tmp/changed-files.txt)"
+
+          if [ "$CHANGED_COUNT" -ne 1 ]; then
+            echo "ERROR: Patch 1 changed files outside NavigationMapView.java."
+            exit 1
+          fi
+
+          if grep -Fq \
+            "V10CarActivity.java" \
+            /tmp/changed-files.txt; then
+            echo "ERROR: V10CarActivity.java changed."
+            exit 1
+          fi
+
+          if grep -Fq \
+            "AndroidManifest.xml" \
+            /tmp/changed-files.txt; then
+            echo "ERROR: AndroidManifest.xml changed."
+            exit 1
+          fi
+
+          if grep -Fq \
+            "build.gradle" \
+            /tmp/changed-files.txt; then
+            echo "ERROR: build.gradle changed."
+            exit 1
+          fi
+
+          echo "PASS: Patch 1 scope is NavigationMapView.java only."
+
+      # ============================================================
+      # 9. VERIFY AUTO-FOLLOW / RECENTER
+      # ============================================================
+      - name: Verify Patch 1 Auto-follow and Recenter
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          NAV_SRC="navigation-v1-source/app/src/main/java/com/carassistant/v10/NavigationMapView.java"
+
+          python3 - "$NAV_SRC" <<'PY'
           from pathlib import Path
+          import sys
 
-          P = Path(
-              "v10-source/app/src/main/java/com/hieptran/aacast/doudou/V10CarActivity.java"
-          )
+          p = Path(sys.argv[1])
+          s = p.read_text(encoding="utf-8")
 
-          s = P.read_text(encoding="utf-8")
+          compact = "".join(s.split())
 
-          def method(sig):
-              a = s.find(sig)
-
-              if a < 0:
-                  raise RuntimeError(
-                      "METHOD NOT FOUND: " + sig
-                  )
-
-              b = s.find("{", a)
-
-              if b < 0:
-                  raise RuntimeError(
-                      "OPEN BRACE NOT FOUND: " + sig
-                  )
-
-              depth = 0
-
-              for i in range(b, len(s)):
-
-                  if s[i] == "{":
-                      depth += 1
-
-                  elif s[i] == "}":
-                      depth -= 1
-
-                      if depth == 0:
-                          return a, i + 1
-
-              raise RuntimeError(
-                  "METHOD END NOT FOUND: " + sig
-              )
-
-          def replace(sig, new):
-              global s
-
-              a, b = method(sig)
-
-              s = (
-                  s[:a]
-                  + new.rstrip()
-                  + "\n"
-                  + s[b:]
-              )
-
-          def require(x):
-
-              if x not in s:
-                  raise RuntimeError(
-                      "FOUNDATION MARKER MISSING: " + x
-                  )
-
-          require(
-              "public final class V10CarActivity"
-          )
-
-          require(
-              "private void buildUi()"
-          )
-
-          require(
-              "private void buildDashboard()"
-          )
-
-          require(
-              "private void rebuildDock()"
-          )
-
-          require(
-              "private LinearLayout appTile("
-          )
-
-          require(
-              "public void onResume()"
-          )
-
-          require(
-              "public void onPause()"
-          )
-
-          require(
-              "public void onDestroy()"
-          )
-
-          imports = [
-              (
-                  "import android.content.pm.ResolveInfo;",
-                  "import android.content.pm.ResolveInfo;\n"
-                  "import android.content.pm.ApplicationInfo;\n"
-                  "import android.content.pm.PackageManager;"
-              ),
-              (
-                  "import android.graphics.drawable.GradientDrawable;",
-                  "import android.graphics.drawable.GradientDrawable;\n"
-                  "import android.graphics.drawable.Drawable;"
-              ),
-              (
-                  "import android.widget.GridLayout;",
-                  "import android.widget.GridLayout;\n"
-                  "import android.widget.ImageView;"
-              )
+          required = [
+              "privatebooleanautoFollow=true;",
+              "LocationManager",
+              "LocationListener",
+              "startLocationUpdates()",
+              "stopLocationUpdates()",
+              "autoFollowToLastKnownLocation()",
+              "followLocation(Locationlocation)",
+              "REASON_API_GESTURE",
+              "autoFollow=false;",
+              "autoFollow=true;",
+              "publicvoidrecenter()",
+              "CameraUpdateFactory.newLatLng(",
+              "CameraUpdateFactory.newLatLngZoom(",
+              "LocationManager.GPS_PROVIDER",
+              "LocationManager.NETWORK_PROVIDER"
           ]
 
-          for old, new in imports:
-
-              if new.split("\n")[1] not in s:
-                  s = s.replace(
-                      old,
-                      new,
-                      1
+          for marker in required:
+              if marker not in compact:
+                  raise SystemExit(
+                      "ERROR: Patch 1 marker missing: " + marker
                   )
 
-          if (
-              "private NavigationMapView navigationMap;"
-              not in s
-          ):
-
-              s = s.replace(
-                  "    private FrameLayout root;",
-                  "    private FrameLayout root;\n"
-                  "    private NavigationMapView navigationMap;",
-                  1
-              )
-
-          build_ui = """
-              private void buildUi() {
-
-                  root =
-                          new FrameLayout(this);
-
-                  root.setBackgroundColor(
-                          Color.TRANSPARENT);
-
-                  setContentView(root);
-
-                  buildDashboard();
-
-                  if (navigationMap == null) {
-                      navigationMap = new NavigationMapView(this);
-                  }
-
-                  FrameLayout.LayoutParams navParams =
-                          new FrameLayout.LayoutParams(
-                                  -1,
-                                  -1);
-
-                  navParams.gravity =
-                          Gravity.CENTER;
-
-                  root.addView(
-                          navigationMap,
-                          0,
-                          navParams);
-
-                  buildAppPanel();
-
-                  rebuildDock();
-              }
-          """
-
-          dashboard = """
-              private void buildDashboard() {
-
-                  dashboard =
-                          new FrameLayout(this);
-
-                  dashboard.setBackgroundColor(
-                          Color.TRANSPARENT);
-
-                  root.addView(
-                          dashboard,
-                          new FrameLayout.LayoutParams(
-                                  -1,
-                                  -1));
-
-                  LinearLayout launcherLayer =
-                          new LinearLayout(this);
-
-                  launcherLayer.setOrientation(
-                          LinearLayout.HORIZONTAL);
-
-                  launcherLayer.setBackgroundColor(
-                          Color.TRANSPARENT);
-
-                  dashboard.addView(
-                          launcherLayer,
-                          new FrameLayout.LayoutParams(
-                                  -1,
-                                  -1));
-
-                  LinearLayout sidebar =
-                          new LinearLayout(this);
-
-                  sidebar.setOrientation(
-                          LinearLayout.VERTICAL);
-
-                  sidebar.setGravity(
-                          Gravity.TOP);
-
-                  sidebar.setPadding(
-                          dp(4),
-                          dp(8),
-                          dp(4),
-                          dp(8));
-
-                  launcherLayer.addView(
-                          sidebar,
-                          new LinearLayout.LayoutParams(
-                                  dp(88),
-                                  -1));
-
-                  TextView appChoose =
-                          sidebarButton(
-                                  "APP CHỌN");
-
-                  appChoose.setOnClickListener(
-                          v -> showApps());
-
-                  sidebar.addView(
-                          appChoose,
-                          sidebarButtonParams());
-
-                  TextView tasks =
-                          sidebarButton(
-                                  "TASKS");
-
-                  tasks.setOnClickListener(
-                          v -> {});
-
-                  sidebar.addView(
-                          tasks,
-                          sidebarButtonParams());
-
-                  TextView media =
-                          sidebarButton(
-                                  "MEDIA");
-
-                  media.setOnClickListener(
-                          v -> {});
-
-                  sidebar.addView(
-                          media,
-                          sidebarButtonParams());
-
-                  TextView wyn =
-                          sidebarButton(
-                                  "WYN");
-
-                  wyn.setOnClickListener(
-                          v -> {});
-
-                  sidebar.addView(
-                          wyn,
-                          sidebarFixedButtonParams());
-
-                  LinearLayout bottom =
-                          new LinearLayout(this);
-
-                  bottom.setOrientation(
-                          LinearLayout.HORIZONTAL);
-
-                  FrameLayout.LayoutParams bfp =
-                          new FrameLayout.LayoutParams(
-                                  -1,
-                                  dp(92));
-
-                  bfp.gravity =
-                          Gravity.BOTTOM;
-
-                  bfp.setMargins(
-                          dp(100),
-                          0,
-                          dp(12),
-                          dp(8));
-
-                  dashboard.addView(
-                          bottom,
-                          bfp);
-
-                  LinearLayout mediaCard =
-                          card();
-
-                  mediaCard.setPadding(
-                          dp(14),
-                          dp(7),
-                          dp(14),
-                          dp(7));
-
-                  mediaCard.addView(
-                          text(
-                                  "MEDIA",
-                                  12,
-                                  Color.LTGRAY),
-                          new LinearLayout.LayoutParams(
-                                  -1,
-                                  dp(25)));
-
-                  mediaCard.addView(
-                          text(
-                                  "▶  Đang phát...",
-                                  17,
-                                  Color.WHITE),
-                          new LinearLayout.LayoutParams(
-                                  -1,
-                                  dp(35)));
-
-                  mediaCard.setOnClickListener(
-                          v -> {});
-
-                  LinearLayout.LayoutParams mp =
-                          new LinearLayout.LayoutParams(
-                                  0,
-                                  dp(78),
-                                  1f);
-
-                  mp.setMargins(
-                          dp(12),
-                          0,
-                          0,
-                          0);
-
-                  bottom.addView(
-                          mediaCard,
-                          mp);
-              }
-          """
-
-          dock = """
-              private void rebuildDock() {
-
-                  if (dock == null) {
-                      return;
-                  }
-
-                  dock.removeAllViews();
-
-                  ArrayList<AppInfo> q =
-                          getQuickLaunchApps();
-
-                  int n =
-                          Math.min(
-                                  4,
-                                  q.size());
-
-                  for (
-                          int i = 0;
-                          i < n;
-                          i++) {
-
-                      dock.addView(
-                              quickLaunchTile(
-                                      q.get(i)),
-                              sidebarQuickParams());
-                  }
-              }
-
-              private ArrayList<AppInfo> getQuickLaunchApps() {
-
-                  ArrayList<AppInfo> out =
-                          new ArrayList<>();
-
-                  String[] p = {
-                      "com.google.android.apps.maps",
-                      "com.google.android.youtube",
-                      "com.zing.zalo",
-                      "com.spotify.music"
-                  };
-
-                  for (String x : p) {
-
-                      for (AppInfo a : apps) {
-
-                          if (
-                              x.equals(
-                                  a.component
-                                      .getPackageName())) {
-
-                              out.add(a);
-                              break;
-                          }
-                      }
-
-                      if (out.size() == 4) {
-                          break;
-                      }
-                  }
-
-                  if (out.size() < 4) {
-
-                      for (AppInfo a : apps) {
-
-                          boolean duplicate =
-                                  false;
-
-                          for (AppInfo b : out) {
-
-                              if (
-                                  b.component.equals(
-                                      a.component)) {
-
-                                  duplicate = true;
-                              }
-                          }
-
-                          if (!duplicate) {
-                              out.add(a);
-                          }
-
-                          if (out.size() == 4) {
-                              break;
-                          }
-                      }
-                  }
-
-                  return out;
-              }
-
-              private LinearLayout quickLaunchTile(
-                      AppInfo app) {
-
-                  LinearLayout t =
-                          new LinearLayout(this);
-
-                  t.setOrientation(
-                          LinearLayout.VERTICAL);
-
-                  t.setGravity(
-                          Gravity.CENTER);
-
-                  GradientDrawable g =
-                          new GradientDrawable();
-
-                  g.setColor(
-                          Color.rgb(
-                                  22,
-                                  27,
-                                  33));
-
-                  g.setCornerRadius(
-                          dp(14));
-
-                  t.setBackground(g);
-
-                  ImageView i =
-                          new ImageView(this);
-
-                  Drawable d =
-                          getRealAppIcon(
-                                  app.component
-                                      .getPackageName());
-
-                  if (d != null) {
-                      i.setImageDrawable(d);
-                  }
-
-                  i.setScaleType(
-                          ImageView.ScaleType.CENTER_INSIDE);
-
-                  t.addView(
-                          i,
-                          new LinearLayout.LayoutParams(
-                                  dp(42),
-                                  dp(42)));
-
-                  TextView n =
-                          text(
-                                  app.name,
-                                  8,
-                                  Color.WHITE);
-
-                  n.setGravity(
-                          Gravity.CENTER);
-
-                  n.setMaxLines(1);
-
-                  t.addView(
-                          n,
-                          new LinearLayout.LayoutParams(
-                                  -1,
-                                  dp(18)));
-
-                  t.setOnClickListener(
-                          v ->
-                                  launchProjection(
-                                          app.component));
-
-                  return t;
-              }
-
-              private Drawable getRealAppIcon(
-                      String packageName) {
-
-                  try {
-
-                      PackageManager pm =
-                              getPackageManager();
-
-                      ApplicationInfo i =
-                              pm.getApplicationInfo(
-                                      packageName,
-                                      0);
-
-                      return i.loadIcon(pm);
-
-                  } catch (Exception e) {
-
-                      return null;
-                  }
-              }
-          """
-
-          app_tile = """
-              private LinearLayout appTile(
-                      AppInfo app) {
-
-                  LinearLayout t =
-                          new LinearLayout(this);
-
-                  t.setOrientation(
-                          LinearLayout.VERTICAL);
-
-                  t.setGravity(
-                          Gravity.CENTER);
-
-                  GradientDrawable g =
-                          new GradientDrawable();
-
-                  g.setColor(
-                          Color.rgb(
-                                  22,
-                                  27,
-                                  33));
-
-                  g.setCornerRadius(
-                          dp(16));
-
-                  t.setBackground(g);
-
-                  ImageView i =
-                          new ImageView(this);
-
-                  Drawable d =
-                          getRealAppIcon(
-                                  app.component
-                                      .getPackageName());
-
-                  if (d != null) {
-                      i.setImageDrawable(d);
-                  }
-
-                  i.setScaleType(
-                          ImageView.ScaleType.CENTER_INSIDE);
-
-                  t.addView(
-                          i,
-                          new LinearLayout.LayoutParams(
-                                  -1,
-                                  dp(64)));
-
-                  TextView n =
-                          text(
-                                  app.name,
-                                  12,
-                                  Color.WHITE);
-
-                  n.setGravity(
-                          Gravity.CENTER);
-
-                  n.setMaxLines(2);
-
-                  t.addView(
-                          n,
-                          new LinearLayout.LayoutParams(
-                                  -1,
-                                  dp(38)));
-
-                  t.setOnClickListener(
-                          v -> {
-                              hideApps();
-                              launchProjection(
-                                      app.component);
-                          });
-
-                  return t;
-              }
-          """
-
-          replace(
-              "    private void buildUi()",
-              build_ui
-          )
-
-          replace(
-              "    private void buildDashboard()",
-              dashboard
-          )
-
-          replace(
-              "    private void rebuildDock()",
-              dock
-          )
-
-          replace(
-              "    private LinearLayout appTile(",
-              app_tile
-          )
-
-          a, b = method(
-              "    private void buildAppPanel()"
-          )
-
-          block = s[a:b]
-
-          block = block.replace(
-              """appPanel.setBackgroundColor(
-                  Color.rgb(
-                          7,
-                          9,
-                          12));""",
-              "appPanel.setBackgroundColor("
-              "Color.TRANSPARENT);"
-          )
-
-          s = s[:a] + block + s[b:]
-
-          def add_after(
-                  sig,
-                  needle,
-                  insert):
-
-              global s
-
-              a, b = method(sig)
-
-              block = s[a:b]
-
-              if insert not in block:
-
-                  block = block.replace(
-                      needle,
-                      needle
-                      + "\n\n        "
-                      + insert,
-                      1
-                  )
-
-                  s = (
-                      s[:a]
-                      + block
-                      + s[b:]
-                  )
-
-          add_after(
-              "public void onResume()",
-              "attachProjection();",
-              "if (navigationMap != null) "
-              "navigationMap.onHostResume();"
-          )
-
-          add_after(
-              "public void onPause()",
-              "super.onPause();",
-              "if (navigationMap != null) "
-              "navigationMap.onHostPause();"
-          )
-
-          add_after(
-              "public void onDestroy()",
-              "resumed = false;",
-              "if (navigationMap != null) { "
-              "navigationMap.onHostDestroy(); "
-              "navigationMap = null; }"
-          )
-
-          P.write_text(
-              s.rstrip() + "\n",
-              encoding="utf-8"
-          )
-
-          print(
-              "PATCH HOME UI V2 OVERLAY PASS"
-          )
+          print("PASS: Auto-follow/Recenter markers.")
           PY
 
-          python3 -m py_compile \
-            /tmp/carassistant-patch/patch.py
-
-          python3 \
-            /tmp/carassistant-patch/patch.py
-
-          echo "PASS: Home UI V2 overlay preserved."
-
-      - name: Verify Navigation V1 + Patch 1 architecture
+      # ============================================================
+      # 10. VERIFY NO NEW UI LAYER
+      # ============================================================
+      - name: Verify no new UI or overlay layer
         shell: bash
         run: |
           set -euo pipefail
 
-          SRC="v10-source/app/src/main/java/com/hieptran/aacast/doudou"
-          FILE="$SRC/V10CarActivity.java"
-          NAV="$SRC/NavigationMapView.java"
+          NAV_SRC="navigation-v1-source/app/src/main/java/com/carassistant/v10/NavigationMapView.java"
+          ACTIVITY="navigation-v1-source/app/src/main/java/com/hieptran/aacast/doudou/V10CarActivity.java"
 
-          check() {
-            local label="$1"
-            local pattern="$2"
-            local file="$3"
-
-            if grep -Fq "$pattern" "$file"; then
-              echo "PASS: $label"
-            else
-              echo "ERROR: $label"
-              echo "Missing: $pattern"
-              echo "File: $file"
-              exit 1
-            fi
-          }
-
-          check \
-            "Navigation V1 field" \
-            "private NavigationMapView navigationMap;" \
-            "$FILE"
-
-          # FIX ONLY:
-          # Normalize all whitespace before checking the Java statement.
-          # This avoids false failure caused by formatting/newlines.
-          python3 - "$FILE" <<'PY'
-          import re
-          import sys
-
-          path = sys.argv[1]
-          text = open(path, encoding="utf-8").read()
-
-          compact = re.sub(r"\s+", "", text)
-
-          expected = "navigationMap=newNavigationMapView(this);"
-
-          if expected in compact:
-              print("PASS: Navigation V1 creation")
-          else:
-              print("ERROR: Navigation V1 creation")
-              print("Missing NavigationMapView creation.")
-              print()
-              print("Actual navigationMap references:")
-              for line_no, line in enumerate(
-                  text.splitlines(),
-                  1
-              ):
-                  if "navigationMap" in line:
-                      print(
-                          f"{line_no}: {line}"
-                      )
-              sys.exit(1)
-          PY
-
-          # FIX ONLY: Transparent root verification.
-          # Normalize whitespace because the generated Java uses
-          # line breaks between the method call components.
-          python3 - "$FILE" <<'PY'
-          import re
-          import sys
-
-          path = sys.argv[1]
-          text = open(path, encoding="utf-8").read()
-
-          compact = re.sub(r"\s+", "", text)
-
-          expected = "root.setBackgroundColor(Color.TRANSPARENT);"
-
-          if expected in compact:
-              print("PASS: Transparent root")
-          else:
-              print("ERROR: Transparent root")
-              print("Missing transparent root.")
-              sys.exit(1)
-          PY
-
-          # FIX ONLY: Transparent Home UI overlay verification.
-          # Normalize whitespace because the generated Java uses
-          # line breaks between the method call components.
-          python3 - "$FILE" <<'PY'
-          import re
-          import sys
-
-          path = sys.argv[1]
-          text = open(path, encoding="utf-8").read()
-
-          compact = re.sub(r"\s+", "", text)
-
-          expected = (
-              "launcherLayer.setBackgroundColor("
-              "Color.TRANSPARENT);"
-          )
-
-          if expected in compact:
-              print("PASS: Transparent Home UI overlay")
-          else:
-              print("ERROR: Transparent Home UI overlay")
-              print(
-                  "Missing launcherLayer transparent background."
-              )
-              sys.exit(1)
-          PY
-
-          check \
-            "Transparent dashboard" \
-            "dashboard.setBackgroundColor(Color.TRANSPARENT);" \
-            "$FILE"
-
-          check \
-            "Home app selector" \
-            'sidebarButton("APP CHỌN")' \
-            "$FILE"
-
-          check \
-            "Home tasks" \
-            '"TASKS"' \
-            "$FILE"
-
-          check \
-            "Home media" \
-            '"MEDIA"' \
-            "$FILE"
-
-          check \
-            "Home WYN" \
-            '"WYN"' \
-            "$FILE"
-
-          check \
-            "Navigation resume lifecycle" \
-            "navigationMap.onHostResume()" \
-            "$FILE"
-
-          check \
-            "Navigation pause lifecycle" \
-            "navigationMap.onHostPause()" \
-            "$FILE"
-
-          check \
-            "Navigation destroy lifecycle" \
-            "navigationMap.onHostDestroy()" \
-            "$FILE"
-
-          check \
-            "MapLibre style" \
-            "https://tiles.openfreemap.org/styles/liberty" \
-            "$NAV"
-
-          check \
-            "Auto-follow state" \
-            "private boolean autoFollow = true;" \
-            "$NAV"
-
-          check \
-            "Auto-follow tracking" \
-            "CameraMode.TRACKING" \
-            "$NAV"
-
-          check \
-            "Manual camera release" \
-            "CameraMode.NONE" \
-            "$NAV"
-
-          check \
-            "Recenter" \
-            "public void recenter()" \
-            "$NAV"
-
-          check \
-            "Auto-follow query" \
-            "public boolean isAutoFollowEnabled()" \
-            "$NAV"
-
-          if grep -Fq \
-            "NavigationV2Activity" \
-            "$SRC"/*.java; then
-            echo "ERROR: NavigationV2Activity detected."
+          if grep -Eq \
+            "buildDashboard|buildAppPanel|launcherLayer|projectionLayer" \
+            "$NAV_SRC"; then
+            echo "ERROR: Patch 1 attempted to add Home UI/overlay logic."
             exit 1
           fi
 
-          if grep -Fq \
-            "NavigationMapViewV2" \
-            "$SRC"/*.java; then
-            echo "ERROR: NavigationMapViewV2 detected."
-            exit 1
-          fi
+          test -f "$ACTIVITY"
 
-          if grep -Fq \
-            "V10NavigationActivity" \
-            "$SRC"/*.java; then
-            echo "ERROR: New Navigation Activity detected."
-            exit 1
-          fi
+          python3 - "$ACTIVITY" <<'PY'
+          from pathlib import Path
+          import sys
 
-          echo "PASS: No new Navigation architecture detected."
+          p = Path(sys.argv[1])
+          s = p.read_text(encoding="utf-8")
+          n = "".join(s.split())
 
-      - name: Verify protected Projection Persistence Floating Touch
+          required = [
+              "NavigationMapView",
+              "projectionLayer",
+              "launcherLayer",
+              "dashboard.setBackgroundColor(Color.TRANSPARENT);",
+              "projectionLayer.setBackgroundColor(Color.TRANSPARENT);",
+              "launcherLayer.setBackgroundColor(Color.TRANSPARENT);"
+          ]
+
+          for marker in required:
+              if marker not in n:
+                  raise SystemExit(
+                      "ERROR: Home UI/overlay baseline changed or missing: "
+                      + marker
+                  )
+
+          print("PASS: Existing Home UI V2 + Transparent Overlay remains.")
+          PY
+
+          echo "PASS: No new UI layer added by Patch 1."
+
+      # ============================================================
+      # 11. VERIFY PROTECTED CORE UNCHANGED
+      # ============================================================
+      - name: Verify protected Projection and Persistence core
         shell: bash
         run: |
           set -euo pipefail
 
-          SRC="v10-source/app/src/main/java/com/hieptran/aacast/doudou"
-          FILE="$SRC/V10CarActivity.java"
+          SRC="navigation-v1-source/app/src/main/java/com/hieptran/aacast/doudou"
 
           sha256sum \
             "$SRC/V10ProjectionSession.java" \
@@ -1320,131 +797,184 @@ jobs:
             "$SRC/V10SessionStore.java" \
             > /tmp/core-after.sha256
 
-          if ! diff -u \
+          diff -u \
             /tmp/core-before.sha256 \
-            /tmp/core-after.sha256; then
+            /tmp/core-after.sha256
 
-            echo \
-              "ERROR: Protected Foundation core files changed."
+          echo "PASS: Projection/Persistence core unchanged."
 
+      # ============================================================
+      # 12. VERIFY ORIGINAL NAVIGATION FEATURES REMAIN
+      # ============================================================
+      - name: Verify Navigation V1 baseline remains
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          NAV_SRC="navigation-v1-source/app/src/main/java/com/carassistant/v10/NavigationMapView.java"
+
+          grep -Fq "org.maplibre.android.MapLibre" "$NAV_SRC"
+          grep -Fq "https://tiles.openfreemap.org/styles/liberty" "$NAV_SRC"
+          grep -Fq "public void zoomIn()" "$NAV_SRC"
+          grep -Fq "public void zoomOut()" "$NAV_SRC"
+          grep -Fq "public void recenter()" "$NAV_SRC"
+          grep -Fq "onHostResume()" "$NAV_SRC"
+          grep -Fq "onHostPause()" "$NAV_SRC"
+          grep -Fq "onHostDestroy()" "$NAV_SRC"
+
+          echo "PASS: Navigation V1 MapLibre/Zoom/Recenter/lifecycle remain."
+
+      # ============================================================
+      # 13. VERIFY MAIN SOURCE DOES NOT USE OLD v10-source
+      # ============================================================
+      - name: Verify current architecture paths
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          test -d navigation-v1-source
+
+          if [ -d v10-source ]; then
+            echo "ERROR: Old v10-source directory exists on main."
             exit 1
           fi
 
-          echo \
-            "PASS: Projection/Persistence core SHA unchanged."
+          if grep -RIl \
+            "v10-source" \
+            .github/workflows/build-navigation-v1-patch1-autofollow.yml \
+            >/tmp/old-path-hit.txt 2>/dev/null; then
+            echo "ERROR: Patch 1 workflow still references old v10-source."
+            exit 1
+          fi
 
-          check() {
-            local label="$1"
-            local pattern="$2"
+          echo "PASS: Patch 1 uses navigation-v1-source only."
 
-            if grep -Fq "$pattern" "$FILE"; then
-              echo "PASS: $label"
-            else
-              echo "ERROR: $label"
-              echo "Missing: $pattern"
-              exit 1
-            fi
-          }
-
-          check \
-            "Floating Touch creation" \
-            "createFloatingTouchKey()"
-
-          check \
-            "Floating Touch timing" \
-            "floatingDownTime"
-
-          check \
-            "Floating BACK" \
-            'addFloatingMenuButton("BACK"'
-
-          check \
-            "Floating HOME" \
-            'addFloatingMenuButton("HOME"'
-
-          echo \
-            "Projection/Persistence/Floating Touch protection PASS."
-
-      - name: Verify source syntax
+      # ============================================================
+      # 14. GRADLE PERMISSION
+      # ============================================================
+      - name: Prepare Gradle
         shell: bash
         run: |
           set -euo pipefail
 
-          python3 -m py_compile \
-            /tmp/carassistant-patch/patch.py
+          cd navigation-v1-source
 
-          echo "PASS: Patch script syntax."
+          chmod +x gradlew
 
-      - name: Git diff safety
+          test -x gradlew
+
+          echo "PASS: Gradle wrapper ready."
+
+      # ============================================================
+      # 15. COMPILE
+      # ============================================================
+      - name: Compile Patch 1
         shell: bash
         run: |
           set -euo pipefail
 
-          git diff --check
-
-          echo "PASS: git diff --check."
-
-      - name: Compile
-        working-directory: v10-source
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          chmod +x ./gradlew
+          cd navigation-v1-source
 
           ./gradlew \
+            :app:compileReleaseJavaWithJavac \
             --no-daemon \
-            :app:compileDebugJavaWithJavac \
             --stacktrace
 
-          echo "PASS: Java compile."
+          echo "PASS: Patch 1 Java compilation."
 
-      - name: Assemble APK
-        working-directory: v10-source
+      # ============================================================
+      # 16. ASSEMBLE
+      # ============================================================
+      - name: Assemble Patch 1 APK
         shell: bash
         run: |
           set -euo pipefail
+
+          cd navigation-v1-source
 
           ./gradlew \
+            :app:assembleRelease \
             --no-daemon \
-            :app:assembleDebug \
             --stacktrace
 
-          echo "PASS: APK assemble."
+          test -f app/build/outputs/apk/release/app-release.apk
 
-      - name: Package APK
+          echo "PASS: Patch 1 APK assembled."
+
+      # ============================================================
+      # 17. APK SHA256
+      # ============================================================
+      - name: Calculate APK SHA256
         shell: bash
         run: |
           set -euo pipefail
 
-          APK="$(
-            find v10-source/app/build/outputs/apk \
-              -type f \
-              -name "*.apk" \
-              | head -n 1
-          )"
+          APK="navigation-v1-source/app/build/outputs/apk/release/app-release.apk"
 
-          test -n "$APK"
+          sha256sum "$APK"
+
+          mkdir -p /tmp/apk-output
 
           cp \
             "$APK" \
-            CarAssistant-Navigation-V1-Patch1-AutoFollow.apk
+            "/tmp/apk-output/CarAssistant-Navigation-V1-Patch1-AutoFollow.apk"
 
           sha256sum \
-            CarAssistant-Navigation-V1-Patch1-AutoFollow.apk \
-            > CarAssistant-Navigation-V1-Patch1-AutoFollow.sha256
+            "/tmp/apk-output/CarAssistant-Navigation-V1-Patch1-AutoFollow.apk" \
+            > "/tmp/apk-output/CarAssistant-Navigation-V1-Patch1-AutoFollow.apk.sha256"
 
-          test -s \
-            CarAssistant-Navigation-V1-Patch1-AutoFollow.apk
+          echo "PASS: APK SHA256 generated."
 
-          echo "PASS: APK package."
+      # ============================================================
+      # 18. FINAL ARCHITECTURE CHECK
+      # ============================================================
+      - name: Final Patch 1 architecture check
+        shell: bash
+        run: |
+          set -euo pipefail
 
-      - name: Upload APK
+          echo "=============================================="
+          echo "PATCH 1 FINAL ARCHITECTURE"
+          echo "=============================================="
+          echo "Source: navigation-v1-source/"
+          echo "Feature: Auto-follow + Recenter"
+          echo "Modified Java: NavigationMapView.java ONLY"
+          echo "Home UI V2: PRESERVED"
+          echo "Transparent Overlay: PRESERVED"
+          echo "Projection Core: PRESERVED"
+          echo "Persistence Core: PRESERVED"
+          echo "New UI layer: NONE"
+          echo "Old v10-source: NOT USED"
+          echo "=============================================="
+
+          echo "PASS: Patch 1 architecture locked."
+
+      # ============================================================
+      # 19. UPLOAD APK
+      # ============================================================
+      - name: Upload Patch 1 APK
         uses: actions/upload-artifact@v4
         with:
           name: CarAssistant-Navigation-V1-Patch1-AutoFollow
           path: |
-            CarAssistant-Navigation-V1-Patch1-AutoFollow.apk
-            CarAssistant-Navigation-V1-Patch1-AutoFollow.sha256
+            /tmp/apk-output/CarAssistant-Navigation-V1-Patch1-AutoFollow.apk
+            /tmp/apk-output/CarAssistant-Navigation-V1-Patch1-AutoFollow.apk.sha256
           if-no-files-found: error
-          retention-days: 14
+
+      # ============================================================
+      # 20. FINAL RESULT
+      # ============================================================
+      - name: Patch 1 PASS
+        shell: bash
+        run: |
+          echo "================================================"
+          echo "PASS: Navigation V1 Patch 1"
+          echo "Auto-follow + Recenter"
+          echo "================================================"
+          echo "Baseline: main/navigation-v1-source"
+          echo "Home UI V2: unchanged"
+          echo "Transparent Overlay: unchanged"
+          echo "Projection Core: unchanged"
+          echo "Persistence Core: unchanged"
+          echo "New UI layer: none"
+          echo "================================================"
