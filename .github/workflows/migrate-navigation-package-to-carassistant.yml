@@ -8,16 +8,14 @@ permissions:
 
 jobs:
   migrate-navigation-v1-package:
-    name: Migrate com.hieptran.aacast.doudou -> com.carassistant.v10
     runs-on: ubuntu-latest
     timeout-minutes: 45
 
     steps:
-
       # ============================================================
       # 01. CHECKOUT MAIN
       # ============================================================
-      - name: 01 - Checkout main
+      - name: "01 - Checkout main"
         uses: actions/checkout@v4
         with:
           ref: main
@@ -26,17 +24,16 @@ jobs:
       # ============================================================
       # 02. JAVA 17
       # ============================================================
-      - name: 02 - Setup Java 17
+      - name: "02 - Setup Java 17"
         uses: actions/setup-java@v4
         with:
           distribution: temurin
-          java-version: '17'
-          cache: gradle
+          java-version: "17"
 
       # ============================================================
-      # 03. DEFINE PATHS
+      # 03. DEFINE MIGRATION PATHS
       # ============================================================
-      - name: 03 - Define migration paths
+      - name: "03 - Define migration paths"
         shell: bash
         run: |
           set -euo pipefail
@@ -57,24 +54,21 @@ jobs:
           echo "OLD_PATH=$OLD_PATH" >> "$GITHUB_ENV"
           echo "NEW_PATH=$NEW_PATH" >> "$GITHUB_ENV"
 
-          echo "=============================================="
-          echo "Navigation V1 package migration"
-          echo "=============================================="
-          echo "OLD PACKAGE : $OLD_PACKAGE"
-          echo "NEW PACKAGE : $NEW_PACKAGE"
-          echo "OLD PATH    : $OLD_PATH"
-          echo "NEW PATH    : $NEW_PATH"
-          echo "=============================================="
+          echo "OLD_DIR=$OLD_DIR"
+          echo "NEW_DIR=$NEW_DIR"
+          echo "OLD_PACKAGE=$OLD_PACKAGE"
+          echo "NEW_PACKAGE=$NEW_PACKAGE"
 
       # ============================================================
-      # 04. VERIFY CURRENT MAIN STRUCTURE
+      # 04. VERIFY CURRENT STRUCTURE
       # ============================================================
-      - name: 04 - Verify current Navigation V1 structure
+      - name: "04 - Verify current Navigation V1 structure"
         shell: bash
         run: |
           set -euo pipefail
 
           test -d "$OLD_DIR"
+          test ! -e "$NEW_DIR"
 
           test -f "$OLD_DIR/V10CarActivity.java"
           test -f "$OLD_DIR/NavigationMapView.java"
@@ -83,77 +77,71 @@ jobs:
           test -f "$OLD_DIR/V10SessionStore.java"
           test -f "$OLD_DIR/V10TaskSession.java"
 
-          test -f "navigation-v1-source/app/build.gradle"
-          test -f "navigation-v1-source/build.gradle"
-          test -f "navigation-v1-source/settings.gradle"
+          test -f navigation-v1-source/app/build.gradle
+          test -f navigation-v1-source/build.gradle
+          test -f navigation-v1-source/settings.gradle
 
-          echo "PASS: Current Navigation V1 structure verified."
+          echo "PASS: current Navigation V1 structure verified."
 
       # ============================================================
-      # 05. PROTECT V10-SOURCE
+      # 05. PROTECT V10 SOURCE
       # ============================================================
-      - name: 05 - Protect v10-source
+      - name: "05 - Record protected v10-source hash"
         shell: bash
         run: |
           set -euo pipefail
 
           if [ -d "v10-source" ]; then
-            find v10-source -type f -print0 \
-              | sort -z \
-              | xargs -0 sha256sum \
-              > /tmp/v10-source.before.sha256
-
-            echo "PASS: v10-source backup hash created."
+            find v10-source -type f -print0 | sort -z | xargs -0 sha256sum > /tmp/v10-source.before.sha256
+            echo "Protected v10-source snapshot created."
           else
-            echo "INFO: v10-source does not exist on main."
+            : > /tmp/v10-source.before.sha256
+            echo "v10-source does not exist."
           fi
 
       # ============================================================
-      # 06. RECORD NAVIGATION FILE COUNT
+      # 06. RECORD JAVA INVENTORY
       # ============================================================
-      - name: 06 - Record Navigation V1 file inventory
+      - name: "06 - Record Navigation V1 Java inventory"
         shell: bash
         run: |
           set -euo pipefail
 
-          find "$OLD_DIR" \
-            -type f \
-            -name "*.java" \
-            | sort \
-            > /tmp/navigation-java-before.txt
+          find "$OLD_DIR" -type f -name '*.java' -print \
+            | sed "s#^$OLD_DIR/##" \
+            | sort > /tmp/navigation-java.before.txt
 
-          JAVA_COUNT="$(wc -l < /tmp/navigation-java-before.txt | tr -d ' ')"
+          JAVA_COUNT=$(wc -l < /tmp/navigation-java.before.txt | tr -d ' ')
 
           echo "Navigation V1 Java file count before migration: $JAVA_COUNT"
 
-          if [ "$JAVA_COUNT" -ne 31 ]; then
-            echo "ERROR: Expected exactly 31 Navigation V1 Java files."
+          if [ "$JAVA_COUNT" -eq 0 ]; then
+            echo "ERROR: No Navigation V1 Java files found."
             exit 1
           fi
 
-          echo "PASS: Exactly 31 Navigation V1 Java files found."
+          echo "JAVA_COUNT_BEFORE=$JAVA_COUNT" >> "$GITHUB_ENV"
+
+          echo "PASS: Java inventory recorded."
 
       # ============================================================
-      # 07. BACKUP SOURCE HASHES
+      # 07. RECORD SOURCE HASH
       # ============================================================
-      - name: 07 - Record source hashes before migration
+      - name: "07 - Record Navigation V1 source hash"
         shell: bash
         run: |
           set -euo pipefail
 
-          find "$OLD_DIR" \
-            -type f \
-            -print0 \
+          find navigation-v1-source/app/src/main/java -type f -print0 \
             | sort -z \
-            | xargs -0 sha256sum \
-            > /tmp/navigation-source-before.sha256
+            | xargs -0 sha256sum > /tmp/navigation-source.before.sha256
 
-          echo "PASS: Navigation V1 source hashes recorded."
+          echo "PASS: Navigation V1 source hash recorded."
 
       # ============================================================
       # 08. CREATE NEW PACKAGE DIRECTORY
       # ============================================================
-      - name: 08 - Create new package directory
+      - name: "08 - Create new package directory"
         shell: bash
         run: |
           set -euo pipefail
@@ -166,474 +154,302 @@ jobs:
 
           mkdir -p "$NEW_DIR"
 
-          echo "PASS: Created:"
-          echo "$NEW_DIR"
+          echo "PASS: New package directory created."
 
       # ============================================================
-      # 09. MOVE ENTIRE PACKAGE TREE
+      # 09. MOVE ALL SOURCE FILES
       # ============================================================
-      - name: 09 - Move entire Navigation package tree
+      - name: "09 - Move all files to new package"
         shell: bash
         run: |
           set -euo pipefail
 
-          find "$OLD_DIR" -mindepth 1 -maxdepth 1 -exec mv {} "$NEW_DIR"/ \;
+          shopt -s dotglob nullglob
+
+          files=("$OLD_DIR"/*)
+
+          if [ "${#files[@]}" -eq 0 ]; then
+            echo "ERROR: Old package directory is empty."
+            exit 1
+          fi
+
+          mv "${files[@]}" "$NEW_DIR/"
 
           rmdir "$OLD_DIR"
 
-          test ! -d "$OLD_DIR"
-          test -d "$NEW_DIR"
-
-          echo "PASS: Entire package tree moved."
-          echo ""
-          echo "NEW TREE:"
-          find "$NEW_DIR" -type f | sort
+          echo "PASS: All direct children moved from old package to new package."
 
       # ============================================================
-      # 10. UPDATE PACKAGE AND PATH REFERENCES
+      # 10. MIGRATE PACKAGE REFERENCES
       # ============================================================
-      - name: 10 - Update package and path references
+      - name: "10 - Migrate package and path references"
         shell: bash
         run: |
           set -euo pipefail
 
-          python3 - <<'PY'
-          from pathlib import Path
+          find navigation-v1-source -type f \
+            \( -name '*.java' -o -name '*.kt' -o -name '*.gradle' -o -name '*.xml' -o -name '*.properties' -o -name '*.md' -o -name '*.yml' -o -name '*.yaml' \) \
+            -print0 |
+          while IFS= read -r -d '' file; do
+            sed -i \
+              -e "s#${OLD_PACKAGE}#${NEW_PACKAGE}#g" \
+              -e "s#${OLD_PATH}#${NEW_PATH}#g" \
+              "$file"
+          done
 
-          roots = [
-              Path("navigation-v1-source"),
-              Path(".github/workflows"),
-          ]
-
-          old_package = "com.hieptran.aacast.doudou"
-          new_package = "com.carassistant.v10"
-
-          old_path = "com/hieptran/aacast/doudou"
-          new_path = "com/carassistant/v10"
-
-          text_extensions = {
-              ".java",
-              ".kt",
-              ".xml",
-              ".gradle",
-              ".properties",
-              ".pro",
-              ".txt",
-              ".md",
-              ".yml",
-              ".yaml",
-              ".json",
-              ".sh",
-          }
-
-          changed = []
-
-          for root in roots:
-              if not root.exists():
-                  continue
-
-              for path in root.rglob("*"):
-                  if not path.is_file():
-                      continue
-
-                  if path.suffix.lower() not in text_extensions:
-                      continue
-
-                  try:
-                      data = path.read_text(encoding="utf-8")
-                  except UnicodeDecodeError:
-                      continue
-
-                  updated = data.replace(old_package, new_package)
-                  updated = updated.replace(old_path, new_path)
-
-                  if updated != data:
-                      path.write_text(updated, encoding="utf-8")
-                      changed.append(str(path))
-
-          print("Files updated:")
-          for item in sorted(changed):
-              print("  " + item)
-
-          print("")
-          print(f"Updated file count: {len(changed)}")
-          print("PASS: Package/path references migrated.")
-          PY
+          echo "PASS: Package/path references migrated."
 
       # ============================================================
-      # 11. VERIFY JAVA PACKAGE DECLARATIONS
+      # 11. VERIFY NO OLD PACKAGE DECLARATIONS
       # ============================================================
-      - name: 11 - Verify Java package declarations
+      - name: "11 - Verify Java package declarations"
         shell: bash
         run: |
           set -euo pipefail
 
-          if grep -RIn \
-            --include="*.java" \
-            "package com.hieptran.aacast.doudou" \
-            "navigation-v1-source"; then
-
-            echo "ERROR: Old Java package declaration remains."
+          if grep -RIn --include='*.java' \
+            -E "package ${OLD_PACKAGE//./\\.}|import ${OLD_PACKAGE//./\\.}" \
+            navigation-v1-source 2>/dev/null; then
+            echo "ERROR: Old package declaration/import still exists."
             exit 1
           fi
 
-          OLD_IMPORTS="$(grep -RIn \
-            --include="*.java" \
-            "com.hieptran.aacast.doudou" \
-            navigation-v1-source || true)"
-
-          if [ -n "$OLD_IMPORTS" ]; then
-            echo "$OLD_IMPORTS"
-            echo "ERROR: Old Java package reference remains."
-            exit 1
-          fi
-
-          echo "PASS: No old Java package declarations/imports."
+          echo "PASS: No old Java package declarations/imports found."
 
       # ============================================================
-      # 12. VERIFY OLD PHYSICAL PATH IS GONE
+      # 12. VERIFY OLD PHYSICAL PATH
       # ============================================================
-      - name: 12 - Verify old physical package path removed
+      - name: "12 - Verify old physical package path is gone"
         shell: bash
         run: |
           set -euo pipefail
 
-          test ! -d "$OLD_DIR"
-          test -d "$NEW_DIR"
-
-          OLD_PATHS="$(find navigation-v1-source \
-            -type f \
-            -path "*$OLD_PATH*" \
-            -print || true)"
-
-          if [ -n "$OLD_PATHS" ]; then
-            echo "$OLD_PATHS"
-            echo "ERROR: Old physical package path still exists."
+          if [ -e "$OLD_DIR" ]; then
+            echo "ERROR: Old package directory still exists."
             exit 1
           fi
 
           echo "PASS: Old physical package path removed."
 
       # ============================================================
-      # 13. VERIFY NEW TREE FILE COUNT
+      # 13. VERIFY JAVA FILE COUNT
       # ============================================================
-      - name: 13 - Verify migrated Java file count
+      - name: "13 - Verify Java file count preserved"
         shell: bash
         run: |
           set -euo pipefail
 
-          find "$NEW_DIR" \
-            -type f \
-            -name "*.java" \
-            | sort \
-            > /tmp/navigation-java-after.txt
+          JAVA_COUNT_AFTER=$(find "$NEW_DIR" -type f -name '*.java' | wc -l | tr -d ' ')
 
-          BEFORE_COUNT="$(wc -l < /tmp/navigation-java-before.txt | tr -d ' ')"
-          AFTER_COUNT="$(wc -l < /tmp/navigation-java-after.txt | tr -d ' ')"
+          echo "Java file count before: $JAVA_COUNT_BEFORE"
+          echo "Java file count after : $JAVA_COUNT_AFTER"
 
-          echo "Before: $BEFORE_COUNT"
-          echo "After : $AFTER_COUNT"
+          if [ "$JAVA_COUNT_AFTER" -ne "$JAVA_COUNT_BEFORE" ]; then
+            echo "ERROR: Java file count changed."
+            exit 1
+          fi
+
+          echo "PASS: Java file count preserved."
+
+      # ============================================================
+      # 14. VERIFY COMPLETE INVENTORY BEFORE/AFTER
+      # ============================================================
+      - name: "14 - Verify complete Java inventory before and after"
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          find "$NEW_DIR" -type f -name '*.java' -print \
+            | sed "s#^$NEW_DIR/##" \
+            | sort > /tmp/navigation-java.after.txt
+
+          BEFORE_COUNT=$(wc -l < /tmp/navigation-java.before.txt | tr -d ' ')
+          AFTER_COUNT=$(wc -l < /tmp/navigation-java.after.txt | tr -d ' ')
+
+          echo "Inventory before: $BEFORE_COUNT Java files"
+          echo "Inventory after : $AFTER_COUNT Java files"
 
           if [ "$BEFORE_COUNT" -ne "$AFTER_COUNT" ]; then
-            echo "ERROR: Java file count changed during migration."
+            echo "ERROR: Java inventory count mismatch."
+            echo "Missing/extra files:"
+            diff -u /tmp/navigation-java.before.txt /tmp/navigation-java.after.txt || true
             exit 1
           fi
 
-          if [ "$AFTER_COUNT" -ne 31 ]; then
-            echo "ERROR: Expected 31 Java files after migration."
+          if ! diff -u /tmp/navigation-java.before.txt /tmp/navigation-java.after.txt > /tmp/navigation-java.inventory.diff; then
+            echo "ERROR: Java inventory changed during migration."
+            echo
+            cat /tmp/navigation-java.inventory.diff
             exit 1
           fi
 
-          echo "PASS: All 31 Java files preserved."
+          echo "PASS: Complete Java inventory preserved."
+          echo "PASS: No Navigation V1 Java file was lost or added unexpectedly."
 
       # ============================================================
-      # 14. VERIFY IMPORTANT FILES
+      # 15. VERIFY BUILD.GRADLE ARCHITECTURE
       # ============================================================
-      - name: 14 - Verify important Navigation V1 files
+      - name: "15 - Verify Navigation V1 build architecture"
         shell: bash
         run: |
           set -euo pipefail
 
-          REQUIRED_FILES=(
-            "AACastCarService.java"
-            "AACastDisplay.java"
-            "AppCatalog.java"
-            "AppEntry.java"
-            "DividerView.java"
-            "DockStateProvider.java"
-            "LayoutMath.java"
-            "LayoutRects.java"
-            "NavigationMapView.java"
-            "PaneContainer.java"
-            "PaneView.java"
-            "RootShellSession.java"
-            "RootView.java"
-            "TileOrder.java"
-            "V10CarActivity.java"
-            "V10ControlReceiver.java"
-            "V10Display.java"
-            "V10DisplayController.java"
-            "V10InputController.java"
-            "V10LauncherActivity.java"
-            "V10ProjectionSession.java"
-            "V10SessionStore.java"
-            "V10SurfaceManager.java"
-            "V10TaskSession.java"
-            "aabridge/AACastBridge.java"
-            "hook/DisplayHooks.java"
-            "hook/DisplayReflect.java"
-            "hook/GearheadAllow.java"
-            "hook/GearheadDockPatcher.java"
-            "hook/InputHooks.java"
-            "hook/InstallerSpoof.java"
-          )
+          BUILD_FILE="navigation-v1-source/app/build.gradle"
 
-          for FILE in "${REQUIRED_FILES[@]}"; do
-            test -f "$NEW_DIR/$FILE"
-          done
+          grep -Fq 'namespace "com.carassistant.v10"' "$BUILD_FILE"
+          grep -Fq 'org.maplibre.gl:android-sdk:11.11.0' "$BUILD_FILE"
+          grep -Fq "compileOnly files('libs/xposed-api-82.jar')" "$BUILD_FILE"
+          grep -Fq "compileOnly files('libs/aasdk-legacy.jar')" "$BUILD_FILE"
+          grep -Fq 'aasdk-legacy.dex' "$BUILD_FILE"
 
-          echo "PASS: All 31 expected Navigation V1 Java files exist."
+          test -f navigation-v1-source/app/libs/xposed-api-82.jar
+          test -f navigation-v1-source/app/libs/aasdk-legacy.jar
+          test -f navigation-v1-source/app/libs/aasdk-legacy.dex
+
+          echo "PASS: Navigation V1 build architecture verified."
 
       # ============================================================
-      # 15. VERIFY BUILD CONFIG WAS NOT REDESIGNED
+      # 16. VERIFY OLD PACKAGE/PATH ABSENCE
       # ============================================================
-      - name: 15 - Verify build configuration
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          test -f "navigation-v1-source/app/build.gradle"
-
-          grep -Fq "namespace 'com.carassistant.v10'" \
-            navigation-v1-source/app/build.gradle
-
-          grep -Fq 'org.maplibre.gl:android-sdk:11.11.0' \
-            navigation-v1-source/app/build.gradle
-
-          grep -Fq "compileOnly files('libs/xposed-api-82.jar')" \
-            navigation-v1-source/app/build.gradle
-
-          grep -Fq "compileOnly files('libs/aasdk-legacy.jar')" \
-            navigation-v1-source/app/build.gradle
-
-          test -f "navigation-v1-source/app/libs/aasdk-legacy.dex"
-          test -f "navigation-v1-source/app/libs/aasdk-legacy.jar"
-
-          echo "PASS: Existing Navigation V1 build configuration preserved."
-          echo "PASS: Legacy DEX/JAR preserved."
-
-      # ============================================================
-      # 16. VERIFY NO OLD PACKAGE ANYWHERE IN NAVIGATION SOURCE
-      # ============================================================
-      - name: 16 - Verify no old package references remain
+      - name: "16 - Verify old package and path are absent"
         shell: bash
         run: |
           set -euo pipefail
 
           if grep -RIn \
-            --exclude-dir=.git \
-            "$OLD_PACKAGE" \
+            -E "${OLD_PACKAGE//./\\.}|${OLD_PATH//\//\\/}" \
             navigation-v1-source 2>/dev/null; then
-
-            echo "ERROR: Old package reference remains in Navigation V1."
+            echo "ERROR: Old package/path reference remains in Navigation V1."
             exit 1
           fi
 
-          if grep -RIn \
-            --exclude-dir=.git \
-            "$OLD_PATH" \
-            navigation-v1-source 2>/dev/null; then
-
-            echo "ERROR: Old package path reference remains in Navigation V1."
-            exit 1
-          fi
-
-          echo "PASS: Old package/path completely removed from Navigation V1."
+          echo "PASS: Old package/path absent from Navigation V1."
 
       # ============================================================
-      # 17. VERIFY NEW PACKAGE REFERENCES
+      # 17. VERIFY ALL JAVA FILES USE NEW PACKAGE
       # ============================================================
-      - name: 17 - Verify new package references
+      - name: "17 - Verify all Java files use new package"
         shell: bash
         run: |
           set -euo pipefail
 
-          NEW_COUNT="$(grep -RIl \
-            --include="*.java" \
-            "$NEW_PACKAGE" \
-            "$NEW_DIR" \
-            | wc -l \
-            | tr -d ' ')"
+          JAVA_FILES=$(find "$NEW_DIR" -type f -name '*.java')
 
-          echo "Java files containing new package: $NEW_COUNT"
-
-          if [ "$NEW_COUNT" -lt 31 ]; then
-            echo "ERROR: Not all migrated Java files contain new package."
+          if [ -z "$JAVA_FILES" ]; then
+            echo "ERROR: No Java files found after migration."
             exit 1
           fi
 
-          echo "PASS: New package com.carassistant.v10 is active."
+          while IFS= read -r file; do
+            if ! grep -Fq "package $NEW_PACKAGE" "$file"; then
+              echo "ERROR: Missing new package declaration:"
+              echo "$file"
+              exit 1
+            fi
+          done <<< "$JAVA_FILES"
+
+          echo "PASS: All Navigation V1 Java files use the new package."
 
       # ============================================================
-      # 18. PROTECT V10-SOURCE
+      # 18. VERIFY V10 SOURCE UNCHANGED
       # ============================================================
-      - name: 18 - Verify v10-source untouched
+      - name: "18 - Verify v10-source unchanged"
         shell: bash
         run: |
           set -euo pipefail
 
-          if [ ! -f /tmp/v10-source.before.sha256 ]; then
-            echo "INFO: No v10-source backup was created."
-            exit 0
+          if [ -d "v10-source" ]; then
+            find v10-source -type f -print0 | sort -z | xargs -0 sha256sum > /tmp/v10-source.after.sha256
+
+            if ! diff -u /tmp/v10-source.before.sha256 /tmp/v10-source.after.sha256; then
+              echo "ERROR: v10-source was modified."
+              exit 1
+            fi
           fi
 
-          find v10-source -type f -print0 \
-            | sort -z \
-            | xargs -0 sha256sum \
-            > /tmp/v10-source.after.sha256
-
-          if ! diff -u \
-            /tmp/v10-source.before.sha256 \
-            /tmp/v10-source.after.sha256; then
-
-            echo "ERROR: v10-source changed."
-            exit 1
-          fi
-
-          echo "PASS: v10-source is untouched."
+          echo "PASS: v10-source unchanged."
 
       # ============================================================
-      # 19. VERIFY GIT SCOPE
+      # 19. INSPECT GIT DIFF
       # ============================================================
-      - name: 19 - Inspect migration diff
+      - name: "19 - Verify migration diff scope"
         shell: bash
         run: |
           set -euo pipefail
-
-          echo "=============================================="
-          echo "GIT STATUS"
-          echo "=============================================="
 
           git status --short
-
-          echo ""
-          echo "=============================================="
-          echo "CHANGED FILES"
-          echo "=============================================="
-
-          git diff --name-status
-
-          echo ""
-          echo "=============================================="
-          echo "DIFF STAT"
-          echo "=============================================="
-
           git diff --stat
 
-          echo "=============================================="
-
           if git diff --name-only | grep -q '^v10-source/'; then
-            echo "ERROR: v10-source was modified."
+            echo "ERROR: v10-source appears in git diff."
             exit 1
           fi
 
-          echo "PASS: Migration scope verified."
+          echo "PASS: Migration diff scope verified."
 
       # ============================================================
       # 20. PREPARE GRADLE
       # ============================================================
-      - name: 20 - Prepare Gradle
+      - name: "20 - Prepare Gradle"
         shell: bash
+        working-directory: navigation-v1-source
         run: |
           set -euo pipefail
 
-          cd navigation-v1-source
-
-          chmod +x gradlew
-
-          test -x gradlew
-
-          echo "PASS: Gradle wrapper ready."
+          chmod +x ./gradlew
+          ./gradlew --version
 
       # ============================================================
-      # 21. COMPILE ONLY
-      #
-      # Không thay đổi mergeDexRelease.
-      # Không chạy R8.
-      # Không sanitize.
-      #
-      # Mục tiêu bước này chỉ xác nhận package migration
-      # không phá Java compilation.
+      # 21. COMPILE JAVA
       # ============================================================
-      - name: 21 - Compile migrated Navigation V1
+      - name: "21 - Compile migrated Navigation V1 Java"
         shell: bash
+        working-directory: navigation-v1-source
         run: |
           set -euo pipefail
 
-          cd navigation-v1-source
-
-          ./gradlew \
-            :app:compileReleaseJavaWithJavac \
+          ./gradlew :app:compileReleaseJavaWithJavac \
             --no-daemon \
             --stacktrace
 
-          echo "PASS: Navigation V1 compiles after package migration."
-
       # ============================================================
-      # 22. FINAL VERIFY
+      # 22. FINAL PRE-COMMIT VERIFICATION
       # ============================================================
-      - name: 22 - Final migration verification
+      - name: "22 - Final migration verification"
         shell: bash
         run: |
           set -euo pipefail
 
           test -d "$NEW_DIR"
-          test ! -d "$OLD_DIR"
+          test ! -e "$OLD_DIR"
 
-          test -f "$NEW_DIR/V10CarActivity.java"
-          test -f "$NEW_DIR/NavigationMapView.java"
-          test -f "$NEW_DIR/V10ProjectionSession.java"
-          test -f "$NEW_DIR/V10SessionStore.java"
+          FINAL_COUNT=$(find "$NEW_DIR" -type f -name '*.java' | wc -l | tr -d ' ')
 
-          if grep -RIn \
-            --exclude-dir=.git \
-            "$OLD_PACKAGE" \
-            navigation-v1-source 2>/dev/null; then
-            echo "ERROR: Old package still exists."
+          if [ "$FINAL_COUNT" -ne "$JAVA_COUNT_BEFORE" ]; then
+            echo "ERROR: Final Java file count mismatch."
+            exit 1
+          fi
+
+          if ! diff -u /tmp/navigation-java.before.txt /tmp/navigation-java.after.txt; then
+            echo "ERROR: Final Java inventory mismatch."
             exit 1
           fi
 
           if grep -RIn \
-            --exclude-dir=.git \
-            "$OLD_PATH" \
+            -E "${OLD_PACKAGE//./\\.}|${OLD_PATH//\//\\/}" \
             navigation-v1-source 2>/dev/null; then
-            echo "ERROR: Old package path still exists."
+            echo "ERROR: Old package/path still exists."
             exit 1
           fi
 
-          if git diff --name-only | grep -q '^v10-source/'; then
-            echo "ERROR: v10-source changed."
-            exit 1
-          fi
-
-          echo "=============================================="
-          echo "FINAL MIGRATION CHECK"
-          echo "=============================================="
-          echo "Old package : REMOVED"
-          echo "New package : com.carassistant.v10"
-          echo "Old path    : REMOVED"
-          echo "New path    : PRESENT"
-          echo "Java files  : 31"
-          echo "Compile     : PASS"
-          echo "v10-source  : UNTOUCHED"
-          echo "Legacy DEX  : PRESERVED"
-          echo "Legacy JAR  : PRESERVED"
-          echo "=============================================="
+          echo "PASS: Final migration verification."
+          echo "PASS: $FINAL_COUNT Java files preserved."
+          echo "PASS: Package migrated to $NEW_PACKAGE."
 
       # ============================================================
       # 23. COMMIT
       # ============================================================
-      - name: 23 - Commit migration
+      - name: "23 - Commit migration"
         shell: bash
         run: |
           set -euo pipefail
@@ -641,56 +457,43 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
-          git add \
-            navigation-v1-source \
-            .github/workflows
+          git add navigation-v1-source
 
           if git diff --cached --quiet; then
-            echo "INFO: No migration changes to commit."
-            exit 0
+            echo "ERROR: No migration changes staged."
+            exit 1
           fi
 
-          git commit \
-            -m "chore: migrate Navigation V1 package to com.carassistant.v10"
-
-          echo "PASS: Migration commit created."
+          git commit -m "Migrate Navigation V1 package to com.carassistant.v10"
 
       # ============================================================
       # 24. PUSH MAIN
       # ============================================================
-      - name: 24 - Push migration to main
+      - name: "24 - Push migration to main"
         shell: bash
         run: |
           set -euo pipefail
 
           git push origin HEAD:main
 
-          echo "PASS: Navigation V1 package migration pushed to main."
+          echo "PASS: Migration pushed to main."
 
       # ============================================================
       # 25. FINAL RESULT
       # ============================================================
-      - name: 25 - Migration PASS
+      - name: "25 - Final result"
         shell: bash
         run: |
-          echo "================================================"
-          echo "PASS: Navigation V1 package migration"
-          echo "================================================"
-          echo ""
-          echo "OLD:"
-          echo "com/hieptran/aacast/doudou"
-          echo ""
-          echo "NEW:"
-          echo "com/carassistant/v10"
-          echo ""
-          echo "JAVA PACKAGE:"
-          echo "com.carassistant.v10"
-          echo ""
-          echo "31 Java files migrated."
-          echo "AACast legacy structure preserved."
-          echo "Navigation V1 compile: PASS"
-          echo "Legacy DEX: preserved"
-          echo "Legacy JAR: preserved"
-          echo "v10-source: untouched"
-          echo "Main: updated"
-          echo "================================================"
+          set -euo pipefail
+
+          echo "============================================================"
+          echo "NAVIGATION V1 PACKAGE MIGRATION COMPLETE"
+          echo "============================================================"
+          echo "Old package : $OLD_PACKAGE"
+          echo "New package : $NEW_PACKAGE"
+          echo "Java files  : $JAVA_COUNT_BEFORE"
+          echo "Old path    : REMOVED"
+          echo "New path    : $NEW_DIR"
+          echo "Compile     : PASS"
+          echo "Push main   : PASS"
+          echo "============================================================"
