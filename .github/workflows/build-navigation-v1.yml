@@ -1,0 +1,809 @@
+name: CarAssistant V10 - Navigation V1 Core
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+
+    steps:
+
+      - name: Checkout exact Foundation
+        uses: actions/checkout@v4
+        with:
+          ref: 2c814a181d00cde9547a446927ae181e18cb9cbb
+          fetch-depth: 1
+
+      - name: Setup Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Verify Foundation source
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          SRC="v10-source/app/src/main/java/com/hieptran/aacast/doudou"
+
+          test -f "$SRC/V10CarActivity.java"
+          test -f "$SRC/V10ProjectionSession.java"
+          test -f "$SRC/V10DisplayController.java"
+          test -f "$SRC/V10SurfaceManager.java"
+          test -f "$SRC/V10TaskSession.java"
+          test -f "$SRC/V10SessionStore.java"
+
+          ACTUAL="$(git rev-parse HEAD)"
+
+          if [ "$ACTUAL" != "2c814a181d00cde9547a446927ae181e18cb9cbb" ]; then
+            echo "ERROR: Foundation commit mismatch: $ACTUAL"
+            exit 1
+          fi
+
+          sha256sum \
+            "$SRC/V10ProjectionSession.java" \
+            "$SRC/V10DisplayController.java" \
+            "$SRC/V10SurfaceManager.java" \
+            "$SRC/V10TaskSession.java" \
+            "$SRC/V10SessionStore.java" \
+            > /tmp/core-before.sha256
+
+          echo "PASS: exact Foundation locked."
+
+      - name: Add MapLibre and location permissions
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          GRADLE="v10-source/app/build.gradle"
+          MANIFEST="v10-source/app/src/main/AndroidManifest.xml"
+
+          test -f "$GRADLE"
+          test -f "$MANIFEST"
+
+          if ! grep -Fq "org.maplibre.gl:android-sdk:11.11.0" "$GRADLE"; then
+            printf '%s\n' \
+              'implementation "org.maplibre.gl:android-sdk:11.11.0"' \
+              > /tmp/maplibre.line
+
+            sed -i \
+              '/^[[:space:]]*dependencies[[:space:]]*{/r /tmp/maplibre.line' \
+              "$GRADLE"
+          fi
+
+          if ! grep -Fq \
+            "android.permission.ACCESS_FINE_LOCATION" \
+            "$MANIFEST"; then
+
+            printf '%s\n' \
+              '<uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />' \
+              '<uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />' \
+              > /tmp/location.permissions
+
+            sed -i \
+              '/<manifest/r /tmp/location.permissions' \
+              "$MANIFEST"
+          fi
+
+          grep -Fq \
+            "org.maplibre.gl:android-sdk:11.11.0" \
+            "$GRADLE"
+
+          grep -Fq \
+            "android.permission.ACCESS_FINE_LOCATION" \
+            "$MANIFEST"
+
+          grep -Fq \
+            "android.permission.ACCESS_COARSE_LOCATION" \
+            "$MANIFEST"
+
+          echo "PASS: MapLibre 11.11.0 and location permissions."
+
+      - name: Create NavigationMapView
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          SRC="v10-source/app/src/main/java/com/hieptran/aacast/doudou"
+
+          cat > "$SRC/NavigationMapView.java" <<'EOF'
+          package com.carassistant.v10;
+
+          import android.Manifest;
+          import android.app.Activity;
+          import android.content.Context;
+          import android.content.pm.PackageManager;
+          import android.graphics.Color;
+          import android.location.Location;
+          import android.os.Bundle;
+          import android.widget.FrameLayout;
+
+          import org.maplibre.android.MapLibre;
+          import org.maplibre.android.camera.CameraUpdateFactory;
+          import org.maplibre.android.geometry.LatLng;
+          import org.maplibre.android.location.LocationComponentActivationOptions;
+          import org.maplibre.android.location.LocationComponentOptions;
+          import org.maplibre.android.maps.MapLibreMap;
+          import org.maplibre.android.maps.MapView;
+          import org.maplibre.android.maps.UiSettings;
+
+          public final class NavigationMapView extends FrameLayout {
+
+              private static final int LOCATION_REQUEST = 4101;
+
+              private final MapView mapView;
+              private MapLibreMap map;
+
+              public NavigationMapView(Context context) {
+                  super(context);
+
+                  setBackgroundColor(Color.BLACK);
+
+                  MapLibre.getInstance(
+                          context.getApplicationContext());
+
+                  mapView = new MapView(context);
+
+                  mapView.onCreate(
+                          new Bundle());
+
+                  addView(
+                          mapView,
+                          new LayoutParams(
+                                  LayoutParams.MATCH_PARENT,
+                                  LayoutParams.MATCH_PARENT));
+
+                  mapView.getMapAsync(
+                          this::onMapReady);
+              }
+
+              private void onMapReady(
+                      MapLibreMap readyMap) {
+
+                  map = readyMap;
+
+                  UiSettings ui =
+                          map.getUiSettings();
+
+                  ui.setCompassEnabled(false);
+                  ui.setZoomGesturesEnabled(true);
+                  ui.setScrollGesturesEnabled(true);
+                  ui.setRotateGesturesEnabled(true);
+                  ui.setTiltGesturesEnabled(false);
+
+                  map.setStyle(
+                          "https://tiles.openfreemap.org/styles/liberty",
+                          style -> enableLocation());
+              }
+
+              private void enableLocation() {
+
+                  if (map == null) {
+                      return;
+                  }
+
+                  Context context =
+                          getContext();
+
+                  if (context == null) {
+                      return;
+                  }
+
+                  if (context.checkSelfPermission(
+                          Manifest.permission.ACCESS_FINE_LOCATION)
+                          != PackageManager.PERMISSION_GRANTED) {
+
+                      if (context instanceof Activity) {
+                          ((Activity) context).requestPermissions(
+                                  new String[]{
+                                          Manifest.permission.ACCESS_FINE_LOCATION,
+                                          Manifest.permission.ACCESS_COARSE_LOCATION
+                                  },
+                                  LOCATION_REQUEST);
+                      }
+
+                      return;
+                  }
+
+                  LocationComponentOptions options =
+                          LocationComponentOptions
+                                  .builder(context)
+                                  .pulseEnabled(true)
+                                  .build();
+
+                  LocationComponentActivationOptions activation =
+                          LocationComponentActivationOptions
+                                  .builder(
+                                          context,
+                                          map.getStyle())
+                                  .locationComponentOptions(options)
+                                  .build();
+
+                  map.getLocationComponent()
+                          .activateLocationComponent(
+                                  activation);
+
+                  map.getLocationComponent()
+                          .setLocationComponentEnabled(true);
+              }
+
+              public void zoomIn() {
+
+                  if (map == null) {
+                      return;
+                  }
+
+                  double zoom =
+                          map.getCameraPosition().zoom;
+
+                  map.animateCamera(
+                          CameraUpdateFactory.zoomTo(
+                                  Math.min(
+                                          20.0,
+                                          zoom + 1.0)),
+                          250);
+              }
+
+              public void zoomOut() {
+
+                  if (map == null) {
+                      return;
+                  }
+
+                  double zoom =
+                          map.getCameraPosition().zoom;
+
+                  map.animateCamera(
+                          CameraUpdateFactory.zoomTo(
+                                  Math.max(
+                                          1.0,
+                                          zoom - 1.0)),
+                          250);
+              }
+
+              public void recenter() {
+
+                  if (map == null) {
+                      return;
+                  }
+
+                  try {
+                      Location location =
+                              map.getLocationComponent()
+                                      .getLastKnownLocation();
+
+                      if (location == null) {
+                          return;
+                      }
+
+                      map.animateCamera(
+                              CameraUpdateFactory
+                                      .newLatLngZoom(
+                                              new LatLng(
+                                                      location.getLatitude(),
+                                                      location.getLongitude()),
+                                              16.0),
+                              500);
+
+                  } catch (Exception ignored) {
+                  }
+              }
+
+              public void onHostResume() {
+                  mapView.onResume();
+              }
+
+              public void onHostPause() {
+                  mapView.onPause();
+              }
+
+              public void onHostDestroy() {
+                  mapView.onDestroy();
+              }
+          }
+          EOF
+
+          test -f "$SRC/NavigationMapView.java"
+
+          grep -Fq \
+            "class NavigationMapView" \
+            "$SRC/NavigationMapView.java"
+
+          grep -Fq \
+            "https://tiles.openfreemap.org/styles/liberty" \
+            "$SRC/NavigationMapView.java"
+
+          echo "PASS: NavigationMapView created."
+
+      - name: Patch V10CarActivity to Navigation Full Screen only
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          FILE="v10-source/app/src/main/java/com/hieptran/aacast/doudou/V10CarActivity.java"
+
+          python3 - <<'PY'
+          from pathlib import Path
+
+          path = Path(
+              "v10-source/app/src/main/java/com/hieptran/aacast/doudou/V10CarActivity.java"
+          )
+
+          s = path.read_text(encoding="utf-8")
+
+          def find_method(signature):
+              start = s.find(signature)
+
+              if start < 0:
+                  raise RuntimeError(
+                      "METHOD NOT FOUND: " + signature
+                  )
+
+              brace = s.find("{", start)
+
+              if brace < 0:
+                  raise RuntimeError(
+                      "OPEN BRACE NOT FOUND: " + signature
+                  )
+
+              depth = 0
+
+              for i in range(brace, len(s)):
+                  if s[i] == "{":
+                      depth += 1
+
+                  elif s[i] == "}":
+                      depth -= 1
+
+                      if depth == 0:
+                          return start, i + 1
+
+              raise RuntimeError(
+                  "METHOD END NOT FOUND: " + signature
+              )
+
+          def replace_method(signature, replacement):
+              global s
+
+              a, b = find_method(signature)
+
+              s = (
+                  s[:a]
+                  + replacement.rstrip()
+                  + "\n"
+                  + s[b:]
+              )
+
+          required = [
+              "public final class V10CarActivity",
+              "private void buildUi()",
+              "private void attachProjection()",
+              "public void onResume()",
+              "public void onPause()",
+              "public void onDestroy()",
+          ]
+
+          for marker in required:
+              if marker not in s:
+                  raise RuntimeError(
+                      "FOUNDATION MARKER MISSING: " + marker
+                  )
+
+          if "private NavigationMapView navigationMap;" not in s:
+              s = s.replace(
+                  "    private FrameLayout root;",
+                  "    private FrameLayout root;\n"
+                  "    private NavigationMapView navigationMap;",
+                  1
+              )
+
+          navigation_build_ui = r'''    private void buildUi() {
+
+              root =
+                      new FrameLayout(this);
+
+              root.setBackgroundColor(
+                      Color.TRANSPARENT);
+
+              navigationMap =
+                      new NavigationMapView(this);
+
+              root.addView(
+                      navigationMap,
+                      new FrameLayout.LayoutParams(
+                              -1,
+                              -1));
+
+              /*
+               * Projection layer remains part of the
+               * original V10 Activity structure.
+               *
+               * Navigation is intentionally the only
+               * visible UI in Navigation V1.
+               *
+               * Home UI V2 is NOT created here.
+               * It will be added later by the separate
+               * Home UI V2 Overlay workflow.
+               */
+              projectionLayer =
+                      new FrameLayout(this);
+
+              projectionLayer.setVisibility(
+                      View.GONE);
+
+              root.addView(
+                      projectionLayer,
+                      new FrameLayout.LayoutParams(
+                              -1,
+                              -1));
+
+              setContentView(root);
+          }
+          '''
+
+          replace_method(
+              "    private void buildUi()",
+              navigation_build_ui
+          )
+
+          old_resume_block = """        if (root == null) {
+            buildUi();
+            attachProjection();
+        }
+          """
+
+          new_resume_block = """        if (root == null) {
+            buildUi();
+            attachProjection();
+
+            if (navigationMap != null) {
+                navigationMap.onHostResume();
+            }
+        }
+          """
+
+          if old_resume_block not in s:
+              raise RuntimeError(
+                  "EXPECTED onResume build block not found"
+              )
+
+          s = s.replace(
+              old_resume_block,
+              new_resume_block,
+              1
+          )
+
+          old_pause = """        handler.removeCallbacks(
+                targetPoller);
+
+        super.onPause();
+          """
+
+          new_pause = """        handler.removeCallbacks(
+                targetPoller);
+
+        if (navigationMap != null) {
+            navigationMap.onHostPause();
+        }
+
+        super.onPause();
+          """
+
+          if old_pause not in s:
+              raise RuntimeError(
+                  "EXPECTED onPause block not found"
+              )
+
+          s = s.replace(
+              old_pause,
+              new_pause,
+              1
+          )
+
+          old_destroy = """        if (session != null) {
+
+            session.destroy();
+
+            session = null;
+        }
+
+        V10SessionStore
+                .clearCurrentActivity(
+                        this);
+          """
+
+          new_destroy = """        if (navigationMap != null) {
+            navigationMap.onHostDestroy();
+            navigationMap = null;
+        }
+
+        if (session != null) {
+
+            session.destroy();
+
+            session = null;
+        }
+
+        V10SessionStore
+                .clearCurrentActivity(
+                        this);
+          """
+
+          if old_destroy not in s:
+              raise RuntimeError(
+                  "EXPECTED onDestroy block not found"
+              )
+
+          s = s.replace(
+              old_destroy,
+              new_destroy,
+              1
+          )
+
+          path.write_text(
+              s.rstrip() + "\n",
+              encoding="utf-8"
+          )
+
+          print("PATCH PASS")
+          PY
+
+          echo "PASS: V10CarActivity now uses Navigation as full-screen base."
+
+      - name: Verify Navigation-only architecture
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          SRC="v10-source/app/src/main/java/com/hieptran/aacast/doudou"
+          FILE="$SRC/V10CarActivity.java"
+
+          check() {
+            label="$1"
+            pattern="$2"
+            file="$3"
+
+            if grep -Fq "$pattern" "$file"; then
+              echo "PASS: $label"
+            else
+              echo "ERROR: $label"
+              echo "Missing: $pattern"
+              exit 1
+            fi
+          }
+
+          check \
+            "NavigationMapView field" \
+            "private NavigationMapView navigationMap;" \
+            "$FILE"
+
+          check \
+            "NavigationMapView creation" \
+            "navigationMap =" \
+            "$FILE"
+
+          check \
+            "Navigation full-screen root" \
+            "root.addView(" \
+            "$FILE"
+
+          check \
+            "Transparent Navigation root" \
+            "root.setBackgroundColor(" \
+            "$FILE"
+
+          check \
+            "Navigation lifecycle resume" \
+            "navigationMap.onHostResume();" \
+            "$FILE"
+
+          check \
+            "Navigation lifecycle pause" \
+            "navigationMap.onHostPause();" \
+            "$FILE"
+
+          check \
+            "Navigation lifecycle destroy" \
+            "navigationMap.onHostDestroy();" \
+            "$FILE"
+
+          check \
+            "MapLibre dependency" \
+            "org.maplibre.gl:android-sdk:11.11.0" \
+            "v10-source/app/build.gradle"
+
+          check \
+            "OpenFreeMap Liberty" \
+            "https://tiles.openfreemap.org/styles/liberty" \
+            "$SRC/NavigationMapView.java"
+
+          check \
+            "Projection layer preserved" \
+            "private FrameLayout projectionLayer;" \
+            "$FILE"
+
+          check \
+            "Projection attach preserved" \
+            "private void attachProjection()" \
+            "$FILE"
+
+          check \
+            "Projection session preserved" \
+            "new V10ProjectionSession(" \
+            "$FILE"
+
+          echo "PASS: Navigation-only architecture."
+
+      - name: Verify Home UI is NOT built by Navigation V1
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          FILE="v10-source/app/src/main/java/com/hieptran/aacast/doudou/V10CarActivity.java"
+
+          python3 - <<'PY'
+          from pathlib import Path
+
+          p = Path(
+              "v10-source/app/src/main/java/com/hieptran/aacast/doudou/V10CarActivity.java"
+          )
+
+          s = p.read_text(encoding="utf-8")
+
+          start = s.find("    private void buildUi()")
+
+          if start < 0:
+              raise SystemExit(
+                  "ERROR: buildUi() not found"
+              )
+
+          brace = s.find("{", start)
+
+          depth = 0
+          end = -1
+
+          for i in range(brace, len(s)):
+              if s[i] == "{":
+                  depth += 1
+              elif s[i] == "}":
+                  depth -= 1
+                  if depth == 0:
+                      end = i + 1
+                      break
+
+          if end < 0:
+              raise SystemExit(
+                  "ERROR: buildUi() end not found"
+              )
+
+          block = s[start:end]
+
+          forbidden = [
+              "buildDashboard();",
+              "buildAppPanel();",
+              "launcherLayer =",
+              "dashboard =",
+              "appPanel =",
+              "dock =",
+              "APP CHỌN",
+              "TASKS",
+              "MEDIA",
+              "WYN",
+          ]
+
+          for item in forbidden:
+              if item in block:
+                  raise SystemExit(
+                      "ERROR: Home UI marker found inside Navigation buildUi(): "
+                      + item
+                  )
+
+          print(
+              "PASS: Navigation V1 buildUi() contains no Home UI construction."
+          )
+          PY
+
+      - name: Verify Projection Core unchanged
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          SRC="v10-source/app/src/main/java/com/hieptran/aacast/doudou"
+
+          sha256sum \
+            "$SRC/V10ProjectionSession.java" \
+            "$SRC/V10DisplayController.java" \
+            "$SRC/V10SurfaceManager.java" \
+            "$SRC/V10TaskSession.java" \
+            "$SRC/V10SessionStore.java" \
+            > /tmp/core-after.sha256
+
+          if ! diff -u \
+            /tmp/core-before.sha256 \
+            /tmp/core-after.sha256; then
+
+            echo "ERROR: Protected Projection/Persistence Core changed."
+            exit 1
+          fi
+
+          echo "PASS: Projection Core SHA unchanged."
+
+      - name: Git diff safety
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          git diff --check
+
+          echo "PASS: git diff --check."
+
+      - name: Compile
+        working-directory: v10-source
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          chmod +x ./gradlew
+
+          ./gradlew \
+            --no-daemon \
+            :app:compileDebugJavaWithJavac \
+            --stacktrace
+
+          echo "PASS: Java compile."
+
+      - name: Assemble APK
+        working-directory: v10-source
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          ./gradlew \
+            --no-daemon \
+            :app:assembleDebug \
+            --stacktrace
+
+          echo "PASS: APK assemble."
+
+      - name: Package APK
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          APK="$(
+            find v10-source/app/build/outputs/apk \
+              -type f \
+              -name "*.apk" \
+              | head -n 1
+          )"
+
+          test -n "$APK"
+
+          cp \
+            "$APK" \
+            CarAssistant-Navigation-V1-Core.apk
+
+          sha256sum \
+            CarAssistant-Navigation-V1-Core.apk \
+            > CarAssistant-Navigation-V1-Core.sha256
+
+          test -s \
+            CarAssistant-Navigation-V1-Core.apk
+
+          echo "PASS: Navigation V1 APK packaged."
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: CarAssistant-Navigation-V1-Core
+          path: |
+            CarAssistant-Navigation-V1-Core.apk
+            CarAssistant-Navigation-V1-Core.sha256
+          if-no-files-found: error
+          retention-days: 14
