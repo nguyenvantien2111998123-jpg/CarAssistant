@@ -578,33 +578,19 @@ jobs:
                   String query =
                           searchInput == null
                                   ? ""
-                                  : searchInput
-                                          .getText()
+                                  : searchInput.getText()
                                           .toString()
                                           .trim();
 
                   if (query.isEmpty()) {
-                      showStatus(
-                              "Nhập địa điểm cần tìm.");
-                      return;
-                  }
-
-                  Location origin =
-                          getLastLocation();
-
-                  if (origin == null) {
-                      showStatus(
-                              "Chưa lấy được vị trí GPS.");
-                      recenter();
+                      showStatus("Hãy nhập địa điểm cần tìm.");
                       return;
                   }
 
                   routeRequestRunning = true;
-
                   searchButton.setEnabled(false);
 
-                  showStatus(
-                          "Đang tìm: " + query);
+                  showStatus("Đang tìm địa điểm...");
 
                   networkExecutor.execute(
                           () -> {
@@ -637,37 +623,45 @@ jobs:
                                   JSONObject first =
                                           results.getJSONObject(0);
 
-                                  String name =
-                                          first.optString(
-                                                  "display_name",
-                                                  query);
-
-                                  double latitude =
-                                          Double.parseDouble(
-                                                  first.getString(
-                                                          "lat"));
-
-                                  double longitude =
-                                          Double.parseDouble(
-                                                  first.getString(
-                                                          "lon"));
-
                                   SearchResult destination =
                                           new SearchResult(
-                                                  name,
-                                                  latitude,
-                                                  longitude);
+                                                  first.optString(
+                                                          "display_name",
+                                                          query),
+                                                  first.getDouble(
+                                                          "lat"),
+                                                  first.getDouble(
+                                                          "lon"));
 
-                                  mainHandler.post(
-                                          () -> {
-                                              showStatus(
-                                                      "Đã tìm thấy: "
-                                                              + destination.name);
+                                  Location current =
+                                          getLastLocation();
 
-                                              requestRoute(
-                                                      origin,
-                                                      destination);
-                                          });
+                                  if (current == null) {
+                                      mainHandler.post(
+                                              () -> {
+                                                  routeRequestRunning =
+                                                          false;
+
+                                                  searchButton.setEnabled(
+                                                          true);
+
+                                                  showStatus(
+                                                          "Chưa có GPS để tính tuyến.");
+
+                                                  Toast.makeText(
+                                                          getContext(),
+                                                          "Chưa có vị trí GPS.",
+                                                          Toast.LENGTH_SHORT)
+                                                          .show();
+                                              });
+
+                                      return;
+                                  }
+
+                                  requestRoute(
+                                          current.getLatitude(),
+                                          current.getLongitude(),
+                                          destination);
 
                               } catch (Exception e) {
                                   mainHandler.post(
@@ -679,11 +673,11 @@ jobs:
                                                       true);
 
                                               showStatus(
-                                                      "Không tìm được địa điểm.");
+                                                      "Không tìm thấy địa điểm.");
 
                                               Toast.makeText(
                                                       getContext(),
-                                                      "Không tìm được địa điểm.",
+                                                      "Tìm địa điểm thất bại.",
                                                       Toast.LENGTH_SHORT)
                                                       .show();
                                           });
@@ -692,95 +686,88 @@ jobs:
               }
 
               private void requestRoute(
-                      Location origin,
+                      double fromLat,
+                      double fromLon,
                       SearchResult destination) {
 
-                  showStatus(
-                          "Đang tính tuyến...");
+                  try {
+                      String url =
+                              String.format(
+                                      Locale.US,
+                                      "https://router.project-osrm.org/route/v1/driving/%f,%f;%f,%f"
+                                              + "?overview=full&geometries=geojson",
+                                      fromLon,
+                                      fromLat,
+                                      destination.longitude,
+                                      destination.latitude);
 
-                  networkExecutor.execute(
-                          () -> {
-                              try {
-                                  String url =
-                                          String.format(
-                                                  Locale.US,
-                                                  "https://router.project-osrm.org/route/v1/driving/"
-                                                          + "%.7f,%.7f;%.7f,%.7f"
-                                                          + "?overview=full&geometries=geojson",
-                                                  origin.getLongitude(),
-                                                  origin.getLatitude(),
-                                                  destination.longitude,
-                                                  destination.latitude);
+                      String response =
+                              httpGet(
+                                      url,
+                                      "CarAssistant-Navigation/1.0");
 
-                                  String response =
-                                          httpGet(
-                                                  url,
-                                                  "CarAssistant-Navigation/1.0");
+                      JSONObject root =
+                              new JSONObject(response);
 
-                                  JSONObject root =
-                                          new JSONObject(response);
+                      JSONArray routes =
+                              root.getJSONArray("routes");
 
-                                  JSONArray routes =
-                                          root.getJSONArray(
-                                                  "routes");
+                      if (routes.length() == 0) {
+                          throw new Exception(
+                                  "No route.");
+                      }
 
-                                  if (routes.length() == 0) {
-                                      throw new Exception(
-                                              "Không có tuyến.");
-                                  }
+                      JSONObject route =
+                              routes.getJSONObject(0);
 
-                                  JSONObject route =
-                                          routes.getJSONObject(0);
+                      JSONObject geometry =
+                              route.getJSONObject(
+                                      "geometry");
 
-                                  JSONObject geometry =
-                                          route.getJSONObject(
-                                                  "geometry");
+                      JSONArray coordinates =
+                              geometry.getJSONArray(
+                                      "coordinates");
 
-                                  JSONArray coordinates =
-                                          geometry.getJSONArray(
-                                                  "coordinates");
+                      ArrayList<LatLng> points =
+                              new ArrayList<>();
 
-                                  ArrayList<LatLng> points =
-                                          new ArrayList<>();
+                      for (int i = 0;
+                           i < coordinates.length();
+                           i++) {
 
-                                  for (int i = 0;
-                                       i < coordinates.length();
-                                       i++) {
+                          JSONArray point =
+                                  coordinates.getJSONArray(i);
 
-                                      JSONArray point =
-                                              coordinates.getJSONArray(i);
+                          points.add(
+                                  new LatLng(
+                                          point.getDouble(1),
+                                          point.getDouble(0)));
+                      }
 
-                                      points.add(
-                                              new LatLng(
-                                                      point.getDouble(1),
-                                                      point.getDouble(0)));
-                                  }
+                      mainHandler.post(
+                              () -> drawRoute(
+                                      points,
+                                      destination));
 
-                                  mainHandler.post(
-                                          () -> drawRoute(
-                                                  points,
-                                                  destination));
+                  } catch (Exception e) {
+                      mainHandler.post(
+                              () -> {
+                                  routeRequestRunning =
+                                          false;
 
-                              } catch (Exception e) {
-                                  mainHandler.post(
-                                          () -> {
-                                              routeRequestRunning =
-                                                      false;
+                                  searchButton.setEnabled(
+                                          true);
 
-                                              searchButton.setEnabled(
-                                                      true);
+                                  showStatus(
+                                          "Không tính được tuyến.");
 
-                                              showStatus(
-                                                      "Không tính được tuyến.");
-
-                                              Toast.makeText(
-                                                      getContext(),
-                                                      "Không lấy được tuyến đường.",
-                                                      Toast.LENGTH_SHORT)
-                                                      .show();
-                                          });
-                              }
-                          });
+                                  Toast.makeText(
+                                          getContext(),
+                                          "Không lấy được tuyến đường.",
+                                          Toast.LENGTH_SHORT)
+                                          .show();
+                              });
+                  }
               }
 
               private void drawRoute(
