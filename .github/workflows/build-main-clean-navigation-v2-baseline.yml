@@ -626,22 +626,19 @@ jobs:
       # ============================================================
       # 19. PATCH ONLY aasdk-legacy.dex DUPLICATE MERGE
       #
-      # IMPORTANT:
-      # - Không sửa Java.
-      # - Không sửa Navigation.
-      # - Không sửa Projection Core.
-      # - Không R8.
-      # - Không re-dex aasdk-legacy.dex.
-      # - Giữ nguyên bytecode gốc của aasdk-legacy.dex.
-      #
-      # Lỗi cũ:
+      # CHỈ SỬA LỖI:
       # D8 merge app dex + aasdk-legacy.dex
-      # -> duplicate androidx.core.app.RemoteActionCompatParcelizer
+      # gây duplicate AndroidX class.
       #
-      # Cách sửa:
-      # giữ app dex do AGP tạo,
-      # sau đó đặt nguyên file aasdk-legacy.dex vào output
-      # dưới dạng một classesN.dex riêng.
+      # KHÔNG:
+      # - sửa Java
+      # - sửa Navigation
+      # - sửa Projection Core
+      # - R8
+      # - re-dex aasdk-legacy.dex
+      #
+      # Legacy dex được giữ nguyên bytecode và copy thành
+      # một classesN.dex riêng sau khi AGP tạo app dex.
       # ============================================================
 
       - name: Patch aasdk legacy dex merge
@@ -688,76 +685,70 @@ jobs:
                       "mergeDexRelease block: " + fragment
                   )
 
-          new_block = r'''tasks.matching { it.name == 'mergeDexRelease' }.configureEach { task ->
-    task.doLast {
-        def legacyDex = rootProject.file('app/libs/aasdk-legacy.dex')
-        if (!legacyDex.exists()) {
-            throw new GradleException("Thiếu app/libs/aasdk-legacy.dex!")
-        }
+          new_lines = [
+              "tasks.matching { it.name == 'mergeDexRelease' }.configureEach { task ->",
+              "    task.doLast {",
+              "        def legacyDex = rootProject.file('app/libs/aasdk-legacy.dex')",
+              "        if (!legacyDex.exists()) {",
+              "            throw new GradleException(\"Thiếu app/libs/aasdk-legacy.dex!\")",
+              "        }",
+              "",
+              "        def outputDir = task.outputDir.get().asFile",
+              "        def dexFilter = { it.isFile() && it.name ==~ /classes\\d*\\.dex/ } as FileFilter",
+              "        def appDexes = outputDir.listFiles(dexFilter)?.toList() ?: []",
+              "",
+              "        if (appDexes.isEmpty()) {",
+              "            throw new GradleException(",
+              "                    \"Không tìm thấy classes*.dex trong \" + outputDir",
+              "            )",
+              "        }",
+              "",
+              "        // Keep aasdk-legacy.dex as original bytecode.",
+              "        // Do NOT pass it through D8.",
+              "        // This avoids duplicate AndroidX classes during D8 merge.",
+              "",
+              "        int nextIndex = 1",
+              "        File target",
+              "",
+              "        while (true) {",
+              "            String name = nextIndex == 1",
+              "                    ? \"classes.dex\"",
+              "                    : \"classes${nextIndex}.dex\"",
+              "",
+              "            target = new File(outputDir, name)",
+              "",
+              "            if (!target.exists()) {",
+              "                break",
+              "            }",
+              "",
+              "            nextIndex++",
+              "        }",
+              "",
+              "        target.bytes = legacyDex.bytes",
+              "",
+              "        if (target.length() != legacyDex.length()) {",
+              "            throw new GradleException(",
+              "                    \"Copy aasdk-legacy.dex thất bại: kích thước không khớp.\"",
+              "            )",
+              "        }",
+              "",
+              "        println(",
+              "                \"Added raw aasdk-legacy.dex as \" +",
+              "                target.name +",
+              "                \" without D8 reprocessing.\"",
+              "        )",
+              "",
+              "        println(",
+              "                \"Legacy dex size: \" +",
+              "                legacyDex.length() +",
+              "                \" bytes.\"",
+              "        )",
+              "    }",
+              "}",
+              "",
+          ]
 
-        def outputDir = task.outputDir.get().asFile
-        def dexFilter = { it.isFile() && it.name ==~ /classes\d*\.dex/ } as FileFilter
-        def appDexes = outputDir.listFiles(dexFilter)?.toList() ?: []
-
-        if (appDexes.isEmpty()) {
-            throw new GradleException(
-                    "Không tìm thấy classes*.dex trong " + outputDir
-            )
-        }
-
-        /*
-         * KHÔNG đưa aasdk-legacy.dex vào D8 merge.
-         *
-         * aasdk-legacy.dex phải được giữ nguyên bytecode gốc.
-         * D8 merge với app dex gây duplicate:
-         *
-         * androidx.core.app.RemoteActionCompatParcelizer
-         *
-         * Vì Android runtime có thể nạp nhiều dex ở minSdk 29,
-         * giữ legacy SDK thành một dex riêng sẽ tránh việc D8
-         * phân tích/merge lại legacy dex.
-         */
-
-        int nextIndex = 1
-        File target
-
-        while (true) {
-            String name = nextIndex == 1
-                    ? "classes.dex"
-                    : "classes${nextIndex}.dex"
-
-            target = new File(outputDir, name)
-
-            if (!target.exists()) {
-                break
-            }
-
-            nextIndex++
-        }
-
-        target.bytes = legacyDex.bytes
-
-        if (target.length() != legacyDex.length()) {
-            throw new GradleException(
-                    "Copy aasdk-legacy.dex thất bại: kích thước không khớp."
-            )
-        }
-
-        println(
-                "Added raw aasdk-legacy.dex as " +
-                target.name +
-                " without D8 reprocessing."
-        )
-
-        println(
-                "Legacy dex size: " +
-                legacyDex.length() +
-                " bytes."
-        )
-    }
-}
-
-'''
+          new_block = "\n".join(new_lines)
 
           source = (
               source[:start]
@@ -797,9 +788,15 @@ jobs:
                   "Raw legacy dex copy logic is missing."
               )
 
+          if "target.length() != legacyDex.length()" not in verify:
+              raise SystemExit(
+                  "Legacy dex size verification is missing."
+              )
+
           print(
               "aasdk-legacy.dex duplicate merge patch applied successfully."
           )
+
           print(
               "Legacy dex remains raw and is not re-dexed."
           )
