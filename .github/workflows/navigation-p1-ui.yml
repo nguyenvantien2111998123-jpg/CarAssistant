@@ -836,7 +836,7 @@ jobs:
 
           "$DEXDUMP" "$LEGACY" \
             | sed -n \
-              "s/.*Class descriptor.*'\\(L[^']*;\\)'.*/\\1/p" \
+              "s/.*Class descriptor.*'\(L[^']*;\)'.*/\1/p" \
             | sort -u \
             > /tmp/legacy_classes.txt
 
@@ -845,7 +845,7 @@ jobs:
           while IFS= read -r dex; do
             "$DEXDUMP" "$dex" \
               | sed -n \
-                "s/.*Class descriptor.*'\\(L[^']*;\\)'.*/\\1/p" \
+                "s/.*Class descriptor.*'\(L[^']*;\)'.*/\1/p" \
               >> /tmp/app_classes.txt
           done < /tmp/app_dex_files.txt
 
@@ -1019,12 +1019,134 @@ jobs:
           echo "PASS: assembleRelease completed."
 
       # ============================================================
-      # STEP 33
+      # STEP 33 - DEX DIAGNOSTIC
       #
-      # FIX:
-      # KHÔNG giả định legacy DEX là classes2.dex.
+      # CHỈ CHẨN ĐOÁN.
+      # KHÔNG SỬA CÁCH ĐÓNG GÓI.
+      # KHÔNG SỬA NAVIGATION/PATCH 1.
+      # ============================================================
+      - name: Diagnose APK DEX before Step 34
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          APK="app/build/outputs/apk/release/app-release.apk"
+          LEGACY="app/libs/aasdk-legacy.dex"
+
+          test -f "$APK"
+          test -s "$APK"
+          test -f "$LEGACY"
+          test -s "$LEGACY"
+
+          echo "=== APK ==="
+          ls -lh "$APK"
+
+          echo
+          echo "=== LEGACY DEX ==="
+          ls -lh "$LEGACY"
+
+          LEGACY_SHA="$(sha256sum "$LEGACY" | awk '{print $1}')"
+
+          echo
+          echo "=== SOURCE LEGACY DEX SHA256 ==="
+          echo "$LEGACY_SHA"
+
+          rm -rf /tmp/apk_dex_diagnosis
+          mkdir -p /tmp/apk_dex_diagnosis
+
+          unzip -q "$APK" \
+            'classes*.dex' \
+            -d /tmp/apk_dex_diagnosis
+
+          mapfile -t APK_DEX_FILES < <(
+            find /tmp/apk_dex_diagnosis \
+              -type f \
+              -name 'classes*.dex' \
+              -print \
+              | sort
+          )
+
+          if [ "${#APK_DEX_FILES[@]}" -eq 0 ]; then
+            echo "ERROR: no classes*.dex found inside APK."
+            exit 1
+          fi
+
+          echo
+          echo "=== APK DEX FILES ==="
+
+          MATCH_COUNT=0
+
+          for DEX_FILE in "${APK_DEX_FILES[@]}"; do
+            DEX_NAME="$(basename "$DEX_FILE")"
+            DEX_SHA="$(sha256sum "$DEX_FILE" | awk '{print $1}')"
+            DEX_SIZE="$(stat -c '%s' "$DEX_FILE")"
+
+            echo "$DEX_NAME"
+            echo "  size = $DEX_SIZE bytes"
+            echo "  sha256 = $DEX_SHA"
+
+            if [ "$DEX_SHA" = "$LEGACY_SHA" ]; then
+              echo "  >>> EXACT SHA256 MATCH <<<"
+              MATCH_COUNT=$((MATCH_COUNT + 1))
+            fi
+
+            echo
+          done
+
+          echo "=== SUMMARY ==="
+          echo "Source legacy SHA256 = $LEGACY_SHA"
+          echo "APK DEX count        = ${#APK_DEX_FILES[@]}"
+          echo "Exact SHA256 matches = $MATCH_COUNT"
+
+          mkdir -p /tmp/navigation-v1-dex-diagnosis
+
+          cp "$APK" \
+            /tmp/navigation-v1-dex-diagnosis/app-release.apk
+
+          cp "$LEGACY" \
+            /tmp/navigation-v1-dex-diagnosis/aasdk-legacy.dex
+
+          sha256sum "$APK" \
+            > /tmp/navigation-v1-dex-diagnosis/apk.sha256
+
+          sha256sum "$LEGACY" \
+            > /tmp/navigation-v1-dex-diagnosis/legacy-dex.sha256
+
+          for DEX_FILE in "${APK_DEX_FILES[@]}"; do
+            cp "$DEX_FILE" \
+              "/tmp/navigation-v1-dex-diagnosis/$(basename "$DEX_FILE")"
+          done
+
+          {
+            echo "Source legacy SHA256 = $LEGACY_SHA"
+            echo "APK DEX count = ${#APK_DEX_FILES[@]}"
+            echo "Exact SHA256 matches = $MATCH_COUNT"
+            echo
+            echo "=== APK DEX SHA256 ==="
+
+            for DEX_FILE in "${APK_DEX_FILES[@]}"; do
+              sha256sum "$DEX_FILE"
+            done
+          } > /tmp/navigation-v1-dex-diagnosis/dex-report.txt
+
+          echo
+          echo "PASS: DEX diagnosis completed."
+
+      # ============================================================
+      # STEP 33B - UPLOAD DIAGNOSTIC ARTIFACT
+      # ============================================================
+      - name: Upload APK DEX diagnosis
+        uses: actions/upload-artifact@v4
+        with:
+          name: navigation-v1-apk-dex-diagnosis
+          path: /tmp/navigation-v1-dex-diagnosis
+          if-no-files-found: error
+
+      # ============================================================
+      # STEP 34
       #
-      # Tìm DEX thực tế trong APK bằng SHA256.
+      # GIỮ NGUYÊN.
+      # VÒNG NÀY CHƯA SỬA CHECK SHA.
       # ============================================================
       - name: Verify APK and packaged DEX
         shell: bash
@@ -1157,7 +1279,7 @@ jobs:
           echo "PASS: Release APK verified."
 
       # ============================================================
-      # STEP 34
+      # STEP 35
       # ============================================================
       - name: Save diagnostic reports
         shell: bash
@@ -1192,7 +1314,7 @@ jobs:
           echo "PASS: diagnostic reports prepared."
 
       # ============================================================
-      # STEP 35
+      # STEP 36
       # ============================================================
       - name: Upload Release APK
         uses: actions/upload-artifact@v4
@@ -1202,7 +1324,7 @@ jobs:
           if-no-files-found: error
 
       # ============================================================
-      # STEP 36
+      # STEP 37
       # ============================================================
       - name: Upload DEX diagnostics
         uses: actions/upload-artifact@v4
