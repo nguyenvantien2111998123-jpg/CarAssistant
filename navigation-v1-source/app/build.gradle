@@ -37,6 +37,9 @@ android {
         }
 
         release {
+            // Giữ nguyên cơ chế AACast-Doudou:
+            // KHÔNG chạy R8/minify trên legacy SDK DEX.
+            // aasdk-legacy.dex đã là bytecode runtime hoàn chỉnh.
             minifyEnabled false
             shrinkResources false
 
@@ -69,352 +72,52 @@ android {
     }
 }
 
-configurations {
-    r8Tool
-
-    /*
-     * AndroidX Core được khai báo thành dependency chính thức
-     * để Gradle tự resolve trước khi sanitizeLegacyDex chạy.
-     */
-    androidxCoreTool
-}
-
 dependencies {
+    // Navigation V1 mới thêm.
     implementation "org.maplibre.gl:android-sdk:11.11.0"
 
+    // Xposed API: chỉ compile, runtime do LSPosed cung cấp.
     compileOnly files('libs/xposed-api-82.jar')
+
+    // Android Auto SDK legacy:
+    // chỉ dùng để compile Java source.
+    //
+    // Runtime KHÔNG lấy từ JAR.
+    // Runtime dùng trực tiếp app/libs/aasdk-legacy.dex.
     compileOnly files('libs/aasdk-legacy.jar')
-
-    /*
-     * Dependency chính thức của AndroidX Core.
-     * Không còn phụ thuộc vào việc file JAR đã có sẵn trong cache hay chưa.
-     */
-    androidxCoreTool "androidx.core:core:1.13.1"
-
-    r8Tool "com.android.tools:r8:8.13.6"
 
     testImplementation 'junit:junit:4.13.2'
 }
 
-def findR8Jar = {
-    def r8Files = configurations.r8Tool.resolve().findAll {
-        it.exists() &&
-        it.isFile() &&
-        it.name.toLowerCase().endsWith(".jar")
-    }
+// ============================================================
+// AACast-Doudou LEGACY DEX PACKAGING
+// ============================================================
+//
+// Debug:
+// AGP dùng mergeProjectDexDebug và chia DEX theo bucket.
+// Thêm nguyên bản aasdk-legacy.dex thành bucket riêng.
+//
+// Không R8.
+// Không sanitize.
+// Không chuyển DEX -> JAR -> DEX.
+// Không lọc AndroidX.
+// Không sửa bytecode legacy SDK.
+//
+// Đây là cơ chế runtime gốc của AACast-Doudou.
+// ============================================================
 
-    if (r8Files.isEmpty()) {
-        throw new GradleException(
-                "Không resolve được R8 tool: com.android.tools:r8:8.13.6"
-        )
-    }
+tasks.matching {
+    it.name == 'mergeProjectDexDebug'
+}.configureEach { task ->
 
-    def selected = r8Files.find {
-        it.name == "r8-8.13.6.jar"
-    }
+    task.doLast {
 
-    if (selected == null) {
-        selected = r8Files[0]
-    }
-
-    logger.lifecycle("R8 TOOL: " + selected.absolutePath)
-
-    return selected
-}
-
-/*
- * Resolve AndroidX Core chính thức thông qua Gradle.
- *
- * KHÔNG quét:
- * ~/.gradle/caches/modules-2/files-2.1/...
- *
- * Gradle tự resolve:
- * androidx.core:core:1.13.1
- *
- * Sau đó lấy trực tiếp JAR từ configuration đã resolve.
- */
-def findAndroidXCoreJar = {
-
-    def androidXCoreFiles =
-            configurations.androidxCoreTool
-                    .resolve()
-                    .findAll {
-                        it.exists() &&
-                        it.isFile() &&
-                        it.name.toLowerCase().endsWith(".jar")
-                    }
-
-    if (androidXCoreFiles.isEmpty()) {
-        throw new GradleException(
-                "Gradle không resolve được androidx.core:core:1.13.1"
-        )
-    }
-
-    def selected =
-            androidXCoreFiles.find {
-                it.name == "core-1.13.1.jar"
-            }
-
-    if (selected == null) {
-        selected = androidXCoreFiles[0]
-    }
-
-    logger.lifecycle(
-            "ANDROIDX CORE TOOL: " +
-            selected.absolutePath
-    )
-
-    return selected
-}
-
-tasks.register("sanitizeLegacyDex") {
-
-    def legacyDex =
-            rootProject.file("app/libs/aasdk-legacy.dex")
-
-    def outputRoot =
-            project.layout.buildDirectory
-                    .dir("intermediates/sanitized-legacy-dex")
-                    .get()
-                    .asFile
-
-    def outputDir =
-            new File(outputRoot, "release")
-
-    def outputDex =
-            new File(outputDir, "classes.dex")
-
-    def rulesFile =
-            new File(outputRoot, "legacy-r8-rules.pro")
-
-    inputs.file(legacyDex)
-
-    outputs.file(outputDex)
-
-    doLast {
+        def legacyDex =
+                rootProject.file('app/libs/aasdk-legacy.dex')
 
         if (!legacyDex.exists()) {
             throw new GradleException(
                     "Thiếu app/libs/aasdk-legacy.dex!"
-            )
-        }
-
-        outputDir.deleteDir()
-        outputDir.mkdirs()
-
-        rulesFile.text = '''
--dontobfuscate
--dontoptimize
--dontwarn **
-
--keep class com.google.android.apps.auto.sdk.** { *; }
-
--keep class ** { *; }
-
--keep,allowshrinking,allowoptimization class androidx.** { *; }
-
--checkdiscard class androidx.core.app.CoreComponentFactory
--checkdiscard class androidx.core.app.RemoteActionCompat
--checkdiscard class androidx.core.app.RemoteActionCompatParcelizer
--checkdiscard class androidx.core.graphics.drawable.IconCompat
--checkdiscard class androidx.core.graphics.drawable.IconCompatParcelizer
-'''.stripIndent()
-
-        /*
-         * Resolve cả hai dependency chính thức trước khi chạy R8.
-         */
-        def r8Jar = findR8Jar()
-
-        def androidXCoreJar =
-                findAndroidXCoreJar()
-
-        def androidJar =
-                new File(
-                        android.sdkDirectory,
-                        "platforms/android-${android.compileSdk}/android.jar"
-                )
-
-        if (!androidJar.exists()) {
-            throw new GradleException(
-                    "Không tìm thấy Android SDK android.jar: " +
-                    androidJar.absolutePath
-            )
-        }
-
-        logger.lifecycle("============================================================")
-        logger.lifecycle("SANITIZE LEGACY DEX")
-        logger.lifecycle("============================================================")
-        logger.lifecycle("Input DEX     : " + legacyDex.absolutePath)
-        logger.lifecycle("Output DEX    : " + outputDex.absolutePath)
-        logger.lifecycle("R8            : " + r8Jar.absolutePath)
-        logger.lifecycle("Android API   : " + androidJar.absolutePath)
-        logger.lifecycle("AndroidX Core : " + androidXCoreJar.absolutePath)
-        logger.lifecycle("============================================================")
-
-        project.exec {
-            commandLine(
-                    "java",
-                    "-cp",
-                    r8Jar.absolutePath,
-                    "com.android.tools.r8.R8",
-                    "--release",
-                    "--min-api",
-                    "29",
-                    "--output",
-                    outputDir.absolutePath,
-                    "--lib",
-                    androidJar.absolutePath,
-                    "--lib",
-                    androidXCoreJar.absolutePath,
-                    "--pg-conf",
-                    rulesFile.absolutePath,
-                    legacyDex.absolutePath
-            )
-        }
-
-        if (!outputDex.exists()) {
-            throw new GradleException(
-                    "R8 không tạo được sanitized legacy dex!"
-            )
-        }
-
-        logger.lifecycle(
-                "PASS: R8 đã tạo sanitized legacy dex."
-        )
-
-        def buildToolsDir =
-                new File(
-                        android.sdkDirectory,
-                        "build-tools/${android.buildToolsVersion}"
-                )
-
-        def dexdump =
-                new File(
-                        buildToolsDir,
-                        "dexdump"
-                )
-
-        if (!dexdump.exists()) {
-            throw new GradleException(
-                    "Không tìm thấy dexdump: " +
-                    dexdump.absolutePath
-            )
-        }
-
-        def dumpFile =
-                new File(
-                        outputRoot,
-                        "sanitized-dexdump.txt"
-                )
-
-        project.exec {
-            standardOutput =
-                    new FileOutputStream(dumpFile)
-
-            commandLine(
-                    dexdump.absolutePath,
-                    outputDex.absolutePath
-            )
-        }
-
-        def dumpText = dumpFile.text
-
-        def forbiddenDescriptors = [
-                "Landroidx/core/app/CoreComponentFactory;",
-                "Landroidx/core/app/RemoteActionCompat;",
-                "Landroidx/core/app/RemoteActionCompatParcelizer;",
-                "Landroidx/core/graphics/drawable/IconCompat;",
-                "Landroidx/core/graphics/drawable/IconCompatParcelizer;"
-        ]
-
-        def remainingExact =
-                forbiddenDescriptors.findAll { descriptor ->
-                    dumpText.contains(descriptor)
-                }
-
-        if (!remainingExact.isEmpty()) {
-
-            logger.lifecycle(
-                    "FAIL: AndroidX class vẫn còn trong sanitized DEX"
-            )
-
-            remainingExact.each {
-                logger.lifecycle(
-                        "STILL PRESENT: " + it
-                )
-            }
-
-            throw new GradleException(
-                    "Một hoặc nhiều AndroidX class vẫn còn."
-            )
-        }
-
-        logger.lifecycle(
-                "PASS: cả 5 AndroidX class mục tiêu đã được loại bỏ."
-        )
-
-        def remainingAndroidX =
-                dumpText.readLines().findAll {
-                    it.contains("androidx/")
-                }
-
-        if (!remainingAndroidX.isEmpty()) {
-
-            logger.lifecycle(
-                    "FAIL: AndroidX vẫn còn trong sanitized dex"
-            )
-
-            remainingAndroidX.each {
-                logger.lifecycle(it)
-            }
-
-            throw new GradleException(
-                    "Sanitized legacy dex vẫn chứa androidx/*."
-            )
-        }
-
-        if (!dumpText.contains(
-                "com/google/android/apps/auto/sdk"
-        )) {
-            throw new GradleException(
-                    "Sanitized dex không còn " +
-                    "com/google/android/apps/auto/sdk."
-            )
-        }
-
-        logger.lifecycle(
-                "PASS: com.google.android.apps.auto.sdk vẫn còn."
-        )
-
-        logger.lifecycle(
-                "SANITIZE LEGACY DEX: PASS"
-        )
-    }
-}
-
-tasks.matching {
-    it.name == "mergeProjectDexDebug"
-}.configureEach { task ->
-
-    dependsOn tasks.named("sanitizeLegacyDex")
-
-    task.doLast {
-
-        def sanitizedDex =
-                new File(
-                        project.layout.buildDirectory
-                                .dir(
-                                        "intermediates/" +
-                                        "sanitized-legacy-dex/release"
-                                )
-                                .get()
-                                .asFile,
-                        "classes.dex"
-                )
-
-        if (!sanitizedDex.exists()) {
-            throw new GradleException(
-                    "Thiếu sanitized legacy dex cho Debug!"
             )
         }
 
@@ -430,37 +133,31 @@ tasks.matching {
         new File(
                 bucket,
                 "classes.dex"
-        ).bytes = sanitizedDex.bytes
+        ).bytes = legacyDex.bytes
 
         logger.lifecycle(
-                "PASS: sanitized legacy dex đã thêm vào Debug."
+                "PASS: nguyên bản aasdk-legacy.dex đã được thêm vào Debug."
         )
     }
 }
 
-tasks.matching {
-    it.name == "mergeDexRelease"
-}.configureEach { task ->
+// ============================================================
+// Release:
+// D8 merge các app DEX với NGUYÊN BẢN aasdk-legacy.dex.
+// ============================================================
 
-    dependsOn tasks.named("sanitizeLegacyDex")
+tasks.matching {
+    it.name == 'mergeDexRelease'
+}.configureEach { task ->
 
     task.doLast {
 
-        def sanitizedDex =
-                new File(
-                        project.layout.buildDirectory
-                                .dir(
-                                        "intermediates/" +
-                                        "sanitized-legacy-dex/release"
-                                )
-                                .get()
-                                .asFile,
-                        "classes.dex"
-                )
+        def legacyDex =
+                rootProject.file('app/libs/aasdk-legacy.dex')
 
-        if (!sanitizedDex.exists()) {
+        if (!legacyDex.exists()) {
             throw new GradleException(
-                    "Thiếu sanitized legacy dex!"
+                    "Thiếu app/libs/aasdk-legacy.dex!"
             )
         }
 
@@ -508,24 +205,36 @@ tasks.matching {
                 "${sdkDir}/build-tools/" +
                 "${buildToolsVersion}/d8"
 
-        logger.lifecycle("============================================================")
-        logger.lifecycle("MERGE RELEASE DEX")
-        logger.lifecycle("============================================================")
+        logger.lifecycle(
+                "============================================================"
+        )
+        logger.lifecycle(
+                "AACast-Doudou LEGACY DEX MERGE"
+        )
+        logger.lifecycle(
+                "============================================================"
+        )
+        logger.lifecycle(
+                "Legacy DEX: " + legacyDex.absolutePath
+        )
+        logger.lifecycle(
+                "D8        : " + d8Tool
+        )
 
         project.exec {
             commandLine(
                     [
                             d8Tool,
-                            "--min-api",
-                            "29",
-                            "--output",
+                            '--min-api',
+                            '29',
+                            '--output',
                             tempDir.absolutePath
                     ]
                     +
                     appDexes*.absolutePath
                     +
                     [
-                            sanitizedDex.absolutePath
+                            legacyDex.absolutePath
                     ]
             )
         }
@@ -562,14 +271,18 @@ tasks.matching {
         tempDir.deleteDir()
 
         logger.lifecycle(
-                "PASS: D8 merge release dex."
+                "PASS: D8 merge nguyên bản legacy DEX thành công."
         )
     }
 }
 
-tasks.register("distRelease", Copy) {
+// ============================================================
+// Distribution APK
+// ============================================================
 
-    dependsOn "assembleRelease"
+tasks.register('distRelease', Copy) {
+
+    dependsOn 'assembleRelease'
 
     def buildDirFile =
             project.layout.buildDirectory
@@ -581,8 +294,8 @@ tasks.register("distRelease", Copy) {
     into "${rootDir}/dist"
 
     rename(
-            "app-release.apk",
-            "AACast-Doudou-v1.0.0.apk"
+            'app-release.apk',
+            'AACast-Doudou-v1.0.0.apk'
     )
 
     doLast {
