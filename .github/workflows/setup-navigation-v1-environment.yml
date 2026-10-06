@@ -280,18 +280,266 @@ jobs:
 
       # ============================================================
       # 15. RUN SANITIZE LEGACY DEX
+      #
+      # FIX:
+      # Không gọi :app:sanitizeLegacyDex vì task cũ đưa
+      # aasdk-legacy.dex trực tiếp vào R8.
+      #
+      # R8 không hỗ trợ compile DEX input theo cơ chế cũ.
+      #
+      # Cơ chế mới:
+      #   aasdk-legacy.jar
+      #          |
+      #          v
+      #        R8 8.13.6
+      #          |
+      #          v
+      # sanitized classes.dex
+      #
+      # Sau đó dùng dexdump để xác minh:
+      #   - 5 AndroidX class mục tiêu không còn
+      #   - com.google.android.apps.auto.sdk vẫn còn
       # ============================================================
       - name: 15 - Run sanitizeLegacyDex
         working-directory: navigation-v1-source
         run: |
           set -e
 
-          ./gradlew \
-            --no-daemon \
-            --stacktrace \
-            :app:sanitizeLegacyDex
+          echo "============================================================"
+          echo "SANITIZE LEGACY DEX - JAR INPUT MODE"
+          echo "============================================================"
 
-          echo "PASS: sanitizeLegacyDex"
+          LEGACY_DEX="app/libs/aasdk-legacy.dex"
+          LEGACY_JAR="app/libs/aasdk-legacy.jar"
+
+          OUTPUT_ROOT="app/build/intermediates/sanitized-legacy-dex"
+          OUTPUT_DIR="$OUTPUT_ROOT/release"
+          OUTPUT_DEX="$OUTPUT_DIR/classes.dex"
+          RULES_FILE="$OUTPUT_ROOT/legacy-r8-rules.pro"
+
+          ANDROID_JAR="$ANDROID_SDK_ROOT/platforms/android-36/android.jar"
+          DEXDUMP="$ANDROID_SDK_ROOT/build-tools/35.0.0/dexdump"
+
+          test -f "$LEGACY_DEX"
+          test -s "$LEGACY_DEX"
+
+          test -f "$LEGACY_JAR"
+          test -s "$LEGACY_JAR"
+
+          test -f "$ANDROID_JAR"
+          test -x "$DEXDUMP"
+
+          rm -rf "$OUTPUT_ROOT"
+          mkdir -p "$OUTPUT_DIR"
+
+          echo
+          echo "INPUT DEX:"
+          ls -lh "$LEGACY_DEX"
+
+          echo
+          echo "INPUT JAR:"
+          ls -lh "$LEGACY_JAR"
+
+          echo
+          echo "Checking legacy JAR..."
+
+          jar tf "$LEGACY_JAR" > "$OUTPUT_ROOT/legacy-jar-contents.txt"
+
+          echo "Legacy JAR class count:"
+          grep -c '\.class$' \
+            "$OUTPUT_ROOT/legacy-jar-contents.txt" || true
+
+          echo
+          echo "AndroidX classes found in legacy JAR:"
+
+          for CLASS_PATH in \
+            "androidx/core/app/CoreComponentFactory.class" \
+            "androidx/core/app/RemoteActionCompat.class" \
+            "androidx/core/app/RemoteActionCompatParcelizer.class" \
+            "androidx/core/graphics/drawable/IconCompat.class" \
+            "androidx/core/graphics/drawable/IconCompatParcelizer.class"
+          do
+            if grep -Fxq "$CLASS_PATH" \
+              "$OUTPUT_ROOT/legacy-jar-contents.txt"
+            then
+              echo "FOUND: $CLASS_PATH"
+            else
+              echo "NOT FOUND: $CLASS_PATH"
+            fi
+          done
+
+          echo
+          echo "Creating R8 rules..."
+
+          cat > "$RULES_FILE" <<'R8RULES'
+          -dontobfuscate
+          -dontoptimize
+          -dontwarn **
+
+          -keep class com.google.android.apps.auto.sdk.** { *; }
+
+          -keep,allowshrinking class androidx.core.app.CoreComponentFactory { *; }
+          -keep,allowshrinking class androidx.core.app.RemoteActionCompat { *; }
+          -keep,allowshrinking class androidx.core.app.RemoteActionCompatParcelizer { *; }
+          -keep,allowshrinking class androidx.core.graphics.drawable.IconCompat { *; }
+          -keep,allowshrinking class androidx.core.graphics.drawable.IconCompatParcelizer { *; }
+
+          -checkdiscard class androidx.core.app.CoreComponentFactory
+          -checkdiscard class androidx.core.app.RemoteActionCompat
+          -checkdiscard class androidx.core.app.RemoteActionCompatParcelizer
+          -checkdiscard class androidx.core.graphics.drawable.IconCompat
+          -checkdiscard class androidx.core.graphics.drawable.IconCompatParcelizer
+          R8RULES
+
+          echo
+          echo "R8 RULES:"
+          cat "$RULES_FILE"
+
+          echo
+          echo "Resolving R8 8.13.6 from Gradle configuration..."
+
+          cat > ci-print-r8.gradle <<'GRADLE_INIT'
+          allprojects {
+              if (project.path == ":app") {
+                  tasks.register("ciPrintR8Jar") {
+                      doLast {
+                          def files = configurations.r8Tool.resolve().findAll {
+                              it.exists() &&
+                              it.isFile() &&
+                              it.name == "r8-8.13.6.jar"
+                          }
+
+                          if (files.isEmpty()) {
+                              throw new GradleException(
+                                  "Không resolve được r8-8.13.6.jar"
+                              )
+                          }
+
+                          println("CI_R8_JAR=" + files[0].absolutePath)
+                      }
+                  }
+              }
+          }
+          GRADLE_INIT
+
+          R8_JAR="$(
+            ./gradlew \
+              --no-daemon \
+              --quiet \
+              -I ci-print-r8.gradle \
+              :app:ciPrintR8Jar \
+              | grep '^CI_R8_JAR=' \
+              | head -n 1 \
+              | cut -d= -f2-
+          )"
+
+          rm -f ci-print-r8.gradle
+
+          if [ -z "$R8_JAR" ]; then
+            echo "FAIL: Không lấy được R8 8.13.6 từ Gradle configuration"
+            exit 1
+          fi
+
+          test -f "$R8_JAR"
+
+          echo "R8:"
+          echo "$R8_JAR"
+
+          echo
+          echo "Running R8 against aasdk-legacy.jar..."
+
+          java \
+            -cp "$R8_JAR" \
+            com.android.tools.r8.R8 \
+            --release \
+            --min-api 29 \
+            --output "$OUTPUT_DIR" \
+            --lib "$ANDROID_JAR" \
+            --pg-conf "$RULES_FILE" \
+            "$LEGACY_JAR"
+
+          if [ ! -f "$OUTPUT_DEX" ]; then
+            echo "FAIL: R8 không tạo được sanitized classes.dex"
+            echo
+            echo "OUTPUT DIRECTORY:"
+            find "$OUTPUT_ROOT" -maxdepth 3 -type f -print
+            exit 1
+          fi
+
+          test -s "$OUTPUT_DEX"
+
+          echo
+          echo "PASS: R8 created sanitized classes.dex"
+          ls -lh "$OUTPUT_DEX"
+
+          echo
+          echo "Running dexdump..."
+
+          DUMP_FILE="$OUTPUT_ROOT/sanitized-dexdump.txt"
+
+          "$DEXDUMP" "$OUTPUT_DEX" > "$DUMP_FILE"
+
+          test -s "$DUMP_FILE"
+
+          echo
+          echo "Checking forbidden AndroidX descriptors..."
+
+          FORBIDDEN_FOUND=0
+
+          for DESCRIPTOR in \
+            "Landroidx/core/app/CoreComponentFactory;" \
+            "Landroidx/core/app/RemoteActionCompat;" \
+            "Landroidx/core/app/RemoteActionCompatParcelizer;" \
+            "Landroidx/core/graphics/drawable/IconCompat;" \
+            "Landroidx/core/graphics/drawable/IconCompatParcelizer;"
+          do
+            if grep -Fq "$DESCRIPTOR" "$DUMP_FILE"; then
+              echo "FAIL: STILL PRESENT: $DESCRIPTOR"
+              FORBIDDEN_FOUND=1
+            else
+              echo "PASS: ABSENT: $DESCRIPTOR"
+            fi
+          done
+
+          if [ "$FORBIDDEN_FOUND" -ne 0 ]; then
+            echo
+            echo "FAIL: AndroidX target classes vẫn còn trong sanitized DEX"
+            exit 1
+          fi
+
+          echo
+          echo "Checking any remaining androidx/ classes..."
+
+          REMAINING_ANDROIDX="$(
+            grep -F "androidx/" "$DUMP_FILE" || true
+          )"
+
+          if [ -n "$REMAINING_ANDROIDX" ]; then
+            echo "FAIL: Sanitized DEX vẫn chứa androidx/ classes:"
+            echo "$REMAINING_ANDROIDX"
+            exit 1
+          fi
+
+          echo "PASS: Không còn androidx/ trong sanitized DEX"
+
+          echo
+          echo "Checking Android Auto SDK..."
+
+          if ! grep -Fq \
+            "com/google/android/apps/auto/sdk" \
+            "$DUMP_FILE"
+          then
+            echo "FAIL: Sanitized DEX không còn"
+            echo "com/google/android/apps/auto/sdk"
+            exit 1
+          fi
+
+          echo "PASS: com.google.android.apps.auto.sdk vẫn còn"
+
+          echo
+          echo "============================================================"
+          echo "SANITIZE LEGACY DEX: PASS"
+          echo "============================================================"
 
       # ============================================================
       # 16. VERIFY SANITIZED DEX
