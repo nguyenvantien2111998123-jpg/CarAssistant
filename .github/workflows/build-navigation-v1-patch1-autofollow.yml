@@ -547,6 +547,10 @@ jobs:
 
       # ============================================================
       # STEP 25
+      #
+      # Verify bằng exact-string.
+      # Không dùng text.find() vì tên task có thể xuất hiện
+      # trong comment trước hook thật.
       # ============================================================
       - name: Verify Debug and Release task hooks
         shell: bash
@@ -556,93 +560,70 @@ jobs:
           python3 <<'PY'
           from pathlib import Path
 
-          text = Path(
-              "app/build.gradle"
-          ).read_text(
-              encoding="utf-8"
+          path = Path("app/build.gradle")
+          text = path.read_text(encoding="utf-8")
+
+          expected_debug = (
+              "project.tasks.configureEach { task ->\n"
+              "\n"
+              "    if (task.name != 'mergeProjectDexDebug') {\n"
+              "        return\n"
+              "    }"
           )
 
-          # ----------------------------------------------------------
-          # Debug verification
-          # ----------------------------------------------------------
-          debug_pos = text.find(
-              "mergeProjectDexDebug"
+          expected_release = (
+              "project.tasks.configureEach { task ->\n"
+              "\n"
+              "    if (task.name != 'mergeDexRelease') {\n"
+              "        return\n"
+              "    }"
           )
 
-          if debug_pos < 0:
+          old_debug = (
+              "tasks.matching {\n"
+              "    it.name == 'mergeProjectDexDebug'\n"
+              "}.configureEach { task ->"
+          )
+
+          old_release = (
+              "tasks.matching {\n"
+              "    it.name == 'mergeDexRelease'\n"
+              "}.configureEach { task ->"
+          )
+
+          debug_count = text.count(expected_debug)
+          release_count = text.count(expected_release)
+
+          old_debug_count = text.count(old_debug)
+          old_release_count = text.count(old_release)
+
+          print(f"Patched Debug hook count   = {debug_count}")
+          print(f"Patched Release hook count = {release_count}")
+          print(f"Old Debug hook count       = {old_debug_count}")
+          print(f"Old Release hook count     = {old_release_count}")
+
+          if debug_count != 1:
               raise SystemExit(
-                  "ERROR: mergeProjectDexDebug not found."
+                  "ERROR: Expected exactly 1 patched Debug hook, "
+                  f"found {debug_count}."
               )
 
-          before_debug = text[:debug_pos]
-
-          debug_project = before_debug.rfind(
-              "project.tasks.configureEach"
-          )
-
-          debug_matching = before_debug.rfind(
-              "tasks.matching {"
-          )
-
-          if debug_project < 0:
+          if release_count != 1:
               raise SystemExit(
-                  "ERROR: Debug hook does not use "
-                  "project.tasks.configureEach."
+                  "ERROR: Expected exactly 1 patched Release hook, "
+                  f"found {release_count}."
               )
 
-          if debug_matching > debug_project:
+          if old_debug_count != 0:
               raise SystemExit(
-                  "ERROR: Debug hook still uses "
-                  "tasks.matching."
+                  "ERROR: Old Debug tasks.matching hook still exists."
               )
 
-          print(
-              "PASS: mergeProjectDexDebug uses "
-              "project.tasks.configureEach."
-          )
-
-          # ----------------------------------------------------------
-          # Release verification
-          # ----------------------------------------------------------
-          release_pos = text.find(
-              "mergeDexRelease"
-          )
-
-          if release_pos < 0:
+          if old_release_count != 0:
               raise SystemExit(
-                  "ERROR: mergeDexRelease not found."
+                  "ERROR: Old Release tasks.matching hook still exists."
               )
 
-          before_release = text[:release_pos]
-
-          release_project = before_release.rfind(
-              "project.tasks.configureEach"
-          )
-
-          release_matching = before_release.rfind(
-              "tasks.matching {"
-          )
-
-          if release_project < 0:
-              raise SystemExit(
-                  "ERROR: Release hook does not use "
-                  "project.tasks.configureEach."
-              )
-
-          if release_matching > release_project:
-              raise SystemExit(
-                  "ERROR: Release hook still uses "
-                  "tasks.matching."
-              )
-
-          print(
-              "PASS: mergeDexRelease uses "
-              "project.tasks.configureEach."
-          )
-
-          # ----------------------------------------------------------
-          # Legacy/R8 protections
-          # ----------------------------------------------------------
           if "R8DexFilter" in text:
               raise SystemExit(
                   "ERROR: R8DexFilter must not be present."
@@ -653,10 +634,6 @@ jobs:
                   "ERROR: setEnableExperimentalDexInput "
                   "must not be present."
               )
-
-          print(
-              "PASS: obsolete R8 logic is absent."
-          )
 
           if "def d8Tool" not in text:
               raise SystemExit(
@@ -669,13 +646,31 @@ jobs:
               )
 
           print(
-              "PASS: D8 release merge implementation "
-              "is present."
+              "PASS: Debug hook uses "
+              "project.tasks.configureEach exactly once."
+          )
+
+          print(
+              "PASS: Release hook uses "
+              "project.tasks.configureEach exactly once."
+          )
+
+          print(
+              "PASS: Old Debug/Release tasks.matching hooks are absent."
+          )
+
+          print(
+              "PASS: obsolete R8 logic is absent."
+          )
+
+          print(
+              "PASS: D8 legacy DEX merge implementation is present."
+          )
+
+          print(
+              "PASS: Step 25 hook verification completed."
           )
           PY
-
-          echo
-          echo "PASS: Debug and Release task hooks verified."
 
       # ============================================================
       # STEP 26
