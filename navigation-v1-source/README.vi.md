@@ -7,7 +7,7 @@ Chia màn hình **Android Auto** thành 2–3 ô, mỗi ô chạy một ứng d�
 
 | | |
 |---|---|
-| Package | `com.hieptran.aacast.doudou` |
+| Package | `com.carassistant.v10` |
 | Version | 1.0.0 (versionCode 3) |
 | minSdk / targetSdk / compileSdk | 29 / 36 / 36 |
 | Quyền Android | **không có quyền nào** — mọi thao tác đặc quyền đi qua `su` |
@@ -185,14 +185,14 @@ gearhead (Android Auto) ──host──> AACastCarActivity (process app)
   | gearhead | class kiểm tra quyền của AA | trả `true` cho package của app |
   | gearhead | `Application#attach`, `WindowManagerGlobal#addView` | ẩn dock + che display `GhFacetBar` + mở rộng vùng activity |
 
-- **Lease dock**: `DockStateProvider` (`content://com.hieptran.aacast.doudou.launcher.dock/state`)
+- **Lease dock**: `DockStateProvider` (`content://com.carassistant.v10.launcher.dock/state`)
   — app ghi `visible_until = now + 3000` mỗi 1 s; gearhead đọc và ẩn/khôi phục dock.
 - Tất cả hook đều **fail-open**: không tìm thấy class/method thì bỏ qua, không làm hỏng host.
 
 ### Cấu trúc mã nguồn
 
 ```
-app/src/main/java/com/hieptran/aacast/doudou/
+app/src/main/java/com.carassistant.v10/
 ├── AACastCarActivity.java     # CarActivity — UI trên màn hình xe
 ├── AACastCarService.java      # đăng ký Car App với Android Auto
 ├── AACastDisplay.java         # nhận diện display ảo của app (dùng chung app + hook)

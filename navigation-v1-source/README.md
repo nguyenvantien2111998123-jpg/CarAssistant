@@ -7,7 +7,7 @@ Split the **Android Auto** screen into 2–3 panes, each running a real Android 
 
 | | |
 |---|---|
-| Package | `com.hieptran.aacast.doudou` |
+| Package | `com.carassistant.v10` |
 | Version | 1.0.0 (versionCode 3) |
 | minSdk / targetSdk / compileSdk | 29 / 36 / 36 |
 | Android permissions | **none** — all privileged operations go through `su` |
@@ -185,14 +185,14 @@ gearhead (Android Auto) ──host──> AACastCarActivity (app process)
   | gearhead | AA's package allow-list class | returns `true` for this app's package |
   | gearhead | `Application#attach`, `WindowManagerGlobal#addView` | hides the dock + covers the `GhFacetBar` display + expands the activity region |
 
-- **Dock lease**: `DockStateProvider` (`content://com.hieptran.aacast.doudou.launcher.dock/state`)
+- **Dock lease**: `DockStateProvider` (`content://com.carassistant.v10.launcher.dock/state`)
   — the app writes `visible_until = now + 3000` every second; gearhead reads it and hides/restores the dock.
 - All hooks are **fail-open**: when a class/method is missing they are simply skipped and never break the host.
 
 ### Source layout
 
 ```
-app/src/main/java/com/hieptran/aacast/doudou/
+app/src/main/java/com.carassistant.v10/
 ├── AACastCarActivity.java     # CarActivity — UI on the car screen
 ├── AACastCarService.java      # registers the Car App with Android Auto
 ├── AACastDisplay.java         # identifies this app's virtual displays (shared by app + hooks)
