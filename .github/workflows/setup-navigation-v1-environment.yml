@@ -300,13 +300,27 @@ jobs:
       #   - 5 AndroidX class mục tiêu không còn
       #   - com.google.android.apps.auto.sdk vẫn còn
       # ============================================================
+      # ============================================================
+      # 15. RUN SANITIZE LEGACY DEX
+      #
+      # FIX V2:
+      # - Giữ nguyên Steps 01-14.
+      # - Không sửa build.gradle.
+      # - Không đưa aasdk-legacy.dex trực tiếp vào R8.
+      # - Loại toàn bộ androidx/** khỏi legacy JAR trước khi chạy R8.
+      # - Giữ toàn bộ com.google.android.apps.auto.sdk/**.
+      # - Sau đó dùng R8 8.13.6 để tạo sanitized classes.dex.
+      # - Cuối cùng dùng dexdump để xác minh:
+      #     + Không còn androidx/
+      #     + Android Auto SDK vẫn còn.
+      # ============================================================
       - name: 15 - Run sanitizeLegacyDex
         working-directory: navigation-v1-source
         run: |
           set -e
 
           echo "============================================================"
-          echo "SANITIZE LEGACY DEX - JAR INPUT MODE"
+          echo "SANITIZE LEGACY DEX - FILTER ANDROIDX THEN R8"
           echo "============================================================"
 
           LEGACY_DEX="app/libs/aasdk-legacy.dex"
@@ -315,11 +329,19 @@ jobs:
           OUTPUT_ROOT="app/build/intermediates/sanitized-legacy-dex"
           OUTPUT_DIR="$OUTPUT_ROOT/release"
           OUTPUT_DEX="$OUTPUT_DIR/classes.dex"
+
+          FILTERED_JAR="$OUTPUT_ROOT/aasdk-legacy-filtered.jar"
+          FILTERED_LIST="$OUTPUT_ROOT/filtered-jar-contents.txt"
+
           RULES_FILE="$OUTPUT_ROOT/legacy-r8-rules.pro"
+          DUMP_FILE="$OUTPUT_ROOT/sanitized-dexdump.txt"
 
           ANDROID_JAR="$ANDROID_SDK_ROOT/platforms/android-36/android.jar"
           DEXDUMP="$ANDROID_SDK_ROOT/build-tools/35.0.0/dexdump"
 
+          # ------------------------------------------------------------
+          # 15.1 VERIFY INPUTS
+          # ------------------------------------------------------------
           test -f "$LEGACY_DEX"
           test -s "$LEGACY_DEX"
 
@@ -340,36 +362,124 @@ jobs:
           echo "INPUT JAR:"
           ls -lh "$LEGACY_JAR"
 
+          # ------------------------------------------------------------
+          # 15.2 INSPECT ORIGINAL JAR
+          # ------------------------------------------------------------
           echo
-          echo "Checking legacy JAR..."
+          echo "============================================================"
+          echo "ORIGINAL LEGACY JAR"
+          echo "============================================================"
 
-          jar tf "$LEGACY_JAR" > "$OUTPUT_ROOT/legacy-jar-contents.txt"
+          ORIGINAL_LIST="$OUTPUT_ROOT/original-jar-contents.txt"
 
-          echo "Legacy JAR class count:"
-          grep -c '\.class$' \
-            "$OUTPUT_ROOT/legacy-jar-contents.txt" || true
+          jar tf "$LEGACY_JAR" > "$ORIGINAL_LIST"
 
-          echo
-          echo "AndroidX classes found in legacy JAR:"
+          ORIGINAL_CLASS_COUNT="$(
+            grep -c '\.class$' "$ORIGINAL_LIST" || true
+          )"
 
-          for CLASS_PATH in \
-            "androidx/core/app/CoreComponentFactory.class" \
-            "androidx/core/app/RemoteActionCompat.class" \
-            "androidx/core/app/RemoteActionCompatParcelizer.class" \
-            "androidx/core/graphics/drawable/IconCompat.class" \
-            "androidx/core/graphics/drawable/IconCompatParcelizer.class"
-          do
-            if grep -Fxq "$CLASS_PATH" \
-              "$OUTPUT_ROOT/legacy-jar-contents.txt"
-            then
-              echo "FOUND: $CLASS_PATH"
-            else
-              echo "NOT FOUND: $CLASS_PATH"
-            fi
-          done
+          echo "Original class count:"
+          echo "$ORIGINAL_CLASS_COUNT"
 
           echo
-          echo "Creating R8 rules..."
+          echo "AndroidX classes in original JAR:"
+          grep -E '^androidx/.+\.class$' \
+            "$ORIGINAL_LIST" \
+            | head -n 100 || true
+
+          # ------------------------------------------------------------
+          # 15.3 CREATE FILTERED JAR
+          #
+          # Chỉ loại androidx/**.
+          #
+          # Không loại:
+          #   com/google/android/apps/auto/sdk/**
+          #   các package legacy khác.
+          # ------------------------------------------------------------
+          echo
+          echo "============================================================"
+          echo "FILTERING androidx/** FROM LEGACY JAR"
+          echo "============================================================"
+
+          FILTER_WORK="$OUTPUT_ROOT/filter-work"
+
+          rm -rf "$FILTER_WORK"
+          mkdir -p "$FILTER_WORK"
+
+          (
+            cd "$FILTER_WORK"
+
+            jar xf "$OLDPWD/$LEGACY_JAR"
+
+            find androidx \
+              -type f \
+              -print \
+              -delete \
+              2>/dev/null || true
+
+            find androidx \
+              -type d \
+              -empty \
+              -delete \
+              2>/dev/null || true
+
+            jar cf "$OLDPWD/$FILTERED_JAR" .
+          )
+
+          test -f "$FILTERED_JAR"
+          test -s "$FILTERED_JAR"
+
+          jar tf "$FILTERED_JAR" > "$FILTERED_LIST"
+
+          echo
+          echo "Filtered JAR:"
+          ls -lh "$FILTERED_JAR"
+
+          echo
+          echo "Filtered class count:"
+          grep -c '\.class$' "$FILTERED_LIST" || true
+
+          # ------------------------------------------------------------
+          # 15.4 HARD VERIFY: NO ANDROIDX IN FILTERED JAR
+          # ------------------------------------------------------------
+          echo
+          echo "Checking filtered JAR for androidx/**..."
+
+          REMAINING_FILTERED_ANDROIDX="$(
+            grep -E '^androidx/' "$FILTERED_LIST" || true
+          )"
+
+          if [ -n "$REMAINING_FILTERED_ANDROIDX" ]; then
+            echo "FAIL: androidx/** still exists in filtered JAR:"
+            echo "$REMAINING_FILTERED_ANDROIDX"
+            exit 1
+          fi
+
+          echo "PASS: No androidx/** in filtered JAR"
+
+          # ------------------------------------------------------------
+          # 15.5 VERIFY ANDROID AUTO SDK REMAINS
+          # ------------------------------------------------------------
+          echo
+          echo "Checking Android Auto SDK in filtered JAR..."
+
+          if ! grep -Fq \
+            "com/google/android/apps/auto/sdk/" \
+            "$FILTERED_LIST"
+          then
+            echo "FAIL: Android Auto SDK disappeared from filtered JAR"
+            exit 1
+          fi
+
+          echo "PASS: com/google/android/apps/auto/sdk/** remains"
+
+          # ------------------------------------------------------------
+          # 15.6 CREATE R8 RULES
+          # ------------------------------------------------------------
+          echo
+          echo "============================================================"
+          echo "CREATING R8 RULES"
+          echo "============================================================"
 
           cat > "$RULES_FILE" <<'R8RULES'
           -dontobfuscate
@@ -377,26 +487,19 @@ jobs:
           -dontwarn **
 
           -keep class com.google.android.apps.auto.sdk.** { *; }
-
-          -keep,allowshrinking class androidx.core.app.CoreComponentFactory { *; }
-          -keep,allowshrinking class androidx.core.app.RemoteActionCompat { *; }
-          -keep,allowshrinking class androidx.core.app.RemoteActionCompatParcelizer { *; }
-          -keep,allowshrinking class androidx.core.graphics.drawable.IconCompat { *; }
-          -keep,allowshrinking class androidx.core.graphics.drawable.IconCompatParcelizer { *; }
-
-          -checkdiscard class androidx.core.app.CoreComponentFactory
-          -checkdiscard class androidx.core.app.RemoteActionCompat
-          -checkdiscard class androidx.core.app.RemoteActionCompatParcelizer
-          -checkdiscard class androidx.core.graphics.drawable.IconCompat
-          -checkdiscard class androidx.core.graphics.drawable.IconCompatParcelizer
           R8RULES
 
           echo
           echo "R8 RULES:"
           cat "$RULES_FILE"
 
+          # ------------------------------------------------------------
+          # 15.7 RESOLVE R8 8.13.6
+          # ------------------------------------------------------------
           echo
-          echo "Resolving R8 8.13.6 from Gradle configuration..."
+          echo "============================================================"
+          echo "RESOLVING R8 8.13.6"
+          echo "============================================================"
 
           cat > ci-print-r8.gradle <<'GRADLE_INIT'
           allprojects {
@@ -445,8 +548,13 @@ jobs:
           echo "R8:"
           echo "$R8_JAR"
 
+          # ------------------------------------------------------------
+          # 15.8 RUN R8 ON FILTERED JAR
+          # ------------------------------------------------------------
           echo
-          echo "Running R8 against aasdk-legacy.jar..."
+          echo "============================================================"
+          echo "RUNNING R8 ON FILTERED JAR"
+          echo "============================================================"
 
           java \
             -cp "$R8_JAR" \
@@ -456,13 +564,13 @@ jobs:
             --output "$OUTPUT_DIR" \
             --lib "$ANDROID_JAR" \
             --pg-conf "$RULES_FILE" \
-            "$LEGACY_JAR"
+            "$FILTERED_JAR"
 
           if [ ! -f "$OUTPUT_DEX" ]; then
             echo "FAIL: R8 không tạo được sanitized classes.dex"
             echo
             echo "OUTPUT DIRECTORY:"
-            find "$OUTPUT_ROOT" -maxdepth 3 -type f -print
+            find "$OUTPUT_ROOT" -maxdepth 4 -type f -print
             exit 1
           fi
 
@@ -472,58 +580,48 @@ jobs:
           echo "PASS: R8 created sanitized classes.dex"
           ls -lh "$OUTPUT_DEX"
 
+          # ------------------------------------------------------------
+          # 15.9 RUN DEXDUMP
+          # ------------------------------------------------------------
           echo
-          echo "Running dexdump..."
-
-          DUMP_FILE="$OUTPUT_ROOT/sanitized-dexdump.txt"
+          echo "============================================================"
+          echo "RUNNING DEXDUMP"
+          echo "============================================================"
 
           "$DEXDUMP" "$OUTPUT_DEX" > "$DUMP_FILE"
 
           test -s "$DUMP_FILE"
 
+          echo "PASS: dexdump generated"
+
+          # ------------------------------------------------------------
+          # 15.10 VERIFY NO ANDROIDX
+          # ------------------------------------------------------------
           echo
-          echo "Checking forbidden AndroidX descriptors..."
-
-          FORBIDDEN_FOUND=0
-
-          for DESCRIPTOR in \
-            "Landroidx/core/app/CoreComponentFactory;" \
-            "Landroidx/core/app/RemoteActionCompat;" \
-            "Landroidx/core/app/RemoteActionCompatParcelizer;" \
-            "Landroidx/core/graphics/drawable/IconCompat;" \
-            "Landroidx/core/graphics/drawable/IconCompatParcelizer;"
-          do
-            if grep -Fq "$DESCRIPTOR" "$DUMP_FILE"; then
-              echo "FAIL: STILL PRESENT: $DESCRIPTOR"
-              FORBIDDEN_FOUND=1
-            else
-              echo "PASS: ABSENT: $DESCRIPTOR"
-            fi
-          done
-
-          if [ "$FORBIDDEN_FOUND" -ne 0 ]; then
-            echo
-            echo "FAIL: AndroidX target classes vẫn còn trong sanitized DEX"
-            exit 1
-          fi
-
-          echo
-          echo "Checking any remaining androidx/ classes..."
+          echo "============================================================"
+          echo "VERIFYING NO ANDROIDX IN SANITIZED DEX"
+          echo "============================================================"
 
           REMAINING_ANDROIDX="$(
             grep -F "androidx/" "$DUMP_FILE" || true
           )"
 
           if [ -n "$REMAINING_ANDROIDX" ]; then
-            echo "FAIL: Sanitized DEX vẫn chứa androidx/ classes:"
+            echo "FAIL: Sanitized DEX still contains androidx/:"
+            echo
             echo "$REMAINING_ANDROIDX"
             exit 1
           fi
 
-          echo "PASS: Không còn androidx/ trong sanitized DEX"
+          echo "PASS: No androidx/ classes remain"
 
+          # ------------------------------------------------------------
+          # 15.11 VERIFY ANDROID AUTO SDK
+          # ------------------------------------------------------------
           echo
-          echo "Checking Android Auto SDK..."
+          echo "============================================================"
+          echo "VERIFYING ANDROID AUTO SDK"
+          echo "============================================================"
 
           if ! grep -Fq \
             "com/google/android/apps/auto/sdk" \
@@ -534,12 +632,28 @@ jobs:
             exit 1
           fi
 
-          echo "PASS: com.google.android.apps.auto.sdk vẫn còn"
+          echo "PASS: com.google.android.apps.auto.sdk remains"
 
+          # ------------------------------------------------------------
+          # 15.12 FINAL SANITIZE RESULT
+          # ------------------------------------------------------------
           echo
           echo "============================================================"
           echo "SANITIZE LEGACY DEX: PASS"
           echo "============================================================"
+
+          echo
+          echo "Input legacy JAR : $LEGACY_JAR"
+          echo "Filtered JAR     : $FILTERED_JAR"
+          echo "Sanitized DEX    : $OUTPUT_DEX"
+          echo "R8               : 8.13.6"
+          echo "Min SDK          : 29"
+          echo
+          echo "AndroidX         : REMOVED"
+          echo "Android Auto SDK : PRESENT"
+          echo
+          echo "============================================================"
+                                    
 
       # ============================================================
       # 16. VERIFY SANITIZED DEX
