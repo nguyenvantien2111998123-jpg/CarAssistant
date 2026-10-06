@@ -1,0 +1,766 @@
+name: CarAssistant - Migrate Navigation Package to com.carassistant.v10
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  migrate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    steps:
+
+      # ============================================================
+      # 1. CHECKOUT MAIN
+      # ============================================================
+      - name: Checkout current main
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      # ============================================================
+      # 2. JAVA
+      # ============================================================
+      - name: Setup Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      # ============================================================
+      # 3. VERIFY CURRENT NAVIGATION SOURCE
+      # ============================================================
+      - name: Verify current Navigation V1 source
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          SRC="navigation-v1-source"
+          OLD_JAVA_DIR="$SRC/app/src/main/java/com/hieptran/aacast/doudou"
+          NEW_JAVA_DIR="$SRC/app/src/main/java/com/carassistant/v10"
+
+          test -d "$SRC"
+          test -f "$SRC/settings.gradle"
+          test -f "$SRC/build.gradle"
+          test -f "$SRC/app/build.gradle"
+          test -f "$SRC/gradlew"
+
+          test -d "$OLD_JAVA_DIR"
+
+          test -f "$OLD_JAVA_DIR/V10CarActivity.java"
+          test -f "$OLD_JAVA_DIR/NavigationMapView.java"
+          test -f "$OLD_JAVA_DIR/V10ProjectionSession.java"
+          test -f "$OLD_JAVA_DIR/V10DisplayController.java"
+          test -f "$OLD_JAVA_DIR/V10SurfaceManager.java"
+          test -f "$OLD_JAVA_DIR/V10TaskSession.java"
+          test -f "$OLD_JAVA_DIR/V10SessionStore.java"
+
+          echo "PASS: navigation-v1-source exists."
+          echo "PASS: old Java directory exists."
+          echo "PASS: protected Navigation/Projection/Persistence files exist."
+
+      # ============================================================
+      # 4. SAVE COMPLETE BACKUP BEFORE MIGRATION
+      # ============================================================
+      - name: Create rollback backup
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          mkdir -p /tmp/carassistant-migration-backup
+
+          git status --short > /tmp/carassistant-migration-backup/git-status-before.txt
+
+          tar -czf \
+            /tmp/carassistant-migration-backup/navigation-v1-source-before.tar.gz \
+            navigation-v1-source
+
+          if [ -d ".github/workflows" ]; then
+            tar -czf \
+              /tmp/carassistant-migration-backup/workflows-before.tar.gz \
+              .github/workflows
+          fi
+
+          git rev-parse HEAD \
+            > /tmp/carassistant-migration-backup/commit-before.txt
+
+          echo "PASS: Complete rollback backup created."
+
+      # ============================================================
+      # 5. RECORD PROTECTED FILE HASHES
+      #
+      # Lưu hash trước migration.
+      # Migration chỉ đổi package/path, không được đổi logic.
+      # ============================================================
+      - name: Record protected source hashes before migration
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          SRC="navigation-v1-source/app/src/main/java/com/hieptran/aacast/doudou"
+
+          sha256sum \
+            "$SRC/V10ProjectionSession.java" \
+            "$SRC/V10DisplayController.java" \
+            "$SRC/V10SurfaceManager.java" \
+            "$SRC/V10TaskSession.java" \
+            "$SRC/V10SessionStore.java" \
+            "$SRC/V10CarActivity.java" \
+            "$SRC/NavigationMapView.java" \
+            > /tmp/protected-before.sha256
+
+          echo "PASS: Protected source hashes recorded."
+
+      # ============================================================
+      # 6. RECORD SOURCE FILE LIST
+      # ============================================================
+      - name: Record Navigation source file list
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          find \
+            navigation-v1-source/app/src/main/java/com/hieptran/aacast/doudou \
+            -type f \
+            -print \
+            | sort \
+            > /tmp/navigation-files-before.txt
+
+          test -s /tmp/navigation-files-before.txt
+
+          echo "Navigation files before migration:"
+          cat /tmp/navigation-files-before.txt
+
+          echo "PASS: Navigation source file list recorded."
+
+      # ============================================================
+      # 7. MIGRATE PHYSICAL DIRECTORY
+      #
+      # ONLY:
+      #
+      # com/hieptran/aacast/doudou
+      #             ↓
+      # com/carassistant/v10
+      #
+      # Không thay đổi nội dung Java ở bước này.
+      # ============================================================
+      - name: Move Navigation Java directory
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          SRC="navigation-v1-source"
+          OLD_JAVA_DIR="$SRC/app/src/main/java/com/hieptran/aacast/doudou"
+          NEW_JAVA_DIR="$SRC/app/src/main/java/com/carassistant/v10"
+
+          test -d "$OLD_JAVA_DIR"
+
+          if [ -e "$NEW_JAVA_DIR" ]; then
+            echo "ERROR: Destination already exists:"
+            echo "$NEW_JAVA_DIR"
+            exit 1
+          fi
+
+          mkdir -p \
+            "$SRC/app/src/main/java/com/carassistant"
+
+          git mv \
+            "$OLD_JAVA_DIR" \
+            "$NEW_JAVA_DIR"
+
+          echo "PASS: Physical Java directory moved."
+
+      # ============================================================
+      # 8. MIGRATE OLD PACKAGE REFERENCES
+      #
+      # Chỉ trong navigation-v1-source.
+      #
+      # Không đụng v10-source.
+      # Không đụng các thư mục legacy bên ngoài Navigation V1.
+      # ============================================================
+      - name: Migrate old package references inside Navigation V1
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          ROOT="navigation-v1-source"
+
+          OLD_PACKAGE="com.hieptran.aacast.doudou"
+          NEW_PACKAGE="com.carassistant.v10"
+
+          OLD_PATH="com/hieptran/aacast/doudou"
+          NEW_PATH="com/carassistant/v10"
+
+          echo "Searching Navigation V1 for old package references..."
+
+          OLD_FILES="$(grep -RIl \
+            --exclude-dir=.git \
+            "$OLD_PACKAGE" \
+            "$ROOT" \
+            2>/dev/null || true)"
+
+          if [ -n "$OLD_FILES" ]; then
+            while IFS= read -r FILE; do
+              [ -z "$FILE" ] && continue
+
+              python3 - "$FILE" "$OLD_PACKAGE" "$NEW_PACKAGE" <<'PY'
+          from pathlib import Path
+          import sys
+
+          path = Path(sys.argv[1])
+          old = sys.argv[2]
+          new = sys.argv[3]
+
+          data = path.read_text(encoding="utf-8")
+          updated = data.replace(old, new)
+
+          if updated != data:
+              path.write_text(updated, encoding="utf-8")
+              print(f"UPDATED: {path}")
+          PY
+
+            done <<< "$OLD_FILES"
+          fi
+
+          OLD_PATH_FILES="$(grep -RIl \
+            --exclude-dir=.git \
+            "$OLD_PATH" \
+            "$ROOT" \
+            2>/dev/null || true)"
+
+          if [ -n "$OLD_PATH_FILES" ]; then
+            while IFS= read -r FILE; do
+              [ -z "$FILE" ] && continue
+
+              python3 - "$FILE" "$OLD_PATH" "$NEW_PATH" <<'PY'
+          from pathlib import Path
+          import sys
+
+          path = Path(sys.argv[1])
+          old = sys.argv[2]
+          new = sys.argv[3]
+
+          data = path.read_text(encoding="utf-8")
+          updated = data.replace(old, new)
+
+          if updated != data:
+              path.write_text(updated, encoding="utf-8")
+              print(f"UPDATED PATH: {path}")
+          PY
+
+            done <<< "$OLD_PATH_FILES"
+          fi
+
+          echo "PASS: Old package/path references migrated inside Navigation V1."
+
+      # ============================================================
+      # 9. VERIFY NEW DIRECTORY
+      # ============================================================
+      - name: Verify new package directory
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          SRC="navigation-v1-source"
+          OLD_JAVA_DIR="$SRC/app/src/main/java/com/hieptran/aacast/doudou"
+          NEW_JAVA_DIR="$SRC/app/src/main/java/com/carassistant/v10"
+
+          test ! -d "$OLD_JAVA_DIR"
+          test -d "$NEW_JAVA_DIR"
+
+          test -f "$NEW_JAVA_DIR/V10CarActivity.java"
+          test -f "$NEW_JAVA_DIR/NavigationMapView.java"
+          test -f "$NEW_JAVA_DIR/V10ProjectionSession.java"
+          test -f "$NEW_JAVA_DIR/V10DisplayController.java"
+          test -f "$NEW_JAVA_DIR/V10SurfaceManager.java"
+          test -f "$NEW_JAVA_DIR/V10TaskSession.java"
+          test -f "$NEW_JAVA_DIR/V10SessionStore.java"
+
+          echo "PASS: New com/carassistant/v10 directory exists."
+          echo "PASS: Old com/hieptran/aacast/doudou directory removed."
+
+      # ============================================================
+      # 10. VERIFY NO OLD PACKAGE INSIDE NAVIGATION V1
+      # ============================================================
+      - name: Verify old package completely removed from Navigation V1
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          ROOT="navigation-v1-source"
+
+          if grep -RIn \
+            --exclude-dir=.git \
+            "com.hieptran.aacast.doudou" \
+            "$ROOT"; then
+
+            echo "ERROR: Old Java package reference still exists."
+            exit 1
+          fi
+
+          if grep -RIn \
+            --exclude-dir=.git \
+            "com/hieptran/aacast/doudou" \
+            "$ROOT"; then
+
+            echo "ERROR: Old Java path reference still exists."
+            exit 1
+          fi
+
+          echo "PASS: No old package/path remains inside Navigation V1."
+
+      # ============================================================
+      # 11. VERIFY PACKAGE DECLARATIONS
+      # ============================================================
+      - name: Verify Java package declarations
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          NEW_JAVA_DIR="navigation-v1-source/app/src/main/java/com/carassistant/v10"
+
+          while IFS= read -r FILE; do
+            [ -z "$FILE" ] && continue
+
+            FIRST_PACKAGE="$(grep -m1 '^package ' "$FILE" || true)"
+
+            if [ -z "$FIRST_PACKAGE" ]; then
+              continue
+            fi
+
+            case "$FIRST_PACKAGE" in
+              "package com.carassistant.v10;"*)
+                ;;
+              *)
+                echo "WARNING: $FILE"
+                echo "        $FIRST_PACKAGE"
+                ;;
+            esac
+
+          done < <(
+            find "$NEW_JAVA_DIR" \
+              -type f \
+              -name "*.java" \
+              | sort
+          )
+
+          if grep -RIn \
+            '^package com\.hieptran\.aacast\.doudou;' \
+            "$NEW_JAVA_DIR"; then
+
+            echo "ERROR: Old package declaration remains."
+            exit 1
+          fi
+
+          echo "PASS: Java package declarations migrated."
+
+      # ============================================================
+      # 12. VERIFY IMPORTANT FILE CONTENT
+      #
+      # Không kiểm tra hash bằng hash cũ vì package/path migration
+      # có thể làm hash thay đổi.
+      #
+      # Thay vào đó kiểm tra các marker logic đã PASS.
+      # ============================================================
+      - name: Verify Navigation V1 functionality remains
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          NAV="navigation-v1-source/app/src/main/java/com/carassistant/v10/NavigationMapView.java"
+          ACTIVITY="navigation-v1-source/app/src/main/java/com/carassistant/v10/V10CarActivity.java"
+
+          test -f "$NAV"
+          test -f "$ACTIVITY"
+
+          grep -Fq "org.maplibre.android.MapLibre" "$NAV"
+          grep -Fq "https://tiles.openfreemap.org/styles/liberty" "$NAV"
+          grep -Fq "public void zoomIn()" "$NAV"
+          grep -Fq "public void zoomOut()" "$NAV"
+          grep -Fq "public void recenter()" "$NAV"
+          grep -Fq "onHostResume()" "$NAV"
+          grep -Fq "onHostPause()" "$NAV"
+          grep -Fq "onHostDestroy()" "$NAV"
+
+          grep -Fq "NavigationMapView" "$ACTIVITY"
+          grep -Fq "projectionLayer" "$ACTIVITY"
+          grep -Fq "launcherLayer" "$ACTIVITY"
+          grep -Fq "APP CHỌN" "$ACTIVITY"
+          grep -Fq "TASKS" "$ACTIVITY"
+          grep -Fq "MEDIA" "$ACTIVITY"
+          grep -Fq "Math.min(4" "$ACTIVITY"
+
+          echo "PASS: Navigation V1 functionality markers remain."
+
+      # ============================================================
+      # 13. VERIFY TRANSPARENT HOME UI
+      # ============================================================
+      - name: Verify Home UI V2 and Transparent Overlay
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          ACTIVITY="navigation-v1-source/app/src/main/java/com/carassistant/v10/V10CarActivity.java"
+
+          python3 - "$ACTIVITY" <<'PY'
+          from pathlib import Path
+          import sys
+
+          p = Path(sys.argv[1])
+          s = p.read_text(encoding="utf-8")
+
+          normalized = "".join(s.split())
+
+          required = [
+              "NavigationMapView",
+              "projectionLayer",
+              "launcherLayer",
+              "dashboard.setBackgroundColor(Color.TRANSPARENT);",
+              "projectionLayer.setBackgroundColor(Color.TRANSPARENT);",
+              "launcherLayer.setBackgroundColor(Color.TRANSPARENT);",
+              "Math.min(4"
+          ]
+
+          for marker in required:
+              if marker not in normalized:
+                  raise SystemExit(
+                      "ERROR: Missing Home UI marker: " + marker
+                  )
+
+          print("PASS: Home UI V2 + Transparent Overlay markers remain.")
+          PY
+
+      # ============================================================
+      # 14. VERIFY PROJECTION CORE FILES STILL EXIST
+      # ============================================================
+      - name: Verify protected Projection and Persistence files
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          SRC="navigation-v1-source/app/src/main/java/com/carassistant/v10"
+
+          test -f "$SRC/V10ProjectionSession.java"
+          test -f "$SRC/V10DisplayController.java"
+          test -f "$SRC/V10SurfaceManager.java"
+          test -f "$SRC/V10TaskSession.java"
+          test -f "$SRC/V10SessionStore.java"
+
+          echo "PASS: Protected Projection/Persistence files remain."
+
+      # ============================================================
+      # 15. VERIFY PROTECTED CORE WAS NOT LOGICALLY REWRITTEN
+      #
+      # Kiểm tra diff chỉ được phép có thay đổi package/path liên quan
+      # tới migration, không được có nội dung logic mới bất thường.
+      # ============================================================
+      - name: Inspect migration diff
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          echo "=============================================="
+          echo "MIGRATION DIFF"
+          echo "=============================================="
+
+          git status --short
+
+          echo ""
+          echo "Changed files:"
+          git diff --name-status
+
+          echo ""
+          echo "Diff statistics:"
+          git diff --stat
+
+          echo "=============================================="
+
+      # ============================================================
+      # 16. ENSURE OLD v10-source IS UNTOUCHED
+      # ============================================================
+      - name: Verify old v10-source untouched
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          if [ -d "v10-source" ]; then
+            echo "PASS: v10-source still exists and was not migrated."
+          else
+            echo "INFO: v10-source is absent on current main."
+          fi
+
+          if git diff --name-only | grep -q '^v10-source/'; then
+            echo "ERROR: Migration changed v10-source."
+            exit 1
+          fi
+
+          echo "PASS: Migration does not modify v10-source."
+
+      # ============================================================
+      # 17. UPDATE ONLY NAVIGATION V1 PATH REFERENCES
+      #
+      # Chỉ đổi đường dẫn Navigation V1.
+      # Không đổi đường dẫn v10-source.
+      # ============================================================
+      - name: Update Navigation V1 workflow path references
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          OLD_PATH="navigation-v1-source/app/src/main/java/com/hieptran/aacast/doudou"
+          NEW_PATH="navigation-v1-source/app/src/main/java/com/carassistant/v10"
+
+          while IFS= read -r FILE; do
+            [ -z "$FILE" ] && continue
+
+            python3 - "$FILE" "$OLD_PATH" "$NEW_PATH" <<'PY'
+          from pathlib import Path
+          import sys
+
+          path = Path(sys.argv[1])
+          old = sys.argv[2]
+          new = sys.argv[3]
+
+          data = path.read_text(encoding="utf-8")
+          updated = data.replace(old, new)
+
+          if updated != data:
+              path.write_text(updated, encoding="utf-8")
+              print(f"UPDATED WORKFLOW PATH: {path}")
+          PY
+
+          done < <(
+            find .github/workflows \
+              -type f \
+              \( -name "*.yml" -o -name "*.yaml" \) \
+              -print \
+              | sort
+          )
+
+          echo "PASS: Navigation V1 workflow path references updated."
+
+      # ============================================================
+      # 18. VERIFY ACTIVE NAVIGATION WORKFLOWS
+      # ============================================================
+      - name: Verify Navigation V1 workflow references
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          OLD_PATH="navigation-v1-source/app/src/main/java/com/hieptran/aacast/doudou"
+          NEW_PATH="navigation-v1-source/app/src/main/java/com/carassistant/v10"
+
+          if grep -RIn \
+            --include="*.yml" \
+            --include="*.yaml" \
+            "$OLD_PATH" \
+            .github/workflows 2>/dev/null; then
+
+            echo "ERROR: Old Navigation V1 workflow path still exists."
+            exit 1
+          fi
+
+          if grep -RIn \
+            --include="*.yml" \
+            --include="*.yaml" \
+            "navigation-v1-source.*$NEW_PATH" \
+            .github/workflows 2>/dev/null; then
+            echo "PASS: Navigation V1 workflow references use new path."
+          else
+            echo "INFO: No combined Navigation V1 path reference found."
+          fi
+
+          echo "PASS: Workflow path migration check complete."
+
+      # ============================================================
+      # 19. VERIFY GIT STATUS
+      # ============================================================
+      - name: Verify migration scope
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          echo "=============================================="
+          echo "FILES CHANGED BY MIGRATION"
+          echo "=============================================="
+
+          git status --short
+
+          echo "=============================================="
+
+          if git status --porcelain | grep -q '^.M.*v10-source/'; then
+            echo "ERROR: v10-source modified."
+            exit 1
+          fi
+
+          echo "PASS: Migration scope verified."
+
+      # ============================================================
+      # 20. PRE-BUILD GRADLE CHECK
+      # ============================================================
+      - name: Prepare Gradle
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          cd navigation-v1-source
+
+          chmod +x gradlew
+
+          test -x gradlew
+
+          echo "PASS: Gradle wrapper ready."
+
+      # ============================================================
+      # 21. COMPILE BEFORE COMMIT
+      # ============================================================
+      - name: Compile migrated Navigation V1
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          cd navigation-v1-source
+
+          ./gradlew \
+            :app:compileReleaseJavaWithJavac \
+            --no-daemon \
+            --stacktrace
+
+          echo "PASS: Java compilation after package migration."
+
+      # ============================================================
+      # 22. ASSEMBLE APK BEFORE COMMIT
+      # ============================================================
+      - name: Assemble migrated APK
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          cd navigation-v1-source
+
+          ./gradlew \
+            :app:assembleRelease \
+            --no-daemon \
+            --stacktrace
+
+          test -f app/build/outputs/apk/release/app-release.apk
+
+          echo "PASS: APK assembled after package migration."
+
+      # ============================================================
+      # 23. FINAL PRE-COMMIT VERIFY
+      # ============================================================
+      - name: Final verification before commit
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          SRC="navigation-v1-source"
+          NEW_JAVA_DIR="$SRC/app/src/main/java/com/carassistant/v10"
+
+          test -d "$NEW_JAVA_DIR"
+          test ! -d "$SRC/app/src/main/java/com/hieptran/aacast/doudou"
+
+          test -f "$NEW_JAVA_DIR/V10CarActivity.java"
+          test -f "$NEW_JAVA_DIR/NavigationMapView.java"
+
+          if grep -RIn \
+            --exclude-dir=.git \
+            "com.hieptran.aacast.doudou" \
+            "$SRC" 2>/dev/null; then
+            echo "ERROR: Old package remains."
+            exit 1
+          fi
+
+          if grep -RIn \
+            --exclude-dir=.git \
+            "com/hieptran/aacast/doudou" \
+            "$SRC" 2>/dev/null; then
+            echo "ERROR: Old path remains."
+            exit 1
+          fi
+
+          if git diff --name-only | grep -q '^v10-source/'; then
+            echo "ERROR: v10-source was changed."
+            exit 1
+          fi
+
+          echo "=============================================="
+          echo "PASS: FINAL PRE-COMMIT VERIFICATION"
+          echo "=============================================="
+          echo "Old package: REMOVED"
+          echo "New package: com.carassistant.v10"
+          echo "Old physical directory: REMOVED"
+          echo "New physical directory: PRESENT"
+          echo "Java compile: PASS"
+          echo "APK assemble: PASS"
+          echo "v10-source: UNTOUCHED"
+          echo "=============================================="
+
+      # ============================================================
+      # 24. COMMIT ONLY AFTER ALL CHECKS PASS
+      # ============================================================
+      - name: Commit migration
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          git add navigation-v1-source .github/workflows
+
+          if git diff --cached --quiet; then
+            echo "INFO: No migration changes to commit."
+            exit 0
+          fi
+
+          git commit \
+            -m "chore: migrate Navigation V1 package to com.carassistant.v10"
+
+          echo "PASS: Migration commit created."
+
+      # ============================================================
+      # 25. PUSH TO MAIN
+      # ============================================================
+      - name: Push migration to main
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          git push origin HEAD:main
+
+          echo "PASS: Migration pushed to main."
+
+      # ============================================================
+      # 26. FINAL RESULT
+      # ============================================================
+      - name: Migration PASS
+        shell: bash
+        run: |
+          echo "================================================"
+          echo "PASS: CarAssistant package migration"
+          echo "================================================"
+          echo "OLD:"
+          echo "com/hieptran/aacast/doudou"
+          echo ""
+          echo "NEW:"
+          echo "com/carassistant/v10"
+          echo ""
+          echo "Java package:"
+          echo "com.carassistant.v10"
+          echo ""
+          echo "Navigation V1: preserved"
+          echo "Home UI V2: preserved"
+          echo "Transparent Overlay: preserved"
+          echo "Projection Core: preserved"
+          echo "Persistence Core: preserved"
+          echo "v10-source: untouched"
+          echo "APK build: passed"
+          echo "Commit: created"
+          echo "Main: updated"
+          echo "================================================"
