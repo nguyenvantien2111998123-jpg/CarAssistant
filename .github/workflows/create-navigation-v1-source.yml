@@ -1,26 +1,59 @@
-name: Create Navigation V1 Source From Foundation
+name: CarAssistant - Extract Navigation V1 Source and Remove V10 Source
 
 on:
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
-  create-source:
+  build:
     runs-on: ubuntu-latest
     timeout-minutes: 40
 
     steps:
-
-      # ============================================================
-      # 1. Lấy ĐÚNG Foundation của build-navigation-v1-home-ui-v2-overlay.yml
-      # ============================================================
-      - name: Checkout exact Foundation
+      - name: Checkout main
         uses: actions/checkout@v4
         with:
-          ref: 2c814a181d00cde9547a446927ae181e18cb9cbb
+          ref: main
           fetch-depth: 1
+
+      - name: Extract Navigation V1 source from exact Foundation
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          FOUNDATION="2c814a181d00cde9547a446927ae181e18cb9cbb"
+
+          git fetch --no-tags origin "$FOUNDATION"
+
+          if [ "$(git rev-parse "$FOUNDATION")" != "$FOUNDATION" ]; then
+            echo "ERROR: Foundation commit cannot be resolved."
+            exit 1
+          fi
+
+          rm -rf navigation-v1-source
+          rm -rf /tmp/foundation-extract
+
+          mkdir -p /tmp/foundation-extract
+
+          git archive "$FOUNDATION" v10-source \
+            | tar -x -C /tmp/foundation-extract
+
+          test -d /tmp/foundation-extract/v10-source
+
+          mv \
+            /tmp/foundation-extract/v10-source \
+            navigation-v1-source
+
+          rm -rf v10-source
+
+          test -d navigation-v1-source
+          test ! -d v10-source
+
+          echo "PASS: Navigation V1 source extracted from exact Foundation."
+          echo "PASS: Current main v10-source was NOT used as source."
+          echo "PASS: v10-source removed from workspace."
 
       - name: Setup Java 17
         uses: actions/setup-java@v4
@@ -28,15 +61,14 @@ jobs:
           distribution: temurin
           java-version: '17'
 
-      # ============================================================
-      # 2. Kiểm tra Foundation
-      # ============================================================
-      - name: Verify Foundation
+      - name: Verify extracted Foundation source
         shell: bash
         run: |
           set -euo pipefail
 
-          SRC="v10-source/app/src/main/java/com/hieptran/aacast/doudou"
+          FOUNDATION="2c814a181d00cde9547a446927ae181e18cb9cbb"
+
+          SRC="navigation-v1-source/app/src/main/java/com/hieptran/aacast/doudou"
 
           test -f "$SRC/V10CarActivity.java"
           test -f "$SRC/V10ProjectionSession.java"
@@ -45,10 +77,8 @@ jobs:
           test -f "$SRC/V10TaskSession.java"
           test -f "$SRC/V10SessionStore.java"
 
-          ACTUAL="$(git rev-parse HEAD)"
-
-          if [ "$ACTUAL" != "2c814a181d00cde9547a446927ae181e18cb9cbb" ]; then
-            echo "ERROR: Foundation commit mismatch: $ACTUAL"
+          if [ "$(git rev-parse "$FOUNDATION")" != "$FOUNDATION" ]; then
+            echo "ERROR: Foundation object mismatch."
             exit 1
           fi
 
@@ -60,37 +90,8 @@ jobs:
             "$SRC/V10SessionStore.java" \
             > /tmp/core-before.sha256
 
-          echo "PASS: Exact Foundation verified."
+          echo "PASS: Exact Foundation source extracted and verified."
 
-      # ============================================================
-      # 3. Tạo source mới
-      #
-      # Không sửa v10-source.
-      # Copy nguyên Foundation sang navigation-v1-source.
-      # ============================================================
-      - name: Create new Navigation V1 source
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          rm -rf navigation-v1-source
-
-          cp -a v10-source navigation-v1-source
-
-          test -f \
-            navigation-v1-source/app/src/main/java/com/hieptran/aacast/doudou/V10CarActivity.java
-
-          test -f \
-            navigation-v1-source/app/src/main/java/com/hieptran/aacast/doudou/V10ProjectionSession.java
-
-          test -f \
-            navigation-v1-source/app/src/main/java/com/hieptran/aacast/doudou/V10DisplayController.java
-
-          echo "PASS: navigation-v1-source created from exact Foundation."
-
-      # ============================================================
-      # 4. MapLibre + Location permissions
-      # ============================================================
       - name: Add MapLibre and location permissions
         shell: bash
         run: |
@@ -126,25 +127,29 @@ jobs:
               "$MANIFEST"
           fi
 
-          grep -Fq \
+          if ! grep -Fq \
             "org.maplibre.gl:android-sdk:11.11.0" \
-            "$GRADLE"
+            "$GRADLE"; then
+            echo "ERROR: MapLibre dependency missing."
+            exit 1
+          fi
 
-          grep -Fq \
+          if ! grep -Fq \
             "android.permission.ACCESS_FINE_LOCATION" \
-            "$MANIFEST"
+            "$MANIFEST"; then
+            echo "ERROR: FINE location permission missing."
+            exit 1
+          fi
 
-          grep -Fq \
+          if ! grep -Fq \
             "android.permission.ACCESS_COARSE_LOCATION" \
-            "$MANIFEST"
+            "$MANIFEST"; then
+            echo "ERROR: COARSE location permission missing."
+            exit 1
+          fi
 
           echo "PASS: Navigation dependency and permissions."
 
-      # ============================================================
-      # 5. NavigationMapView
-      #
-      # Giữ nguyên code của workflow Navigation V1.
-      # ============================================================
       - name: Create NavigationMapView
         shell: bash
         run: |
@@ -349,28 +354,29 @@ jobs:
           }
           EOF
 
-          grep -Fq \
+          if ! grep -Fq \
             "class NavigationMapView" \
-            "$SRC/NavigationMapView.java"
+            "$SRC/NavigationMapView.java"; then
+            echo "ERROR: NavigationMapView was not created."
+            exit 1
+          fi
 
-          grep -Fq \
+          if ! grep -Fq \
             "https://tiles.openfreemap.org/styles/liberty" \
-            "$SRC/NavigationMapView.java"
+            "$SRC/NavigationMapView.java"; then
+            echo "ERROR: Navigation style missing."
+            exit 1
+          fi
 
           echo "PASS: NavigationMapView."
 
-      # ============================================================
-      # 6. Home UI V2 + Transparent Navigation Overlay
-      #
-      # Giữ nguyên patch từ build-navigation-v1-home-ui-v2-overlay.yml.
-      # Chỉ đổi đường dẫn đích từ v10-source -> navigation-v1-source.
-      # ============================================================
       - name: Patch Home UI V2 and transparent Navigation overlay
         shell: bash
         run: |
           set -euo pipefail
 
-          SRC="navigation-v1-source/app/src/main/java/com/hieptran/aacast/doudou"
+          rm -rf /tmp/carassistant-patch
+          mkdir -p /tmp/carassistant-patch
 
           printf '%s\n' \
           'from pathlib import Path' \
@@ -672,20 +678,17 @@ jobs:
           '' \
           'P.write_text(s.rstrip()+"\n",encoding="utf-8")' \
           'print("PATCH PASS")' \
-          > /tmp/patch_navigation_v1.py
+          > /tmp/carassistant-patch/patch.py
 
           python3 -m py_compile \
-            /tmp/patch_navigation_v1.py
+            /tmp/carassistant-patch/patch.py
 
           python3 \
-            /tmp/patch_navigation_v1.py
+            /tmp/carassistant-patch/patch.py
 
           echo "PASS: Home UI V2 + Navigation overlay patch."
 
-      # ============================================================
-      # 7. Kiểm tra kiến trúc source mới
-      # ============================================================
-      - name: Verify new source architecture
+      - name: Verify architecture
         shell: bash
         run: |
           set -euo pipefail
@@ -788,26 +791,30 @@ jobs:
             exit 1
           fi
 
+          echo "PASS: old Home title removed."
+
           if grep -Fq '"SPEED"' "$FILE"; then
             echo "ERROR: old SPEED card remains."
             exit 1
           fi
+
+          echo "PASS: old SPEED card removed."
 
           if grep -Fq '"WEATHER"' "$FILE"; then
             echo "ERROR: old WEATHER card remains."
             exit 1
           fi
 
+          echo "PASS: old WEATHER card removed."
+
           if grep -Fq 'initial(app.name)' "$FILE"; then
             echo "ERROR: old letter icons remain."
             exit 1
           fi
 
-          echo "PASS: Navigation V1 architecture."
+          echo "PASS: old letter icons removed."
+          echo "Architecture verification PASS."
 
-      # ============================================================
-      # 8. Bảo vệ Projection / Persistence / Floating Touch
-      # ============================================================
       - name: Verify Projection Persistence Floating Touch
         shell: bash
         run: |
@@ -862,11 +869,8 @@ jobs:
             "Floating HOME" \
             'addFloatingMenuButton("HOME"'
 
-          echo "PASS: Projection/Persistence/Floating Touch."
+          echo "Projection/Persistence/Floating Touch protection PASS."
 
-      # ============================================================
-      # 9. Không có lỗi whitespace
-      # ============================================================
       - name: Git diff safety
         shell: bash
         run: |
@@ -876,13 +880,7 @@ jobs:
 
           echo "PASS: git diff --check."
 
-      # ============================================================
-      # 10. Build source mới
-      #
-      # Dùng DEBUG đúng như workflow nguồn.
-      # Không dùng release / R8 / legacy dex workaround.
-      # ============================================================
-      - name: Compile new source
+      - name: Compile
         working-directory: navigation-v1-source
         shell: bash
         run: |
@@ -895,9 +893,9 @@ jobs:
             :app:compileDebugJavaWithJavac \
             --stacktrace
 
-          echo "PASS: New source Java compile."
+          echo "PASS: Java compile."
 
-      - name: Assemble new source
+      - name: Assemble APK
         working-directory: navigation-v1-source
         shell: bash
         run: |
@@ -908,12 +906,9 @@ jobs:
             :app:assembleDebug \
             --stacktrace
 
-          echo "PASS: New source APK assemble."
+          echo "PASS: APK assemble."
 
-      # ============================================================
-      # 11. Đóng gói source mới
-      # ============================================================
-      - name: Package new source
+      - name: Package APK
         shell: bash
         run: |
           set -euo pipefail
@@ -935,32 +930,56 @@ jobs:
             CarAssistant-Navigation-V1-Home-UI-V2-Overlay-Safe.apk \
             > CarAssistant-Navigation-V1-Home-UI-V2-Overlay-Safe.sha256
 
-          tar -czf \
-            CarAssistant-Navigation-V1-Source.tar.gz \
-            navigation-v1-source
-
-          sha256sum \
-            CarAssistant-Navigation-V1-Source.tar.gz \
-            > CarAssistant-Navigation-V1-Source.tar.gz.sha256
-
-          test -s \
-            CarAssistant-Navigation-V1-Source.tar.gz
-
           test -s \
             CarAssistant-Navigation-V1-Home-UI-V2-Overlay-Safe.apk
 
-          echo "PASS: New source and APK packaged."
+          echo "PASS: APK package."
 
-      # ============================================================
-      # 12. Upload source + APK
-      # ============================================================
-      - name: Upload new source and APK
+      - name: Verify main migration result
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          test -d navigation-v1-source
+          test ! -d v10-source
+
+          test -f navigation-v1-source/app/build.gradle
+          test -f navigation-v1-source/app/src/main/AndroidManifest.xml
+
+          echo "PASS: navigation-v1-source exists."
+          echo "PASS: v10-source is removed."
+          echo "PASS: Main migration tree is ready."
+
+      - name: Commit migration to main
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          git add -A
+
+          if git diff --cached --quiet; then
+            echo "ERROR: No migration changes detected."
+            exit 1
+          fi
+
+          git status --short
+
+          git commit \
+            -m "Create Navigation V1 source and remove v10-source"
+
+          git push origin HEAD:main
+
+          echo "PASS: navigation-v1-source committed to main."
+          echo "PASS: v10-source removed from main."
+
+      - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: CarAssistant-Navigation-V1-Source
+          name: CarAssistant-Navigation-V1-Home-UI-V2-Overlay-Safe
           path: |
-            CarAssistant-Navigation-V1-Source.tar.gz
-            CarAssistant-Navigation-V1-Source.tar.gz.sha256
             CarAssistant-Navigation-V1-Home-UI-V2-Overlay-Safe.apk
             CarAssistant-Navigation-V1-Home-UI-V2-Overlay-Safe.sha256
           if-no-files-found: error
