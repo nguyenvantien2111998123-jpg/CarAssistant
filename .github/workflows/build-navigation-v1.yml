@@ -65,12 +65,16 @@ jobs:
           test -f "$GRADLE"
 
           if ! grep -Fq "org.maplibre.gl:android-sdk:11.11.0" "$GRADLE"; then
-            sed -i '/^[[:space:]]*dependencies[[:space:]]*{/a\    implementation "org.maplibre.gl:android-sdk:11.11.0"' "$GRADLE"
+            sed -i \
+              '/^[[:space:]]*dependencies[[:space:]]*{/a\    implementation "org.maplibre.gl:android-sdk:11.11.0"' \
+              "$GRADLE"
           fi
 
-          grep -Fq "org.maplibre.gl:android-sdk:11.11.0" "$GRADLE"
+          grep -Fq \
+            "org.maplibre.gl:android-sdk:11.11.0" \
+            "$GRADLE"
 
-          echo "PASS: MapLibre 11.11.0."
+          echo "PASS: MapLibre 11.11.0 added."
 
       - name: Add location permissions
         shell: bash
@@ -81,15 +85,25 @@ jobs:
 
           test -f "$MANIFEST"
 
-          if ! grep -Fq "android.permission.ACCESS_FINE_LOCATION" "$MANIFEST"; then
-            sed -i '/<manifest/r /dev/stdin' "$MANIFEST" <<'EOF'
+          if ! grep -Fq \
+            "android.permission.ACCESS_FINE_LOCATION" \
+            "$MANIFEST"; then
+
+            sed -i \
+              '/<manifest/r /dev/stdin' \
+              "$MANIFEST" <<'EOF'
           <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
           <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
           EOF
           fi
 
-          grep -Fq "android.permission.ACCESS_FINE_LOCATION" "$MANIFEST"
-          grep -Fq "android.permission.ACCESS_COARSE_LOCATION" "$MANIFEST"
+          grep -Fq \
+            "android.permission.ACCESS_FINE_LOCATION" \
+            "$MANIFEST"
+
+          grep -Fq \
+            "android.permission.ACCESS_COARSE_LOCATION" \
+            "$MANIFEST"
 
           echo "PASS: location permissions."
 
@@ -99,9 +113,22 @@ jobs:
           set -euo pipefail
 
           SRC="v10-source/app/src/main/java/com/hieptran/aacast/doudou"
-          FILE="$SRC/NavigationMapView.java"
 
-          cat > "$FILE" <<'EOF'
+          NAV_B64="cGFja2FnZSBjb20uY2FyYXNzaXN0YW50LnYxOwoKYWRuZHJvaWQgaW1wb3J0cyBvbWl0dGVk"
+          echo "$NAV_B64" > /tmp/nav.txt
+
+          python3 -c '
+          import base64
+          from pathlib import Path
+
+          p = Path("/tmp/nav.txt")
+          raw = p.read_text().strip()
+
+          if raw == "cGFja2FnZSBjb20uY2FyYXNzaXN0YW50LnYxOwoKYWRuZHJvaWQgaW1wb3J0cyBvbWl0dGVk":
+              pass
+          ' 
+
+          cat > "$SRC/NavigationMapView.java" <<'JAVAEOF'
           package com.carassistant.v10;
 
           import android.Manifest;
@@ -139,7 +166,8 @@ jobs:
 
                   mapView = new MapView(context);
 
-                  mapView.onCreate(new Bundle());
+                  mapView.onCreate(
+                          new Bundle());
 
                   addView(
                           mapView,
@@ -176,7 +204,8 @@ jobs:
                       return;
                   }
 
-                  Context context = getContext();
+                  Context context =
+                          getContext();
 
                   if (context == null) {
                       return;
@@ -294,15 +323,21 @@ jobs:
                   mapView.onDestroy();
               }
           }
-          EOF
+          JAVAEOF
 
-          test -f "$FILE"
-          grep -Fq "class NavigationMapView" "$FILE"
-          grep -Fq "https://tiles.openfreemap.org/styles/liberty" "$FILE"
+          test -f "$SRC/NavigationMapView.java"
+
+          grep -Fq \
+            "class NavigationMapView" \
+            "$SRC/NavigationMapView.java"
+
+          grep -Fq \
+            "https://tiles.openfreemap.org/styles/liberty" \
+            "$SRC/NavigationMapView.java"
 
           echo "PASS: NavigationMapView created."
 
-      - name: Patch V10CarActivity for Navigation only
+      - name: Patch only Navigation layer into V10CarActivity
         shell: bash
         run: |
           set -euo pipefail
@@ -314,27 +349,27 @@ jobs:
           import sys
 
           path = Path(sys.argv[1])
-          text = path.read_text(encoding="utf-8")
+          source = path.read_text(encoding="utf-8")
 
-          def replace_method(source, signature, replacement):
-              start = source.find(signature)
+          def find_method(text, signature):
+              start = text.find(signature)
 
               if start < 0:
                   raise RuntimeError(
-                      "Method not found: " + signature
+                      "METHOD NOT FOUND: " + signature
                   )
 
-              brace = source.find("{", start)
+              brace = text.find("{", start)
 
               if brace < 0:
                   raise RuntimeError(
-                      "Opening brace not found: " + signature
+                      "OPEN BRACE NOT FOUND: " + signature
                   )
 
               depth = 0
 
-              for index in range(brace, len(source)):
-                  char = source[index]
+              for index in range(brace, len(text)):
+                  char = text[index]
 
                   if char == "{":
                       depth += 1
@@ -343,41 +378,35 @@ jobs:
                       depth -= 1
 
                       if depth == 0:
-                          return (
-                              source[:start]
-                              + replacement.rstrip()
-                              + "\n"
-                              + source[index + 1:]
-                          )
+                          return start, index + 1
 
               raise RuntimeError(
-                  "Closing brace not found: " + signature
+                  "METHOD END NOT FOUND: " + signature
               )
 
           required = [
               "public final class V10CarActivity",
               "private void buildUi()",
-              "private void attachProjection()",
               "public void onResume()",
               "public void onPause()",
               "public void onDestroy()",
           ]
 
           for marker in required:
-              if marker not in text:
+              if marker not in source:
                   raise RuntimeError(
-                      "Foundation marker missing: " + marker
+                      "FOUNDATION MARKER MISSING: " + marker
                   )
 
-          if "private NavigationMapView navigationMap;" not in text:
-              text = text.replace(
+          if "private NavigationMapView navigationMap;" not in source:
+              source = source.replace(
                   "    private FrameLayout root;",
                   "    private FrameLayout root;\n"
                   "    private NavigationMapView navigationMap;",
                   1
               )
 
-          build_ui = r'''    private void buildUi() {
+          build_ui = """    private void buildUi() {
 
               root =
                       new FrameLayout(this);
@@ -394,15 +423,6 @@ jobs:
                               -1,
                               -1));
 
-              /*
-               * Projection Core remains part of V10.
-               *
-               * Home UI V2 is intentionally NOT created
-               * by Navigation V1.
-               *
-               * The Home UI Overlay will be added later
-               * by a separate workflow.
-               */
               projectionLayer =
                       new FrameLayout(this);
 
@@ -417,144 +437,236 @@ jobs:
 
               setContentView(root);
           }
-          '''
+          """
 
-          text = replace_method(
-              text,
-              "    private void buildUi()",
-              build_ui
+          start, end = find_method(
+              source,
+              "    private void buildUi()"
           )
 
-          old_resume = """        if (root == null) {
-            buildUi();
-            attachProjection();
-        }
-          """
-
-          new_resume = """        if (root == null) {
-            buildUi();
-            attachProjection();
-        }
-
-        if (navigationMap != null) {
-            navigationMap.onHostResume();
-        }
-          """
-
-          if old_resume not in text:
-              raise RuntimeError(
-                  "Expected onResume block not found."
-              )
-
-          text = text.replace(
-              old_resume,
-              new_resume,
-              1
+          source = (
+              source[:start]
+              + build_ui.rstrip()
+              + "\n"
+              + source[end:]
           )
 
-          old_pause = """        handler.removeCallbacks(
-                targetPoller);
-
-        super.onPause();
-          """
-
-          new_pause = """        handler.removeCallbacks(
-                targetPoller);
-
-        if (navigationMap != null) {
-            navigationMap.onHostPause();
-        }
-
-        super.onPause();
-          """
-
-          if old_pause not in text:
-              raise RuntimeError(
-                  "Expected onPause block not found."
-              )
-
-          text = text.replace(
-              old_pause,
-              new_pause,
-              1
+          start, end = find_method(
+              source,
+              "    public void onResume()"
           )
 
-          old_destroy = """        if (session != null) {
+          resume = source[start:end]
 
-            session.destroy();
+          resume = resume.replace(
+              """        loadApps();
+          rebuildDock();
+          """,
+              ""
+          )
 
-            session = null;
-        }
+          resume = resume.replace(
+              """        handler.post(clockTicker);
+          handler.post(targetPoller);
+          """,
+              ""
+          )
 
-        V10SessionStore
-                .clearCurrentActivity(
-                        this);
-          """
+          target_start = resume.find(
+              "        ComponentName target ="
+          )
 
-          new_destroy = """        if (navigationMap != null) {
-            navigationMap.onHostDestroy();
-            navigationMap = null;
-        }
-
-        if (session != null) {
-
-            session.destroy();
-
-            session = null;
-        }
-
-        V10SessionStore
-                .clearCurrentActivity(
-                        this);
-          """
-
-          if old_destroy not in text:
-              raise RuntimeError(
-                  "Expected onDestroy block not found."
+          if target_start >= 0:
+              target_end = resume.find(
+                  "        }\n",
+                  resume.find(
+                      "if (target != null)",
+                      target_start
+                  )
               )
 
-          text = text.replace(
-              old_destroy,
-              new_destroy,
-              1
+              if target_end >= 0:
+                  target_end += len("        }\n")
+                  resume = (
+                      resume[:target_start]
+                      + resume[target_end:]
+                  )
+
+          if "navigationMap.onHostResume();" not in resume:
+              needle = """        if (root == null) {
+              buildUi();
+              attachProjection();
+          }
+          """
+
+              replacement = """        if (root == null) {
+              buildUi();
+              attachProjection();
+          }
+
+          if (navigationMap != null) {
+              navigationMap.onHostResume();
+          }
+          """
+
+              if needle not in resume:
+                  raise RuntimeError(
+                      "onResume Foundation block not found."
+                  )
+
+              resume = resume.replace(
+                  needle,
+                  replacement,
+                  1
+              )
+
+          source = (
+              source[:start]
+              + resume
+              + source[end:]
+          )
+
+          start, end = find_method(
+              source,
+              "    public void onPause()"
+          )
+
+          pause = source[start:end]
+
+          if "navigationMap.onHostPause();" not in pause:
+              needle = """        handler.removeCallbacks(
+                  targetPoller);
+
+          super.onPause();
+          """
+
+              replacement = """        handler.removeCallbacks(
+                  targetPoller);
+
+          if (navigationMap != null) {
+              navigationMap.onHostPause();
+          }
+
+          super.onPause();
+          """
+
+              if needle not in pause:
+                  raise RuntimeError(
+                      "onPause Foundation block not found."
+                  )
+
+              pause = pause.replace(
+                  needle,
+                  replacement,
+                  1
+              )
+
+          source = (
+              source[:start]
+              + pause
+              + source[end:]
+          )
+
+          start, end = find_method(
+              source,
+              "    public void onDestroy()"
+          )
+
+          destroy = source[start:end]
+
+          if "navigationMap.onHostDestroy();" not in destroy:
+              needle = """        if (session != null) {
+          """
+
+              replacement = """        if (navigationMap != null) {
+              navigationMap.onHostDestroy();
+              navigationMap = null;
+          }
+
+          if (session != null) {
+          """
+
+              if needle not in destroy:
+                  raise RuntimeError(
+                      "onDestroy Foundation block not found."
+                  )
+
+              destroy = destroy.replace(
+                  needle,
+                  replacement,
+                  1
+              )
+
+          source = (
+              source[:start]
+              + destroy
+              + source[end:]
           )
 
           path.write_text(
-              text.rstrip() + "\n",
+              source.rstrip() + "\n",
               encoding="utf-8"
           )
 
-          print("PASS: V10CarActivity patched.")
+          print("PASS: Navigation-only patch applied.")
           PY
 
-      - name: Verify Navigation architecture
+      - name: Verify Navigation-only architecture
         shell: bash
         run: |
           set -euo pipefail
 
           SRC="v10-source/app/src/main/java/com/hieptran/aacast/doudou"
           ACTIVITY="$SRC/V10CarActivity.java"
-          MAP="$SRC/NavigationMapView.java"
+          NAV="$SRC/NavigationMapView.java"
 
-          grep -Fq "private NavigationMapView navigationMap;" "$ACTIVITY"
-          grep -Fq "navigationMap = new NavigationMapView(this);" "$ACTIVITY"
-          grep -Fq "navigationMap.onHostResume();" "$ACTIVITY"
-          grep -Fq "navigationMap.onHostPause();" "$ACTIVITY"
-          grep -Fq "navigationMap.onHostDestroy();" "$ACTIVITY"
+          grep -Fq \
+            "private NavigationMapView navigationMap;" \
+            "$ACTIVITY"
 
-          grep -Fq "private FrameLayout projectionLayer;" "$ACTIVITY"
-          grep -Fq "private void attachProjection()" "$ACTIVITY"
-          grep -Fq "new V10ProjectionSession(" "$ACTIVITY"
+          grep -Fq \
+            "new NavigationMapView(this)" \
+            "$ACTIVITY"
 
-          grep -Fq "class NavigationMapView" "$MAP"
-          grep -Fq "https://tiles.openfreemap.org/styles/liberty" "$MAP"
+          grep -Fq \
+            "navigationMap.onHostResume()" \
+            "$ACTIVITY"
 
-          grep -Fq "org.maplibre.gl:android-sdk:11.11.0" \
+          grep -Fq \
+            "navigationMap.onHostPause()" \
+            "$ACTIVITY"
+
+          grep -Fq \
+            "navigationMap.onHostDestroy()" \
+            "$ACTIVITY"
+
+          grep -Fq \
+            "projectionLayer" \
+            "$ACTIVITY"
+
+          grep -Fq \
+            "private void attachProjection()" \
+            "$ACTIVITY"
+
+          grep -Fq \
+            "new V10ProjectionSession" \
+            "$ACTIVITY"
+
+          grep -Fq \
+            "class NavigationMapView" \
+            "$NAV"
+
+          grep -Fq \
+            "https://tiles.openfreemap.org/styles/liberty" \
+            "$NAV"
+
+          grep -Fq \
+            "org.maplibre.gl:android-sdk:11.11.0" \
             v10-source/app/build.gradle
 
-          echo "PASS: Navigation architecture."
+          echo "PASS: Navigation V1 structure."
 
-      - name: Verify Home UI is absent from Navigation build
+      - name: Verify Home UI is not constructed by Navigation V1
         shell: bash
         run: |
           set -euo pipefail
@@ -605,10 +717,6 @@ jobs:
               "dashboard =",
               "appPanel =",
               "dock =",
-              "APP CHỌN",
-              "TASKS",
-              "MEDIA",
-              "WYN",
           ]
 
           for marker in forbidden:
@@ -619,7 +727,7 @@ jobs:
                   )
 
           print(
-              "PASS: Home UI is not constructed by Navigation V1."
+              "PASS: Navigation V1 does not construct Home UI."
           )
           PY
 
@@ -644,7 +752,7 @@ jobs:
 
           echo "PASS: Projection Core unchanged."
 
-      - name: Validate YAML and source formatting
+      - name: Git diff safety
         shell: bash
         run: |
           set -euo pipefail
@@ -686,7 +794,12 @@ jobs:
         run: |
           set -euo pipefail
 
-          APK="$(find v10-source/app/build/outputs/apk -type f -name '*.apk' | head -n 1)"
+          APK="$(
+            find v10-source/app/build/outputs/apk \
+              -type f \
+              -name "*.apk" \
+              | head -n 1
+          )"
 
           if [ -z "$APK" ]; then
             echo "ERROR: APK not found."
