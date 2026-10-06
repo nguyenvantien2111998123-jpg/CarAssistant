@@ -642,6 +642,28 @@ jobs:
 
       # ============================================================
       # 22. ASSEMBLE APK BEFORE COMMIT
+      #
+      # CHỈ SỬA BƯỚC BUILD BỊ LỖI.
+      #
+      # Nguyên nhân:
+      # app/libs/aasdk-legacy.dex nằm trong libs nên AGP tự đưa
+      # file này vào mergeDexRelease.
+      #
+      # build.gradle hiện tại đồng thời có doLast của mergeDexRelease
+      # để merge chính aasdk-legacy.dex lần nữa.
+      #
+      # Kết quả:
+      # RemoteActionCompatParcelizer is defined multiple times.
+      #
+      # Cách xử lý:
+      # - KHÔNG sửa app/build.gradle trên GitHub.
+      # - Tạm đưa aasdk-legacy.dex ra ngoài app/libs.
+      # - Tạm đổi đúng 2 tham chiếu rootProject.file(...) trong
+      #   build.gradle để block mergeDexRelease dùng file tạm.
+      # - Assemble APK.
+      # - Khôi phục nguyên trạng build.gradle và aasdk-legacy.dex.
+      #
+      # Không thay đổi source được commit.
       # ============================================================
       - name: Assemble migrated APK
         shell: bash
@@ -649,6 +671,69 @@ jobs:
           set -euo pipefail
 
           cd navigation-v1-source
+
+          LEGACY_DEX="app/libs/aasdk-legacy.dex"
+          TEMP_LEGACY_DEX="/tmp/aasdk-legacy.dex"
+          BUILD_GRADLE="app/build.gradle"
+          BUILD_GRADLE_BACKUP="/tmp/app-build.gradle.before-step22"
+
+          test -f "$LEGACY_DEX"
+          test -f "$BUILD_GRADLE"
+
+          cp "$BUILD_GRADLE" "$BUILD_GRADLE_BACKUP"
+          cp "$LEGACY_DEX" "$TEMP_LEGACY_DEX"
+
+          restore_step22_files() {
+            echo "Restoring original build files..."
+
+            if [ -f "$BUILD_GRADLE_BACKUP" ]; then
+              cp "$BUILD_GRADLE_BACKUP" "$BUILD_GRADLE"
+            fi
+
+            if [ -f "$TEMP_LEGACY_DEX" ]; then
+              cp "$TEMP_LEGACY_DEX" "$LEGACY_DEX"
+            fi
+          }
+
+          trap restore_step22_files EXIT
+
+          echo "Temporarily moving aasdk-legacy.dex outside app/libs..."
+          rm -f "$LEGACY_DEX"
+
+          echo "Temporarily redirecting mergeDexRelease legacy dex path..."
+
+          python3 - "$BUILD_GRADLE" <<'PY'
+          from pathlib import Path
+          import sys
+
+          path = Path(sys.argv[1])
+
+          data = path.read_text(encoding="utf-8")
+
+          old = "rootProject.file('app/libs/aasdk-legacy.dex')"
+          new = "rootProject.file('/tmp/aasdk-legacy.dex')"
+
+          count = data.count(old)
+
+          if count != 2:
+              raise SystemExit(
+                  f"ERROR: Expected exactly 2 legacy dex references, found {count}."
+              )
+
+          updated = data.replace(old, new)
+
+          path.write_text(updated, encoding="utf-8")
+
+          print(
+              "PASS: Temporarily redirected exactly 2 "
+              "mergeDexRelease legacy dex references."
+          )
+          PY
+
+          test ! -f "$LEGACY_DEX"
+          test -f "$TEMP_LEGACY_DEX"
+
+          echo "Running release APK assemble..."
 
           ./gradlew \
             :app:assembleRelease \
@@ -658,6 +743,7 @@ jobs:
           test -f app/build/outputs/apk/release/app-release.apk
 
           echo "PASS: APK assembled after package migration."
+          echo "PASS: Original aasdk-legacy.dex/build.gradle will be restored."
 
       # ============================================================
       # 23. FINAL PRE-COMMIT VERIFY
