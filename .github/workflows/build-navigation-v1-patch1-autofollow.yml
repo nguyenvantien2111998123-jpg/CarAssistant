@@ -1,981 +1,754 @@
-name: CarAssistant V10 - Navigation V1 Patch 1 Auto-follow Recenter
-- on:
-workflow_dispatch:
+name: Build Main Clean Navigation V2 Baseline
+
+on:
+  workflow_dispatch:
 
 permissions:
-contents: read
+  contents: write
 
 jobs:
-build:
-runs-on: ubuntu-latest
-timeout-minutes: 40
-
-steps:
-
-  # ============================================================
-  # 1. CHECKOUT MAIN
-  # ============================================================
-  - name: Checkout current main Navigation V1
-    uses: actions/checkout@v4
-    with:
-      ref: main
-      fetch-depth: 1
-
-  # ============================================================
-  # 2. JAVA
-  # ============================================================
-  - name: Setup Java 17
-    uses: actions/setup-java@v4
-    with:
-      distribution: temurin
-      java-version: '17'
-
-  # ============================================================
-  # 3. VERIFY CURRENT MAIN SOURCE
-  # ============================================================
-  - name: Verify current main Navigation V1 source
-    shell: bash
-    run: |
-      set -euo pipefail
-
-      SRC="navigation-v1-source"
-      JAVA_SRC="$SRC/app/src/main/java/com/carassistant/v10"
-      NAV_SRC="$SRC/app/src/main/java/com/carassistant/v10/NavigationMapView.java"
-      ACTIVITY="$JAVA_SRC/V10CarActivity.java"
-
-      test -d "$SRC"
-      test -f "$SRC/settings.gradle"
-      test -f "$SRC/build.gradle"
-      test -f "$SRC/app/build.gradle"
-      test -f "$SRC/gradlew"
-
-      test -f "$ACTIVITY"
-      test -f "$NAV_SRC"
-
-      test -f "$JAVA_SRC/V10ProjectionSession.java"
-      test -f "$JAVA_SRC/V10DisplayController.java"
-      test -f "$JAVA_SRC/V10SurfaceManager.java"
-      test -f "$JAVA_SRC/V10TaskSession.java"
-      test -f "$JAVA_SRC/V10SessionStore.java"
-
-      echo "PASS: navigation-v1-source exists on main."
-      echo "PASS: NavigationMapView exists."
-      echo "PASS: V10CarActivity exists."
-      echo "PASS: protected Projection/Persistence files exist."
-
-  # ============================================================
-  # 4. PROTECTED CORE HASH BEFORE PATCH
-  # ============================================================
-  - name: Lock protected Projection and Persistence core
-    shell: bash
-    run: |
-      set -euo pipefail
-
-      SRC="navigation-v1-source/app/src/main/java/com/carassistant/v10"
-
-      sha256sum \
-        "$SRC/V10ProjectionSession.java" \
-        "$SRC/V10DisplayController.java" \
-        "$SRC/V10SurfaceManager.java" \
-        "$SRC/V10TaskSession.java" \
-        "$SRC/V10SessionStore.java" \
-        > /tmp/core-before.sha256
-
-      echo "PASS: Protected core SHA recorded."
-
-  # ============================================================
-  # 5. VERIFY BASELINE UI BEFORE PATCH
-  #    Chỉ kiểm tra, KHÔNG sửa Home UI.
-  # ============================================================
-  - name: Verify Home UI V2 and transparent overlay baseline
-    shell: bash
-    run: |
-      set -euo pipefail
-
-      ACTIVITY="navigation-v1-source/app/src/main/java/com/carassistant/v10/V10CarActivity.java"
-
-      grep -Fq "NavigationMapView" "$ACTIVITY"
-      grep -Fq "projectionLayer" "$ACTIVITY"
-      grep -Fq "launcherLayer" "$ACTIVITY"
-
-      grep -Fq "APP CHỌN" "$ACTIVITY"
-      grep -Fq "TASKS" "$ACTIVITY"
-      grep -Fq "MEDIA" "$ACTIVITY"
-
-      grep -Fq "Math.min(4" "$ACTIVITY"
-
-      python3 - "$ACTIVITY" <<'PY'
-      from pathlib import Path
-      import sys
-
-      p = Path(sys.argv[1])
-      s = p.read_text(encoding="utf-8")
-      n = "".join(s.split())
-
-      required = [
-          "dashboard.setBackgroundColor(Color.TRANSPARENT);",
-          "projectionLayer.setBackgroundColor(Color.TRANSPARENT);",
-          "launcherLayer.setBackgroundColor(Color.TRANSPARENT);"
-      ]
-
-      for item in required:
-          if item not in n:
-              raise SystemExit(
-                  "ERROR: Missing transparent UI marker: " + item
-              )
-
-      print("PASS: Home UI V2 + transparent overlay markers.")
-      PY
-
-  # ============================================================
-  # 6. SAVE BASELINE NAVIGATION SOURCE
-  # ============================================================
-  - name: Save Navigation V1 source before Patch 1
-    shell: bash
-    run: |
-      set -euo pipefail
-
-      NAV_SRC="navigation-v1-source/app/src/main/java/com/carassistant/v10/NavigationMapView.java"
-
-      cp "$NAV_SRC" /tmp/NavigationMapView.before.java
-
-      echo "PASS: Navigation V1 source snapshot saved."
-
-  # ============================================================
-  # 7. PATCH 1
-  #
-  # CHỈ SỬA NavigationMapView.java
-  #
-  # Không:
-  # - sửa V10CarActivity
-  # - sửa Home UI
-  # - sửa overlay
-  # - sửa Projection Core
-  # - tạo UI layer mới
-  # ============================================================
-  - name: Apply Patch 1 Auto-follow and Recenter
-    shell: bash
-    run: |
-      set -euo pipefail
-
-      NAV_SRC="navigation-v1-source/app/src/main/java/com/carassistant/v10/NavigationMapView.java"
-
-      test -f "$NAV_SRC"
-
-      cat > "$NAV_SRC" <<'EOF'
-      package com.carassistant.v10;
-
-      import android.Manifest;
-      import android.app.Activity;
-      import android.content.Context;
-      import android.content.pm.PackageManager;
-      import android.graphics.Color;
-      import android.location.Location;
-      import android.location.LocationListener;
-      import android.location.LocationManager;
-      import android.os.Bundle;
-      import android.os.Looper;
-      import android.widget.FrameLayout;
-
-      import org.maplibre.android.MapLibre;
-      import org.maplibre.android.camera.CameraUpdateFactory;
-      import org.maplibre.android.geometry.LatLng;
-      import org.maplibre.android.location.LocationComponentActivationOptions;
-      import org.maplibre.android.location.LocationComponentOptions;
-      import org.maplibre.android.maps.MapLibreMap;
-      import org.maplibre.android.maps.MapView;
-      import org.maplibre.android.maps.UiSettings;
-
-      public final class NavigationMapView extends FrameLayout {
-
-          private static final int LOCATION_REQUEST = 4101;
-          private static final long AUTO_FOLLOW_INTERVAL_MS = 1000L;
-          private static final float AUTO_FOLLOW_MIN_DISTANCE_METERS = 5.0f;
-
-          private final MapView mapView;
-          private final LocationManager locationManager;
-
-          private MapLibreMap map;
-
-          private boolean autoFollow = true;
-          private boolean locationUpdatesStarted = false;
-          private Location lastAutoFollowLocation;
-
-          private final LocationListener navigationLocationListener =
-                  new LocationListener() {
-
-                      @Override
-                      public void onLocationChanged(Location location) {
-                          if (location == null) {
-                              return;
-                          }
-
-                          if (!autoFollow || map == null) {
-                              return;
-                          }
-
-                          if (lastAutoFollowLocation != null
-                                  && location.distanceTo(lastAutoFollowLocation)
-                                  < AUTO_FOLLOW_MIN_DISTANCE_METERS) {
-                              return;
-                          }
-
-                          lastAutoFollowLocation = new Location(location);
-
-                          followLocation(location);
-                      }
-
-                      @Override
-                      public void onProviderEnabled(String provider) {
-                      }
-
-                      @Override
-                      public void onProviderDisabled(String provider) {
-                      }
-                  };
-
-          public NavigationMapView(Context context) {
-              super(context);
-
-              setBackgroundColor(Color.BLACK);
-
-              MapLibre.getInstance(
-                      context.getApplicationContext());
-
-              locationManager =
-                      (LocationManager) context.getSystemService(
-                              Context.LOCATION_SERVICE);
-
-              mapView = new MapView(context);
-
-              mapView.onCreate(
-                      new Bundle());
-
-              addView(
-                      mapView,
-                      new LayoutParams(
-                              LayoutParams.MATCH_PARENT,
-                              LayoutParams.MATCH_PARENT));
-
-              mapView.getMapAsync(
-                      this::onMapReady);
-          }
-
-          private void onMapReady(
-                  MapLibreMap readyMap) {
-
-              map = readyMap;
-
-              UiSettings ui =
-                      map.getUiSettings();
-
-              ui.setCompassEnabled(false);
-              ui.setZoomGesturesEnabled(true);
-              ui.setScrollGesturesEnabled(true);
-              ui.setRotateGesturesEnabled(true);
-              ui.setTiltGesturesEnabled(false);
-
-              map.setOnCameraMoveStartedListener(
-                      reason -> {
-                          if (reason
-                                  == MapLibreMap
-                                  .OnCameraMoveStartedListener
-                                  .REASON_API_GESTURE) {
-
-                              autoFollow = false;
-                          }
-                      });
-
-              map.setStyle(
-                      "https://tiles.openfreemap.org/styles/liberty",
-                      style -> enableLocation());
-          }
-
-          private void enableLocation() {
-
-              if (map == null) {
-                  return;
-              }
-
-              Context context =
-                      getContext();
-
-              if (context == null) {
-                  return;
-              }
-
-              if (context.checkSelfPermission(
-                      Manifest.permission.ACCESS_FINE_LOCATION)
-                      != PackageManager.PERMISSION_GRANTED) {
-
-                  if (context instanceof Activity) {
-                      ((Activity) context).requestPermissions(
-                              new String[]{
-                                      Manifest.permission.ACCESS_FINE_LOCATION,
-                                      Manifest.permission.ACCESS_COARSE_LOCATION
-                              },
-                              LOCATION_REQUEST);
-                  }
-
-                  return;
-              }
-
-              LocationComponentOptions options =
-                      LocationComponentOptions
-                              .builder(context)
-                              .pulseEnabled(true)
-                              .build();
-
-              LocationComponentActivationOptions activation =
-                      LocationComponentActivationOptions
-                              .builder(
-                                      context,
-                                      map.getStyle())
-                              .locationComponentOptions(options)
-                              .build();
-
-              map.getLocationComponent()
-                      .activateLocationComponent(
-                              activation);
-
-              map.getLocationComponent()
-                      .setLocationComponentEnabled(true);
-
-              startLocationUpdates();
-              autoFollowToLastKnownLocation();
-          }
-
-          private void startLocationUpdates() {
-
-              if (locationUpdatesStarted) {
-                  return;
-              }
-
-              if (locationManager == null) {
-                  return;
-              }
-
-              Context context =
-                      getContext();
-
-              if (context == null) {
-                  return;
-              }
-
-              if (context.checkSelfPermission(
-                      Manifest.permission.ACCESS_FINE_LOCATION)
-                      != PackageManager.PERMISSION_GRANTED
-                      && context.checkSelfPermission(
-                      Manifest.permission.ACCESS_COARSE_LOCATION)
-                      != PackageManager.PERMISSION_GRANTED) {
-                  return;
-              }
-
-              try {
-                  if (locationManager.isProviderEnabled(
-                          LocationManager.GPS_PROVIDER)) {
-
-                      locationManager.requestLocationUpdates(
-                              LocationManager.GPS_PROVIDER,
-                              AUTO_FOLLOW_INTERVAL_MS,
-                              AUTO_FOLLOW_MIN_DISTANCE_METERS,
-                              navigationLocationListener,
-                              Looper.getMainLooper());
-                  }
-
-                  if (locationManager.isProviderEnabled(
-                          LocationManager.NETWORK_PROVIDER)) {
-
-                      locationManager.requestLocationUpdates(
-                              LocationManager.NETWORK_PROVIDER,
-                              AUTO_FOLLOW_INTERVAL_MS,
-                              AUTO_FOLLOW_MIN_DISTANCE_METERS,
-                              navigationLocationListener,
-                              Looper.getMainLooper());
-                  }
-
-                  locationUpdatesStarted = true;
-
-              } catch (SecurityException ignored) {
-              } catch (Exception ignored) {
-              }
-          }
-
-          private void stopLocationUpdates() {
-
-              if (!locationUpdatesStarted) {
-                  return;
-              }
-
-              if (locationManager == null) {
-                  return;
-              }
-
-              try {
-                  locationManager.removeUpdates(
-                          navigationLocationListener);
-              } catch (Exception ignored) {
-              }
-
-              locationUpdatesStarted = false;
-          }
-
-          private void autoFollowToLastKnownLocation() {
-
-              if (!autoFollow || map == null) {
-                  return;
-              }
-
-              try {
-                  Location location =
-                          map.getLocationComponent()
-                                  .getLastKnownLocation();
-
-                  if (location != null) {
-                      lastAutoFollowLocation =
-                              new Location(location);
-
-                      followLocation(location);
-                      return;
-                  }
-              } catch (Exception ignored) {
-              }
-
-              try {
-                  if (locationManager == null) {
-                      return;
-                  }
-
-                  Context context =
-                          getContext();
-
-                  if (context == null) {
-                      return;
-                  }
-
-                  if (context.checkSelfPermission(
-                          Manifest.permission.ACCESS_FINE_LOCATION)
-                          != PackageManager.PERMISSION_GRANTED
-                          && context.checkSelfPermission(
-                          Manifest.permission.ACCESS_COARSE_LOCATION)
-                          != PackageManager.PERMISSION_GRANTED) {
-                      return;
-                  }
-
-                  Location location = null;
-
-                  try {
-                      location =
-                              locationManager.getLastKnownLocation(
-                                      LocationManager.GPS_PROVIDER);
-                  } catch (Exception ignored) {
-                  }
-
-                  if (location == null) {
-                      try {
-                          location =
-                                  locationManager.getLastKnownLocation(
-                                          LocationManager.NETWORK_PROVIDER);
-                      } catch (Exception ignored) {
-                      }
-                  }
-
-                  if (location != null) {
-                      lastAutoFollowLocation =
-                              new Location(location);
-
-                      followLocation(location);
-                  }
-
-              } catch (SecurityException ignored) {
-              } catch (Exception ignored) {
-              }
-          }
-
-          private void followLocation(
-                  Location location) {
-
-              if (map == null || location == null) {
-                  return;
-              }
-
-              map.animateCamera(
-                      CameraUpdateFactory
-                              .newLatLng(
-                                      new LatLng(
-                                              location.getLatitude(),
-                                              location.getLongitude())),
-                      350);
-          }
-
-          public void zoomIn() {
-
-              if (map == null) {
-                  return;
-              }
-
-              double zoom =
-                      map.getCameraPosition().zoom;
-
-              map.animateCamera(
-                      CameraUpdateFactory.zoomTo(
-                              Math.min(
-                                      20.0,
-                                      zoom + 1.0)),
-                      250);
-          }
-
-          public void zoomOut() {
-
-              if (map == null) {
-                  return;
-              }
-
-              double zoom =
-                      map.getCameraPosition().zoom;
-
-              map.animateCamera(
-                      CameraUpdateFactory.zoomTo(
-                              Math.max(
-                                      1.0,
-                                      zoom - 1.0)),
-                      250);
-          }
-
-          public void recenter() {
-
-              if (map == null) {
-                  return;
-              }
-
-              autoFollow = true;
-
-              try {
-                  Location location =
-                          map.getLocationComponent()
-                                  .getLastKnownLocation();
-
-                  if (location == null
-                          && locationManager != null) {
-
-                      Context context =
-                              getContext();
-
-                      if (context != null
-                              && (context.checkSelfPermission(
-                              Manifest.permission.ACCESS_FINE_LOCATION)
-                              == PackageManager.PERMISSION_GRANTED
-                              || context.checkSelfPermission(
-                              Manifest.permission.ACCESS_COARSE_LOCATION)
-                              == PackageManager.PERMISSION_GRANTED)) {
-
-                          try {
-                              location =
-                                      locationManager.getLastKnownLocation(
-                                              LocationManager.GPS_PROVIDER);
-                          } catch (Exception ignored) {
-                          }
-
-                          if (location == null) {
-                              try {
-                                  location =
-                                          locationManager.getLastKnownLocation(
-                                                  LocationManager.NETWORK_PROVIDER);
-                              } catch (Exception ignored) {
-                              }
-                          }
-                      }
-                  }
-
-                  if (location == null) {
-                      return;
-                  }
-
-                  lastAutoFollowLocation =
-                          new Location(location);
-
-                  map.animateCamera(
-                          CameraUpdateFactory
-                                  .newLatLngZoom(
-                                          new LatLng(
-                                                  location.getLatitude(),
-                                                  location.getLongitude()),
-                                          16.0),
-                          500);
-
-              } catch (Exception ignored) {
-              }
-          }
-
-          public void onHostResume() {
-              mapView.onResume();
-
-              if (map != null) {
-                  startLocationUpdates();
-
-                  if (autoFollow) {
-                      autoFollowToLastKnownLocation();
-                  }
-              }
-          }
-
-          public void onHostPause() {
-              stopLocationUpdates();
-              mapView.onPause();
-          }
-
-          public void onHostDestroy() {
-              stopLocationUpdates();
-              mapView.onDestroy();
-          }
-      }
-      EOF
-
-      echo "PASS: Patch 1 source applied to NavigationMapView only."
-
-  # ============================================================
-  # 8. VERIFY PATCH SCOPE
-  # ============================================================
-  - name: Verify Patch 1 changed only Navigation layer
-    shell: bash
-    run: |
-      set -euo pipefail
-
-      git diff --name-only > /tmp/changed-files.txt
-
-      echo "Changed files:"
-      cat /tmp/changed-files.txt
-
-      if grep -Fxq \
-        "navigation-v1-source/app/src/main/java/com/carassistant/v10/NavigationMapView.java" \
-        /tmp/changed-files.txt; then
-        :
-      else
-        echo "ERROR: NavigationMapView.java was not changed."
-        exit 1
-      fi
-
-      CHANGED_COUNT="$(wc -l < /tmp/changed-files.txt)"
-
-      if [ "$CHANGED_COUNT" -ne 1 ]; then
-        echo "ERROR: Patch 1 changed files outside NavigationMapView.java."
-        exit 1
-      fi
-
-      if grep -Fq \
-        "V10CarActivity.java" \
-        /tmp/changed-files.txt; then
-        echo "ERROR: V10CarActivity.java changed."
-        exit 1
-      fi
-
-      if grep -Fq \
-        "AndroidManifest.xml" \
-        /tmp/changed-files.txt; then
-        echo "ERROR: AndroidManifest.xml changed."
-        exit 1
-      fi
-
-      if grep -Fq \
-        "build.gradle" \
-        /tmp/changed-files.txt; then
-        echo "ERROR: build.gradle changed."
-        exit 1
-      fi
-
-      echo "PASS: Patch 1 scope is NavigationMapView.java only."
-
-  # ============================================================
-  # 9. VERIFY AUTO-FOLLOW / RECENTER
-  # ============================================================
-  - name: Verify Patch 1 Auto-follow and Recenter
-    shell: bash
-    run: |
-      set -euo pipefail
-
-      NAV_SRC="navigation-v1-source/app/src/main/java/com/carassistant/v10/NavigationMapView.java"
-
-      python3 - "$NAV_SRC" <<'PY'
-      from pathlib import Path
-      import sys
-
-      p = Path(sys.argv[1])
-      s = p.read_text(encoding="utf-8")
-
-      compact = "".join(s.split())
-
-      required = [
-          "privatebooleanautoFollow=true;",
-          "LocationManager",
-          "LocationListener",
-          "startLocationUpdates()",
-          "stopLocationUpdates()",
-          "autoFollowToLastKnownLocation()",
-          "followLocation(Locationlocation)",
-          "REASON_API_GESTURE",
-          "autoFollow=false;",
-          "autoFollow=true;",
-          "publicvoidrecenter()",
-          "CameraUpdateFactory.newLatLng(",
-          "CameraUpdateFactory.newLatLngZoom(",
-          "LocationManager.GPS_PROVIDER",
-          "LocationManager.NETWORK_PROVIDER"
-      ]
-
-      for marker in required:
-          if marker not in compact:
-              raise SystemExit(
-                  "ERROR: Patch 1 marker missing: " + marker
-              )
-
-      print("PASS: Auto-follow/Recenter markers.")
-      PY
-
-  # ============================================================
-  # 10. VERIFY NO NEW UI LAYER
-  # ============================================================
-  - name: Verify no new UI or overlay layer
-    shell: bash
-    run: |
-      set -euo pipefail
-
-      NAV_SRC="navigation-v1-source/app/src/main/java/com/carassistant/v10/NavigationMapView.java"
-      ACTIVITY="navigation-v1-source/app/src/main/java/com/carassistant/v10/V10CarActivity.java"
-
-      if grep -Eq \
-        "buildDashboard|buildAppPanel|launcherLayer|projectionLayer" \
-        "$NAV_SRC"; then
-        echo "ERROR: Patch 1 attempted to add Home UI/overlay logic."
-        exit 1
-      fi
-
-      test -f "$ACTIVITY"
-
-      python3 - "$ACTIVITY" <<'PY'
-      from pathlib import Path
-      import sys
-
-      p = Path(sys.argv[1])
-      s = p.read_text(encoding="utf-8")
-      n = "".join(s.split())
-
-      required = [
-          "NavigationMapView",
-          "projectionLayer",
-          "launcherLayer",
-          "dashboard.setBackgroundColor(Color.TRANSPARENT);",
-          "projectionLayer.setBackgroundColor(Color.TRANSPARENT);",
-          "launcherLayer.setBackgroundColor(Color.TRANSPARENT);"
-      ]
-
-      for marker in required:
-          if marker not in n:
-              raise SystemExit(
-                  "ERROR: Home UI/overlay baseline changed or missing: "
-                  + marker
-              )
-
-      print("PASS: Existing Home UI V2 + Transparent Overlay remains.")
-      PY
-
-      echo "PASS: No new UI layer added by Patch 1."
-
-  # ============================================================
-  # 11. VERIFY PROTECTED CORE UNCHANGED
-  # ============================================================
-  - name: Verify protected Projection and Persistence core
-    shell: bash
-    run: |
-      set -euo pipefail
-
-      SRC="navigation-v1-source/app/src/main/java/com/carassistant/v10"
-
-      sha256sum \
-        "$SRC/V10ProjectionSession.java" \
-        "$SRC/V10DisplayController.java" \
-        "$SRC/V10SurfaceManager.java" \
-        "$SRC/V10TaskSession.java" \
-        "$SRC/V10SessionStore.java" \
-        > /tmp/core-after.sha256
-
-      diff -u \
-        /tmp/core-before.sha256 \
-        /tmp/core-after.sha256
-
-      echo "PASS: Projection/Persistence core unchanged."
-
-  # ============================================================
-  # 12. VERIFY ORIGINAL NAVIGATION FEATURES REMAIN
-  # ============================================================
-  - name: Verify Navigation V1 baseline remains
-    shell: bash
-    run: |
-      set -euo pipefail
-
-      NAV_SRC="navigation-v1-source/app/src/main/java/com/carassistant/v10/NavigationMapView.java"
-
-      grep -Fq "org.maplibre.android.MapLibre" "$NAV_SRC"
-      grep -Fq "https://tiles.openfreemap.org/styles/liberty" "$NAV_SRC"
-      grep -Fq "public void zoomIn()" "$NAV_SRC"
-      grep -Fq "public void zoomOut()" "$NAV_SRC"
-      grep -Fq "public void recenter()" "$NAV_SRC"
-      grep -Fq "onHostResume()" "$NAV_SRC"
-      grep -Fq "onHostPause()" "$NAV_SRC"
-      grep -Fq "onHostDestroy()" "$NAV_SRC"
-
-      echo "PASS: Navigation V1 MapLibre/Zoom/Recenter/lifecycle remain."
-
-  # ============================================================
-  # 13. VERIFY MAIN SOURCE DOES NOT USE OLD v10-source
-  # ============================================================
-  - name: Verify current architecture paths
-    shell: bash
-    run: |
-      set -euo pipefail
-
-      test -d navigation-v1-source
-
-      if [ -d v10-source ]; then
-        echo "ERROR: Old v10-source directory exists on main."
-        exit 1
-      fi
-
-      if grep -RIn \
-        "v10-source" \
-        navigation-v1-source \
-        2>/dev/null; then
-        echo "ERROR: Navigation V1 source still references old v10-source."
-        exit 1
-      fi
-
-      echo "PASS: Patch 1 uses navigation-v1-source only."
-
-  # ============================================================
-  # 14. GRADLE PERMISSION
-  # ============================================================
-  - name: Prepare Gradle
-    shell: bash
-    run: |
-      set -euo pipefail
-
-      cd navigation-v1-source
-
-      chmod +x gradlew
-
-      test -x gradlew
-
-      echo "PASS: Gradle wrapper ready."
-
-  # ============================================================
-  # 15. COMPILE
-  # ============================================================
-  - name: Compile Patch 1
-    shell: bash
-    run: |
-      set -euo pipefail
-
-      cd navigation-v1-source
-
-      ./gradlew \
-        :app:compileReleaseJavaWithJavac \
-        --no-daemon \
-        --stacktrace
-
-      echo "PASS: Patch 1 Java compilation."
-
-  # ============================================================
-  # 16. ASSEMBLE
-  # ============================================================
-  - name: Assemble Patch 1 APK
-    shell: bash
-    run: |
-      set -euo pipefail
-
-      cd navigation-v1-source
-
-      ./gradlew \
-        :app:assembleRelease \
-        --no-daemon \
-        --stacktrace
-
-      test -f app/build/outputs/apk/release/app-release.apk
-
-      echo "PASS: Patch 1 APK assembled."
-
-  # ============================================================
-  # 17. APK SHA256
-  # ============================================================
-  - name: Calculate APK SHA256
-    shell: bash
-    run: |
-      set -euo pipefail
-
-      APK="navigation-v1-source/app/build/outputs/apk/release/app-release.apk"
-
-      sha256sum "$APK"
-
-      mkdir -p /tmp/apk-output
-
-      cp \
-        "$APK" \
-        "/tmp/apk-output/CarAssistant-Navigation-V1-Patch1-AutoFollow.apk"
-
-      sha256sum \
-        "/tmp/apk-output/CarAssistant-Navigation-V1-Patch1-AutoFollow.apk" \
-        > "/tmp/apk-output/CarAssistant-Navigation-V1-Patch1-AutoFollow.apk.sha256"
-
-      echo "PASS: APK SHA256 generated."
-
-  # ============================================================
-  # 18. FINAL ARCHITECTURE CHECK
-  # ============================================================
-  - name: Final Patch 1 architecture check
-    shell: bash
-    run: |
-      set -euo pipefail
-
-      echo "=============================================="
-      echo "PATCH 1 FINAL ARCHITECTURE"
-      echo "=============================================="
-      echo "Source: navigation-v1-source/"
-      echo "Feature: Auto-follow + Recenter"
-      echo "Modified Java: NavigationMapView.java ONLY"
-      echo "Home UI V2: PRESERVED"
-      echo "Transparent Overlay: PRESERVED"
-      echo "Projection Core: PRESERVED"
-      echo "Persistence Core: PRESERVED"
-      echo "New UI layer: NONE"
-      echo "Old v10-source: NOT USED"
-      echo "=============================================="
-
-      echo "PASS: Patch 1 architecture locked."
-
-  # ============================================================
-  # 19. UPLOAD APK
-  # ============================================================
-  - name: Upload Patch 1 APK
-    uses: actions/upload-artifact@v4
-    with:
-      name: CarAssistant-Navigation-V1-Patch1-AutoFollow
-      path: |
-        /tmp/apk-output/CarAssistant-Navigation-V1-Patch1-AutoFollow.apk
-        /tmp/apk-output/CarAssistant-Navigation-V1-Patch1-AutoFollow.apk.sha256
-      if-no-files-found: error
-
-  # ============================================================
-  # 20. FINAL RESULT
-  # ============================================================
-  - name: Patch 1 PASS
-    shell: bash
-    run: |
-      echo "================================================"
-      echo "PASS: Navigation V1 Patch 1"
-      echo "Auto-follow + Recenter"
-      echo "================================================"
-      echo "Baseline: main/navigation-v1-source"
-      echo "Home UI V2: unchanged"
-      echo "Transparent Overlay: unchanged"
-      echo "Projection Core: unchanged"
-      echo "Persistence Core: unchanged"
-      echo "New UI layer: none"
-      echo "================================================"
+  clean-build:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: v10-source
+
+    steps:
+      - name: Checkout exact main baseline
+        uses: actions/checkout@v4
+        with:
+          ref: 09b2c919b946164618b79283b7c3293c586547a8
+          fetch-depth: 0
+
+      - name: Verify exact commit
+        shell: bash
+        run: |
+          set -euo pipefail
+          ACTUAL="$(git rev-parse HEAD)"
+          EXPECTED="09b2c919b946164618b79283b7c3293c586547a8"
+          echo "HEAD=$ACTUAL"
+          test "$ACTUAL" = "$EXPECTED"
+
+      - name: Verify required source structure
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          test -f settings.gradle
+          test -f build.gradle
+          test -f app/build.gradle
+          test -f app/src/main/AndroidManifest.xml
+
+          test -d app/src/main/java
+          test -d app/src/main/res
+          test -d app/libs
+
+          echo "Required Navigation V2 source structure verified."
+
+      - name: Save protected core checksums
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          mkdir -p /tmp/carassistant-protected
+
+          find app/src/main/java \
+            -type f \
+            \( \
+              -name '*ProjectionService*.java' \
+              -o -name '*ProjectionSession*.java' \
+              -o -name '*Floating*.java' \
+              -o -name '*Touch*.java' \
+            \) \
+            -print0 \
+            | sort -z \
+            | xargs -0 sha256sum \
+            > /tmp/carassistant-protected/core.sha256 || true
+
+          echo "Protected core checksums:"
+          cat /tmp/carassistant-protected/core.sha256 || true
+
+      - name: Save Floating Touch checksum
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          mkdir -p /tmp/carassistant-protected
+
+          find app/src/main/java \
+            -type f \
+            -iname '*Floating*Touch*.java' \
+            -print0 \
+            | sort -z \
+            | xargs -0 sha256sum \
+            > /tmp/carassistant-protected/floating-touch.sha256 || true
+
+          echo "Floating Touch checksum:"
+          cat /tmp/carassistant-protected/floating-touch.sha256 || true
+
+      - name: Inspect NavigationMap initialization
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          echo "=== NavigationMap initialization ==="
+
+          grep -RIn \
+            --include='*.java' \
+            --include='*.kt' \
+            'NavigationMap' \
+            app/src/main/java \
+            || true
+
+          echo "=== Navigation source files ==="
+
+          find app/src/main/java \
+            -type f \
+            \( \
+              -iname '*Navigation*.java' \
+              -o -iname '*Navigation*.kt' \
+            \) \
+            -print \
+            | sort \
+            || true
+
+      - name: Clean redundant Dashboard code
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          echo "=== Cleaning redundant Dashboard code ==="
+
+          while IFS= read -r -d '' file; do
+            echo "Inspecting: $file"
+
+            python3 - "$file" <<'PY'
+import sys
+from pathlib import Path
+
+path = Path(sys.argv[1])
+text = path.read_text(encoding="utf-8")
+
+original = text
+
+# Remove only clearly redundant/duplicate Dashboard imports.
+lines = text.splitlines(True)
+seen = set()
+out = []
+
+for line in lines:
+    stripped = line.strip()
+
+    if stripped.startswith("import ") and stripped in seen:
+        continue
+
+    if stripped.startswith("import "):
+        seen.add(stripped)
+
+    out.append(line)
+
+text = "".join(out)
+
+if text != original:
+    path.write_text(text, encoding="utf-8")
+    print(f"Updated: {path}")
+else:
+    print(f"No redundant imports found: {path}")
+PY
+
+          done < <(
+            find app/src/main/java \
+              -type f \
+              \( \
+                -iname '*Dashboard*.java' \
+                -o -iname '*Dashboard*.kt' \
+              \) \
+              -print0
+          )
+
+      - name: Verify cleanup
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          echo "=== Verify source after cleanup ==="
+
+          find app/src/main/java \
+            -type f \
+            \( \
+              -iname '*Dashboard*.java' \
+              -o -iname '*Dashboard*.kt' \
+            \) \
+            -print \
+            | sort
+
+          echo "=== Duplicate imports check ==="
+
+          python3 <<'PY'
+from pathlib import Path
+
+errors = []
+
+for path in Path("app/src/main/java").rglob("*"):
+    if not path.is_file():
+        continue
+
+    if path.suffix not in {".java", ".kt"}:
+        continue
+
+    try:
+        lines = path.read_text(encoding="utf-8").splitlines()
+    except Exception:
+        continue
+
+    imports = [line.strip() for line in lines if line.strip().startswith("import ")]
+
+    if len(imports) != len(set(imports)):
+        errors.append(str(path))
+
+if errors:
+    print("Duplicate imports remain:")
+    for item in errors:
+        print(item)
+    raise SystemExit(1)
+
+print("Duplicate import check passed.")
+PY
+
+      - name: Verify Navigation core
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          echo "=== Navigation core verification ==="
+
+          NAV_FILES="$(find app/src/main/java \
+            -type f \
+            \( \
+              -iname '*Navigation*.java' \
+              -o -iname '*Navigation*.kt' \
+            \) \
+            | sort)"
+
+          if [ -z "$NAV_FILES" ]; then
+            echo "ERROR: No Navigation source files found."
+            exit 1
+          fi
+
+          echo "$NAV_FILES"
+
+          echo "=== NavigationMap references ==="
+
+          grep -RIn \
+            --include='*.java' \
+            --include='*.kt' \
+            'NavigationMap' \
+            app/src/main/java \
+            || true
+
+      - name: Verify protected core unchanged
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          if [ -s /tmp/carassistant-protected/core.sha256 ]; then
+            sha256sum -c /tmp/carassistant-protected/core.sha256
+          else
+            echo "No protected core files were captured."
+          fi
+
+      - name: Verify Floating Touch unchanged
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          if [ -s /tmp/carassistant-protected/floating-touch.sha256 ]; then
+            sha256sum -c /tmp/carassistant-protected/floating-touch.sha256
+          else
+            echo "No Floating Touch files were captured."
+          fi
+
+      - name: Show source diff
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          echo "=== Git status ==="
+          git status --short
+
+          echo "=== Git diff stat ==="
+          git diff --stat
+
+          echo "=== Git diff ==="
+          git diff -- app/src/main/java app/src/main/res app/build.gradle
+
+      - name: Git diff check
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          echo "=== Git diff check ==="
+
+          if git diff --quiet; then
+            echo "No source changes detected before build."
+          else
+            echo "Source changes detected:"
+            git diff --stat
+          fi
+
+      - name: Setup Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Accept SDK licenses
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          yes | sdkmanager --licenses >/dev/null || true
+
+          sdkmanager \
+            "platform-tools" \
+            "platforms;android-35" \
+            "build-tools;35.0.0"
+
+      - name: Make Gradle executable
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          test -f ./gradlew
+          chmod +x ./gradlew
+
+          ./gradlew --version
+
+      - name: Compile Java
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          ./gradlew \
+            :app:compileDebugJavaWithJavac \
+            --no-daemon \
+            --stacktrace
+
+      - name: Patch release merge for aasdk legacy dex
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          python3 <<'PY'
+from pathlib import Path
+
+path = Path("app/build.gradle")
+text = path.read_text(encoding="utf-8")
+
+start_marker = "tasks.matching { it.name == 'mergeDexRelease' }.configureEach { task ->"
+
+start = text.find(start_marker)
+
+if start < 0:
+    raise SystemExit(
+        "ERROR: Original mergeDexRelease patch block was not found."
+    )
+
+depth = 0
+end = None
+started = False
+
+for index in range(start, len(text)):
+    char = text[index]
+
+    if char == "{":
+        depth += 1
+        started = True
+    elif char == "}":
+        depth -= 1
+
+        if started and depth == 0:
+            end = index + 1
+            break
+
+if end is None:
+    raise SystemExit(
+        "ERROR: Could not determine end of mergeDexRelease block."
+    )
+
+new_block = """
+tasks.matching { it.name == 'mergeDexRelease' }.configureEach { task ->
+    def legacyDex = file("$projectDir/libs/aasdk-legacy.dex")
+    def legacyInputDir = file("$buildDir/intermediates/aasdk_legacy_input")
+    def stagedLegacyDex = file("$legacyInputDir/aasdk-legacy.dex")
+    def filteredDir = file("$buildDir/intermediates/aasdk_legacy_filtered")
+    def mergedDir = file("$buildDir/intermediates/aasdk_legacy_merged")
+    def rulesFile = file("$buildDir/intermediates/aasdk_legacy_r8.pro")
+    def helperDir = file("$buildDir/intermediates/aasdk_legacy_helper")
+    def androidJar = file("${android.sdkDirectory}/platforms/${android.compileSdk}/android.jar")
+
+    doFirst {
+        if (!legacyDex.exists()) {
+            throw new GradleException(
+                "Missing legacy dex: ${legacyDex.absolutePath}"
+            )
+        }
+
+        if (!androidJar.exists()) {
+            throw new GradleException(
+                "Missing Android platform jar: ${androidJar.absolutePath}"
+            )
+        }
+
+        legacyInputDir.mkdirs()
+        filteredDir.mkdirs()
+        mergedDir.mkdirs()
+        helperDir.mkdirs()
+
+        stagedLegacyDex.bytes = legacyDex.bytes
+
+        legacyDex.delete()
+
+        rulesFile.text = '''
+-dontshrink
+-dontoptimize
+-dontobfuscate
+-dontpreverify
+-dontwarn **
+-ignorewarnings
+-keep class ** { *; }
+'''
+
+        def builderRoot = new File(
+            System.getProperty("user.home"),
+            ".gradle/caches/modules-2/files-2.1/com.android.tools.build/builder/8.13.0"
+        )
+
+        if (!builderRoot.exists()) {
+            throw new GradleException(
+                "AGP builder 8.13.0 cache was not found: ${builderRoot.absolutePath}"
+            )
+        }
+
+        def builderJarFiles = builderRoot.findFiles {
+            it.name == "builder-8.13.0.jar"
+        }
+
+        if (builderJarFiles == null || builderJarFiles.length == 0) {
+            throw new GradleException(
+                "builder-8.13.0.jar was not found under ${builderRoot.absolutePath}"
+            )
+        }
+
+        def builderJar = builderJarFiles[0]
+
+        println("Using AGP builder: ${builderJar.absolutePath}")
+
+        def r8Class = new File(
+            builderJar.parentFile,
+            "com/android/tools/r8/R8.class"
+        )
+
+        def d8Class = new File(
+            builderJar.parentFile,
+            "com/android/tools/r8/D8.class"
+        )
+
+        println("Builder jar verified: ${builderJar.exists()}")
+        println("R8.class expected from AGP builder.")
+        println("D8.class expected from AGP builder.")
+
+        def helperSource = new File(helperDir, "R8DexFilter.java")
+
+        helperSource.text = '''
+import com.android.tools.r8.CompilationMode;
+import com.android.tools.r8.R8;
+import com.android.tools.r8.R8Command;
+import com.android.tools.r8.utils.OutputMode;
+
+import java.nio.file.Path;
+import java.nio.file.Paths;
+import java.util.ArrayList;
+import java.util.List;
+
+public class R8DexFilter {
+    public static void main(String[] args) throws Exception {
+        if (args.length != 4) {
+            throw new IllegalArgumentException(
+                "Usage: R8DexFilter <input.dex> <output.dir> <android.jar> <rules.pro>"
+            );
+        }
+
+        Path inputDex = Paths.get(args[0]);
+        Path outputDir = Paths.get(args[1]);
+        Path androidJar = Paths.get(args[2]);
+        Path rules = Paths.get(args[3]);
+
+        List<Path> libraries = new ArrayList<>();
+        libraries.add(androidJar);
+
+        R8Command.Builder builder = R8Command.builder();
+
+        builder
+            .setMode(CompilationMode.RELEASE)
+            .setEnableExperimentalDexInput(true)
+            .addProgramFiles(inputDex)
+            .addLibraryFiles(libraries)
+            .addProguardConfigurationFiles(rules)
+            .setOutput(outputDir, OutputMode.DexIndexed);
+
+        R8.run(builder.build());
+    }
+}
+'''
+
+        println("R8 helper source written: ${helperSource.absolutePath}")
+    }
+
+    doLast {
+        def legacyInputDir = file("$buildDir/intermediates/aasdk_legacy_input")
+        def stagedLegacyDex = file("$legacyInputDir/aasdk-legacy.dex")
+        def filteredDir = file("$buildDir/intermediates/aasdk_legacy_filtered")
+        def mergedDir = file("$buildDir/intermediates/aasdk_legacy_merged")
+        def rulesFile = file("$buildDir/intermediates/aasdk_legacy_r8.pro")
+        def helperDir = file("$buildDir/intermediates/aasdk_legacy_helper")
+        def helperSource = file("$helperDir/R8DexFilter.java")
+        def helperClasses = file("$helperDir/classes")
+        def androidJar = file("${android.sdkDirectory}/platforms/${android.compileSdk}/android.jar")
+
+        def builderRoot = new File(
+            System.getProperty("user.home"),
+            ".gradle/caches/modules-2/files-2.1/com.android.tools.build/builder/8.13.0"
+        )
+
+        def builderJarFiles = builderRoot.findFiles {
+            it.name == "builder-8.13.0.jar"
+        }
+
+        if (builderJarFiles == null || builderJarFiles.length == 0) {
+            throw new GradleException(
+                "builder-8.13.0.jar was not found."
+            )
+        }
+
+        def builderJar = builderJarFiles[0]
+
+        helperClasses.mkdirs()
+        filteredDir.mkdirs()
+        mergedDir.mkdirs()
+
+        def appDexDir = task.outputs.files.singleFile
+
+        def appDexFiles = fileTree(appDexDir).matching {
+            include("**/*.dex")
+        }.files.sort { a, b ->
+            a.name <=> b.name
+        }
+
+        if (appDexFiles.isEmpty()) {
+            throw new GradleException(
+                "No application dex files found in ${appDexDir.absolutePath}"
+            )
+        }
+
+        println("Application dex files:")
+        appDexFiles.each {
+            println(" - ${it.absolutePath}")
+        }
+
+        println("Legacy dex:")
+        println(" - ${stagedLegacyDex.absolutePath}")
+
+        def compileClasspath = builderJar.absolutePath
+
+        exec {
+            commandLine(
+                "javac",
+                "-cp", compileClasspath,
+                "-d", helperClasses.absolutePath,
+                helperSource.absolutePath
+            )
+        }
+
+        exec {
+            commandLine(
+                "java",
+                "-cp",
+                "${helperClasses.absolutePath}${File.pathSeparator}${builderJar.absolutePath}",
+                "R8DexFilter",
+                stagedLegacyDex.absolutePath,
+                filteredDir.absolutePath,
+                androidJar.absolutePath,
+                rulesFile.absolutePath
+            )
+        }
+
+        def filteredDexFiles = fileTree(filteredDir).matching {
+            include("**/*.dex")
+        }.files.sort { a, b ->
+            a.name <=> b.name
+        }
+
+        if (filteredDexFiles.isEmpty()) {
+            throw new GradleException(
+                "R8 produced no filtered dex files."
+            )
+        }
+
+        println("Filtered legacy dex files:")
+        filteredDexFiles.each {
+            println(" - ${it.absolutePath}")
+        }
+
+        def d8Inputs = []
+        d8Inputs.addAll(appDexFiles)
+        d8Inputs.addAll(filteredDexFiles)
+
+        println("Running D8 merge with ${d8Inputs.size()} dex inputs.")
+
+        def d8Command = [
+            "java",
+            "-cp",
+            builderJar.absolutePath,
+            "com.android.tools.r8.D8"
+        ]
+
+        d8Inputs.each {
+            d8Command.add(it.absolutePath)
+        }
+
+        d8Command.add("--lib")
+        d8Command.add(androidJar.absolutePath)
+        d8Command.add("--min-api")
+        d8Command.add("${android.defaultConfig.minSdk ?: 23}")
+        d8Command.add("--output")
+        d8Command.add(mergedDir.absolutePath)
+
+        exec {
+            commandLine(d8Command)
+        }
+
+        def mergedDexFiles = fileTree(mergedDir).matching {
+            include("**/*.dex")
+        }.files.sort { a, b ->
+            a.name <=> b.name
+        }
+
+        if (mergedDexFiles.isEmpty()) {
+            throw new GradleException(
+                "D8 produced no merged dex files."
+            )
+        }
+
+        println("Merged dex files:")
+        mergedDexFiles.each {
+            println(" - ${it.absolutePath}")
+        }
+
+        fileTree(appDexDir).matching {
+            include("**/*.dex")
+        }.files.each {
+            if (!it.delete()) {
+                throw new GradleException(
+                    "Could not delete old dex: ${it.absolutePath}"
+                )
+            }
+        }
+
+        mergedDexFiles.eachWithIndex { dexFile, index ->
+            def destination = new File(
+                appDexDir,
+                dexFile.name
+            )
+
+            if (!dexFile.renameTo(destination)) {
+                destination.bytes = dexFile.bytes
+            }
+
+            println("Installed merged dex: ${destination.absolutePath}")
+        }
+
+        if (!stagedLegacyDex.exists()) {
+            throw new GradleException(
+                "Staged legacy dex disappeared before restore."
+            )
+        }
+
+        def legacyDex = file("$projectDir/libs/aasdk-legacy.dex")
+        legacyDex.parentFile.mkdirs()
+        legacyDex.bytes = stagedLegacyDex.bytes
+
+        println("Restored legacy dex to ${legacyDex.absolutePath}")
+    }
+}
+"""
+
+path.write_text(
+    text[:start] + new_block.strip("\n") + text[end:],
+    encoding="utf-8"
+)
+
+print("mergeDexRelease patch installed successfully.")
+PY
+
+      - name: Verify release merge patch
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          echo "=== Verify release merge patch ==="
+
+          test -f app/build.gradle
+
+          grep -Fq "mergeDexRelease" app/build.gradle
+          grep -Fq "aasdk-legacy.dex" app/build.gradle
+          grep -Fq "R8DexFilter" app/build.gradle
+          grep -Fq "setEnableExperimentalDexInput(true)" app/build.gradle
+          grep -Fq "builder-8.13.0.jar" app/build.gradle
+          grep -Fq "com.android.tools.r8.D8" app/build.gradle
+
+          echo "Release merge patch markers verified."
+
+      - name: Assemble Release APK
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          ./gradlew \
+            :app:assembleRelease \
+            --no-daemon \
+            --stacktrace
+
+      - name: Verify APK
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          APK="app/build/outputs/apk/release/app-release.apk"
+
+          echo "=== Verify release APK ==="
+
+          test -f "$APK"
+          test -s "$APK"
+
+          echo "APK path:"
+          realpath "$APK"
+
+          echo "APK size:"
+          stat -c '%s bytes' "$APK"
+
+          echo "APK SHA256:"
+          sha256sum "$APK"
+
+          echo "APK verification passed."
+
+      - name: Upload clean baseline APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: navigation-v2-clean-baseline-apk
+          path: v10-source/app/build/outputs/apk/release/app-release.apk
+          if-no-files-found: error
+          retention-days: 14
