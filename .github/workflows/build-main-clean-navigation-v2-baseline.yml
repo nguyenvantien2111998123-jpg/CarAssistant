@@ -1,4 +1,4 @@
-name: CarAssistant - Clean Main Navigation V2 Baseline
+name: Build Main Clean Navigation V2 Baseline
 
 on:
   workflow_dispatch:
@@ -7,12 +7,15 @@ permissions:
   contents: write
 
 jobs:
-  clean-main:
+  clean-build:
     runs-on: ubuntu-latest
 
-    steps:
+    defaults:
+      run:
+        working-directory: v10-source
 
-      - name: Checkout exact Main baseline
+    steps:
+      - name: Checkout exact main baseline
         uses: actions/checkout@v4
         with:
           ref: 09b2c919b946164618b79283b7c3293c586547a8
@@ -22,109 +25,108 @@ jobs:
         shell: bash
         run: |
           set -e
-
-          EXPECTED="09b2c919b946164618b79283b7c3293c586547a8"
           ACTUAL="$(git rev-parse HEAD)"
+          EXPECTED="09b2c919b946164618b79283b7c3293c586547a8"
 
           echo "Expected: $EXPECTED"
           echo "Actual:   $ACTUAL"
 
           test "$ACTUAL" = "$EXPECTED"
 
-          echo "Exact Main baseline verified."
-
       - name: Verify required source structure
         shell: bash
         run: |
           set -e
 
-          BASE="v10-source/app/src/main/java/com/hieptran/aacast/doudou"
+          test -f app/src/main/java/com/hieptran/aacast/doudou/V10CarActivity.java
+          test -f app/src/main/java/com/hieptran/aacast/doudou/V10ProjectionSession.java
+          test -f app/src/main/java/com/hieptran/aacast/doudou/V10DisplayController.java
+          test -f app/src/main/java/com/hieptran/aacast/doudou/V10SurfaceManager.java
+          test -f app/src/main/java/com/hieptran/aacast/doudou/V10TaskSession.java
+          test -f app/src/main/java/com/hieptran/aacast/doudou/V10SessionStore.java
+          test -f app/src/main/java/com/hieptran/aacast/doudou/NavigationMapView.java
 
-          test -f "$BASE/V10CarActivity.java"
-          test -f "$BASE/NavigationMapView.java"
-
-          test -f "$BASE/V10ProjectionSession.java"
-          test -f "$BASE/V10DisplayController.java"
-          test -f "$BASE/V10SurfaceManager.java"
-          test -f "$BASE/V10TaskSession.java"
-          test -f "$BASE/V10SessionStore.java"
-
-          test -f "v10-source/app/build.gradle"
-
-          echo "Required source structure PASS."
+          echo "Required source files exist."
 
       - name: Save protected core checksums
         shell: bash
         run: |
           set -e
 
-          BASE="v10-source/app/src/main/java/com/hieptran/aacast/doudou"
-
-          mkdir -p /tmp/protected-before
+          mkdir -p /tmp/carassistant-protected
 
           sha256sum \
-            "$BASE/V10ProjectionSession.java" \
-            "$BASE/V10DisplayController.java" \
-            "$BASE/V10SurfaceManager.java" \
-            "$BASE/V10TaskSession.java" \
-            "$BASE/V10SessionStore.java" \
-            > /tmp/protected-before/checksums.txt
+            app/src/main/java/com/hieptran/aacast/doudou/V10ProjectionSession.java \
+            app/src/main/java/com/hieptran/aacast/doudou/V10DisplayController.java \
+            app/src/main/java/com/hieptran/aacast/doudou/V10SurfaceManager.java \
+            app/src/main/java/com/hieptran/aacast/doudou/V10TaskSession.java \
+            app/src/main/java/com/hieptran/aacast/doudou/V10SessionStore.java \
+            > /tmp/carassistant-protected/core.sha256
 
-          echo "Protected core checksums saved."
+          echo "Protected Projection/Persistence core checksums:"
+          cat /tmp/carassistant-protected/core.sha256
 
       - name: Save Floating Touch checksum
         shell: bash
         run: |
           set -e
 
-          FILE="v10-source/app/src/main/java/com/hieptran/aacast/doudou/V10CarActivity.java"
-
-          python3 <<'PY'
+          python3 - <<'PY'
           from pathlib import Path
           import hashlib
 
-          path = Path(
-              "v10-source/app/src/main/java/com/hieptran/aacast/doudou/V10CarActivity.java"
-          )
-
-          text = path.read_text()
+          p = Path("app/src/main/java/com/hieptran/aacast/doudou/V10CarActivity.java")
+          s = p.read_text(encoding="utf-8")
 
           start_marker = "    private void createFloatingTouchKey() {"
-          end_marker = "private void showFloatingMenu() {"
+          end_marker = "    private void showFloatingMenu() {"
 
-          start = text.find(start_marker)
-          end = text.find(end_marker, start)
+          start = s.find(start_marker)
+          end = s.find(end_marker)
 
-          if start == -1:
-              raise SystemExit("Floating Touch start marker not found")
+          if start < 0:
+              raise SystemExit("createFloatingTouchKey() not found")
 
-          if end == -1:
-              raise SystemExit("Floating Touch end marker not found")
+          if end < 0:
+              raise SystemExit("showFloatingMenu() not found")
 
-          block = text[start:end]
+          if end <= start:
+              raise SystemExit("Invalid Floating Touch boundaries")
 
-          if "createFloatingTouchKey()" not in block:
-              raise SystemExit("createFloatingTouchKey missing")
+          block = s[start:end]
+          digest = hashlib.sha256(block.encode("utf-8")).hexdigest()
 
-          if "floatingDownTime" not in block:
-              raise SystemExit("floatingDownTime missing")
-
-          if 'addFloatingMenuButton("BACK"' not in text:
-              raise SystemExit("BACK floating button missing")
-
-          if 'addFloatingMenuButton("HOME"' not in text:
-              raise SystemExit("HOME floating button missing")
-
-          digest = hashlib.sha256(
-              block.encode("utf-8")
-          ).hexdigest()
-
-          Path("/tmp/floating-touch-before.sha256").write_text(
-              digest + "\n"
+          Path("/tmp/carassistant-protected/floating.sha256").write_text(
+              digest + "\n",
+              encoding="utf-8"
           )
 
           print("Floating Touch SHA256:", digest)
-          print("Floating Touch checksum saved.")
+          PY
+
+      - name: Inspect NavigationMap initialization
+        shell: bash
+        run: |
+          set -e
+
+          python3 - <<'PY'
+          from pathlib import Path
+
+          p = Path("app/src/main/java/com/hieptran/aacast/doudou/V10CarActivity.java")
+          s = p.read_text(encoding="utf-8")
+
+          needle = "navigationMap = new NavigationMapView(this);"
+          count = s.count(needle)
+
+          print("NavigationMapView initialization count:", count)
+
+          if count < 2:
+              raise SystemExit(
+                  "Expected the current main baseline to contain the redundant "
+                  "NavigationMapView initialization."
+              )
+
+          print("Redundant NavigationMapView initialization detected.")
           PY
 
       - name: Clean redundant Dashboard code
@@ -132,342 +134,158 @@ jobs:
         run: |
           set -e
 
-          python3 <<'PY'
+          python3 - <<'PY'
           from pathlib import Path
-          import re
+          import textwrap
 
-          path = Path(
-              "v10-source/app/src/main/java/com/hieptran/aacast/doudou/V10CarActivity.java"
-          )
+          p = Path("app/src/main/java/com/hieptran/aacast/doudou/V10CarActivity.java")
+          s = p.read_text(encoding="utf-8")
 
-          text = path.read_text()
+          # ------------------------------------------------------------
+          # 1. Remove ONLY the second NavigationMapView initialization.
+          # ------------------------------------------------------------
 
-          # ============================================================
-          # 1. Remove duplicate NavigationMapView initialization.
-          #
-          # Do NOT search for a hard-coded "duplicate block".
-          #
-          # Count the real Java initialization statement and remove
-          # only the SECOND occurrence.
-          # ============================================================
+          navigation_block = """\
+          navigationMap = new NavigationMapView(this);
+          root.addView(
+                  navigationMap,
+                  new FrameLayout.LayoutParams(-1, -1));
+          """
 
-          nav_line = "navigationMap = new NavigationMapView(this);"
-
-          nav_count = text.count(nav_line)
-
-          print("NavigationMapView initialization count BEFORE:", nav_count)
-
-          if nav_count != 2:
+          first = s.find(navigation_block)
+          if first < 0:
               raise SystemExit(
-                  "Expected exactly 2 NavigationMapView initializations "
-                  f"at baseline, found {nav_count}"
+                  "First NavigationMapView initialization block not found."
               )
 
-          first_pos = text.find(nav_line)
-          second_pos = text.find(
-              nav_line,
-              first_pos + len(nav_line)
+          second = s.find(
+              navigation_block,
+              first + len(navigation_block)
           )
 
-          if first_pos == -1 or second_pos == -1:
+          if second < 0:
               raise SystemExit(
-                  "Could not locate both NavigationMapView initializations"
+                  "Second NavigationMapView initialization block not found."
               )
 
-          # Remove only the second initialization statement.
-          text = (
-              text[:second_pos]
-              + text[second_pos + len(nav_line):]
+          s = s[:second] + s[second + len(navigation_block):]
+
+          # ------------------------------------------------------------
+          # 2. Remove only the legacy buildDashboard() method.
+          #    Other UI/projection methods remain untouched.
+          # ------------------------------------------------------------
+
+          dashboard = textwrap.dedent(
+              """\
+              private void buildDashboard() {
+
+                  dashboard =
+                          new LinearLayout(this);
+                  dashboard.setOrientation(LinearLayout.VERTICAL);
+                  dashboard.setPadding(
+                          dp(16),
+                          dp(16),
+                          dp(16),
+                          dp(16));
+
+                  TextView title =
+                          new TextView(this);
+                  title.setText("CAR ASSISTANT");
+                  title.setTextSize(24);
+                  title.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
+                  dashboard.addView(title);
+
+                  date =
+                          new TextView(this);
+                  dashboard.addView(date);
+
+                  clock =
+                          new TextView(this);
+                  dashboard.addView(clock);
+
+                  LinearLayout mapRow =
+                          new LinearLayout(this);
+                  mapRow.setOrientation(LinearLayout.HORIZONTAL);
+
+                  mapRow.addView(
+                          card("MAP", "Navigation"),
+                          weightParams());
+
+                  mapRow.addView(
+                          infoCard("SPEED", "0 km/h"),
+                          weightParams());
+
+                  dashboard.addView(mapRow);
+
+                  LinearLayout infoRow =
+                          new LinearLayout(this);
+                  infoRow.setOrientation(LinearLayout.HORIZONTAL);
+
+                  infoRow.addView(
+                          infoCard("WEATHER", "--"),
+                          weightParams());
+
+                  infoRow.addView(
+                          infoCard("MEDIA", "Idle"),
+                          weightParams());
+
+                  dashboard.addView(infoRow);
+
+                  dock =
+                          new LinearLayout(this);
+                  dock.setOrientation(LinearLayout.HORIZONTAL);
+                  dock.setGravity(Gravity.CENTER_VERTICAL);
+
+                  Button apps =
+                          buttonText("APPS");
+
+                  apps.setOnClickListener(
+                          v -> showApps());
+
+                  dock.addView(
+                          apps,
+                          weightParams());
+
+                  dashboard.addView(dock);
+              }
+              """
           )
 
-          # Remove the immediately associated root.addView(
-          # block belonging to the second NavigationMapView.
-          #
-          # At the exact baseline source this is:
-          #
-          # root.addView(
-          #         navigationMap,
-          #         new FrameLayout.LayoutParams(-1, -1));
-          #
-          add_pattern = re.compile(
-              r'\nroot\.addView\(\s*'
-              r'navigationMap,\s*'
-              r'new FrameLayout\.LayoutParams\(-1, -1\)\);\s*'
-          )
-
-          add_matches = list(add_pattern.finditer(text))
-
-          if len(add_matches) != 2:
+          start = s.find(dashboard)
+          if start < 0:
               raise SystemExit(
-                  "Expected exactly 2 real navigationMap root.addView "
-                  f"blocks after locating initializations, found {len(add_matches)}"
+                  "Legacy buildDashboard() block not found."
               )
 
-          # The first addView belongs to the first navigation map.
-          # Remove the second one.
-          second_add = add_matches[1]
+          end = start + len(dashboard)
 
-          text = (
-              text[:second_add.start()]
-              + "\n"
-              + text[second_add.end():]
+          s = s[:start] + s[end:]
+
+          # ------------------------------------------------------------
+          # 3. Remove only weightParams(), which is now unused after
+          #    removing the legacy Dashboard.
+          # ------------------------------------------------------------
+
+          weight_method = textwrap.dedent(
+              """\
+              private LinearLayout.LayoutParams weightParams() {
+                  return new LinearLayout.LayoutParams(
+                          0,
+                          -2,
+                          1f);
+              }
+              """
           )
 
-          # ============================================================
-          # 2. Remove old clock/date fields.
-          # ============================================================
+          weight_start = s.find(weight_method)
 
-          text = text.replace(
-              "    private TextView clock;\n"
-              "    private TextView date;\n"
-              "\n",
-              ""
-          )
+          if weight_start >= 0:
+              weight_end = weight_start + len(weight_method)
+              s = s[:weight_start] + s[weight_end:]
 
-          # ============================================================
-          # 3. Remove obsolete imports.
-          # ============================================================
+          p.write_text(s, encoding="utf-8")
 
-          text = text.replace(
-              "import android.graphics.Typeface;\n",
-              ""
-          )
-
-          text = text.replace(
-              "import java.text.SimpleDateFormat;\n",
-              ""
-          )
-
-          text = text.replace(
-              "import java.util.Date;\n",
-              ""
-          )
-
-          # ============================================================
-          # 4. Remove clockTicker Runnable using real method marker.
-          # ============================================================
-
-          start = text.find(
-              "    private final Runnable clockTicker ="
-          )
-
-          end = text.find(
-              "    private final Runnable targetPoller =",
-              start
-          )
-
-          if start == -1 or end == -1:
-              raise SystemExit(
-                  "clockTicker boundaries not found"
-              )
-
-          text = text[:start] + text[end:]
-
-          # ============================================================
-          # 5. Remove clockTicker calls.
-          # ============================================================
-
-          text = re.sub(
-              r'\n\s*handler\.removeCallbacks\(\s*clockTicker\);\s*\n',
-              "\n",
-              text
-          )
-
-          text = re.sub(
-              r'\n\s*handler\.post\(clockTicker\);\s*\n',
-              "\n",
-              text
-          )
-
-          # ============================================================
-          # 6. Replace buildDashboard() using the REAL source markers.
-          #
-          # Exact baseline structure:
-          #
-          # buildDashboard()
-          #     ...
-          # buildAppPanel()
-          #
-          # Keep dashboard/dock/APPS/showApps behavior.
-          # Remove legacy CAR ASSISTANT / MAP / SPEED / WEATHER / MEDIA.
-          # ============================================================
-
-          start = text.find(
-              "    private void buildDashboard() {"
-          )
-
-          end = text.find(
-              "    private void buildAppPanel() {",
-              start
-          )
-
-          if start == -1:
-              raise SystemExit(
-                  "buildDashboard start marker not found"
-              )
-
-          if end == -1:
-              raise SystemExit(
-                  "buildAppPanel marker not found after buildDashboard"
-              )
-
-          dashboard = """\
-    private void buildDashboard() {
-
-        dashboard =
-                new LinearLayout(this);
-
-        dashboard.setOrientation(
-                LinearLayout.VERTICAL);
-
-        launcherLayer.addView(
-                dashboard,
-                new LinearLayout.LayoutParams(
-                        -1,
-                        -1));
-
-        LinearLayout dockRow =
-                new LinearLayout(this);
-
-        dockRow.setGravity(
-                Gravity.CENTER_VERTICAL);
-
-        dock =
-                new LinearLayout(this);
-
-        dock.setGravity(
-                Gravity.CENTER_VERTICAL);
-
-        dockRow.addView(
-                dock,
-                new LinearLayout.LayoutParams(
-                        0,
-                        -1,
-                        1));
-
-        TextView appsButton =
-                buttonText("APPS");
-
-        appsButton.setOnClickListener(
-                v -> showApps());
-
-        dockRow.addView(
-                appsButton,
-                new LinearLayout.LayoutParams(
-                        dp(90),
-                        dp(58)));
-
-        dashboard.addView(
-                dockRow,
-                new LinearLayout.LayoutParams(
-                        -1,
-                        dp(70)));
-    }
-
-"""
-
-          text = text[:start] + dashboard + text[end:]
-
-          # ============================================================
-          # 7. Remove updateClock() using real source markers.
-          # ============================================================
-
-          start = text.find(
-              "    private void updateClock() {"
-          )
-
-          end = text.find(
-              "    private LinearLayout card() {",
-              start
-          )
-
-          if start == -1:
-              raise SystemExit(
-                  "updateClock start marker not found"
-              )
-
-          if end == -1:
-              raise SystemExit(
-                  "card() marker not found after updateClock"
-              )
-
-          text = text[:start] + text[end:]
-
-          # ============================================================
-          # 8. Remove card() and infoCard().
-          #
-          # Both are inside the block ending immediately before
-          # buttonText().
-          # ============================================================
-
-          start = text.find(
-              "    private LinearLayout card() {"
-          )
-
-          end = text.find(
-              "    private TextView buttonText(",
-              start
-          )
-
-          if start == -1:
-              raise SystemExit(
-                  "card() marker not found"
-              )
-
-          if end == -1:
-              raise SystemExit(
-                  "buttonText() marker not found after card()"
-              )
-
-          text = text[:start] + text[end:]
-
-          # ============================================================
-          # 9. Remove weightParams().
-          #
-          # Keep initial(), because appTile() still uses initial().
-          # ============================================================
-
-          start = text.find(
-              "    private LinearLayout.LayoutParams\n"
-              "            weightParams() {"
-          )
-
-          if start != -1:
-
-              end = text.find(
-                  "    private String initial(",
-                  start
-              )
-
-              if end == -1:
-                  raise SystemExit(
-                      "initial() marker not found after weightParams()"
-                  )
-
-              text = text[:start] + text[end:]
-
-          path.write_text(text)
-
-          # ============================================================
-          # 10. Final real initialization count.
-          # ============================================================
-
-          final_count = text.count(
-              "navigationMap = new NavigationMapView(this);"
-          )
-
-          print(
-              "NavigationMapView initialization count AFTER:",
-              final_count
-          )
-
-          if final_count != 1:
-              raise SystemExit(
-                  "NavigationMapView cleanup failed: "
-                  f"expected 1, found {final_count}"
-              )
-
-          print("Dashboard cleanup completed successfully.")
+          print("Cleanup completed.")
           PY
 
       - name: Verify cleanup
@@ -475,140 +293,165 @@ jobs:
         run: |
           set -e
 
-          FILE="v10-source/app/src/main/java/com/hieptran/aacast/doudou/V10CarActivity.java"
+          python3 - <<'PY'
+          from pathlib import Path
 
-          NAV_COUNT="$(grep -o "navigationMap = new NavigationMapView(this);" "$FILE" | wc -l | tr -d ' ')"
+          p = Path("app/src/main/java/com/hieptran/aacast/doudou/V10CarActivity.java")
+          s = p.read_text(encoding="utf-8")
 
-          echo "Final NavigationMapView initialization count: $NAV_COUNT"
+          navigation_needle = "navigationMap = new NavigationMapView(this);"
+          navigation_count = s.count(navigation_needle)
 
-          test "$NAV_COUNT" = "1"
+          print(
+              "NavigationMapView initialization count after cleanup:",
+              navigation_count
+          )
 
-          # Legacy Dashboard content must be gone.
-          ! grep -q 'CAR ASSISTANT' "$FILE"
-          ! grep -q '"MAP"' "$FILE"
-          ! grep -q '"SPEED"' "$FILE"
-          ! grep -q '"WEATHER"' "$FILE"
-          ! grep -q '"MEDIA"' "$FILE"
+          if navigation_count != 1:
+              raise SystemExit(
+                  "NavigationMapView initialization count must be exactly 1."
+              )
 
-          # Obsolete helpers/infrastructure must be gone.
-          ! grep -q 'infoCard(' "$FILE"
-          ! grep -q 'weightParams(' "$FILE"
-          ! grep -q 'clockTicker' "$FILE"
-          ! grep -q 'updateClock' "$FILE"
-          ! grep -q 'Typeface' "$FILE"
-          ! grep -q 'SimpleDateFormat' "$FILE"
+          if "private void buildDashboard()" in s:
+              raise SystemExit(
+                  "Legacy buildDashboard() still exists."
+              )
 
-          # initial() MUST remain because appTile() uses it.
-          grep -q 'private String initial(' "$FILE"
-          grep -q 'initial(app.name)' "$FILE"
+          if "private LinearLayout.LayoutParams weightParams()" in s:
+              raise SystemExit(
+                  "Legacy weightParams() still exists."
+              )
 
-          echo "Cleanup verification PASS."
+          # Required modern Navigation/UI pieces must still exist.
+          required = [
+              "private NavigationMapView navigationMap;",
+              "private FrameLayout projectionLayer;",
+              "private LinearLayout launcherLayer;",
+              "private LinearLayout appPanel;",
+              "private LinearLayout dock;",
+              "private void buildAppPanel()",
+              "private void rebuildAppGrid()",
+              "private void loadApps()",
+              "private void rebuildDock()",
+              "private void appTile(",
+              "private void attachProjection()",
+              "private void launchProjection(",
+              "private void returnToLauncher()",
+              "private void showApps()",
+              "private void hideApps()",
+              "private void createFloatingTouchKey()",
+              "private void showFloatingMenu()",
+              "private void hideFloatingMenu()",
+              "private void initial(",
+          ]
 
-      - name: Verify Navigation core remains
+          for item in required:
+              if item not in s:
+                  raise SystemExit(
+                      f"Required source element missing: {item}"
+                  )
+
+          print("Cleanup verification passed.")
+          PY
+
+      - name: Verify Navigation core
         shell: bash
         run: |
           set -e
 
-          FILE="v10-source/app/src/main/java/com/hieptran/aacast/doudou/NavigationMapView.java"
+          NAV="app/src/main/java/com/hieptran/aacast/doudou/NavigationMapView.java"
 
-          grep -q "class NavigationMapView" "$FILE"
-          grep -q "MapLibre" "$FILE"
-          grep -q "recenter()" "$FILE"
-          grep -q "onHostResume()" "$FILE"
-          grep -q "onHostPause()" "$FILE"
-          grep -q "onHostDestroy()" "$FILE"
+          test -f "$NAV"
 
-          echo "Navigation core preserved."
+          grep -q "class NavigationMapView" "$NAV"
+          grep -q "recenter()" "$NAV"
+          grep -q "onHostResume()" "$NAV"
+          grep -q "onHostPause()" "$NAV"
+          grep -q "onHostDestroy()" "$NAV"
+
+          echo "NavigationMapView core verification passed."
 
       - name: Verify protected core unchanged
         shell: bash
         run: |
           set -e
 
-          BASE="v10-source/app/src/main/java/com/hieptran/aacast/doudou"
-
           sha256sum \
-            "$BASE/V10ProjectionSession.java" \
-            "$BASE/V10DisplayController.java" \
-            "$BASE/V10SurfaceManager.java" \
-            "$BASE/V10TaskSession.java" \
-            "$BASE/V10SessionStore.java" \
-            > /tmp/protected-after.txt
+            app/src/main/java/com/hieptran/aacast/doudou/V10ProjectionSession.java \
+            app/src/main/java/com/hieptran/aacast/doudou/V10DisplayController.java \
+            app/src/main/java/com/hieptran/aacast/doudou/V10SurfaceManager.java \
+            app/src/main/java/com/hieptran/aacast/doudou/V10TaskSession.java \
+            app/src/main/java/com/hieptran/aacast/doudou/V10SessionStore.java \
+            > /tmp/carassistant-protected/core-after.sha256
 
           diff -u \
-            /tmp/protected-before/checksums.txt \
-            /tmp/protected-after.txt
+            /tmp/carassistant-protected/core.sha256 \
+            /tmp/carassistant-protected/core-after.sha256
 
-          echo "Projection/Persistence protected core unchanged."
+          echo "Projection/Persistence core is byte-identical."
 
       - name: Verify Floating Touch unchanged
         shell: bash
         run: |
           set -e
 
-          python3 <<'PY'
+          python3 - <<'PY'
           from pathlib import Path
           import hashlib
 
-          path = Path(
-              "v10-source/app/src/main/java/com/hieptran/aacast/doudou/V10CarActivity.java"
-          )
-
-          text = path.read_text()
+          p = Path("app/src/main/java/com/hieptran/aacast/doudou/V10CarActivity.java")
+          s = p.read_text(encoding="utf-8")
 
           start_marker = "    private void createFloatingTouchKey() {"
-          end_marker = "private void showFloatingMenu() {"
+          end_marker = "    private void showFloatingMenu() {"
 
-          start = text.find(start_marker)
-          end = text.find(end_marker, start)
+          start = s.find(start_marker)
+          end = s.find(end_marker)
 
-          if start == -1:
+          if start < 0:
+              raise SystemExit("createFloatingTouchKey() not found after cleanup")
+
+          if end < 0:
+              raise SystemExit("showFloatingMenu() not found after cleanup")
+
+          if end <= start:
+              raise SystemExit("Invalid Floating Touch boundaries")
+
+          block = s[start:end]
+          digest = hashlib.sha256(block.encode("utf-8")).hexdigest()
+
+          expected = Path(
+              "/tmp/carassistant-protected/floating.sha256"
+          ).read_text(
+              encoding="utf-8"
+          ).strip()
+
+          print("Before:", expected)
+          print("After: ", digest)
+
+          if digest != expected:
               raise SystemExit(
-                  "Floating Touch start marker not found after cleanup"
+                  "Floating Touch block changed."
               )
 
-          if end == -1:
-              raise SystemExit(
-                  "Floating Touch end marker not found after cleanup"
-              )
-
-          block = text[start:end]
-
-          digest = hashlib.sha256(
-              block.encode("utf-8")
-          ).hexdigest()
-
-          before = Path(
-              "/tmp/floating-touch-before.sha256"
-          ).read_text().strip()
-
-          print("Floating Touch BEFORE:", before)
-          print("Floating Touch AFTER: ", digest)
-
-          if digest != before:
-              raise SystemExit(
-                  "Floating Touch changed during cleanup"
-              )
-
-          print("Floating Touch unchanged.")
+          print("Floating Touch is byte-identical.")
           PY
 
-      - name: Show diff
+      - name: Show source diff
         shell: bash
         run: |
-          git diff -- \
-            v10-source/app/src/main/java/com/hieptran/aacast/doudou/V10CarActivity.java
+          set -e
+
+          git status --short
+          git diff -- app/src/main/java/com/hieptran/aacast/doudou/V10CarActivity.java
 
       - name: Git diff check
         shell: bash
         run: |
           set -e
-
           git diff --check
 
-          echo "git diff --check PASS."
-
-      - name: Setup Java
+      - name: Setup Java 17
         uses: actions/setup-java@v4
         with:
           distribution: temurin
@@ -617,26 +460,27 @@ jobs:
       - name: Setup Android SDK
         uses: android-actions/setup-android@v3
 
-      - name: Accept Android licenses
+      - name: Accept Android SDK licenses
         shell: bash
         run: |
           yes | sdkmanager --licenses >/dev/null || true
 
-      - name: Compile
-        working-directory: v10-source
+      - name: Make Gradle executable
+        shell: bash
+        run: |
+          chmod +x ./gradlew
+
+      - name: Compile Java
         shell: bash
         run: |
           set -e
-
-          chmod +x gradlew
 
           ./gradlew \
             :app:compileDebugJavaWithJavac \
             --no-daemon \
             --stacktrace
 
-      - name: Assemble APK
-        working-directory: v10-source
+      - name: Assemble Release APK
         shell: bash
         run: |
           set -e
@@ -651,18 +495,19 @@ jobs:
         run: |
           set -e
 
-          APK="v10-source/app/build/outputs/apk/release/app-release.apk"
+          APK="app/build/outputs/apk/release/app-release.apk"
 
           test -f "$APK"
 
-          echo "APK exists:"
+          echo "APK:"
           ls -lh "$APK"
 
-          echo "APK SHA256:"
+          echo "SHA256:"
           sha256sum "$APK"
 
-      - name: Upload APK
+      - name: Upload clean baseline APK
         uses: actions/upload-artifact@v4
         with:
           name: main-clean-navigation-v2-baseline
           path: v10-source/app/build/outputs/apk/release/app-release.apk
+          if-no-files-found: error
