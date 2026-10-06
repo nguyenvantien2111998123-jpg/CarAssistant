@@ -468,227 +468,261 @@ jobs:
           path = Path("app/build.gradle")
           text = path.read_text(encoding="utf-8")
 
-          marker = "tasks.matching {"
+          old_start = text.find("tasks.matching {")
+          old_start_alt = text.find("tasks.configureEach {")
 
-          marker_pos = text.find(marker)
+          candidates = [
+              value
+              for value in [old_start, old_start_alt]
+              if value >= 0
+          ]
 
           target_start = None
-          search_pos = 0
-
-          while True:
-              pos = text.find(marker, search_pos)
-
-              if pos < 0:
-                  break
-
-              block_end_probe = text.find(
-                  "}.configureEach { task ->",
-                  pos
-              )
-
-              if block_end_probe < 0:
-                  break
-
-              header = text[pos:block_end_probe]
-
-              if "mergeDexRelease" in header:
-                  target_start = pos
-                  break
-
-              search_pos = pos + len(marker)
-
-          if target_start is None:
-              raise SystemExit(
-                  "ERROR: Existing mergeDexRelease task block was not found in baseline app/build.gradle."
-              )
-
-          open_brace = text.find("{", target_start)
-
-          if open_brace < 0:
-              raise SystemExit(
-                  "ERROR: Could not find opening brace of mergeDexRelease block."
-              )
-
-          depth = 0
           target_end = None
 
-          for index in range(open_brace, len(text)):
-              char = text[index]
+          for start in sorted(candidates):
+              probe_end = min(
+                  len(text),
+                  start + 1500
+              )
 
-              if char == "{":
-                  depth += 1
+              probe = text[start:probe_end]
 
-              elif char == "}":
-                  depth -= 1
+              if "mergeDexRelease" not in probe:
+                  continue
 
-                  if depth == 0:
-                      target_end = index + 1
-                      break
+              open_brace = text.find("{", start)
 
-          if target_end is None:
+              if open_brace < 0:
+                  continue
+
+              depth = 0
+              in_single = False
+              in_double = False
+              escape = False
+
+              end = None
+
+              for index in range(open_brace, len(text)):
+                  char = text[index]
+
+                  if escape:
+                      escape = False
+                      continue
+
+                  if char == "\\" and (in_single or in_double):
+                      escape = True
+                      continue
+
+                  if char == "'" and not in_double:
+                      in_single = not in_single
+                      continue
+
+                  if char == '"' and not in_single:
+                      in_double = not in_double
+                      continue
+
+                  if in_single or in_double:
+                      continue
+
+                  if char == "{":
+                      depth += 1
+
+                  elif char == "}":
+                      depth -= 1
+
+                      if depth == 0:
+                          end = index + 1
+                          break
+
+              if end is not None:
+                  target_start = start
+                  target_end = end
+                  break
+
+          if target_start is None or target_end is None:
               raise SystemExit(
-                  "ERROR: Could not find end of mergeDexRelease block."
+                  "ERROR: Existing mergeDexRelease task block was not found."
               )
 
           new_block_lines = [
-              "tasks.matching {",
-              "    it.name == 'mergeDexRelease'",
-              "}.configureEach { task ->",
+              "tasks.configureEach { task ->",
               "",
-              "    task.doLast {",
+              "    if (task.name == 'mergeDexRelease') {",
               "",
-              "        def legacyDex =",
-              "                rootProject.file('app/libs/aasdk-legacy.dex')",
+              "        task.doLast {",
               "",
-              "        if (!legacyDex.exists()) {",
-              "            throw new GradleException(",
-              "                    \"Thiếu app/libs/aasdk-legacy.dex!\"",
-              "            )",
-              "        }",
+              "            def legacyDex =",
+              "                    rootProject.file('app/libs/aasdk-legacy.dex')",
               "",
-              "        def outputDir =",
-              "                task.outputDir.get().asFile",
-              "",
-              "        def dexFilter = {",
-              "            it.isFile() &&",
-              "            it.name ==~ /classes\\d*\\.dex/",
-              "        } as FileFilter",
-              "",
-              "        def appDexes =",
-              "                outputDir",
-              "                        .listFiles(dexFilter)",
-              "                        ?.toList() ?: []",
-              "",
-              "        if (appDexes.isEmpty()) {",
-              "            throw new GradleException(",
-              "                    \"Không tìm thấy classes*.dex trong \" +",
-              "                    outputDir",
-              "            )",
-              "        }",
-              "",
-              "        def buildDirFile =",
-              "                project.layout.buildDirectory",
-              "                        .asFile",
-              "                        .get()",
-              "",
-              "        def tempDir =",
-              "                new File(",
-              "                        buildDirFile,",
-              "                        \"intermediates/dex_merged_temp\"",
-              "                )",
-              "",
-              "        tempDir.deleteDir()",
-              "        tempDir.mkdirs()",
-              "",
-              "        def sdkDir =",
-              "                android.sdkDirectory.absolutePath",
-              "",
-              "        def buildToolsVersion =",
-              "                android.buildToolsVersion",
-              "",
-              "        def d8Tool =",
-              "                \"${sdkDir}/build-tools/\" +",
-              "                \"${buildToolsVersion}/d8\"",
-              "",
-              "        if (!file(d8Tool).exists()) {",
-              "            throw new GradleException(",
-              "                    \"Không tìm thấy D8: \" + d8Tool",
-              "            )",
-              "        }",
-              "",
-              "        logger.lifecycle(",
-              "                \"============================================================\"",
-              "        )",
-              "        logger.lifecycle(",
-              "                \"AACast-Doudou LEGACY DEX MERGE\"",
-              "        )",
-              "        logger.lifecycle(",
-              "                \"============================================================\"",
-              "        )",
-              "        logger.lifecycle(",
-              "                \"Legacy DEX: \" + legacyDex.absolutePath",
-              "        )",
-              "        logger.lifecycle(",
-              "                \"D8        : \" + d8Tool",
-              "        )",
-              "        logger.lifecycle(",
-              "                \"App DEX count: \" + appDexes.size()",
-              "        )",
-              "",
-              "        project.exec {",
-              "            commandLine(",
-              "                    [",
-              "                            d8Tool,",
-              "                            '--min-api',",
-              "                            '29',",
-              "                            '--output',",
-              "                            tempDir.absolutePath",
-              "                    ]",
-              "                    +",
-              "                    appDexes*.absolutePath",
-              "                    +",
-              "                    [",
-              "                            legacyDex.absolutePath",
-              "                    ]",
-              "            )",
-              "        }",
-              "",
-              "        def mergedDexes =",
-              "                tempDir",
-              "                        .listFiles(dexFilter)",
-              "                        ?.toList() ?: []",
-              "",
-              "        if (mergedDexes.isEmpty()) {",
-              "            throw new GradleException(",
-              "                    \"D8 merge dex thất bại!\"",
-              "            )",
-              "        }",
-              "",
-              "        logger.lifecycle(",
-              "                \"D8 produced ${mergedDexes.size()} merged dex file(s).\"",
-              "        )",
-              "",
-              "        appDexes.each {",
-              "            if (it.exists() && !it.delete()) {",
+              "            if (!legacyDex.exists()) {",
               "                throw new GradleException(",
-              "                        \"Không thể xóa DEX cũ: \" + it.absolutePath",
+              "                        'Thiếu app/libs/aasdk-legacy.dex!'",
               "                )",
               "            }",
-              "        }",
               "",
-              "        mergedDexes.each { merged ->",
+              "            def outputFiles =",
+              "                    task.outputs.files.files",
               "",
-              "            def target =",
+              "            def dexFiles = []",
+              "",
+              "            outputFiles.each { output ->",
+              "                if (output.isDirectory()) {",
+              "                    output.eachFileRecurse { child ->",
+              "                        if (child.isFile() &&",
+              "                                child.name ==~ /classes\\d*\\.dex/) {",
+              "                            dexFiles.add(child)",
+              "                        }",
+              "                    }",
+              "                } else if (output.isFile() &&",
+              "                        output.name ==~ /classes\\d*\\.dex/) {",
+              "                    dexFiles.add(output)",
+              "                }",
+              "            }",
+              "",
+              "            dexFiles = dexFiles.unique { it.absolutePath }",
+              "",
+              "            if (dexFiles.isEmpty()) {",
+              "                throw new GradleException(",
+              "                        'Không tìm thấy DEX đầu ra của mergeDexRelease.'",
+              "                )",
+              "            }",
+              "",
+              "            def outputDir = dexFiles[0].parentFile",
+              "",
+              "            def buildDirFile =",
+              "                    project.layout.buildDirectory.asFile.get()",
+              "",
+              "            def tempDir =",
               "                    new File(",
-              "                            outputDir,",
-              "                            merged.name",
+              "                            buildDirFile,",
+              "                            'intermediates/dex_merged_temp'",
               "                    )",
               "",
-              "            if (!merged.renameTo(target)) {",
-              "                target.bytes = merged.bytes",
-              "                merged.delete()",
+              "            tempDir.deleteDir()",
+              "            tempDir.mkdirs()",
+              "",
+              "            def sdkDir =",
+              "                    android.sdkDirectory.absolutePath",
+              "",
+              "            def buildToolsVersion =",
+              "                    android.buildToolsVersion",
+              "",
+              "            def d8Tool =",
+              "                    \"${sdkDir}/build-tools/${buildToolsVersion}/d8\"",
+              "",
+              "            if (!file(d8Tool).exists()) {",
+              "                throw new GradleException(",
+              "                        'Không tìm thấy D8: ' + d8Tool",
+              "                )",
               "            }",
-              "        }",
               "",
-              "        tempDir.deleteDir()",
+              "            logger.lifecycle(",
+              "                    '============================================================'",
+              "            )",
+              "            logger.lifecycle(",
+              "                    'AACast-Doudou LEGACY DEX MERGE'",
+              "            )",
+              "            logger.lifecycle(",
+              "                    '============================================================'",
+              "            )",
+              "            logger.lifecycle(",
+              "                    'Legacy DEX: ' + legacyDex.absolutePath",
+              "            )",
+              "            logger.lifecycle(",
+              "                    'D8        : ' + d8Tool",
+              "            )",
+              "            logger.lifecycle(",
+              "                    'Output DEX count: ' + dexFiles.size()",
+              "            )",
               "",
-              "        def finalDexes =",
-              "                outputDir",
-              "                        .listFiles(dexFilter)",
-              "                        ?.toList() ?: []",
+              "            project.exec {",
+              "                commandLine(",
+              "                        [",
+              "                                d8Tool,",
+              "                                '--min-api',",
+              "                                '29',",
+              "                                '--output',",
+              "                                tempDir.absolutePath",
+              "                        ] +",
+              "                        dexFiles*.absolutePath +",
+              "                        [",
+              "                                legacyDex.absolutePath",
+              "                        ]",
+              "                )",
+              "            }",
               "",
-              "        if (finalDexes.isEmpty()) {",
-              "            throw new GradleException(",
-              "                    \"Không còn DEX sau khi cài merged DEX!\"",
+              "            def mergedDexes = []",
+              "",
+              "            tempDir.eachFileRecurse { child ->",
+              "                if (child.isFile() &&",
+              "                        child.name ==~ /classes\\d*\\.dex/) {",
+              "                    mergedDexes.add(child)",
+              "                }",
+              "            }",
+              "",
+              "            if (mergedDexes.isEmpty()) {",
+              "                throw new GradleException(",
+              "                        'D8 merge dex thất bại!'",
+              "                )",
+              "            }",
+              "",
+              "            logger.lifecycle(",
+              "                    'D8 produced ${mergedDexes.size()} merged dex file(s).'",
+              "            )",
+              "",
+              "            dexFiles.each { dex ->",
+              "                if (dex.exists() && !dex.delete()) {",
+              "                    throw new GradleException(",
+              "                            'Không thể xóa DEX cũ: ' + dex.absolutePath",
+              "                    )",
+              "                }",
+              "            }",
+              "",
+              "            mergedDexes.sort { a, b ->",
+              "                a.name <=> b.name",
+              "            }",
+              "",
+              "            mergedDexes.eachWithIndex { merged, index ->",
+              "",
+              "                def targetName =",
+              "                        index == 0",
+              "                                ? 'classes.dex'",
+              "                                : \"classes${index + 1}.dex\"",
+              "",
+              "                def target =",
+              "                        new File(outputDir, targetName)",
+              "",
+              "                if (!merged.renameTo(target)) {",
+              "                    target.bytes = merged.bytes",
+              "                    merged.delete()",
+              "                }",
+              "            }",
+              "",
+              "            tempDir.deleteDir()",
+              "",
+              "            def finalDexes = []",
+              "",
+              "            outputDir.eachFile { child ->",
+              "                if (child.isFile() &&",
+              "                        child.name ==~ /classes\\d*\\.dex/) {",
+              "                    finalDexes.add(child)",
+              "                }",
+              "            }",
+              "",
+              "            if (finalDexes.isEmpty()) {",
+              "                throw new GradleException(",
+              "                        'Không còn DEX sau khi cài merged DEX!'",
+              "                )",
+              "            }",
+              "",
+              "            logger.lifecycle(",
+              "                    'PASS: D8 merge nguyên bản legacy DEX thành công.'",
+              "            )",
+              "            logger.lifecycle(",
+              "                    'Final DEX count: ${finalDexes.size()}'",
               "            )",
               "        }",
-              "",
-              "        logger.lifecycle(",
-              "                \"PASS: D8 merge nguyên bản legacy DEX thành công.\"",
-              "        )",
-              "        logger.lifecycle(",
-              "                \"Final DEX count: ${finalDexes.size()}\"",
-              "        )",
               "    }",
               "}"
           ]
@@ -707,8 +741,8 @@ jobs:
           )
 
           print(
-              "PASS: Existing baseline mergeDexRelease block "
-              "was replaced successfully."
+              "PASS: mergeDexRelease patch replaced with "
+              "tasks.configureEach implementation."
           )
           PY
 
@@ -721,28 +755,44 @@ jobs:
 
           test -f app/build.gradle
 
-          COUNT="$(grep -c "it.name == 'mergeDexRelease'" app/build.gradle || true)"
+          echo
+          echo "=== mergeDexRelease registration ==="
 
-          echo "mergeDexRelease block count: $COUNT"
+          grep -n -A8 -B2 \
+            "task.name == 'mergeDexRelease'" \
+            app/build.gradle
 
-          test "$COUNT" -eq 1
+          echo
+          echo "=== Required D8 markers ==="
 
+          grep -Fq "tasks.configureEach { task ->" app/build.gradle
+          grep -Fq "task.name == 'mergeDexRelease'" app/build.gradle
           grep -Fq "app/libs/aasdk-legacy.dex" app/build.gradle
+          grep -Fq "task.outputs.files.files" app/build.gradle
           grep -Fq "android.buildToolsVersion" app/build.gradle
-          grep -Fq "D8 merge nguyên bản legacy DEX thành công" app/build.gradle
           grep -Fq "'--min-api'" app/build.gradle
           grep -Fq "'29'" app/build.gradle
+          grep -Fq "D8 merge nguyên bản legacy DEX thành công." app/build.gradle
+
+          echo
+          echo "=== Verify obsolete R8 logic is absent ==="
 
           if grep -Fq "R8DexFilter" app/build.gradle; then
-            echo "ERROR: R8DexFilter must not be present in release patch."
+            echo "ERROR: R8DexFilter must not be present."
             exit 1
           fi
 
           if grep -Fq "setEnableExperimentalDexInput" app/build.gradle; then
-            echo "ERROR: R8-specific logic must not be present in release patch."
+            echo "ERROR: setEnableExperimentalDexInput must not be present."
             exit 1
           fi
 
+          if grep -Fq "tasks.matching {" app/build.gradle; then
+            echo "ERROR: Old tasks.matching implementation is still present."
+            exit 1
+          fi
+
+          echo
           echo "Release merge patch markers verified."
 
       - name: Verify patched Gradle syntax
@@ -750,7 +800,7 @@ jobs:
         run: |
           set -euo pipefail
 
-          echo "=== Gradle task verification ==="
+          echo "=== Gradle configuration verification ==="
 
           ./gradlew \
             :app:tasks \
@@ -760,9 +810,29 @@ jobs:
 
           echo "Gradle configuration parsed successfully."
 
-          grep -Fq "assembleRelease" /tmp/carassistant-gradle-tasks.log
+          grep -Fq "assembleRelease" \
+            /tmp/carassistant-gradle-tasks.log
 
           echo "assembleRelease task is available."
+
+      - name: Verify release merge task exists
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          echo "=== Verify mergeDexRelease task ==="
+
+          ./gradlew \
+            :app:tasks \
+            --all \
+            --no-daemon \
+            --stacktrace \
+            >/tmp/carassistant-gradle-all-tasks.log
+
+          grep -Fq "mergeDexRelease" \
+            /tmp/carassistant-gradle-all-tasks.log
+
+          echo "mergeDexRelease task is available."
 
       - name: Assemble Release APK
         shell: bash
