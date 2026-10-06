@@ -1,0 +1,508 @@
+name: CarAssistant Navigation V2 - AutoFollow
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  navigation-v2-autofollow:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Navigation V1 Core
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 1
+
+      - name: Verify Navigation V1 Core
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          SRC="v10-source/app/src/main/java/com/hieptran/aacast/doudou"
+
+          test -f v10-source/gradlew
+          test -f v10-source/app/build.gradle
+          test -f v10-source/app/src/main/AndroidManifest.xml
+
+          test -f "$SRC/NavigationMapView.java"
+          test -f "$SRC/V10CarActivity.java"
+
+          grep -Fq \
+            'org.maplibre.gl:android-sdk:11.11.0' \
+            v10-source/app/build.gradle
+
+          grep -Fq \
+            'package com.carassistant.v10;' \
+            "$SRC/NavigationMapView.java"
+
+          grep -Fq \
+            'class NavigationMapView' \
+            "$SRC/NavigationMapView.java"
+
+          echo "NAVIGATION V1 CORE: PASS"
+
+      - name: Capture protected Projection Core
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          SRC="v10-source/app/src/main/java/com/hieptran/aacast/doudou"
+
+          sha256sum \
+            "$SRC/V10ProjectionSession.java" \
+            "$SRC/V10DisplayController.java" \
+            "$SRC/V10SurfaceManager.java" \
+            "$SRC/V10TaskSession.java" \
+            "$SRC/V10SessionStore.java" \
+            > /tmp/core-before.sha256
+
+          echo "PROJECTION CORE HASH: CAPTURED"
+
+      - name: Apply Patch A - AutoFollow + Recenter
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          FILE="v10-source/app/src/main/java/com/hieptran/aacast/doudou/NavigationMapView.java"
+
+          cat > "$FILE" <<'JAVA'
+          package com.carassistant.v10;
+
+          import android.Manifest;
+          import android.app.Activity;
+          import android.content.Context;
+          import android.content.pm.PackageManager;
+          import android.graphics.Color;
+          import android.graphics.drawable.GradientDrawable;
+          import android.location.Location;
+          import android.os.Bundle;
+          import android.view.Gravity;
+          import android.widget.FrameLayout;
+          import android.widget.TextView;
+
+          import org.maplibre.android.MapLibre;
+          import org.maplibre.android.maps.MapLibreMap;
+          import org.maplibre.android.maps.MapView;
+          import org.maplibre.android.maps.UiSettings;
+          import org.maplibre.android.location.LocationComponentActivationOptions;
+          import org.maplibre.android.location.LocationComponentOptions;
+          import org.maplibre.android.location.modes.CameraMode;
+
+          public final class NavigationMapView extends FrameLayout {
+
+              private static final int LOCATION_REQUEST = 4101;
+
+              private final MapView mapView;
+
+              private MapLibreMap map;
+
+              private TextView recenterButton;
+
+              public NavigationMapView(Context context) {
+                  super(context);
+
+                  setBackgroundColor(Color.BLACK);
+
+                  MapLibre.getInstance(
+                          context.getApplicationContext());
+
+                  mapView = new MapView(context);
+
+                  mapView.onCreate(
+                          new Bundle());
+
+                  addView(
+                          mapView,
+                          new LayoutParams(
+                                  -1,
+                                  -1));
+
+                  mapView.getMapAsync(
+                          this::onMapReady);
+              }
+
+              private void onMapReady(
+                      MapLibreMap readyMap) {
+
+                  map = readyMap;
+
+                  UiSettings ui =
+                          map.getUiSettings();
+
+                  ui.setCompassEnabled(false);
+                  ui.setZoomGesturesEnabled(true);
+                  ui.setScrollGesturesEnabled(true);
+                  ui.setRotateGesturesEnabled(true);
+                  ui.setTiltGesturesEnabled(false);
+
+                  map.setStyle(
+                          "https://tiles.openfreemap.org/styles/liberty",
+                          style -> {
+
+                              enableLocation();
+                              createRecenterButton();
+                          });
+              }
+
+              private void enableLocation() {
+
+                  if (map == null) {
+                      return;
+                  }
+
+                  Context context =
+                          getContext();
+
+                  if (context == null) {
+                      return;
+                  }
+
+                  if (context.checkSelfPermission(
+                          Manifest.permission.ACCESS_FINE_LOCATION)
+                          != PackageManager.PERMISSION_GRANTED) {
+
+                      if (context instanceof Activity) {
+
+                          ((Activity) context)
+                                  .requestPermissions(
+                                          new String[]{
+                                                  Manifest.permission.ACCESS_FINE_LOCATION,
+                                                  Manifest.permission.ACCESS_COARSE_LOCATION
+                                          },
+                                          LOCATION_REQUEST);
+                      }
+
+                      return;
+                  }
+
+                  LocationComponentOptions options =
+                          LocationComponentOptions
+                                  .builder(context)
+                                  .pulseEnabled(true)
+                                  .trackingGesturesManagement(true)
+                                  .build();
+
+                  LocationComponentActivationOptions activation =
+                          LocationComponentActivationOptions
+                                  .builder(
+                                          context,
+                                          map.getStyle())
+                                  .locationComponentOptions(
+                                          options)
+                                  .build();
+
+                  map.getLocationComponent()
+                          .activateLocationComponent(
+                                  activation);
+
+                  map.getLocationComponent()
+                          .setLocationComponentEnabled(true);
+
+                  /*
+                   * PATCH A:
+                   * Start Navigation V2 in Auto-follow mode.
+                   */
+                  map.getLocationComponent()
+                          .setCameraMode(
+                                  CameraMode.TRACKING_GPS);
+              }
+
+              private void createRecenterButton() {
+
+                  if (recenterButton != null) {
+                      return;
+                  }
+
+                  recenterButton =
+                          new TextView(getContext());
+
+                  recenterButton.setText("◎");
+                  recenterButton.setTextSize(28);
+                  recenterButton.setTextColor(
+                          Color.WHITE);
+
+                  recenterButton.setGravity(
+                          Gravity.CENTER);
+
+                  GradientDrawable background =
+                          new GradientDrawable();
+
+                  background.setColor(
+                          Color.rgb(
+                                  29,
+                                  35,
+                                  42));
+
+                  background.setCornerRadius(
+                          50f);
+
+                  recenterButton.setBackground(
+                          background);
+
+                  recenterButton.setElevation(
+                          12f);
+
+                  recenterButton.setOnClickListener(
+                          v -> recenter());
+
+                  LayoutParams params =
+                          new LayoutParams(
+                                  dp(58),
+                                  dp(58),
+                                  Gravity.END
+                                          | Gravity.BOTTOM);
+
+                  params.setMargins(
+                          0,
+                          0,
+                          dp(18),
+                          dp(18));
+
+                  addView(
+                          recenterButton,
+                          params);
+              }
+
+              public void recenter() {
+
+                  if (map == null) {
+                      return;
+                  }
+
+                  try {
+
+                      if (!map.getLocationComponent()
+                              .isLocationComponentEnabled()) {
+                          return;
+                      }
+
+                      /*
+                       * PATCH A:
+                       * Recenter also re-enables Auto-follow.
+                       */
+                      map.getLocationComponent()
+                              .setCameraMode(
+                                      CameraMode.TRACKING_GPS);
+
+                      map.getLocationComponent()
+                              .zoomWhileTracking(
+                                      16.0);
+                  } catch (Exception ignored) {
+                  }
+              }
+
+              public void zoomIn() {
+
+                  if (map == null) {
+                      return;
+                  }
+
+                  double zoom =
+                          map.getCameraPosition()
+                                  .zoom;
+
+                  map.animateCamera(
+                          org.maplibre.android.camera
+                                  .CameraUpdateFactory
+                                  .zoomTo(
+                                          Math.min(
+                                                  20.0,
+                                                  zoom + 1.0)),
+                          250);
+              }
+
+              public void zoomOut() {
+
+                  if (map == null) {
+                      return;
+                  }
+
+                  double zoom =
+                          map.getCameraPosition()
+                                  .zoom;
+
+                  map.animateCamera(
+                          org.maplibre.android.camera
+                                  .CameraUpdateFactory
+                                  .zoomTo(
+                                          Math.max(
+                                                  1.0,
+                                                  zoom - 1.0)),
+                          250);
+              }
+
+              public void onHostResume() {
+                  mapView.onResume();
+              }
+
+              public void onHostPause() {
+                  mapView.onPause();
+              }
+
+              public void onHostDestroy() {
+                  mapView.onDestroy();
+              }
+
+              private int dp(float value) {
+
+                  return Math.round(
+                          value *
+                          getResources()
+                                  .getDisplayMetrics()
+                                  .density);
+              }
+          }
+          JAVA
+
+          test -f "$FILE"
+
+          grep -Fq \
+            'CameraMode.TRACKING_GPS' \
+            "$FILE"
+
+          grep -Fq \
+            'trackingGesturesManagement(true)' \
+            "$FILE"
+
+          grep -Fq \
+            'public void recenter()' \
+            "$FILE"
+
+          grep -Fq \
+            'setCameraMode(' \
+            "$FILE"
+
+          echo "PATCH A: AUTOFOLLOW + RECENTER: APPLIED"
+
+      - name: Verify patch scope
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          git diff --check
+
+          CHANGED="$(git diff --name-only)"
+
+          echo "Changed files:"
+          echo "$CHANGED"
+
+          test "$(printf '%s\n' "$CHANGED" | wc -l)" -eq 1
+
+          test "$CHANGED" = \
+            "v10-source/app/src/main/java/com/hieptran/aacast/doudou/NavigationMapView.java"
+
+          echo "PATCH SCOPE: PASS"
+
+      - name: Verify Projection Core unchanged
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          SRC="v10-source/app/src/main/java/com/hieptran/aacast/doudou"
+
+          sha256sum \
+            "$SRC/V10ProjectionSession.java" \
+            "$SRC/V10DisplayController.java" \
+            "$SRC/V10SurfaceManager.java" \
+            "$SRC/V10TaskSession.java" \
+            "$SRC/V10SessionStore.java" \
+            > /tmp/core-after.sha256
+
+          cmp \
+            /tmp/core-before.sha256 \
+            /tmp/core-after.sha256
+
+          echo "PROJECTION CORE: UNCHANGED"
+
+      - name: Setup Java 17
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Compile Navigation V2 Patch A
+        working-directory: v10-source
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          chmod +x ./gradlew
+
+          ./gradlew \
+            :app:compileDebugJavaWithJavac \
+            --no-daemon \
+            --stacktrace
+
+          echo "JAVA COMPILE: PASS"
+
+      - name: Build Navigation V2 Patch A APK
+        working-directory: v10-source
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          ./gradlew \
+            :app:assembleDebug \
+            --no-daemon \
+            --stacktrace
+
+          test -f \
+            app/build/outputs/apk/debug/app-debug.apk
+
+          echo "APK BUILD: PASS"
+
+      - name: Package Patch A
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          cp \
+            v10-source/app/build/outputs/apk/debug/app-debug.apk \
+            CarAssistant-Navigation-V2-AutoFollow.apk
+
+          sha256sum \
+            CarAssistant-Navigation-V2-AutoFollow.apk \
+            > CarAssistant-Navigation-V2-AutoFollow.sha256
+
+          printf '%s\n' \
+            "CORE=Navigation V1" \
+            "PATCH=AutoFollow + Recenter" \
+            "MAPLIBRE=11.11.0" \
+            "PROJECTION_CORE=UNCHANGED" \
+            "SOURCE=NavigationMapView.java only" \
+            > CarAssistant-Navigation-V2-AutoFollow.txt
+
+          echo "PATCH PACKAGE: PASS"
+
+      - name: Upload Navigation V2 Patch A
+        uses: actions/upload-artifact@v4
+        with:
+          name: CarAssistant-Navigation-V2-AutoFollow
+          path: |
+            CarAssistant-Navigation-V2-AutoFollow.apk
+            CarAssistant-Navigation-V2-AutoFollow.sha256
+            CarAssistant-Navigation-V2-AutoFollow.txt
+          if-no-files-found: error
+          retention-days: 90
+
+      - name: Final result
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          echo "=============================================="
+          echo "CARASSISTANT NAVIGATION V2"
+          echo "PATCH A: AUTOFOLLOW + RECENTER"
+          echo "=============================================="
+          echo ""
+          echo "CORE: Navigation V1"
+          echo "PATCH: NavigationMapView.java only"
+          echo "PROJECTION CORE: UNCHANGED"
+          echo "APK: CarAssistant-Navigation-V2-AutoFollow.apk"
+          echo ""
+          echo "BUILD: PASS"
+          echo "=============================================="
