@@ -1,4 +1,4 @@
-name: Build Main Clean Navigation V2 Baseline
+name: Build Navigation V1 Patch1 Autofollow
 
 on:
   workflow_dispatch:
@@ -9,25 +9,41 @@ permissions:
 jobs:
   clean-build:
     runs-on: ubuntu-latest
+
     defaults:
       run:
-        working-directory: v10-source
+        working-directory: navigation-v1-source
 
     steps:
-      - name: Checkout exact main baseline
+
+      - name: Checkout main baseline
         uses: actions/checkout@v4
         with:
-          ref: 09b2c919b946164618b79283b7c3293c586547a8
+          ref: main
           fetch-depth: 0
 
-      - name: Verify exact commit
+      - name: Verify exact main source
         shell: bash
         run: |
           set -euo pipefail
+
+          git fetch origin main --depth=1
+
           ACTUAL="$(git rev-parse HEAD)"
-          EXPECTED="09b2c919b946164618b79283b7c3293c586547a8"
+          EXPECTED="$(git rev-parse origin/main)"
+
           echo "HEAD=$ACTUAL"
+          echo "origin/main=$EXPECTED"
+
           test "$ACTUAL" = "$EXPECTED"
+
+          test -d navigation-v1-source
+
+          test -f navigation-v1-source/settings.gradle
+          test -f navigation-v1-source/build.gradle
+          test -f navigation-v1-source/app/build.gradle
+
+          echo "Exact main source verified."
 
       - name: Verify required source structure
         shell: bash
@@ -43,7 +59,45 @@ jobs:
           test -d app/src/main/res
           test -d app/libs
 
-          echo "Required Navigation V2 source structure verified."
+          test -f app/src/main/java/com/carassistant/v10/NavigationMapView.java
+          test -f app/src/main/java/com/carassistant/v10/V10CarActivity.java
+          test -f app/src/main/java/com/carassistant/v10/V10ProjectionSession.java
+
+          test -f app/libs/aasdk-legacy.dex
+
+          echo "Required Navigation V1 source structure verified."
+
+      - name: Verify Android Gradle configuration
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          echo "=== Root build.gradle ==="
+          cat build.gradle
+
+          echo
+          echo "=== App build.gradle ==="
+          cat app/build.gradle
+
+          echo
+          echo "=== Verify AGP 8.13.0 ==="
+          grep -Fq "com.android.application" build.gradle
+          grep -Fq "8.13.0" build.gradle
+
+          echo
+          echo "=== Verify compileSdk 36 ==="
+          grep -Eq 'compileSdk[[:space:]]+36' app/build.gradle
+
+          echo
+          echo "=== Verify Java 17 ==="
+          grep -Fq "JavaVersion.VERSION_17" app/build.gradle
+
+          echo
+          echo "=== Verify MapLibre dependency ==="
+          grep -Fq 'org.maplibre.gl:android-sdk:11.11.0' app/build.gradle
+
+          echo
+          echo "Android Gradle configuration verified."
 
       - name: Save protected core checksums
         shell: bash
@@ -100,6 +154,7 @@ jobs:
             app/src/main/java \
             || true
 
+          echo
           echo "=== Navigation source files ==="
 
           find app/src/main/java \
@@ -131,7 +186,6 @@ jobs:
 
           original = text
 
-          # Remove only clearly redundant/duplicate Dashboard imports.
           lines = text.splitlines(True)
           seen = set()
           out = []
@@ -182,6 +236,7 @@ jobs:
             -print \
             | sort
 
+          echo
           echo "=== Duplicate imports check ==="
 
           python3 <<'PY'
@@ -201,7 +256,11 @@ jobs:
               except Exception:
                   continue
 
-              imports = [line.strip() for line in lines if line.strip().startswith("import ")]
+              imports = [
+                  line.strip()
+                  for line in lines
+                  if line.strip().startswith("import ")
+              ]
 
               if len(imports) != len(set(imports)):
                   errors.append(str(path))
@@ -222,13 +281,15 @@ jobs:
 
           echo "=== Navigation core verification ==="
 
-          NAV_FILES="$(find app/src/main/java \
-            -type f \
-            \( \
-              -iname '*Navigation*.java' \
-              -o -iname '*Navigation*.kt' \
-            \) \
-            | sort)"
+          NAV_FILES="$(
+            find app/src/main/java \
+              -type f \
+              \( \
+                -iname '*Navigation*.java' \
+                -o -iname '*Navigation*.kt' \
+              \) \
+              | sort
+          )"
 
           if [ -z "$NAV_FILES" ]; then
             echo "ERROR: No Navigation source files found."
@@ -237,6 +298,7 @@ jobs:
 
           echo "$NAV_FILES"
 
+          echo
           echo "=== NavigationMap references ==="
 
           grep -RIn \
@@ -276,9 +338,11 @@ jobs:
           echo "=== Git status ==="
           git status --short
 
+          echo
           echo "=== Git diff stat ==="
           git diff --stat
 
+          echo
           echo "=== Git diff ==="
           git diff -- app/src/main/java app/src/main/res app/build.gradle
 
@@ -303,7 +367,12 @@ jobs:
           java-version: '17'
 
       - name: Setup Android SDK
-        uses: android-actions/setup-android@v3
+        uses: android-actions/setup-android@v4
+        with:
+          packages: |
+            platform-tools
+            platforms;android-36
+            build-tools;36.0.0
 
       - name: Accept SDK licenses
         shell: bash
@@ -314,8 +383,33 @@ jobs:
 
           sdkmanager \
             "platform-tools" \
-            "platforms;android-35" \
-            "build-tools;35.0.0"
+            "platforms;android-36" \
+            "build-tools;36.0.0"
+
+      - name: Verify Android SDK
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          echo "=== sdkmanager location ==="
+          command -v sdkmanager
+
+          echo
+          echo "=== Installed SDK packages ==="
+          sdkmanager --list_installed | grep -E \
+            'platform-tools|platforms;android-36|build-tools;36.0.0' \
+            || true
+
+          echo
+          echo "=== Verify Android 36 platform ==="
+          test -d "$ANDROID_SDK_ROOT/platforms/android-36"
+
+          echo
+          echo "=== Verify Build Tools 36.0.0 ==="
+          test -d "$ANDROID_SDK_ROOT/build-tools/36.0.0"
+
+          echo
+          echo "Android SDK verification passed."
 
       - name: Make Gradle executable
         shell: bash
@@ -326,6 +420,17 @@ jobs:
           chmod +x ./gradlew
 
           ./gradlew --version
+
+      - name: Verify Gradle source before compile
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          test -f settings.gradle
+          test -f build.gradle
+          test -f app/build.gradle
+
+          echo "Gradle source files verified."
 
       - name: Compile Java
         shell: bash
@@ -379,7 +484,7 @@ jobs:
                   "ERROR: Could not determine end of mergeDexRelease block."
               )
 
-          new_block = """
+          new_block = r'''
           tasks.matching { it.name == 'mergeDexRelease' }.configureEach { task ->
               def legacyDex = file("$projectDir/libs/aasdk-legacy.dex")
               def legacyInputDir = file("$buildDir/intermediates/aasdk_legacy_input")
@@ -446,17 +551,6 @@ jobs:
                   def builderJar = builderJarFiles[0]
 
                   println("Using AGP builder: ${builderJar.absolutePath}")
-
-                  def r8Class = new File(
-                      builderJar.parentFile,
-                      "com/android/tools/r8/R8.class"
-                  )
-
-                  def d8Class = new File(
-                      builderJar.parentFile,
-                      "com/android/tools/r8/D8.class"
-                  )
-
                   println("Builder jar verified: ${builderJar.exists()}")
                   println("R8.class expected from AGP builder.")
                   println("D8.class expected from AGP builder.")
@@ -658,7 +752,7 @@ jobs:
                       }
                   }
 
-                  mergedDexFiles.eachWithIndex { dexFile, index ->
+                  mergedDexFiles.each { dexFile ->
                       def destination = new File(
                           appDexDir,
                           dexFile.name
@@ -684,7 +778,7 @@ jobs:
                   println("Restored legacy dex to ${legacyDex.absolutePath}")
               }
           }
-          """
+          '''
 
           path.write_text(
               text[:start] + new_block.strip("\n") + text[end:],
@@ -745,10 +839,10 @@ jobs:
 
           echo "APK verification passed."
 
-      - name: Upload clean baseline APK
+      - name: Upload Navigation V1 Patch1 APK
         uses: actions/upload-artifact@v4
         with:
-          name: navigation-v2-clean-baseline-apk
-          path: v10-source/app/build/outputs/apk/release/app-release.apk
+          name: navigation-v1-patch1-autofollow-apk
+          path: navigation-v1-source/app/build/outputs/apk/release/app-release.apk
           if-no-files-found: error
           retention-days: 14
