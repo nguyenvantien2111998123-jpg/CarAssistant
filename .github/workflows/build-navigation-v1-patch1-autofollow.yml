@@ -545,98 +545,199 @@ jobs:
               )
 
           release_start = text.rfind(
-              "tasks.matching {",
-              0,
-              release_marker_pos
+      # ============================================================
+      # STEP 24
+      #
+      # FIX:
+      # Patch chính xác cả Debug + Release bằng exact-string
+      # replacement. Không dùng brace parsing.
+      #
+      # Yêu cầu:
+      # - Debug old hook xuất hiện đúng 1 lần
+      # - Release old hook xuất hiện đúng 1 lần
+      # - Mỗi hook chỉ được thay đúng 1 lần
+      # - Old hook phải biến mất hoàn toàn
+      # - New hook phải xuất hiện đúng 1 lần
+      # ============================================================
+      - name: Patch legacy DEX task hooks
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          python3 <<'PY'
+          from pathlib import Path
+
+          path = Path("app/build.gradle")
+          text = path.read_text(encoding="utf-8")
+
+          # ============================================================
+          # EXACT OLD / NEW DEBUG HOOK
+          # ============================================================
+
+          old_debug = (
+              "tasks.matching {\n"
+              "    it.name == 'mergeProjectDexDebug'\n"
+              "}.configureEach { task ->"
           )
 
-          project_release_start = text.rfind(
-              "project.tasks.configureEach",
-              0,
-              release_marker_pos
+          new_debug = (
+              "project.tasks.configureEach { task ->\n"
+              "\n"
+              "    if (task.name != 'mergeProjectDexDebug') {\n"
+              "        return\n"
+              "    }"
           )
 
-          if project_release_start > release_start:
-              release_start = project_release_start
+          # ============================================================
+          # EXACT OLD / NEW RELEASE HOOK
+          # ============================================================
 
-          if release_start < 0:
+          old_release = (
+              "tasks.matching {\n"
+              "    it.name == 'mergeDexRelease'\n"
+              "}.configureEach { task ->"
+          )
+
+          new_release = (
+              "project.tasks.configureEach { task ->\n"
+              "\n"
+              "    if (task.name != 'mergeDexRelease') {\n"
+              "        return\n"
+              "    }"
+          )
+
+          # ============================================================
+          # COUNT BEFORE REPLACEMENT
+          # ============================================================
+
+          debug_count = text.count(old_debug)
+          release_count = text.count(old_release)
+
+          print(f"Debug old hook count   = {debug_count}")
+          print(f"Release old hook count = {release_count}")
+
+          if debug_count != 1:
               raise SystemExit(
-                  "ERROR: Release task hook not found."
+                  "ERROR: Expected exactly 1 Debug legacy DEX hook, "
+                  f"found {debug_count}."
               )
 
-          release_open = text.find(
-              "{",
-              release_start
-          )
-
-          if release_open < 0:
+          if release_count != 1:
               raise SystemExit(
-                  "ERROR: Release block opening brace not found."
+                  "ERROR: Expected exactly 1 Release legacy DEX hook, "
+                  f"found {release_count}."
               )
 
-          depth = 0
-          release_end = None
+          # ============================================================
+          # EXACT REPLACEMENT
+          # ============================================================
 
-          for i in range(release_open, len(text)):
-              if text[i] == "{":
-                  depth += 1
-              elif text[i] == "}":
-                  depth -= 1
-                  if depth == 0:
-                      release_end = i + 1
-                      break
-
-          if release_end is None:
-              raise SystemExit(
-                  "ERROR: Release block end not found."
-              )
-
-          release_block = text[
-              release_start:release_end
-          ]
-
-          if "mergeDexRelease" not in release_block:
-              raise SystemExit(
-                  "ERROR: Located Release block is incorrect."
-              )
-
-          release_block = release_block.replace(
-              "tasks.matching {\n    it.name == 'mergeDexRelease'\n}.configureEach { task ->",
-              "project.tasks.configureEach { task ->\n\n    if (task.name != 'mergeDexRelease') {\n        return\n    }"
+          text = text.replace(
+              old_debug,
+              new_debug,
+              1
           )
 
-          text = (
-              text[:release_start]
-              + release_block
-              + text[release_end:]
+          text = text.replace(
+              old_release,
+              new_release,
+              1
           )
+
+          # ============================================================
+          # VERIFY OLD HOOKS ARE COMPLETELY GONE
+          # ============================================================
+
+          remaining_debug = text.count(old_debug)
+          remaining_release = text.count(old_release)
+
+          print(
+              f"Debug old hook remaining   = {remaining_debug}"
+          )
+
+          print(
+              f"Release old hook remaining = {remaining_release}"
+          )
+
+          if remaining_debug != 0:
+              raise SystemExit(
+                  "ERROR: Old Debug tasks.matching hook still exists."
+              )
+
+          if remaining_release != 0:
+              raise SystemExit(
+                  "ERROR: Old Release tasks.matching hook still exists."
+              )
+
+          # ============================================================
+          # VERIFY NEW HOOKS EXIST EXACTLY ONCE
+          # ============================================================
+
+          patched_debug_count = text.count(new_debug)
+          patched_release_count = text.count(new_release)
+
+          print(
+              f"Patched Debug hook count   = {patched_debug_count}"
+          )
+
+          print(
+              f"Patched Release hook count = {patched_release_count}"
+          )
+
+          if patched_debug_count != 1:
+              raise SystemExit(
+                  "ERROR: Expected exactly 1 patched Debug hook, "
+                  f"found {patched_debug_count}."
+              )
+
+          if patched_release_count != 1:
+              raise SystemExit(
+                  "ERROR: Expected exactly 1 patched Release hook, "
+                  f"found {patched_release_count}."
+              )
+
+          # ============================================================
+          # WRITE ONLY AFTER ALL CHECKS PASS
+          # ============================================================
 
           path.write_text(
               text,
               encoding="utf-8"
           )
 
+          print()
           print(
-              "PASS: Debug and Release legacy DEX "
-              "task hooks patched."
+              "PASS: Debug legacy DEX hook patched exactly once."
+          )
+
+          print(
+              "PASS: Release legacy DEX hook patched exactly once."
+          )
+
+          print(
+              "PASS: Old Debug/Release hooks are completely absent."
+          )
+
+          print(
+              "PASS: Step 24 exact-string replacement completed."
           )
           PY
 
           echo
           echo "=== Verify Debug hook ==="
 
-          grep -n -A8 -B3 \
+          grep -n -A10 -B3 \
             "mergeProjectDexDebug" \
             app/build.gradle \
-            | head -80
+            | head -100
 
           echo
           echo "=== Verify Release hook ==="
 
-          grep -n -A8 -B3 \
+          grep -n -A10 -B3 \
             "mergeDexRelease" \
             app/build.gradle \
-            | head -100
+            | head -120
 
           echo
           echo "PASS: Step 24 completed."
