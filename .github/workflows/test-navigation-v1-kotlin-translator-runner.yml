@@ -1,0 +1,284 @@
+package com.carassistant.tools.javatokotlin
+
+import com.android.tools.lint.UastEnvironment
+import com.google.devtools.jvmtools.convert.psi2k.translateToKotlin
+import com.intellij.openapi.util.Disposer
+import com.intellij.openapi.vfs.StandardFileSystems
+import com.intellij.psi.PsiManager
+import com.intellij.psi.PsiJavaFile
+import com.intellij.pom.java.LanguageLevel
+import java.io.File
+import org.jetbrains.uast.UFile
+import org.jetbrains.uast.toUElementOfType
+
+private data class Result(
+    val source: File,
+    val output: File,
+    val kotlin: String
+)
+
+fun main(args: Array<String>) {
+    val options = parseArgs(args)
+
+    val inputRoot = File(options["input"] ?: error("Missing --input"))
+        .canonicalFile
+
+    val outputRoot = File(options["output"] ?: error("Missing --output"))
+        .canonicalFile
+
+    require(inputRoot.isDirectory) {
+        "Input directory does not exist: $inputRoot"
+    }
+
+    outputRoot.mkdirs()
+
+    println("============================================================")
+    println("CarAssistant Java -> Kotlin Translator Runner")
+    println("============================================================")
+    println("Input : $inputRoot")
+    println("Output: $outputRoot")
+    println()
+
+    val javaFiles = inputRoot
+        .walkTopDown()
+        .filter { it.isFile && it.extension == "java" }
+        .filter { it.name != "package-info.java" }
+        .filter { it.name != "module-info.java" }
+        .toList()
+        .sortedBy { it.relativeTo(inputRoot).path }
+
+    require(javaFiles.isNotEmpty()) {
+        "No Java source files found under $inputRoot"
+    }
+
+    println("Java files found: ${javaFiles.size}")
+    javaFiles.forEachIndexed { index, file ->
+        println("  ${index + 1}. ${file.relativeTo(inputRoot)}")
+    }
+
+    println()
+    println("Creating UAST/PSI environment...")
+
+    val config = UastEnvironment.Configuration.create(
+        enableKotlinScripting = false
+    )
+
+    config.javaLanguageLevel = LanguageLevel.JDK_17
+
+    config.addSourceRoots(
+        listOf(inputRoot)
+    )
+
+    val classpath = collectClasspath(options)
+
+    if (classpath.isNotEmpty()) {
+        println("Classpath entries: ${classpath.size}")
+        config.addClasspathRoots(classpath)
+    } else {
+        println("Classpath entries: 0")
+    }
+
+    val environment = UastEnvironment.create(config)
+
+    try {
+        /*
+         * This is important even for Java-only projects.
+         * The Lint UAST environment initializes PSI machinery here.
+         */
+        environment.analyzeFiles(emptyList())
+
+        val psiManager = PsiManager.getInstance(environment.ideaProject)
+
+        val vfs = StandardFileSystems.local()
+
+        val results = mutableListOf<Result>()
+        val failures = mutableListOf<String>()
+
+        println()
+        println("Translating Java -> Kotlin...")
+        println()
+
+        for ((index, javaFile) in javaFiles.withIndex()) {
+            val relative = javaFile.relativeTo(inputRoot)
+
+            val outputFile = File(
+                outputRoot,
+                relative.path.removeSuffix(".java") + ".kt"
+            )
+
+            outputFile.parentFile.mkdirs()
+
+            print("[${index + 1}/${javaFiles.size}] $relative ... ")
+
+            try {
+                val virtualFile = vfs.findFileByPath(
+                    javaFile.absolutePath
+                ) ?: error(
+                    "Unable to obtain VirtualFile for ${javaFile.absolutePath}"
+                )
+
+                val psiFile = psiManager.findFile(virtualFile)
+                    ?: error(
+                        "Unable to obtain PSI file for ${javaFile.absolutePath}"
+                    )
+
+                require(psiFile is PsiJavaFile) {
+                    "Expected PsiJavaFile but got ${psiFile.javaClass.name}"
+                }
+
+                val uFile = psiFile.toUElementOfType<UFile>()
+                    ?: error(
+                        "Java PSI could not be converted to UFile"
+                    )
+
+                val kotlin = uFile.translateToKotlin()
+
+                require(kotlin.isNotBlank()) {
+                    "Translator returned empty Kotlin source"
+                }
+
+                /*
+                 * Basic structural sanity checks.
+                 */
+                require(kotlin.contains("package ")) {
+                    "Translated source has no package declaration"
+                }
+
+                outputFile.writeText(
+                    kotlin,
+                    Charsets.UTF_8
+                )
+
+                results += Result(
+                    source = javaFile,
+                    output = outputFile,
+                    kotlin = kotlin
+                )
+
+                println("PASS")
+            } catch (t: Throwable) {
+                println("FAIL")
+                failures += buildString {
+                    append(relative)
+                    append(": ")
+                    append(t::class.java.name)
+                    append(": ")
+                    append(t.message ?: "no message")
+                }
+            }
+        }
+
+        println()
+        println("============================================================")
+        println("Translation verification")
+        println("============================================================")
+
+        if (failures.isNotEmpty()) {
+            println("FAILED FILES: ${failures.size}")
+            failures.forEach {
+                println("  $it")
+            }
+
+            error(
+                "Translation failed. No source Java files were modified."
+            )
+        }
+
+        val kotlinFiles = outputRoot
+            .walkTopDown()
+            .filter { it.isFile && it.extension == "kt" }
+            .filter { it.name != "package-info.kt" }
+            .filter { it.name != "module-info.kt" }
+            .map { it.relativeTo(outputRoot).path }
+            .toSet()
+
+        val expectedKotlinFiles = javaFiles
+            .map {
+                it.relativeTo(inputRoot)
+                    .path
+                    .removeSuffix(".java") + ".kt"
+            }
+            .toSet()
+
+        val missing = expectedKotlinFiles - kotlinFiles
+        val unexpected = kotlinFiles - expectedKotlinFiles
+
+        println("Input Java count : ${javaFiles.size}")
+        println("Output Kotlin count: ${kotlinFiles.size}")
+        println()
+
+        require(missing.isEmpty()) {
+            "Missing Kotlin files:\n${missing.joinToString("\n")}"
+        }
+
+        require(unexpected.isEmpty()) {
+            "Unexpected Kotlin files:\n${unexpected.joinToString("\n")}"
+        }
+
+        require(kotlinFiles.size == javaFiles.size) {
+            "Java/Kotlin count mismatch"
+        }
+
+        /*
+         * Verify every generated file is non-empty.
+         */
+        val emptyFiles = kotlinFiles
+            .map { File(outputRoot, it) }
+            .filter { it.length() == 0L }
+
+        require(emptyFiles.isEmpty()) {
+            "Empty generated files:\n${emptyFiles.joinToString("\n")}"
+        }
+
+        println("All Java files translated successfully.")
+        println("All expected Kotlin files exist.")
+        println("No Java source files were modified.")
+        println()
+        println("============================================================")
+        println("TRANSLATOR RUNNER: PASS")
+        println("============================================================")
+    } finally {
+        Disposer.dispose(environment.projectDisposable)
+    }
+}
+
+private fun parseArgs(args: Array<String>): Map<String, String> {
+    val result = linkedMapOf<String, String>()
+
+    var i = 0
+
+    while (i < args.size) {
+        val arg = args[i]
+
+        require(arg.startsWith("--")) {
+            "Invalid argument: $arg"
+        }
+
+        val key = arg.removePrefix("--")
+
+        require(i + 1 < args.size) {
+            "Missing value for $arg"
+        }
+
+        result[key] = args[i + 1]
+        i += 2
+    }
+
+    return result
+}
+
+private fun collectClasspath(
+    options: Map<String, String>
+): List<File> {
+    val value = options["classpath"] ?: return emptyList()
+
+    if (value.isBlank()) {
+        return emptyList()
+    }
+
+    return value
+        .split(File.pathSeparator)
+        .map { File(it).canonicalFile }
+        .filter { it.exists() }
+        .distinct()
+}
