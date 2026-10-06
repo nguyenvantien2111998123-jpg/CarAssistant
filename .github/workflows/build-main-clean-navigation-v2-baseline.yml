@@ -1,40 +1,48 @@
-name: Build Main Clean Navigation V2 Baseline
+name: Clean Navigation V2 Baseline
 
 on:
   workflow_dispatch:
-
-permissions:
-  contents: write
 
 jobs:
   clean-build:
     runs-on: ubuntu-latest
 
-    defaults:
-      run:
-        working-directory: v10-source
-
     steps:
+
+      # ============================================================
+      # 1. CHECKOUT EXACT MAIN BASELINE
+      # ============================================================
+
       - name: Checkout exact main baseline
         uses: actions/checkout@v4
         with:
           ref: 09b2c919b946164618b79283b7c3293c586547a8
           fetch-depth: 0
 
+      # ============================================================
+      # 2. VERIFY EXACT COMMIT
+      # ============================================================
+
       - name: Verify exact commit
-        shell: bash
         run: |
           set -e
+
           ACTUAL="$(git rev-parse HEAD)"
           EXPECTED="09b2c919b946164618b79283b7c3293c586547a8"
+
           echo "Expected: $EXPECTED"
           echo "Actual:   $ACTUAL"
+
           test "$ACTUAL" = "$EXPECTED"
 
+      # ============================================================
+      # 3. VERIFY REQUIRED SOURCE STRUCTURE
+      # ============================================================
+
       - name: Verify required source structure
-        shell: bash
         run: |
           set -e
+
           test -f app/src/main/java/com/hieptran/aacast/doudou/V10CarActivity.java
           test -f app/src/main/java/com/hieptran/aacast/doudou/V10ProjectionSession.java
           test -f app/src/main/java/com/hieptran/aacast/doudou/V10DisplayController.java
@@ -42,13 +50,19 @@ jobs:
           test -f app/src/main/java/com/hieptran/aacast/doudou/V10TaskSession.java
           test -f app/src/main/java/com/hieptran/aacast/doudou/V10SessionStore.java
           test -f app/src/main/java/com/hieptran/aacast/doudou/NavigationMapView.java
+
           echo "Required source files exist."
 
+      # ============================================================
+      # 4. SAVE PROTECTED CORE CHECKSUMS
+      # ============================================================
+
       - name: Save protected core checksums
-        shell: bash
         run: |
           set -e
+
           mkdir -p /tmp/carassistant-protected
+
           sha256sum \
             app/src/main/java/com/hieptran/aacast/doudou/V10ProjectionSession.java \
             app/src/main/java/com/hieptran/aacast/doudou/V10DisplayController.java \
@@ -56,13 +70,18 @@ jobs:
             app/src/main/java/com/hieptran/aacast/doudou/V10TaskSession.java \
             app/src/main/java/com/hieptran/aacast/doudou/V10SessionStore.java \
             > /tmp/carassistant-protected/core.sha256
+
           echo "Protected Projection/Persistence core checksums:"
           cat /tmp/carassistant-protected/core.sha256
 
+      # ============================================================
+      # 5. SAVE FLOATING TOUCH CHECKSUM
+      # ============================================================
+
       - name: Save Floating Touch checksum
-        shell: bash
         run: |
           set -e
+
           python3 - <<'PY'
           from pathlib import Path
           import hashlib
@@ -89,7 +108,9 @@ jobs:
               raise SystemExit("showFloatingMenu() was not found.")
 
           if end <= start:
-              raise SystemExit("Invalid Floating Touch method boundaries.")
+              raise SystemExit(
+                  "Invalid Floating Touch method boundaries."
+              )
 
           block = source[start:end]
 
@@ -107,10 +128,14 @@ jobs:
           print("Floating Touch SHA256:", digest)
           PY
 
+      # ============================================================
+      # 6. INSPECT NAVIGATION MAP INITIALIZATION
+      # ============================================================
+
       - name: Inspect NavigationMap initialization
-        shell: bash
         run: |
           set -e
+
           python3 - <<'PY'
           from pathlib import Path
 
@@ -134,10 +159,14 @@ jobs:
           print("Redundant NavigationMapView initialization detected.")
           PY
 
+      # ============================================================
+      # 7. CLEAN REDUNDANT DASHBOARD CODE
+      # ============================================================
+
       - name: Clean redundant Dashboard code
-        shell: bash
         run: |
           set -e
+
           python3 - <<'PY'
           from pathlib import Path
 
@@ -166,85 +195,61 @@ jobs:
 
           if len(navigation_positions) != 2:
               raise SystemExit(
-                  "Expected exactly 2 NavigationMapView initializations "
-                  "before cleanup, found "
+                  "Expected exactly 2 NavigationMapView initializations, found "
                   + str(len(navigation_positions))
               )
 
-          second_pos = navigation_positions[1]
+          first = navigation_positions[0]
+          second = navigation_positions[1]
 
-          line_start = source.rfind(
-              "\n",
-              0,
-              second_pos
-          ) + 1
+          second_line_end = source.find("\n", second)
 
-          after_init = second_pos + len(navigation_needle)
-
-          next_root = source.find(
-              "root.addView(",
-              after_init
-          )
-
-          if next_root < 0:
+          if second_line_end < 0:
               raise SystemExit(
-                  "The second NavigationMapView root.addView() "
-                  "was not found."
+                  "Could not find end of redundant NavigationMapView line."
               )
 
-          next_statement_end = source.find(
-              ");",
-              next_root
+          second_line_end += 1
+
+          root_add_marker = (
+              "root.addView(\n"
+              "                navigationMap,\n"
+              "                new FrameLayout.LayoutParams(-1, -1));\n"
           )
 
-          if next_statement_end < 0:
+          root_add_pos = source.find(
+              root_add_marker,
+              second_line_end
+          )
+
+          if root_add_pos < 0:
               raise SystemExit(
-                  "The second NavigationMapView root.addView() "
-                  "closing statement was not found."
+                  "Could not find redundant NavigationMapView root.addView block."
               )
 
-          next_statement_end += 2
-
-          if (
-              next_statement_end < len(source)
-              and source[next_statement_end] == "\n"
-          ):
-              next_statement_end += 1
+          root_add_end = root_add_pos + len(root_add_marker)
 
           source = (
-              source[:line_start]
-              + source[next_statement_end:]
-          )
-
-          dashboard_start_marker = (
-              "    private void buildDashboard() {"
-          )
-
-          dashboard_end_marker = (
-              "    private void buildAppPanel() {"
+              source[:second]
+              + source[second_line_end:root_add_pos]
+              + source[root_add_end:]
           )
 
           dashboard_start = source.find(
-              dashboard_start_marker
+              "    private void buildDashboard() {"
           )
 
           dashboard_end = source.find(
-              dashboard_end_marker
-          )
-
-          print(
-              "buildDashboard start:",
+              "    private void buildAppPanel() {",
               dashboard_start
           )
 
-          print(
-              "buildAppPanel boundary:",
-              dashboard_end
-          )
+          print("buildDashboard start:", dashboard_start)
+          print("buildAppPanel boundary:", dashboard_end)
 
           if dashboard_start < 0:
               raise SystemExit(
-                  "buildDashboard() was not found."
+                  "buildDashboard() method was not found."
               )
 
           if dashboard_end < 0:
@@ -252,84 +257,12 @@ jobs:
                   "buildAppPanel() boundary was not found."
               )
 
-          if dashboard_end <= dashboard_start:
-              raise SystemExit(
-                  "Invalid buildDashboard() method boundaries."
-              )
-
           source = (
               source[:dashboard_start]
               + source[dashboard_end:]
           )
 
-          weight_start_marker = (
-              "    private LinearLayout.LayoutParams\n"
-              "            weightParams() {"
-          )
-
-          weight_start = source.find(
-              weight_start_marker
-          )
-
-          if weight_start < 0:
-              raise SystemExit(
-                  "weightParams() was not found."
-              )
-
-          brace_start = source.find(
-              "{",
-              weight_start
-          )
-
-          if brace_start < 0:
-              raise SystemExit(
-                  "weightParams() opening brace was not found."
-              )
-
-          depth = 0
-          end = None
-
-          for i in range(
-              brace_start,
-              len(source)
-          ):
-              char = source[i]
-
-              if char == "{":
-                  depth += 1
-
-              elif char == "}":
-                  depth -= 1
-
-                  if depth == 0:
-                      end = i + 1
-                      break
-
-          if end is None:
-              raise SystemExit(
-                  "Could not determine end of weightParams()."
-              )
-
-          if (
-              end < len(source)
-              and source[end] == "\n"
-          ):
-              end += 1
-
-          source = (
-              source[:weight_start]
-              + source[end:]
-          )
-
-          # ---------------------------------------------------------
-          # IMPORTANT:
-          # buildDashboard() is intentionally removed above.
-          # Remove only its remaining call from onResume().
-          # Do not change any other source code.
-          # ---------------------------------------------------------
-
           call = "        buildDashboard();\n"
-
           call_count = source.count(call)
 
           print(
@@ -354,10 +287,29 @@ jobs:
                   "buildDashboard(); call still exists."
               )
 
-          if "private void buildDashboard()" in source:
+          weight_start = source.find(
+              "    private LinearLayout.LayoutParams weightParams("
+          )
+
+          weight_end = source.find(
+              "    private String initial(",
+              weight_start
+          )
+
+          if weight_start < 0:
               raise SystemExit(
-                  "buildDashboard() method still exists."
+                  "weightParams() method was not found."
               )
+
+          if weight_end < 0:
+              raise SystemExit(
+                  "initial() boundary was not found."
+              )
+
+          source = (
+              source[:weight_start]
+              + source[weight_end:]
+          )
 
           path.write_text(
               source,
@@ -381,10 +333,14 @@ jobs:
           )
           PY
 
+      # ============================================================
+      # 8. VERIFY CLEANUP
+      # ============================================================
+
       - name: Verify cleanup
-        shell: bash
         run: |
           set -e
+
           python3 - <<'PY'
           from pathlib import Path
 
@@ -463,8 +419,11 @@ jobs:
           )
           PY
 
+      # ============================================================
+      # 9. VERIFY NAVIGATION CORE
+      # ============================================================
+
       - name: Verify Navigation core
-        shell: bash
         run: |
           set -e
 
@@ -480,8 +439,11 @@ jobs:
 
           echo "NavigationMapView core verification passed."
 
+      # ============================================================
+      # 10. VERIFY PROTECTED CORE UNCHANGED
+      # ============================================================
+
       - name: Verify protected core unchanged
-        shell: bash
         run: |
           set -e
 
@@ -499,8 +461,11 @@ jobs:
 
           echo "Projection/Persistence core is byte-identical."
 
+      # ============================================================
+      # 11. VERIFY FLOATING TOUCH UNCHANGED
+      # ============================================================
+
       - name: Verify Floating Touch unchanged
-        shell: bash
         run: |
           set -e
 
@@ -577,8 +542,11 @@ jobs:
           )
           PY
 
+      # ============================================================
+      # 12. SHOW SOURCE DIFF
+      # ============================================================
+
       - name: Show source diff
-        shell: bash
         run: |
           set -e
 
@@ -587,11 +555,21 @@ jobs:
           git diff -- \
             app/src/main/java/com/hieptran/aacast/doudou/V10CarActivity.java
 
+      # ============================================================
+      # 13. GIT DIFF CHECK
+      # ============================================================
+
       - name: Git diff check
-        shell: bash
         run: |
           set -e
+
           git diff --check
+
+          echo "Git diff check PASSED."
+
+      # ============================================================
+      # 14. SETUP JAVA 17
+      # ============================================================
 
       - name: Setup Java 17
         uses: actions/setup-java@v4
@@ -599,44 +577,253 @@ jobs:
           distribution: temurin
           java-version: "17"
 
+      # ============================================================
+      # 15. SETUP ANDROID SDK
+      # ============================================================
+
       - name: Setup Android SDK
         uses: android-actions/setup-android@v3
         with:
           packages: "platform-tools"
 
+      # ============================================================
+      # 16. ACCEPT ANDROID SDK LICENSES
+      # ============================================================
+
       - name: Accept Android SDK licenses
-        shell: bash
         run: |
           set -e
-          yes | sdkmanager --licenses >/dev/null || true
+
+          yes | sdkmanager --licenses > /dev/null || true
+
+          echo "Android SDK licenses accepted."
+
+      # ============================================================
+      # 17. MAKE GRADLE EXECUTABLE
+      # ============================================================
 
       - name: Make Gradle executable
-        shell: bash
         run: |
-          chmod +x ./gradlew
+          set -e
+
+          chmod +x v10-source/gradlew
+
+          echo "Gradle executable permission set."
+
+      # ============================================================
+      # 18. COMPILE JAVA
+      # ============================================================
 
       - name: Compile Java
-        shell: bash
+        working-directory: v10-source
         run: |
           set -e
 
-          ./gradlew \
-            :app:compileDebugJavaWithJavac \
+          ./gradlew :app:compileReleaseJavaWithJavac \
             --no-daemon \
             --stacktrace
+
+      # ============================================================
+      # 19. PATCH ONLY aasdk-legacy.dex DUPLICATE MERGE
+      #
+      # IMPORTANT:
+      # - Không sửa Java.
+      # - Không sửa Navigation.
+      # - Không sửa Projection Core.
+      # - Không R8.
+      # - Không re-dex aasdk-legacy.dex.
+      # - Giữ nguyên bytecode gốc của aasdk-legacy.dex.
+      #
+      # Lỗi cũ:
+      # D8 merge app dex + aasdk-legacy.dex
+      # -> duplicate androidx.core.app.RemoteActionCompatParcelizer
+      #
+      # Cách sửa:
+      # giữ app dex do AGP tạo,
+      # sau đó đặt nguyên file aasdk-legacy.dex vào output
+      # dưới dạng một classesN.dex riêng.
+      # ============================================================
+
+      - name: Patch aasdk legacy dex merge
+        working-directory: v10-source
+        run: |
+          set -e
+
+          python3 - <<'PY'
+          from pathlib import Path
+
+          path = Path("app/build.gradle")
+          source = path.read_text(encoding="utf-8")
+
+          marker_start = "tasks.matching { it.name == 'mergeDexRelease' }.configureEach { task ->"
+          marker_end = "tasks.register('distRelease', Copy) {"
+
+          start = source.find(marker_start)
+          end = source.find(marker_end, start)
+
+          if start < 0:
+              raise SystemExit(
+                  "mergeDexRelease block was not found."
+              )
+
+          if end < 0:
+              raise SystemExit(
+                  "distRelease boundary was not found."
+              )
+
+          old_block = source[start:end]
+
+          expected_fragments = [
+              "libs/aasdk-legacy.dex",
+              "mergeDexRelease",
+              "project.exec",
+              "d8Tool",
+              "mergedDexes",
+          ]
+
+          for fragment in expected_fragments:
+              if fragment not in old_block:
+                  raise SystemExit(
+                      "Expected fragment missing from original "
+                      "mergeDexRelease block: " + fragment
+                  )
+
+          new_block = r'''tasks.matching { it.name == 'mergeDexRelease' }.configureEach { task ->
+    task.doLast {
+        def legacyDex = rootProject.file('app/libs/aasdk-legacy.dex')
+        if (!legacyDex.exists()) {
+            throw new GradleException("Thiếu app/libs/aasdk-legacy.dex!")
+        }
+
+        def outputDir = task.outputDir.get().asFile
+        def dexFilter = { it.isFile() && it.name ==~ /classes\d*\.dex/ } as FileFilter
+        def appDexes = outputDir.listFiles(dexFilter)?.toList() ?: []
+
+        if (appDexes.isEmpty()) {
+            throw new GradleException(
+                    "Không tìm thấy classes*.dex trong " + outputDir
+            )
+        }
+
+        /*
+         * KHÔNG đưa aasdk-legacy.dex vào D8 merge.
+         *
+         * aasdk-legacy.dex phải được giữ nguyên bytecode gốc.
+         * D8 merge với app dex gây duplicate:
+         *
+         * androidx.core.app.RemoteActionCompatParcelizer
+         *
+         * Vì Android runtime có thể nạp nhiều dex ở minSdk 29,
+         * giữ legacy SDK thành một dex riêng sẽ tránh việc D8
+         * phân tích/merge lại legacy dex.
+         */
+
+        int nextIndex = 1
+        File target
+
+        while (true) {
+            String name = nextIndex == 1
+                    ? "classes.dex"
+                    : "classes${nextIndex}.dex"
+
+            target = new File(outputDir, name)
+
+            if (!target.exists()) {
+                break
+            }
+
+            nextIndex++
+        }
+
+        target.bytes = legacyDex.bytes
+
+        if (target.length() != legacyDex.length()) {
+            throw new GradleException(
+                    "Copy aasdk-legacy.dex thất bại: kích thước không khớp."
+            )
+        }
+
+        println(
+                "Added raw aasdk-legacy.dex as " +
+                target.name +
+                " without D8 reprocessing."
+        )
+
+        println(
+                "Legacy dex size: " +
+                legacyDex.length() +
+                " bytes."
+        )
+    }
+}
+
+'''
+
+          source = (
+              source[:start]
+              + new_block
+              + source[end:]
+          )
+
+          path.write_text(
+              source,
+              encoding="utf-8"
+          )
+
+          verify = path.read_text(encoding="utf-8")
+
+          if "project.exec {" in verify:
+              raise SystemExit(
+                  "Old D8 project.exec merge block still exists."
+              )
+
+          if "mergedDexes" in verify:
+              raise SystemExit(
+                  "Old mergedDexes logic still exists."
+              )
+
+          if "d8Tool" in verify:
+              raise SystemExit(
+                  "Old d8Tool merge logic still exists."
+              )
+
+          if "tasks.matching { it.name == 'mergeDexRelease' }" not in verify:
+              raise SystemExit(
+                  "Patched mergeDexRelease block is missing."
+              )
+
+          if "target.bytes = legacyDex.bytes" not in verify:
+              raise SystemExit(
+                  "Raw legacy dex copy logic is missing."
+              )
+
+          print(
+              "aasdk-legacy.dex duplicate merge patch applied successfully."
+          )
+          print(
+              "Legacy dex remains raw and is not re-dexed."
+          )
+          PY
+
+      # ============================================================
+      # 20. ASSEMBLE RELEASE APK
+      # ============================================================
 
       - name: Assemble Release APK
-        shell: bash
+        working-directory: v10-source
         run: |
           set -e
 
-          ./gradlew \
-            :app:assembleRelease \
+          ./gradlew :app:assembleRelease \
             --no-daemon \
             --stacktrace
 
+      # ============================================================
+      # 21. VERIFY APK
+      # ============================================================
+
       - name: Verify APK
-        shell: bash
+        working-directory: v10-source
         run: |
           set -e
 
@@ -644,15 +831,19 @@ jobs:
 
           test -f "$APK"
 
-          echo "APK:"
+          echo "APK exists:"
           ls -lh "$APK"
 
-          echo "SHA256:"
+          echo "APK SHA256:"
           sha256sum "$APK"
+
+      # ============================================================
+      # 22. UPLOAD APK
+      # ============================================================
 
       - name: Upload clean baseline APK
         uses: actions/upload-artifact@v4
         with:
-          name: main-clean-navigation-v2-baseline
+          name: CarAssistant-Clean-Navigation-V2-Baseline
           path: v10-source/app/build/outputs/apk/release/app-release.apk
           if-no-files-found: error
