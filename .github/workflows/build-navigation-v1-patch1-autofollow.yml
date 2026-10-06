@@ -430,17 +430,6 @@ jobs:
 
       # ============================================================
       # STEP 24
-      #
-      # QUAN TRỌNG:
-      # Debug vẫn giữ nguyên legacy DEX riêng.
-      #
-      # Release KHÔNG đưa legacy DEX vào D8.
-      # AGP chỉ merge app + dependency DEX.
-      # Sau đó copy nguyên bản legacy DEX thành classesN.dex.
-      #
-      # Không lọc AndroidX.
-      # Không xóa Android Auto legacy.
-      # Không R8.
       # ============================================================
       - name: Patch legacy DEX task hooks safely
         shell: bash
@@ -767,8 +756,6 @@ jobs:
 
       # ============================================================
       # STEP 28
-      #
-      # Lấy dependency tree chính xác của releaseRuntimeClasspath.
       # ============================================================
       - name: Resolve and record release dependencies
         shell: bash
@@ -796,9 +783,6 @@ jobs:
 
       # ============================================================
       # STEP 29
-      #
-      # Chỉ merge app/dependency DEX.
-      # Hook sẽ thêm aasdk-legacy.dex thành DEX riêng.
       # ============================================================
       - name: Merge release DEX without legacy D8 merge
         shell: bash
@@ -823,13 +807,6 @@ jobs:
 
       # ============================================================
       # STEP 30
-      #
-      # ĐỐI CHIẾU CHÍNH XÁC:
-      # legacy DEX vs DEX của app/dependency.
-      #
-      # Không sửa legacy DEX.
-      # Không lọc class.
-      # Chỉ tạo báo cáo.
       # ============================================================
       - name: Analyze exact legacy DEX class overlap
         shell: bash
@@ -942,8 +919,6 @@ jobs:
 
       # ============================================================
       # STEP 31
-      #
-      # Kiểm tra xem overlap AndroidX đến từ JAR dependency nào.
       # ============================================================
       - name: Map overlapping classes to resolved dependency JARs
         shell: bash
@@ -1043,6 +1018,11 @@ jobs:
 
       # ============================================================
       # STEP 33
+      #
+      # FIX:
+      # KHÔNG giả định legacy DEX là classes2.dex.
+      #
+      # Tìm DEX thực tế trong APK bằng SHA256.
       # ============================================================
       - name: Verify APK and packaged DEX
         shell: bash
@@ -1050,15 +1030,18 @@ jobs:
           set -euo pipefail
 
           APK="app/build/outputs/apk/release/app-release.apk"
+          LEGACY="app/libs/aasdk-legacy.dex"
 
           test -f "$APK"
           test -s "$APK"
+          test -f "$LEGACY"
+          test -s "$LEGACY"
 
           echo "=== APK ==="
           ls -lh "$APK"
 
           echo
-          echo "=== SHA256 ==="
+          echo "=== APK SHA256 ==="
           sha256sum "$APK"
 
           echo
@@ -1068,28 +1051,107 @@ jobs:
             | grep -E 'classes[0-9]*\.dex'
 
           echo
-          echo "=== Check legacy DEX signature by SHA ==="
+          echo "=== Source legacy DEX SHA256 ==="
 
-          LEGACY_SHA="$(sha256sum app/libs/aasdk-legacy.dex | awk '{print $1}')"
-
-          unzip -p "$APK" classes2.dex \
-            > /tmp/apk_classes2.dex
-
-          APK_LEGACY_SHA="$(
-            sha256sum /tmp/apk_classes2.dex \
+          LEGACY_SHA="$(
+            sha256sum "$LEGACY" \
             | awk '{print $1}'
           )"
 
           echo "Source legacy SHA = $LEGACY_SHA"
-          echo "APK classes2 SHA  = $APK_LEGACY_SHA"
 
-          if [ "$LEGACY_SHA" != "$APK_LEGACY_SHA" ]; then
-            echo "ERROR: classes2.dex is not byte-identical to aasdk-legacy.dex."
+          echo
+          echo "=== Extract all APK DEX files ==="
+
+          rm -rf /tmp/apk_dex_verify
+          mkdir -p /tmp/apk_dex_verify
+
+          unzip -q "$APK" \
+            'classes*.dex' \
+            -d /tmp/apk_dex_verify
+
+          mapfile -t APK_DEX_FILES < <(
+            find /tmp/apk_dex_verify \
+              -type f \
+              -name 'classes*.dex' \
+              -print \
+              | sort
+          )
+
+          if [ "${#APK_DEX_FILES[@]}" -eq 0 ]; then
+            echo "ERROR: no classes*.dex found inside APK."
             exit 1
           fi
 
           echo
-          echo "PASS: legacy DEX is packaged byte-for-byte unchanged."
+          echo "DEX files found in APK:"
+          printf '%s\n' "${APK_DEX_FILES[@]}"
+
+          echo
+          echo "=== SHA256 of every APK DEX ==="
+
+          MATCH_COUNT=0
+          MATCH_FILE=""
+
+          for DEX_FILE in "${APK_DEX_FILES[@]}"; do
+
+            DEX_SHA="$(
+              sha256sum "$DEX_FILE" \
+              | awk '{print $1}'
+            )"
+
+            DEX_NAME="$(
+              basename "$DEX_FILE"
+            )"
+
+            echo "$DEX_NAME = $DEX_SHA"
+
+            if [ "$DEX_SHA" = "$LEGACY_SHA" ]; then
+              MATCH_COUNT=$((MATCH_COUNT + 1))
+              MATCH_FILE="$DEX_FILE"
+            fi
+
+          done
+
+          echo
+          echo "=== Legacy DEX SHA match result ==="
+          echo "Expected SHA : $LEGACY_SHA"
+          echo "Match count  : $MATCH_COUNT"
+
+          if [ "$MATCH_COUNT" -ne 1 ]; then
+            echo
+            echo "ERROR: expected exactly 1 APK DEX"
+            echo "with SHA256 identical to aasdk-legacy.dex."
+            echo
+            echo "This means the original legacy DEX was either"
+            echo "not packaged, was packaged more than once,"
+            echo "or was modified during packaging."
+            exit 1
+          fi
+
+          echo
+          echo "Matched APK DEX:"
+          echo "$MATCH_FILE"
+
+          PACKAGED_SHA="$(
+            sha256sum "$MATCH_FILE" \
+            | awk '{print $1}'
+          )"
+
+          echo
+          echo "Source legacy SHA    = $LEGACY_SHA"
+          echo "Packaged legacy SHA  = $PACKAGED_SHA"
+
+          test "$LEGACY_SHA" = "$PACKAGED_SHA"
+
+          echo
+          echo "=== Byte-for-byte verification ==="
+
+          cmp -s "$LEGACY" "$MATCH_FILE"
+
+          echo
+          echo "PASS: exactly one packaged DEX matches aasdk-legacy.dex."
+          echo "PASS: legacy DEX is byte-for-byte unchanged."
           echo "PASS: Release APK verified."
 
       # ============================================================
