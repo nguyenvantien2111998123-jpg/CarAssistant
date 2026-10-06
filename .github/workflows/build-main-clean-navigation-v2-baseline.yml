@@ -1,0 +1,488 @@
+name: CarAssistant - Clean Main Navigation V2 Baseline
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  clean-main:
+    runs-on: ubuntu-latest
+
+    steps:
+
+      - name: Checkout exact Main baseline
+        uses: actions/checkout@v4
+        with:
+          ref: 09b2c919b946164618b79283b7c3293c586547a8
+          fetch-depth: 0
+
+      - name: Verify exact commit
+        shell: bash
+        run: |
+          set -e
+
+          EXPECTED="09b2c919b946164618b79283b7c3293c586547a8"
+          ACTUAL="$(git rev-parse HEAD)"
+
+          echo "Expected: $EXPECTED"
+          echo "Actual:   $ACTUAL"
+
+          test "$ACTUAL" = "$EXPECTED"
+
+      - name: Verify required source structure
+        shell: bash
+        run: |
+          set -e
+
+          test -f v10-source/app/src/main/java/com/hieptran/aacast/doudou/V10CarActivity.java
+          test -f v10-source/app/src/main/java/com/hieptran/aacast/doudou/NavigationMapView.java
+
+          test -f v10-source/app/src/main/java/com/hieptran/aacast/doudou/V10ProjectionSession.java
+          test -f v10-source/app/src/main/java/com/hieptran/aacast/doudou/V10DisplayController.java
+          test -f v10-source/app/src/main/java/com/hieptran/aacast/doudou/V10SurfaceManager.java
+          test -f v10-source/app/src/main/java/com/hieptran/aacast/doudou/V10TaskSession.java
+          test -f v10-source/app/src/main/java/com/hieptran/aacast/doudou/V10SessionStore.java
+
+          test -f v10-source/app/build.gradle
+
+          echo "Source structure OK"
+
+      - name: Save protected core checksums
+        shell: bash
+        run: |
+          set -e
+
+          mkdir -p /tmp/protected-before
+
+          sha256sum \
+            v10-source/app/src/main/java/com/hieptran/aacast/doudou/V10ProjectionSession.java \
+            v10-source/app/src/main/java/com/hieptran/aacast/doudou/V10DisplayController.java \
+            v10-source/app/src/main/java/com/hieptran/aacast/doudou/V10SurfaceManager.java \
+            v10-source/app/src/main/java/com/hieptran/aacast/doudou/V10TaskSession.java \
+            v10-source/app/src/main/java/com/hieptran/aacast/doudou/V10SessionStore.java \
+            > /tmp/protected-before/checksums.txt
+
+      - name: Verify Floating Touch exists
+        shell: bash
+        run: |
+          set -e
+
+          FILE="v10-source/app/src/main/java/com/hieptran/aacast/doudou/V10CarActivity.java"
+
+          grep -q "createFloatingTouchKey()" "$FILE"
+          grep -q "floatingDownTime" "$FILE"
+          grep -q 'addFloatingMenuButton("BACK"' "$FILE"
+          grep -q 'addFloatingMenuButton("HOME"' "$FILE"
+
+          echo "Floating Touch OK"
+
+      - name: Clean redundant Dashboard code
+        shell: bash
+        run: |
+          set -e
+
+          python3 <<'PY'
+          from pathlib import Path
+
+          path = Path(
+              "v10-source/app/src/main/java/com/hieptran/aacast/doudou/V10CarActivity.java"
+          )
+
+          text = path.read_text()
+
+          # ------------------------------------------------------------
+          # 1. Remove duplicate NavigationMapView initialization.
+          # Keep the FIRST initialization.
+          # ------------------------------------------------------------
+
+          block = """\
+          projectionLayer =
+                  new FrameLayout(this);
+          navigationMap = new NavigationMapView(this);
+          root.addView(
+                  navigationMap,
+                  new FrameLayout.LayoutParams(-1, -1));
+          """
+
+          count = text.count(block)
+
+          if count != 1:
+              raise SystemExit(
+                  f"Expected exactly one duplicate navigation block, found {count}"
+              )
+
+          text = text.replace(
+              block,
+              """\
+          projectionLayer =
+                  new FrameLayout(this);
+          """,
+              1
+          )
+
+          # ------------------------------------------------------------
+          # 2. Remove old clock/date fields.
+          # ------------------------------------------------------------
+
+          text = text.replace(
+              """\
+          private TextView clock;
+          private TextView date;
+
+          """,
+              ""
+          )
+
+          # ------------------------------------------------------------
+          # 3. Remove obsolete imports.
+          # ------------------------------------------------------------
+
+          text = text.replace(
+              "import android.graphics.Typeface;\n",
+              ""
+          )
+
+          text = text.replace(
+              "import java.text.SimpleDateFormat;\n",
+              ""
+          )
+
+          text = text.replace(
+              "import java.util.Date;\n",
+              ""
+          )
+
+          # ------------------------------------------------------------
+          # 4. Remove clockTicker Runnable.
+          # ------------------------------------------------------------
+
+          start = text.find(
+              "    private final Runnable clockTicker ="
+          )
+
+          end = text.find(
+              "    private final Runnable targetPoller =",
+              start
+          )
+
+          if start == -1 or end == -1:
+              raise SystemExit(
+                  "clockTicker block not found"
+              )
+
+          text = text[:start] + text[end:]
+
+          # ------------------------------------------------------------
+          # 5. Remove clockTicker calls.
+          # ------------------------------------------------------------
+
+          text = text.replace(
+              """\
+                  handler.removeCallbacks(
+                          clockTicker);
+
+          """,
+              ""
+          )
+
+          text = text.replace(
+              """\
+              handler.post(clockTicker);
+          """,
+              ""
+          )
+
+          # ------------------------------------------------------------
+          # 6. Replace old Dashboard with the simple application dock.
+          #
+          # Keep dashboard/dock/showApps/rebuildDock behavior.
+          # Remove CAR ASSISTANT / MAP / SPEED / WEATHER / MEDIA.
+          # ------------------------------------------------------------
+
+          start = text.find(
+              "    private void buildDashboard() {"
+          )
+
+          end = text.find(
+              "    private void buildAppPanel() {",
+              start
+          )
+
+          if start == -1 or end == -1:
+              raise SystemExit(
+                  "buildDashboard boundaries not found"
+              )
+
+          dashboard = """\
+              private void buildDashboard() {
+
+                  dashboard =
+                          new LinearLayout(this);
+
+                  dashboard.setOrientation(
+                          LinearLayout.VERTICAL);
+
+                  launcherLayer.addView(
+                          dashboard,
+                          new LinearLayout.LayoutParams(
+                                  -1,
+                                  -1));
+
+                  LinearLayout dockRow =
+                          new LinearLayout(this);
+
+                  dockRow.setGravity(
+                          Gravity.CENTER_VERTICAL);
+
+                  dock =
+                          new LinearLayout(this);
+
+                  dock.setGravity(
+                          Gravity.CENTER_VERTICAL);
+
+                  dockRow.addView(
+                          dock,
+                          new LinearLayout.LayoutParams(
+                                  0,
+                                  -1,
+                                  1));
+
+                  TextView appsButton =
+                          buttonText("APPS");
+
+                  appsButton.setOnClickListener(
+                          v -> showApps());
+
+                  dockRow.addView(
+                          appsButton,
+                          new LinearLayout.LayoutParams(
+                                  dp(90),
+                                  dp(58)));
+
+                  dashboard.addView(
+                          dockRow,
+                          new LinearLayout.LayoutParams(
+                                  -1,
+                                  dp(70)));
+              }
+
+          """
+
+          text = text[:start] + dashboard + text[end:]
+
+          # ------------------------------------------------------------
+          # 7. Remove updateClock().
+          # ------------------------------------------------------------
+
+          start = text.find(
+              "    private void updateClock() {"
+          )
+
+          end = text.find(
+              "    private LinearLayout card() {",
+              start
+          )
+
+          if start == -1 or end == -1:
+              raise SystemExit(
+                  "updateClock boundaries not found"
+              )
+
+          text = text[:start] + text[end:]
+
+          # ------------------------------------------------------------
+          # 8. Remove obsolete card() and infoCard().
+          # ------------------------------------------------------------
+
+          start = text.find(
+              "    private LinearLayout card() {"
+          )
+
+          end = text.find(
+              "    private TextView buttonText(",
+              start
+          )
+
+          if start == -1 or end == -1:
+              raise SystemExit(
+                  "card helper boundaries not found"
+              )
+
+          text = text[:start] + text[end:]
+
+          # ------------------------------------------------------------
+          # 9. Remove obsolete weightParams().
+          # ------------------------------------------------------------
+
+          start = text.find(
+              "    private LinearLayout.LayoutParams\n"
+              "            weightParams() {"
+          )
+
+          if start != -1:
+              end = text.find(
+                  "    private String initial(",
+                  start
+              )
+
+              if end == -1:
+                  raise SystemExit(
+                      "weightParams end not found"
+                  )
+
+              text = text[:start] + text[end:]
+
+          path.write_text(text)
+
+          print("Dashboard cleanup completed")
+          PY
+
+      - name: Verify cleanup
+        shell: bash
+        run: |
+          set -e
+
+          FILE="v10-source/app/src/main/java/com/hieptran/aacast/doudou/V10CarActivity.java"
+
+          NAV_COUNT="$(grep -o "navigationMap = new NavigationMapView(this);" "$FILE" | wc -l)"
+
+          echo "navigationMap initialization count: $NAV_COUNT"
+
+          test "$NAV_COUNT" = "1"
+
+          ! grep -q 'CAR ASSISTANT' "$FILE"
+          ! grep -q '"MAP"' "$FILE"
+          ! grep -q '"SPEED"' "$FILE"
+          ! grep -q '"WEATHER"' "$FILE"
+          ! grep -q '"MEDIA"' "$FILE"
+
+          ! grep -q 'infoCard(' "$FILE"
+          ! grep -q 'weightParams(' "$FILE"
+          ! grep -q 'clockTicker' "$FILE"
+          ! grep -q 'updateClock' "$FILE"
+          ! grep -q 'Typeface' "$FILE"
+
+          echo "Cleanup verification PASS"
+
+      - name: Verify Navigation core remains
+        shell: bash
+        run: |
+          set -e
+
+          FILE="v10-source/app/src/main/java/com/hieptran/aacast/doudou/NavigationMapView.java"
+
+          grep -q "class NavigationMapView" "$FILE"
+          grep -q "MapLibre" "$FILE"
+          grep -q "recenter()" "$FILE"
+          grep -q "onHostResume()" "$FILE"
+          grep -q "onHostPause()" "$FILE"
+          grep -q "onHostDestroy()" "$FILE"
+
+          echo "Navigation core PASS"
+
+      - name: Verify protected core unchanged
+        shell: bash
+        run: |
+          set -e
+
+          sha256sum \
+            v10-source/app/src/main/java/com/hieptran/aacast/doudou/V10ProjectionSession.java \
+            v10-source/app/src/main/java/com/hieptran/aacast/doudou/V10DisplayController.java \
+            v10-source/app/src/main/java/com/hieptran/aacast/doudou/V10SurfaceManager.java \
+            v10-source/app/src/main/java/com/hieptran/aacast/doudou/V10TaskSession.java \
+            v10-source/app/src/main/java/com/hieptran/aacast/doudou/V10SessionStore.java \
+            > /tmp/protected-after.txt
+
+          diff -u \
+            /tmp/protected-before/checksums.txt \
+            /tmp/protected-after.txt
+
+          echo "Projection/Persistence core unchanged"
+
+      - name: Verify Floating Touch unchanged
+        shell: bash
+        run: |
+          set -e
+
+          FILE="v10-source/app/src/main/java/com/hieptran/aacast/doudou/V10CarActivity.java"
+
+          grep -q "createFloatingTouchKey()" "$FILE"
+          grep -q "floatingDownTime" "$FILE"
+          grep -q 'addFloatingMenuButton("BACK"' "$FILE"
+          grep -q 'addFloatingMenuButton("HOME"' "$FILE"
+
+          echo "Floating Touch preserved"
+
+      - name: Show diff
+        shell: bash
+        run: |
+          git diff -- v10-source/app/src/main/java/com/hieptran/aacast/doudou/V10CarActivity.java
+
+      - name: Git diff check
+        shell: bash
+        run: |
+          set -e
+
+          git diff --check
+
+          echo "git diff --check PASS"
+
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Accept Android licenses
+        shell: bash
+        run: |
+          yes | sdkmanager --licenses >/dev/null || true
+
+      - name: Compile
+        working-directory: v10-source
+        shell: bash
+        run: |
+          set -e
+
+          chmod +x gradlew
+
+          ./gradlew \
+            :app:compileDebugJavaWithJavac \
+            --no-daemon \
+            --stacktrace
+
+      - name: Assemble APK
+        working-directory: v10-source
+        shell: bash
+        run: |
+          set -e
+
+          ./gradlew \
+            :app:assembleRelease \
+            --no-daemon \
+            --stacktrace
+
+      - name: Verify APK
+        shell: bash
+        run: |
+          set -e
+
+          APK="v10-source/app/build/outputs/apk/release/app-release.apk"
+
+          test -f "$APK"
+
+          echo "APK exists:"
+          ls -lh "$APK"
+
+          sha256sum "$APK"
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: main-clean-navigation-v2-baseline
+          path: v10-source/app/build/outputs/apk/release/app-release.apk
