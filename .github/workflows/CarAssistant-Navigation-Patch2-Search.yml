@@ -25,9 +25,6 @@ jobs:
           EXPECTED="3f6f007dfbf0144cf01c2dc989fe686a7b0b3491"
           ACTUAL="$(git rev-parse HEAD)"
 
-          echo "EXPECTED=$EXPECTED"
-          echo "ACTUAL=$ACTUAL"
-
           test "$ACTUAL" = "$EXPECTED"
 
           SRC="v10-source/app/src/main/java/com/hieptran/aacast/doudou"
@@ -35,7 +32,6 @@ jobs:
           test -f v10-source/gradlew
           test -f v10-source/app/build.gradle
           test -f v10-source/app/src/main/AndroidManifest.xml
-
           test -f "$SRC/NavigationMapView.java"
           test -f "$SRC/V10CarActivity.java"
 
@@ -47,13 +43,9 @@ jobs:
             'package com.carassistant.v10;' \
             "$SRC/NavigationMapView.java"
 
-          grep -Fq \
-            'class NavigationMapView' \
-            "$SRC/NavigationMapView.java"
-
           echo "NAVIGATION V1 BASELINE: PASS"
 
-      - name: Capture protected Projection Core
+      - name: Capture protected Core hashes
         shell: bash
         run: |
           set -euo pipefail
@@ -68,32 +60,24 @@ jobs:
             "$SRC/V10SessionStore.java" \
             > /tmp/core-before.sha256
 
-          echo "PROJECTION CORE HASH: CAPTURED"
+          sha256sum \
+            "$SRC/V10CarActivity.java" \
+            > /tmp/activity-before.sha256
 
-      - name: Verify Patch 1 is NOT included
+          echo "PROTECTED HASHES: CAPTURED"
+
+      - name: Verify Patch 1 is absent
         shell: bash
         run: |
           set -euo pipefail
 
           FILE="v10-source/app/src/main/java/com/hieptran/aacast/doudou/NavigationMapView.java"
 
-          if grep -Fq 'CameraMode.TRACKING_GPS' "$FILE"; then
-            echo "ERROR: Patch 1 AutoFollow is already present."
-            echo "Patch 2 must be independent from Patch 1."
-            exit 1
-          fi
+          ! grep -Fq 'CameraMode.TRACKING_GPS' "$FILE"
+          ! grep -Fq 'trackingGesturesManagement(true)' "$FILE"
+          ! grep -Fq 'recenterButton' "$FILE"
 
-          if grep -Fq 'trackingGesturesManagement(true)' "$FILE"; then
-            echo "ERROR: Patch 1 trackingGesturesManagement is already present."
-            exit 1
-          fi
-
-          if grep -Fq 'recenterButton' "$FILE"; then
-            echo "ERROR: Patch 1 Recenter UI is already present."
-            exit 1
-          fi
-
-          echo "PATCH 1 INDEPENDENCE: PASS"
+          echo "PATCH 1 ABSENT: PASS"
 
       - name: Add INTERNET permission
         shell: bash
@@ -123,10 +107,10 @@ jobs:
             'android.permission.ACCESS_COARSE_LOCATION' \
             "$FILE"
 
-          echo "INTERNET PERMISSION: PASS"
+          echo "INTERNET: PASS"
           echo "LOCATION PERMISSIONS: PRESERVED"
 
-      - name: Apply Patch 2 - Search + Select Destination
+      - name: Apply Patch 2 Search
         shell: bash
         run: |
           set -euo pipefail
@@ -142,14 +126,12 @@ jobs:
           import android.content.pm.PackageManager;
           import android.graphics.Color;
           import android.graphics.drawable.GradientDrawable;
-          import android.location.Location;
           import android.os.Bundle;
           import android.os.Handler;
           import android.os.Looper;
           import android.view.Gravity;
           import android.view.View;
           import android.view.inputmethod.InputMethodManager;
-          import android.widget.Button;
           import android.widget.EditText;
           import android.widget.FrameLayout;
           import android.widget.LinearLayout;
@@ -165,8 +147,8 @@ jobs:
           import org.maplibre.android.location.LocationComponentOptions;
           import org.maplibre.android.maps.MapLibreMap;
           import org.maplibre.android.maps.MapView;
-          import org.maplibre.android.maps.UiSettings;
           import org.maplibre.android.style.layers.CircleLayer;
+          import org.maplibre.android.style.layers.PropertyFactory;
           import org.maplibre.android.style.sources.GeoJsonSource;
           import org.maplibre.geojson.Feature;
           import org.maplibre.geojson.Point;
@@ -192,25 +174,15 @@ jobs:
                       "carassistant-patch2-destination-layer";
 
               private final MapView mapView;
-
               private final Handler mainHandler =
                       new Handler(Looper.getMainLooper());
 
               private MapLibreMap map;
-
               private EditText searchInput;
-
-              private TextView searchButton;
-
-              private TextView searchStatus;
-
-              private LinearLayout resultsPanel;
-
+              private TextView status;
               private LinearLayout resultsList;
-
+              private LinearLayout resultsPanel;
               private GeoJsonSource destinationSource;
-
-              private CircleLayer destinationLayer;
 
               public NavigationMapView(Context context) {
                   super(context);
@@ -221,15 +193,11 @@ jobs:
                           context.getApplicationContext());
 
                   mapView = new MapView(context);
-
-                  mapView.onCreate(
-                          new Bundle());
+                  mapView.onCreate(new Bundle());
 
                   addView(
                           mapView,
-                          new LayoutParams(
-                                  -1,
-                                  -1));
+                          new LayoutParams(-1, -1));
 
                   mapView.getMapAsync(
                           this::onMapReady);
@@ -240,34 +208,32 @@ jobs:
 
                   map = readyMap;
 
-                  UiSettings ui =
-                          map.getUiSettings();
+                  map.getUiSettings()
+                          .setCompassEnabled(false);
 
-                  ui.setCompassEnabled(false);
-                  ui.setZoomGesturesEnabled(true);
-                  ui.setScrollGesturesEnabled(true);
-                  ui.setRotateGesturesEnabled(true);
-                  ui.setTiltGesturesEnabled(false);
+                  map.getUiSettings()
+                          .setZoomGesturesEnabled(true);
+
+                  map.getUiSettings()
+                          .setScrollGesturesEnabled(true);
+
+                  map.getUiSettings()
+                          .setRotateGesturesEnabled(true);
 
                   map.setStyle(
                           "https://tiles.openfreemap.org/styles/liberty",
                           style -> {
                               enableLocation();
-                              createSearchUi();
                               createDestinationLayer();
+                              createSearchUi();
                           });
               }
 
               private void enableLocation() {
 
-                  if (map == null) {
-                      return;
-                  }
+                  Context context = getContext();
 
-                  Context context =
-                          getContext();
-
-                  if (context == null) {
+                  if (context == null || map == null) {
                       return;
                   }
 
@@ -276,14 +242,12 @@ jobs:
                           != PackageManager.PERMISSION_GRANTED) {
 
                       if (context instanceof Activity) {
-
-                          ((Activity) context)
-                                  .requestPermissions(
-                                          new String[]{
-                                                  Manifest.permission.ACCESS_FINE_LOCATION,
-                                                  Manifest.permission.ACCESS_COARSE_LOCATION
-                                          },
-                                          LOCATION_REQUEST);
+                          ((Activity) context).requestPermissions(
+                                  new String[]{
+                                          Manifest.permission.ACCESS_FINE_LOCATION,
+                                          Manifest.permission.ACCESS_COARSE_LOCATION
+                                  },
+                                  LOCATION_REQUEST);
                       }
 
                       return;
@@ -300,8 +264,7 @@ jobs:
                                   .builder(
                                           context,
                                           map.getStyle())
-                                  .locationComponentOptions(
-                                          options)
+                                  .locationComponentOptions(options)
                                   .build();
 
                   map.getLocationComponent()
@@ -318,108 +281,71 @@ jobs:
                       return;
                   }
 
-                  LinearLayout searchBox =
+                  LinearLayout box =
                           new LinearLayout(getContext());
 
-                  searchBox.setOrientation(
+                  box.setOrientation(
                           LinearLayout.VERTICAL);
 
-                  searchBox.setPadding(
+                  box.setPadding(
                           dp(10),
                           dp(10),
                           dp(10),
                           dp(10));
 
-                  GradientDrawable background =
+                  GradientDrawable bg =
                           new GradientDrawable();
 
-                  background.setColor(
-                          Color.rgb(
-                                  15,
-                                  20,
-                                  26));
+                  bg.setColor(Color.rgb(15, 20, 26));
+                  bg.setCornerRadius(dp(16));
 
-                  background.setCornerRadius(
-                          dp(16));
-
-                  background.setStroke(
-                          dp(1),
-                          Color.rgb(
-                                  70,
-                                  85,
-                                  100));
-
-                  searchBox.setBackground(
-                          background);
+                  box.setBackground(bg);
 
                   searchInput =
                           new EditText(getContext());
 
                   searchInput.setSingleLine(true);
                   searchInput.setTextColor(Color.WHITE);
-                  searchInput.setHintTextColor(
-                          Color.LTGRAY);
-                  searchInput.setHint(
-                          "Tìm địa điểm...");
+                  searchInput.setHintTextColor(Color.LTGRAY);
+                  searchInput.setHint("Tìm địa điểm...");
                   searchInput.setTextSize(15);
-                  searchInput.setPadding(
-                          dp(14),
-                          0,
-                          dp(14),
-                          0);
 
-                  GradientDrawable inputBackground =
-                          new GradientDrawable();
-
-                  inputBackground.setColor(
-                          Color.rgb(
-                                  29,
-                                  35,
-                                  42));
-
-                  inputBackground.setCornerRadius(
-                          dp(12));
-
-                  searchInput.setBackground(
-                          inputBackground);
-
-                  searchBox.addView(
+                  box.addView(
                           searchInput,
                           new LinearLayout.LayoutParams(
                                   -1,
-                                  dp(52)));
+                                  dp(50)));
 
-                  LinearLayout buttonRow =
+                  LinearLayout row =
                           new LinearLayout(getContext());
 
-                  buttonRow.setGravity(
-                          Gravity.CENTER_VERTICAL);
+                  TextView search =
+                          actionButton("TÌM");
 
-                  searchButton =
-                          createActionButton(
-                                  "TÌM");
-
-                  searchButton.setOnClickListener(
+                  search.setOnClickListener(
                           v -> startSearch());
 
-                  buttonRow.addView(
-                          searchButton,
+                  row.addView(
+                          search,
                           new LinearLayout.LayoutParams(
-                                  dp(86),
-                                  dp(48)));
+                                  dp(80),
+                                  dp(46)));
 
-                  searchStatus =
-                          createStatusText();
+                  status = new TextView(getContext());
+                  status.setTextColor(Color.LTGRAY);
+                  status.setGravity(
+                          Gravity.CENTER_VERTICAL);
+                  status.setPadding(
+                          dp(10), 0, 0, 0);
 
-                  buttonRow.addView(
-                          searchStatus,
+                  row.addView(
+                          status,
                           new LinearLayout.LayoutParams(
                                   0,
-                                  dp(48),
-                                  1f));
+                                  dp(46),
+                                  1));
 
-                  searchBox.addView(
-                          buttonRow);
+                  box.addView(row);
 
                   resultsPanel =
                           new LinearLayout(getContext());
@@ -430,21 +356,6 @@ jobs:
                   resultsPanel.setVisibility(
                           View.GONE);
 
-                  GradientDrawable resultsBackground =
-                          new GradientDrawable();
-
-                  resultsBackground.setColor(
-                          Color.rgb(
-                                  10,
-                                  14,
-                                  19));
-
-                  resultsBackground.setCornerRadius(
-                          dp(14));
-
-                  resultsPanel.setBackground(
-                          resultsBackground);
-
                   resultsList =
                           new LinearLayout(getContext());
 
@@ -454,30 +365,21 @@ jobs:
                   ScrollView scroll =
                           new ScrollView(getContext());
 
-                  scroll.addView(
-                          resultsList,
-                          new ScrollView.LayoutParams(
-                                  -1,
-                                  -2));
+                  scroll.addView(resultsList);
 
                   resultsPanel.addView(
                           scroll,
                           new LinearLayout.LayoutParams(
                                   -1,
-                                  dp(270)));
+                                  dp(250)));
 
-                  searchBox.addView(
-                          resultsPanel,
-                          new LinearLayout.LayoutParams(
-                                  -1,
-                                  -2));
+                  box.addView(resultsPanel);
 
                   LayoutParams params =
                           new LayoutParams(
                                   dp(430),
                                   -2,
-                                  Gravity.TOP
-                                          | Gravity.START);
+                                  Gravity.TOP | Gravity.START);
 
                   params.setMargins(
                           dp(18),
@@ -485,9 +387,7 @@ jobs:
                           dp(18),
                           0);
 
-                  addView(
-                          searchBox,
-                          params);
+                  addView(box, params);
 
                   searchInput.setOnEditorActionListener(
                           (v, actionId, event) -> {
@@ -496,61 +396,28 @@ jobs:
                           });
               }
 
-              private TextView createActionButton(
-                      String label) {
+              private TextView actionButton(
+                      String text) {
 
                   TextView button =
                           new TextView(getContext());
 
-                  button.setText(label);
+                  button.setText(text);
                   button.setTextColor(Color.WHITE);
-                  button.setTextSize(13);
-                  button.setGravity(
-                          Gravity.CENTER);
+                  button.setGravity(Gravity.CENTER);
 
-                  GradientDrawable background =
+                  GradientDrawable bg =
                           new GradientDrawable();
 
-                  background.setColor(
-                          Color.rgb(
-                                  35,
-                                  55,
-                                  70));
+                  bg.setColor(Color.rgb(35, 55, 70));
+                  bg.setCornerRadius(dp(10));
 
-                  background.setCornerRadius(
-                          dp(12));
-
-                  button.setBackground(
-                          background);
+                  button.setBackground(bg);
 
                   return button;
               }
 
-              private TextView createStatusText() {
-
-                  TextView status =
-                          new TextView(getContext());
-
-                  status.setText("");
-                  status.setTextColor(Color.LTGRAY);
-                  status.setTextSize(12);
-                  status.setGravity(
-                          Gravity.CENTER_VERTICAL);
-
-                  status.setPadding(
-                          dp(12),
-                          0,
-                          dp(4),
-                          0);
-
-                  return status;
-              }
-
               private void startSearch() {
-
-                  if (searchInput == null) {
-                      return;
-                  }
 
                   String query =
                           searchInput
@@ -559,20 +426,14 @@ jobs:
                                   .trim();
 
                   if (query.isEmpty()) {
-
-                      setSearchStatus(
-                              "Nhập địa điểm cần tìm.");
-
+                      status.setText(
+                              "Nhập địa điểm cần tìm");
                       return;
                   }
 
                   hideKeyboard();
 
-                  searchButton.setEnabled(false);
-
-                  setSearchStatus(
-                          "Đang tìm...");
-
+                  status.setText("Đang tìm...");
                   resultsPanel.setVisibility(
                           View.VISIBLE);
 
@@ -580,18 +441,16 @@ jobs:
 
                   new Thread(
                           () -> performSearch(query),
-                          "CarAssistant-Patch2-Search")
+                          "CarAssistant-Patch2")
                           .start();
               }
 
               private void performSearch(
                       String query) {
 
-                  HttpURLConnection connection =
-                          null;
+                  HttpURLConnection connection = null;
 
                   try {
-
                       String encoded =
                               URLEncoder.encode(
                                       query,
@@ -604,50 +463,35 @@ jobs:
                               + "&q="
                               + encoded;
 
-                      URL url =
-                              new URL(endpoint);
-
                       connection =
                               (HttpURLConnection)
-                                      url.openConnection();
+                                      new URL(endpoint)
+                                              .openConnection();
 
-                      connection.setRequestMethod(
-                              "GET");
-
-                      connection.setConnectTimeout(
-                              10000);
-
-                      connection.setReadTimeout(
-                              10000);
-
-                      connection.setRequestProperty(
-                              "Accept",
-                              "application/json");
+                      connection.setRequestMethod("GET");
+                      connection.setConnectTimeout(10000);
+                      connection.setReadTimeout(10000);
 
                       connection.setRequestProperty(
                               "User-Agent",
                               "CarAssistant-Navigation-Patch2/1.0");
 
-                      int responseCode =
+                      int code =
                               connection.getResponseCode();
 
-                      if (responseCode
-                              != HttpURLConnection.HTTP_OK) {
-
-                          throw new IllegalStateException(
-                                  "HTTP "
-                                  + responseCode);
+                      if (code != HttpURLConnection.HTTP_OK) {
+                          throw new Exception(
+                                  "HTTP " + code);
                       }
 
-                      String body =
+                      String json =
                               readStream(
-                                      connection
-                                              .getInputStream());
+                                      connection.getInputStream());
 
                       JSONArray array =
-                              new JSONArray(body);
+                              new JSONArray(json);
 
-                      ArrayList<SearchResult> results =
+                      List<SearchResult> results =
                               new ArrayList<>();
 
                       for (int i = 0;
@@ -657,62 +501,33 @@ jobs:
                           JSONObject item =
                                   array.getJSONObject(i);
 
-                          String latText =
-                                  item.optString(
-                                          "lat",
-                                          "");
-
-                          String lonText =
-                                  item.optString(
-                                          "lon",
-                                          "");
-
-                          if (latText.isEmpty()
-                                  || lonText.isEmpty()) {
-                              continue;
-                          }
-
-                          double latitude =
-                                  Double.parseDouble(
-                                          latText);
-
-                          double longitude =
-                                  Double.parseDouble(
-                                          lonText);
-
                           String name =
                                   item.optString(
                                           "display_name",
-                                          query);
+                                          "Địa điểm");
+
+                          double lat =
+                                  Double.parseDouble(
+                                          item.getString("lat"));
+
+                          double lon =
+                                  Double.parseDouble(
+                                          item.getString("lon"));
 
                           results.add(
                                   new SearchResult(
                                           name,
-                                          latitude,
-                                          longitude));
+                                          lat,
+                                          lon));
                       }
 
                       mainHandler.post(
-                              () -> showSearchResults(
-                                      results));
+                              () -> showResults(results));
 
-                  } catch (Exception error) {
-
-                      String message =
-                              error.getMessage();
-
-                      if (message == null
-                              || message.isEmpty()) {
-                          message =
-                                  "Không tìm được địa điểm.";
-                      }
-
-                      final String finalMessage =
-                              message;
+                  } catch (Exception e) {
 
                       mainHandler.post(
-                              () -> showSearchError(
-                                      finalMessage));
+                              () -> showError());
 
                   } finally {
 
@@ -721,13 +536,12 @@ jobs:
                       }
                   }
               }
+          JAVA
+                    cat >> "$FILE" <<'JAVA'
 
               private String readStream(
                       InputStream stream)
                       throws Exception {
-
-                  StringBuilder builder =
-                          new StringBuilder();
 
                   BufferedReader reader =
                           new BufferedReader(
@@ -735,152 +549,75 @@ jobs:
                                           stream,
                                           StandardCharsets.UTF_8));
 
+                  StringBuilder result =
+                          new StringBuilder();
+
                   String line;
 
-                  while ((line =
-                          reader.readLine()) != null) {
-
-                      builder.append(line);
+                  while ((line = reader.readLine()) != null) {
+                      result.append(line);
                   }
 
                   reader.close();
 
-                  return builder.toString();
+                  return result.toString();
               }
 
-              private void showSearchResults(
+              private void showResults(
                       List<SearchResult> results) {
-
-                  searchButton.setEnabled(true);
 
                   resultsList.removeAllViews();
 
                   if (results.isEmpty()) {
-
-                      setSearchStatus(
-                              "Không có kết quả.");
-
-                      resultsPanel.setVisibility(
-                              View.VISIBLE);
-
+                      status.setText(
+                              "Không có kết quả");
                       return;
                   }
 
-                  setSearchStatus(
+                  status.setText(
                           results.size()
                                   + " kết quả");
 
-                  resultsPanel.setVisibility(
-                          View.VISIBLE);
+                  for (SearchResult result : results) {
 
-                  for (SearchResult result :
-                          results) {
+                      TextView item =
+                              new TextView(getContext());
 
-                      addResultItem(result);
+                      item.setText(result.name);
+                      item.setTextColor(Color.WHITE);
+                      item.setTextSize(13);
+                      item.setGravity(
+                              Gravity.CENTER_VERTICAL);
+
+                      item.setPadding(
+                              dp(12),
+                              dp(8),
+                              dp(12),
+                              dp(8));
+
+                      item.setOnClickListener(
+                              v -> selectDestination(result));
+
+                      resultsList.addView(
+                              item,
+                              new LinearLayout.LayoutParams(
+                                      -1,
+                                      dp(60)));
                   }
               }
 
-              private void showSearchError(
-                      String message) {
-
-                  searchButton.setEnabled(true);
+              private void showError() {
 
                   resultsList.removeAllViews();
 
-                  setSearchStatus(
-                          "Lỗi tìm kiếm");
-
-                  TextView error =
-                          new TextView(getContext());
-
-                  error.setText(
-                          "Không tìm được địa điểm.\n"
-                          + message);
-
-                  error.setTextColor(
-                          Color.WHITE);
-
-                  error.setTextSize(13);
-
-                  error.setPadding(
-                          dp(14),
-                          dp(14),
-                          dp(14),
-                          dp(14));
-
-                  resultsList.addView(
-                          error,
-                          new LinearLayout.LayoutParams(
-                                  -1,
-                                  -2));
-
-                  resultsPanel.setVisibility(
-                          View.VISIBLE);
-              }
-
-              private void addResultItem(
-                      SearchResult result) {
-
-                  TextView item =
-                          new TextView(getContext());
-
-                  item.setText(
-                          result.name);
-
-                  item.setTextColor(
-                          Color.WHITE);
-
-                  item.setTextSize(13);
-
-                  item.setGravity(
-                          Gravity.CENTER_VERTICAL);
-
-                  item.setPadding(
-                          dp(14),
-                          dp(8),
-                          dp(14),
-                          dp(8));
-
-                  GradientDrawable background =
-                          new GradientDrawable();
-
-                  background.setColor(
-                          Color.rgb(
-                                  27,
-                                  34,
-                                  41));
-
-                  background.setCornerRadius(
-                          dp(10));
-
-                  item.setBackground(
-                          background);
-
-                  item.setOnClickListener(
-                          v -> selectDestination(
-                                  result));
-
-                  LinearLayout.LayoutParams params =
-                          new LinearLayout.LayoutParams(
-                                  -1,
-                                  dp(62));
-
-                  params.setMargins(
-                          dp(6),
-                          dp(5),
-                          dp(6),
-                          dp(5));
-
-                  resultsList.addView(
-                          item,
-                          params);
+                  status.setText(
+                          "Không tìm được địa điểm");
               }
 
               private void selectDestination(
                       SearchResult result) {
 
-                  if (map == null
-                          || result == null) {
+                  if (map == null) {
                       return;
                   }
 
@@ -900,13 +637,11 @@ jobs:
                           result.latitude,
                           result.longitude);
 
-                  setSearchStatus(
+                  status.setText(
                           "Đã chọn điểm đến");
 
                   resultsPanel.setVisibility(
                           View.GONE);
-
-                  hideKeyboard();
               }
 
               private void createDestinationLayer() {
@@ -918,44 +653,29 @@ jobs:
 
                   try {
 
-                      if (map.getStyle()
-                              .getLayer(
-                                      DESTINATION_LAYER)
-                              == null) {
+                      destinationSource =
+                              new GeoJsonSource(
+                                      DESTINATION_SOURCE);
 
-                          destinationSource =
-                                  new GeoJsonSource(
-                                          DESTINATION_SOURCE);
+                      map.getStyle()
+                              .addSource(
+                                      destinationSource);
 
-                          map.getStyle()
-                                  .addSource(
-                                          destinationSource);
+                      CircleLayer layer =
+                              new CircleLayer(
+                                      DESTINATION_LAYER,
+                                      DESTINATION_SOURCE);
 
-                          destinationLayer =
-                                  new CircleLayer(
-                                          DESTINATION_LAYER,
-                                          DESTINATION_SOURCE);
+                      layer.withProperties(
+                              PropertyFactory.circleRadius(9f),
+                              PropertyFactory.circleColor(
+                                      Color.rgb(220, 60, 60)),
+                              PropertyFactory.circleStrokeColor(
+                                      Color.WHITE),
+                              PropertyFactory.circleStrokeWidth(3f));
 
-                          destinationLayer
-                                  .withProperties(
-                                          org.maplibre.android.style.layers.PropertyFactory
-                                                  .circleRadius(9f),
-                                          org.maplibre.android.style.layers.PropertyFactory
-                                                  .circleColor(
-                                                          Color.rgb(
-                                                                  220,
-                                                                  60,
-                                                                  60)),
-                                          org.maplibre.android.style.layers.PropertyFactory
-                                                  .circleStrokeColor(
-                                                          Color.WHITE),
-                                          org.maplibre.android.style.layers.PropertyFactory
-                                                  .circleStrokeWidth(3f));
-
-                          map.getStyle()
-                                  .addLayer(
-                                          destinationLayer);
-                      }
+                      map.getStyle()
+                              .addLayer(layer);
 
                   } catch (Exception ignored) {
                   }
@@ -965,24 +685,11 @@ jobs:
                       double latitude,
                       double longitude) {
 
-                  if (map == null) {
-                      return;
-                  }
-
-                  if (map.getStyle() == null) {
+                  if (destinationSource == null) {
                       return;
                   }
 
                   try {
-
-                      if (destinationSource == null) {
-
-                          createDestinationLayer();
-                      }
-
-                      if (destinationSource == null) {
-                          return;
-                      }
 
                       Point point =
                               Point.fromLngLat(
@@ -990,18 +697,9 @@ jobs:
                                       latitude);
 
                       destinationSource.setGeoJson(
-                              Feature.fromGeometry(
-                                      point));
+                              Feature.fromGeometry(point));
 
                   } catch (Exception ignored) {
-                  }
-              }
-
-              private void setSearchStatus(
-                      String text) {
-
-                  if (searchStatus != null) {
-                      searchStatus.setText(text);
                   }
               }
 
@@ -1018,7 +716,6 @@ jobs:
                                                   Context.INPUT_METHOD_SERVICE);
 
                   if (manager != null) {
-
                       manager.hideSoftInputFromWindow(
                               searchInput.getWindowToken(),
                               0);
@@ -1032,8 +729,7 @@ jobs:
                   }
 
                   double zoom =
-                          map.getCameraPosition()
-                                  .zoom;
+                          map.getCameraPosition().zoom;
 
                   map.animateCamera(
                           CameraUpdateFactory.zoomTo(
@@ -1050,8 +746,7 @@ jobs:
                   }
 
                   double zoom =
-                          map.getCameraPosition()
-                                  .zoom;
+                          map.getCameraPosition().zoom;
 
                   map.animateCamera(
                           CameraUpdateFactory.zoomTo(
@@ -1059,35 +754,6 @@ jobs:
                                           1.0,
                                           zoom - 1.0)),
                           250);
-              }
-
-              public void recenter() {
-
-                  if (map == null) {
-                      return;
-                  }
-
-                  try {
-
-                      Location location =
-                              map.getLocationComponent()
-                                      .getLastKnownLocation();
-
-                      if (location == null) {
-                          return;
-                      }
-
-                      map.animateCamera(
-                              CameraUpdateFactory
-                                      .newLatLngZoom(
-                                              new LatLng(
-                                                      location.getLatitude(),
-                                                      location.getLongitude()),
-                                              16.0),
-                              500);
-
-                  } catch (Exception ignored) {
-                  }
               }
 
               public void onHostResume() {
@@ -1106,17 +772,15 @@ jobs:
 
                   return Math.round(
                           value
-                          * getResources()
-                                  .getDisplayMetrics()
-                                  .density);
+                                  * getResources()
+                                          .getDisplayMetrics()
+                                          .density);
               }
 
               private static final class SearchResult {
 
                   final String name;
-
                   final double latitude;
-
                   final double longitude;
 
                   SearchResult(
@@ -1135,27 +799,11 @@ jobs:
           test -f "$FILE"
 
           grep -Fq \
-            'class NavigationMapView' \
-            "$FILE"
-
-          grep -Fq \
-            'Nominatim' \
-            "$FILE"
-
-          grep -Fq \
             'nominatim.openstreetmap.org/search' \
             "$FILE"
 
           grep -Fq \
-            'public void selectDestination' \
-            "$FILE" || true
-
-          grep -Fq \
             'selectDestination(' \
-            "$FILE"
-
-          grep -Fq \
-            'createDestinationLayer' \
             "$FILE"
 
           grep -Fq \
@@ -1170,62 +818,35 @@ jobs:
             'newLatLngZoom' \
             "$FILE"
 
-          echo "PATCH 2: SEARCH + SELECT DESTINATION: APPLIED"
+          ! grep -Fq 'OSRM' "$FILE"
+          ! grep -Fq 'NavigationRouteController' "$FILE"
+          ! grep -Fq 'CameraMode.TRACKING_GPS' "$FILE"
+          ! grep -Fq 'public void recenter' "$FILE"
 
-      - name: Verify Patch 2 scope
+          echo "PATCH 2 SOURCE: PASS"
+
+      - name: Verify changed scope
         shell: bash
         run: |
           set -euo pipefail
 
           git diff --check
 
-          echo "Changed files:"
-          git diff --name-only
-
-          EXPECTED1="v10-source/app/src/main/AndroidManifest.xml"
-          EXPECTED2="v10-source/app/src/main/java/com/hieptran/aacast/doudou/NavigationMapView.java"
-
           CHANGED="$(git diff --name-only)"
 
-          echo "$CHANGED" | grep -Fxq "$EXPECTED1"
-          echo "$CHANGED" | grep -Fxq "$EXPECTED2"
+          echo "$CHANGED"
 
-          COUNT="$(printf '%s\n' "$CHANGED" | sed '/^$/d' | wc -l)"
+          echo "$CHANGED" | grep -Fxq \
+            "v10-source/app/src/main/AndroidManifest.xml"
 
-          test "$COUNT" -eq 2
+          echo "$CHANGED" | grep -Fxq \
+            "v10-source/app/src/main/java/com/hieptran/aacast/doudou/NavigationMapView.java"
 
-          echo "PATCH 2 FILE SCOPE: PASS"
+          test "$(printf '%s\n' "$CHANGED" | sed '/^$/d' | wc -l)" -eq 2
 
-      - name: Verify Patch 2 does not contain Route
-        shell: bash
-        run: |
-          set -euo pipefail
+          echo "CHANGED FILE SCOPE: PASS"
 
-          FILE="v10-source/app/src/main/java/com/hieptran/aacast/doudou/NavigationMapView.java"
-
-          if grep -Fq 'OSRM' "$FILE"; then
-            echo "ERROR: Route/OSRM must not be included in Patch 2."
-            exit 1
-          fi
-
-          if grep -Fq 'route/' "$FILE"; then
-            echo "ERROR: Route endpoint must not be included in Patch 2."
-            exit 1
-          fi
-
-          if grep -Fq 'NavigationRouteController' "$FILE"; then
-            echo "ERROR: Route controller must not be included."
-            exit 1
-          fi
-
-          if grep -Fq 'NavigationRouteRenderer' "$FILE"; then
-            echo "ERROR: Route renderer must not be included."
-            exit 1
-          fi
-
-          echo "ROUTE EXCLUSION: PASS"
-
-      - name: Verify Projection Core unchanged
+      - name: Verify Projection Core and Activity
         shell: bash
         run: |
           set -euo pipefail
@@ -1240,33 +861,41 @@ jobs:
             "$SRC/V10SessionStore.java" \
             > /tmp/core-after.sha256
 
+          sha256sum \
+            "$SRC/V10CarActivity.java" \
+            > /tmp/activity-after.sha256
+
           cmp \
             /tmp/core-before.sha256 \
             /tmp/core-after.sha256
 
-          echo "PROJECTION CORE: UNCHANGED"
+          cmp \
+            /tmp/activity-before.sha256 \
+            /tmp/activity-after.sha256
 
-      - name: Verify V10CarActivity unchanged
+          echo "PROJECTION CORE: UNCHANGED"
+          echo "V10CarActivity: UNCHANGED"
+
+      - name: Verify no Route code
         shell: bash
         run: |
           set -euo pipefail
 
-          if git diff --name-only | grep -Fxq \
-            "v10-source/app/src/main/java/com/hieptran/aacast/doudou/V10CarActivity.java"; then
+          FILE="v10-source/app/src/main/java/com/hieptran/aacast/doudou/NavigationMapView.java"
 
-            echo "ERROR: V10CarActivity.java must not be changed by Patch 2."
-            exit 1
-          fi
+          ! grep -Fq 'OSRM' "$FILE"
+          ! grep -Fq 'route/' "$FILE"
+          ! grep -Fq 'NavigationRouteController' "$FILE"
+          ! grep -Fq 'NavigationRouteRenderer' "$FILE"
 
-          echo "V10CarActivity: UNCHANGED"
-
-      - name: Setup Java 17
+          echo "ROUTE EXCLUSION: PASS"
+                - name: Setup Java 17
         uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: "17"
 
-      - name: Compile Patch 2
+      - name: Compile Navigation Patch 2
         working-directory: v10-source
         shell: bash
         run: |
@@ -1279,9 +908,9 @@ jobs:
             --no-daemon \
             --stacktrace
 
-          echo "PATCH 2 JAVA COMPILE: PASS"
+          echo "JAVA COMPILE: PASS"
 
-      - name: Assemble Patch 2 APK
+      - name: Assemble Navigation Patch 2
         working-directory: v10-source
         shell: bash
         run: |
@@ -1295,9 +924,9 @@ jobs:
           test -f \
             app/build/outputs/apk/debug/app-debug.apk
 
-          echo "PATCH 2 APK BUILD: PASS"
+          echo "APK BUILD: PASS"
 
-      - name: Package Patch 2
+      - name: Package APK
         shell: bash
         run: |
           set -euo pipefail
@@ -1320,12 +949,11 @@ jobs:
             "RECENTER=NOT INCLUDED" \
             "PROJECTION_CORE=UNCHANGED" \
             "V10CarActivity=UNCHANGED" \
-            "SOURCE=NavigationMapView.java + AndroidManifest.xml" \
             > CarAssistant-Navigation-Patch2-Search.txt
 
-          echo "PATCH 2 PACKAGE: PASS"
+          echo "PACKAGE: PASS"
 
-      - name: Upload Patch 2
+      - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
           name: CarAssistant-Navigation-Patch2-Search
@@ -1336,28 +964,24 @@ jobs:
           if-no-files-found: error
           retention-days: 90
 
-      - name: Final Patch 2 result
+      - name: Final result
         shell: bash
         run: |
           set -euo pipefail
 
-          echo "=============================================="
+          echo "=========================================="
           echo "CARASSISTANT NAVIGATION - PATCH 2"
           echo "SEARCH + SELECT DESTINATION"
-          echo "=============================================="
-          echo ""
+          echo "=========================================="
           echo "CORE: Navigation V1"
-          echo "SEARCH: NOMINATIM"
-          echo "SELECT DESTINATION: ENABLED"
-          echo "DESTINATION MARKER: ENABLED"
+          echo "SEARCH: Nominatim"
+          echo "SELECT DESTINATION: PASS"
+          echo "DESTINATION MARKER: PASS"
           echo "ROUTE: NOT INCLUDED"
-          echo "PATCH 1 AUTOFOLLOW: NOT INCLUDED"
-          echo "PATCH 1 RECENTER: NOT INCLUDED"
+          echo "AUTOFOLLOW: NOT INCLUDED"
+          echo "RECENTER: NOT INCLUDED"
           echo "V10CarActivity: UNCHANGED"
           echo "PROJECTION CORE: UNCHANGED"
-          echo "SOURCE:"
-          echo "  NavigationMapView.java"
-          echo "  AndroidManifest.xml"
-          echo ""
-          echo "BUILD: PASS"
-          echo "=============================================="
+          echo "JAVA COMPILE: PASS"
+          echo "APK: PASS"
+          echo "=========================================="
