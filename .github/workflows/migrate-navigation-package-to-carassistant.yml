@@ -643,27 +643,36 @@ jobs:
       # ============================================================
       # 22. ASSEMBLE APK BEFORE COMMIT
       #
-      # CHỈ SỬA BƯỚC BUILD BỊ LỖI.
+      # CHỈ SỬA ĐƯỜNG RELEASE DEX.
       #
-      # Nguyên nhân:
-      # app/libs/aasdk-legacy.dex nằm trong libs nên AGP tự đưa
-      # file này vào mergeDexRelease.
+      # Nguyên nhân lỗi cũ:
+      # mergeDexRelease của app/build.gradle lấy toàn bộ app DEX
+      # rồi D8 merge thêm aasdk-legacy.dex.
       #
-      # build.gradle hiện tại đồng thời có doLast của mergeDexRelease
-      # để merge chính aasdk-legacy.dex lần nữa.
+      # aasdk-legacy.dex đã chứa:
+      # androidx.core.app.RemoteActionCompatParcelizer
       #
-      # Kết quả:
-      # RemoteActionCompatParcelizer is defined multiple times.
+      # trong khi app DEX cũng đã chứa class này.
       #
-      # Cách xử lý:
-      # - KHÔNG sửa app/build.gradle trên GitHub.
-      # - Tạm đưa aasdk-legacy.dex ra ngoài app/libs.
-      # - Tạm đổi đúng 2 tham chiếu rootProject.file(...) trong
-      #   build.gradle để block mergeDexRelease dùng file tạm.
-      # - Assemble APK.
-      # - Khôi phục nguyên trạng build.gradle và aasdk-legacy.dex.
+      # Vì vậy D8 báo:
+      # Type ...RemoteActionCompatParcelizer is defined multiple times
+      #
+      # Không sửa app/build.gradle thật.
+      #
+      # Trong bước test này:
+      # - tạm đưa aasdk-legacy.dex ra ngoài app/libs
+      # - tạm thay riêng block mergeDexRelease
+      # - KHÔNG chạy D8 merge legacy DEX với app DEX
+      # - giữ nguyên các classes*.dex do AGP tạo
+      # - copy nguyên bản aasdk-legacy.dex thành một DEX riêng
+      #   trong outputDir của mergeDexRelease
+      # - assembleRelease tiếp tục đóng gói toàn bộ DEX
+      # - sau build khôi phục nguyên trạng build.gradle + legacy dex
       #
       # Không thay đổi source được commit.
+      # Không R8.
+      # Không sanitize.
+      # Không sửa AndroidX.
       # ============================================================
       - name: Assemble migrated APK
         shell: bash
@@ -700,33 +709,160 @@ jobs:
           echo "Temporarily moving aasdk-legacy.dex outside app/libs..."
           rm -f "$LEGACY_DEX"
 
-          echo "Temporarily redirecting mergeDexRelease legacy dex path..."
+          echo "Temporarily replacing ONLY mergeDexRelease logic..."
 
           python3 - "$BUILD_GRADLE" <<'PY'
           from pathlib import Path
           import sys
 
           path = Path(sys.argv[1])
-
           data = path.read_text(encoding="utf-8")
 
-          old = "rootProject.file('app/libs/aasdk-legacy.dex')"
-          new = "rootProject.file('/tmp/aasdk-legacy.dex')"
+          start_marker = """tasks.matching {
+              it.name == 'mergeDexRelease'
+          }.configureEach { task ->"""
 
-          count = data.count(old)
+          end_marker = """// ============================================================
+          // Distribution APK
+          // ============================================================"""
 
-          if count != 2:
+          start = data.find(start_marker)
+          end = data.find(end_marker)
+
+          if start < 0:
               raise SystemExit(
-                  f"ERROR: Expected exactly 2 legacy dex references, found {count}."
+                  "ERROR: mergeDexRelease block start not found."
               )
 
-          updated = data.replace(old, new)
+          if end < 0:
+              raise SystemExit(
+                  "ERROR: Distribution APK marker not found."
+              )
+
+          if end <= start:
+              raise SystemExit(
+                  "ERROR: Invalid mergeDexRelease block boundaries."
+              )
+
+          replacement = r"""tasks.matching {
+              it.name == 'mergeDexRelease'
+          }.configureEach { task ->
+
+              task.doLast {
+
+                  def legacyDex =
+                          new File('/tmp/aasdk-legacy.dex')
+
+                  if (!legacyDex.exists()) {
+                      throw new GradleException(
+                              "Thiếu /tmp/aasdk-legacy.dex!"
+                      )
+                  }
+
+                  def outputDir =
+                          task.outputDir.get().asFile
+
+                  if (!outputDir.exists()) {
+                      throw new GradleException(
+                              "Không tìm thấy mergeDexRelease outputDir: " +
+                              outputDir
+                  )
+                  }
+
+                  def dexFilter = {
+                      it.isFile() &&
+                      it.name ==~ /classes\d*\.dex/
+                  } as FileFilter
+
+                  def existingDexes =
+                          outputDir
+                                  .listFiles(dexFilter)
+                                  ?.toList() ?: []
+
+                  if (existingDexes.isEmpty()) {
+                      throw new GradleException(
+                              "Không tìm thấy classes*.dex do AGP tạo."
+                      )
+                  }
+
+                  def maxDexNumber = 0
+
+                  existingDexes.each { dex ->
+                      def matcher =
+                              dex.name =~ /^classes(\d*)\.dex$/
+
+                      if (matcher.matches()) {
+                          def suffix = matcher[0][1]
+
+                          def number =
+                                  suffix ? suffix.toInteger() : 1
+
+                          if (number > maxDexNumber) {
+                              maxDexNumber = number
+                          }
+                      }
+                  }
+
+                  def legacyNumber =
+                          maxDexNumber + 1
+
+                  def legacyTarget =
+                          new File(
+                                  outputDir,
+                                  "classes${legacyNumber}.dex"
+                          )
+
+                  legacyTarget.bytes = legacyDex.bytes
+
+                  if (!legacyTarget.exists()) {
+                      throw new GradleException(
+                              "Không thể copy legacy DEX vào outputDir."
+                      )
+                  }
+
+                  logger.lifecycle(
+                          "============================================================"
+                  )
+                  logger.lifecycle(
+                          "AACast-Doudou LEGACY DEX RELEASE PACKAGING"
+                  )
+                  logger.lifecycle(
+                          "============================================================"
+                  )
+                  logger.lifecycle(
+                          "AGP DEX count : " +
+                          existingDexes.size()
+                  )
+                  logger.lifecycle(
+                          "Legacy DEX    : " +
+                          legacyDex.absolutePath
+                  )
+                  logger.lifecycle(
+                          "Legacy target : " +
+                          legacyTarget.absolutePath
+                  )
+                  logger.lifecycle(
+                          "PASS: legacy DEX kept as separate raw DEX."
+                  )
+                  logger.lifecycle(
+                          "PASS: no D8 merge with application DEX."
+                  )
+              }
+          }
+
+          """
+
+          updated = (
+              data[:start]
+              + replacement
+              + data[end:]
+          )
 
           path.write_text(updated, encoding="utf-8")
 
           print(
-              "PASS: Temporarily redirected exactly 2 "
-              "mergeDexRelease legacy dex references."
+              "PASS: Replaced ONLY mergeDexRelease with "
+              "raw legacy DEX packaging logic."
           )
           PY
 
@@ -740,9 +876,23 @@ jobs:
             --no-daemon \
             --stacktrace
 
-          test -f app/build/outputs/apk/release/app-release.apk
+          APK="app/build/outputs/apk/release/app-release.apk"
 
+          test -f "$APK"
+
+          echo "Checking generated APK DEX files..."
+
+          unzip -l "$APK" \
+            | grep -E 'classes[0-9]*\.dex'
+
+          echo ""
+          echo "APK size:"
+          du -h "$APK"
+
+          echo ""
           echo "PASS: APK assembled after package migration."
+          echo "PASS: Legacy DEX packaged separately."
+          echo "PASS: No D8 merge between app DEX and legacy DEX."
           echo "PASS: Original aasdk-legacy.dex/build.gradle will be restored."
 
       # ============================================================
