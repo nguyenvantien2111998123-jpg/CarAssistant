@@ -1,495 +1,537 @@
 name: Test Legacy DEX Sanitize
-
 on:
-  workflow_dispatch:
-
+workflow_dispatch:
 permissions:
-  contents: read
-
+contents: read
 jobs:
-  sanitize-legacy-dex:
-    name: Sanitize aasdk-legacy.dex
-    runs-on: ubuntu-latest
-
-    defaults:
-      run:
-        shell: bash
-
-    steps:
-
-      # ============================================================
-      # 1. CHECKOUT
-      # ============================================================
-      - name: 01 - Checkout main
-        uses: actions/checkout@v4
-        with:
-          ref: main
-          fetch-depth: 1
-
-      # ============================================================
-      # 2. JAVA 17
-      # ============================================================
-      - name: 02 - Setup Java 17
-        uses: actions/setup-java@v4
-        with:
-          distribution: temurin
-          java-version: '17'
-          cache: gradle
-
-      # ============================================================
-      # 3. VERIFY PROJECT STRUCTURE
-      # ============================================================
-      - name: 03 - Verify Navigation V1 source
-        run: |
-          set -euo pipefail
-
-          echo "============================================================"
-          echo "VERIFY PROJECT STRUCTURE"
-          echo "============================================================"
-
-          test -d navigation-v1-source
-          test -f navigation-v1-source/settings.gradle
-          test -f navigation-v1-source/build.gradle
-          test -f navigation-v1-source/app/build.gradle
-          test -f navigation-v1-source/app/libs/aasdk-legacy.dex
-          test -f navigation-v1-source/app/libs/aasdk-legacy.jar
-          test -x navigation-v1-source/gradlew
-
-          echo "PASS: navigation-v1-source exists."
-          echo "PASS: app/build.gradle exists."
-          echo "PASS: aasdk-legacy.dex exists."
-          echo "PASS: aasdk-legacy.jar exists."
-          echo "PASS: Gradle wrapper exists."
-
-      # ============================================================
-      # 4. VERIFY ONLY EXPECTED BUILD FILE WAS CHANGED
-      # ============================================================
-      - name: 04 - Verify working tree
-        run: |
-          set -euo pipefail
-
-          cd navigation-v1-source
-
-          echo "============================================================"
-          echo "VERIFY WORKING TREE"
-          echo "============================================================"
-
-          git status --short
-
-          if [ -n "$(git status --short)" ]; then
-            echo "WARNING: checkout working tree is not completely clean."
-          else
-            echo "PASS: working tree clean."
-          fi
-
-      # ============================================================
-      # 5. VERIFY BUILD.GRADLE CONTAINS SANITIZER
-      # ============================================================
-      - name: 05 - Verify sanitizeLegacyDex configuration
-        run: |
-          set -euo pipefail
-
-          BUILD_FILE="navigation-v1-source/app/build.gradle"
-
-          echo "============================================================"
-          echo "VERIFY SANITIZE CONFIGURATION"
-          echo "============================================================"
-
-          test -f "$BUILD_FILE"
-
-          grep -q 'tasks.register("sanitizeLegacyDex")' "$BUILD_FILE"
-          grep -q 'aasdk-legacy.dex' "$BUILD_FILE"
-          grep -q 'findR8Jar' "$BUILD_FILE"
-          grep -q 'findAndroidXCoreJar' "$BUILD_FILE"
-          grep -q 'androidx.core:core' "$BUILD_FILE" || true
-          grep -q 'RemoteActionCompatParcelizer' "$BUILD_FILE"
-          grep -q 'IconCompatParcelizer' "$BUILD_FILE"
-          grep -q 'CoreComponentFactory' "$BUILD_FILE"
-          grep -q 'com/google/android/apps/auto/sdk' "$BUILD_FILE"
-
-          echo "PASS: sanitizeLegacyDex configuration detected."
-
-      # ============================================================
-      # 6. VERIFY LEGACY DEX ORIGINAL INVENTORY
-      # ============================================================
-      - name: 06 - Verify original legacy DEX
-        working-directory: navigation-v1-source
-        run: |
-          set -euo pipefail
-
-          LEGACY_DEX="app/libs/aasdk-legacy.dex"
-
-          echo "============================================================"
-          echo "VERIFY ORIGINAL LEGACY DEX"
-          echo "============================================================"
-
-          test -f "$LEGACY_DEX"
-
-          echo "Legacy DEX:"
-          ls -lh "$LEGACY_DEX"
-
-          BUILD_TOOLS_DIR="$ANDROID_HOME/build-tools/$(ls "$ANDROID_HOME/build-tools" | sort -V | tail -1)"
-          DEXDUMP="$BUILD_TOOLS_DIR/dexdump"
-
-          if [ ! -x "$DEXDUMP" ]; then
-            echo "dexdump not found at:"
-            echo "$DEXDUMP"
-            exit 1
-          fi
-
-          mkdir -p build/legacy-dex-diagnostic
-
-          "$DEXDUMP" "$LEGACY_DEX" \
-            > build/legacy-dex-diagnostic/original-dexdump.txt
-
-          echo "PASS: original DEX dump created."
-
-          echo "------------------------------------------------------------"
-          echo "ANDROIDX CLASSES IN ORIGINAL DEX"
-          echo "------------------------------------------------------------"
-
-          grep -E 'androidx/(core/app|core/graphics/drawable)/' \
-            build/legacy-dex-diagnostic/original-dexdump.txt \
-            || true
-
-          echo "------------------------------------------------------------"
-          echo "ANDROID AUTO SDK CLASSES"
-          echo "------------------------------------------------------------"
-
-          grep -m 10 \
-            'com/google/android/apps/auto/sdk' \
-            build/legacy-dex-diagnostic/original-dexdump.txt \
-            || true
-
-      # ============================================================
-      # 7. SHOW GRADLE / AGP ENVIRONMENT
-      # ============================================================
-      - name: 07 - Show Gradle environment
-        working-directory: navigation-v1-source
-        run: |
-          set -euo pipefail
+sanitize-legacy-dex:
+name: Sanitize aasdk-legacy.dex
+runs-on: ubuntu-latest
+defaults:
+  run:
+    shell: bash
+
+steps:
+
+  # ============================================================
+  # 1. CHECKOUT
+  # ============================================================
+  - name: 01 - Checkout main
+    uses: actions/checkout@v4
+    with:
+      ref: main
+      fetch-depth: 1
+
+  # ============================================================
+  # 2. JAVA 17
+  # ============================================================
+  - name: 02 - Setup Java 17
+    uses: actions/setup-java@v4
+    with:
+      distribution: temurin
+      java-version: '17'
+      cache: gradle
+
+  # ============================================================
+  # 2A. INSTALL ANDROID SDK PLATFORM 36
+  # ============================================================
+  - name: 02A - Install Android SDK Platform 36
+    run: |
+      set -euo pipefail
+
+      echo "============================================================"
+      echo "INSTALL ANDROID SDK PLATFORM 36"
+      echo "============================================================"
+
+      SDKMANAGER="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
+
+      if [ ! -x "$SDKMANAGER" ]; then
+        SDKMANAGER="$(find "$ANDROID_HOME/cmdline-tools" \
+          -type f \
+          -name sdkmanager \
+          | sort \
+          | tail -1)"
+      fi
+
+      if [ -z "${SDKMANAGER:-}" ] || [ ! -x "$SDKMANAGER" ]; then
+        echo "FAIL: Không tìm thấy sdkmanager."
+        exit 1
+      fi
+
+      echo "sdkmanager: $SDKMANAGER"
+
+      yes | "$SDKMANAGER" --licenses >/dev/null || true
+
+      "$SDKMANAGER" "platforms;android-36"
+
+      if [ ! -f "$ANDROID_HOME/platforms/android-36/android.jar" ]; then
+        echo "FAIL: Không tìm thấy android.jar sau khi cài Platform 36:"
+        echo "$ANDROID_HOME/platforms/android-36/android.jar"
+        exit 1
+      fi
+
+      echo "============================================================"
+      echo "PASS: Android SDK Platform 36"
+      echo "============================================================"
+
+      ls -lh \
+        "$ANDROID_HOME/platforms/android-36/android.jar"
+
+  # ============================================================
+  # 3. VERIFY PROJECT STRUCTURE
+  # ============================================================
+  - name: 03 - Verify Navigation V1 source
+    run: |
+      set -euo pipefail
+
+      echo "============================================================"
+      echo "VERIFY PROJECT STRUCTURE"
+      echo "============================================================"
+
+      test -d navigation-v1-source
+      test -f navigation-v1-source/settings.gradle
+      test -f navigation-v1-source/build.gradle
+      test -f navigation-v1-source/app/build.gradle
+      test -f navigation-v1-source/app/libs/aasdk-legacy.dex
+      test -f navigation-v1-source/app/libs/aasdk-legacy.jar
+      test -x navigation-v1-source/gradlew
+
+      echo "PASS: navigation-v1-source exists."
+      echo "PASS: app/build.gradle exists."
+      echo "PASS: aasdk-legacy.dex exists."
+      echo "PASS: aasdk-legacy.jar exists."
+      echo "PASS: Gradle wrapper exists."
+
+  # ============================================================
+  # 4. VERIFY ONLY EXPECTED BUILD FILE WAS CHANGED
+  # ============================================================
+  - name: 04 - Verify working tree
+    run: |
+      set -euo pipefail
+
+      cd navigation-v1-source
+
+      echo "============================================================"
+      echo "VERIFY WORKING TREE"
+      echo "============================================================"
+
+      git status --short
 
-          echo "============================================================"
-          echo "GRADLE ENVIRONMENT"
-          echo "============================================================"
-
-          ./gradlew --version
-
-          echo "------------------------------------------------------------"
-          echo "JAVA"
-          echo "------------------------------------------------------------"
+      if [ -n "$(git status --short)" ]; then
+        echo "WARNING: checkout working tree is not completely clean."
+      else
+        echo "PASS: working tree clean."
+      fi
 
-          java -version
-
-          echo "------------------------------------------------------------"
-          echo "ANDROID SDK"
-          echo "------------------------------------------------------------"
+  # ============================================================
+  # 5. VERIFY BUILD.GRADLE CONTAINS SANITIZER
+  # ============================================================
+  - name: 05 - Verify sanitizeLegacyDex configuration
+    run: |
+      set -euo pipefail
 
-          echo "ANDROID_HOME=${ANDROID_HOME}"
-          echo "ANDROID_SDK_ROOT=${ANDROID_SDK_ROOT}"
+      BUILD_FILE="navigation-v1-source/app/build.gradle"
 
-      # ============================================================
-      # 8. VERIFY ANDROIDX CORE RESOLUTION
-      # ============================================================
-      - name: 08 - Verify AndroidX Core resolution
-        working-directory: navigation-v1-source
-        run: |
-          set -euo pipefail
+      echo "============================================================"
+      echo "VERIFY SANITIZE CONFIGURATION"
+      echo "============================================================"
+
+      test -f "$BUILD_FILE"
+
+      grep -q 'tasks.register("sanitizeLegacyDex")' "$BUILD_FILE"
+      grep -q 'aasdk-legacy.dex' "$BUILD_FILE"
+      grep -q 'findR8Jar' "$BUILD_FILE"
+      grep -q 'findAndroidXCoreJar' "$BUILD_FILE"
+      grep -q 'androidx.core:core' "$BUILD_FILE" || true
+      grep -q 'RemoteActionCompatParcelizer' "$BUILD_FILE"
+      grep -q 'IconCompatParcelizer' "$BUILD_FILE"
+      grep -q 'CoreComponentFactory' "$BUILD_FILE"
+      grep -q 'com/google/android/apps/auto/sdk' "$BUILD_FILE"
+
+      echo "PASS: sanitizeLegacyDex configuration detected."
+
+  # ============================================================
+  # 6. VERIFY LEGACY DEX ORIGINAL INVENTORY
+  # ============================================================
+  - name: 06 - Verify original legacy DEX
+    working-directory: navigation-v1-source
+    run: |
+      set -euo pipefail
+
+      LEGACY_DEX="app/libs/aasdk-legacy.dex"
+
+      echo "============================================================"
+      echo "VERIFY ORIGINAL LEGACY DEX"
+      echo "============================================================"
+
+      test -f "$LEGACY_DEX"
+
+      echo "Legacy DEX:"
+      ls -lh "$LEGACY_DEX"
+
+      BUILD_TOOLS_DIR="$ANDROID_HOME/build-tools/$(ls "$ANDROID_HOME/build-tools" | sort -V | tail -1)"
+      DEXDUMP="$BUILD_TOOLS_DIR/dexdump"
+
+      if [ ! -x "$DEXDUMP" ]; then
+        echo "dexdump not found at:"
+        echo "$DEXDUMP"
+        exit 1
+      fi
+
+      mkdir -p build/legacy-dex-diagnostic
+
+      "$DEXDUMP" "$LEGACY_DEX" \
+        > build/legacy-dex-diagnostic/original-dexdump.txt
+
+      echo "PASS: original DEX dump created."
+
+      echo "------------------------------------------------------------"
+      echo "ANDROIDX CLASSES IN ORIGINAL DEX"
+      echo "------------------------------------------------------------"
+
+      grep -E 'androidx/(core/app|core/graphics/drawable)/' \
+        build/legacy-dex-diagnostic/original-dexdump.txt \
+        || true
+
+      echo "------------------------------------------------------------"
+      echo "ANDROID AUTO SDK CLASSES"
+      echo "------------------------------------------------------------"
+
+      grep -m 10 \
+        'com/google/android/apps/auto/sdk' \
+        build/legacy-dex-diagnostic/original-dexdump.txt \
+        || true
+
+  # ============================================================
+  # 7. SHOW GRADLE / AGP ENVIRONMENT
+  # ============================================================
+  - name: 07 - Show Gradle environment
+    working-directory: navigation-v1-source
+    run: |
+      set -euo pipefail
+
+      echo "============================================================"
+      echo "GRADLE ENVIRONMENT"
+      echo "============================================================"
+
+      ./gradlew --version
+
+      echo "------------------------------------------------------------"
+      echo "JAVA"
+      echo "------------------------------------------------------------"
+
+      java -version
+
+      echo "------------------------------------------------------------"
+      echo "ANDROID SDK"
+      echo "------------------------------------------------------------"
+
+      echo "ANDROID_HOME=${ANDROID_HOME}"
+      echo "ANDROID_SDK_ROOT=${ANDROID_SDK_ROOT}"
 
-          echo "============================================================"
-          echo "ANDROIDX CORE RESOLUTION"
-          echo "============================================================"
+  # ============================================================
+  # 8. VERIFY ANDROIDX CORE RESOLUTION
+  # ============================================================
+  - name: 08 - Verify AndroidX Core resolution
+    working-directory: navigation-v1-source
+    run: |
+      set -euo pipefail
+
+      echo "============================================================"
+      echo "ANDROIDX CORE RESOLUTION"
+      echo "============================================================"
+
+      ./gradlew \
+        :app:dependencyInsight \
+        --dependency androidx.core \
+        --configuration releaseRuntimeClasspath
+
+  # ============================================================
+  # 9. RUN SANITIZER ONLY
+  # ============================================================
+  - name: 09 - Run sanitizeLegacyDex
+    working-directory: navigation-v1-source
+    run: |
+      set -euo pipefail
 
-          ./gradlew \
-            :app:dependencyInsight \
-            --dependency androidx.core \
-            --configuration releaseRuntimeClasspath
+      echo "============================================================"
+      echo "RUN SANITIZE LEGACY DEX"
+      echo "============================================================"
+
+      ./gradlew \
+        --stacktrace \
+        --info \
+        :app:sanitizeLegacyDex
+
+  # ============================================================
+  # 10. VERIFY SANITIZED DEX EXISTS
+  # ============================================================
+  - name: 10 - Verify sanitized DEX output
+    working-directory: navigation-v1-source
+    run: |
+      set -euo pipefail
+
+      SANITIZED_DEX="app/build/intermediates/sanitized-legacy-dex/release/classes.dex"
+
+      echo "============================================================"
+      echo "VERIFY SANITIZED DEX"
+      echo "============================================================"
+
+      if [ ! -f "$SANITIZED_DEX" ]; then
+        echo "FAIL: sanitized DEX does not exist:"
+        echo "$SANITIZED_DEX"
+        exit 1
+      fi
+
+      ls -lh "$SANITIZED_DEX"
+
+      echo "PASS: sanitized DEX exists."
+
+  # ============================================================
+  # 11. DEXDUMP SANITIZED DEX
+  # ============================================================
+  - name: 11 - Dump sanitized DEX
+    working-directory: navigation-v1-source
+    run: |
+      set -euo pipefail
+
+      SANITIZED_DEX="app/build/intermediates/sanitized-legacy-dex/release/classes.dex"
+
+      BUILD_TOOLS_DIR="$ANDROID_HOME/build-tools/$(ls "$ANDROID_HOME/build-tools" | sort -V | tail -1)"
+      DEXDUMP="$BUILD_TOOLS_DIR/dexdump"
+
+      test -x "$DEXDUMP"
+
+      mkdir -p app/build/intermediates/sanitized-legacy-dex
+
+      "$DEXDUMP" "$SANITIZED_DEX" \
+        > app/build/intermediates/sanitized-legacy-dex/sanitized-dexdump.txt
+
+      echo "PASS: sanitized DEX dump created."
+
+  # ============================================================
+  # 12. VERIFY EXACT FIVE ANDROIDX CLASSES ARE GONE
+  # ============================================================
+  - name: 12 - Verify five AndroidX classes removed
+    working-directory: navigation-v1-source
+    run: |
+      set -euo pipefail
+
+      DUMP="app/build/intermediates/sanitized-legacy-dex/sanitized-dexdump.txt"
+
+      echo "============================================================"
+      echo "VERIFY FIVE ANDROIDX CLASSES"
+      echo "============================================================"
+
+      test -f "$DUMP"
+
+      FAILED=0
+
+      check_absent() {
+        local CLASS_NAME="$1"
+
+        if grep -q "$CLASS_NAME" "$DUMP"; then
+          echo "FAIL: STILL PRESENT: $CLASS_NAME"
+          FAILED=1
+        else
+          echo "PASS removed: $CLASS_NAME"
+        fi
+      }
+
+      check_absent \
+        'Landroidx/core/app/CoreComponentFactory;'
+
+      check_absent \
+        'Landroidx/core/app/RemoteActionCompat;'
+
+      check_absent \
+        'Landroidx/core/app/RemoteActionCompatParcelizer;'
+
+      check_absent \
+        'Landroidx/core/graphics/drawable/IconCompat;'
+
+      check_absent \
+        'Landroidx/core/graphics/drawable/IconCompatParcelizer;'
+
+      if [ "$FAILED" -ne 0 ]; then
+        echo "============================================================"
+        echo "FAIL: ONE OR MORE TARGET ANDROIDX CLASSES REMAIN"
+        echo "============================================================"
+        exit 1
+      fi
+
+      echo "============================================================"
+      echo "PASS: ALL FIVE TARGET ANDROIDX CLASSES REMOVED"
+      echo "============================================================"
+
+  # ============================================================
+  # 13. VERIFY NO ANDROIDX IMPLEMENTATION REMAINS
+  # ============================================================
+  - name: 13 - Verify no androidx implementation remains
+    working-directory: navigation-v1-source
+    run: |
+      set -euo pipefail
+
+      DUMP="app/build/intermediates/sanitized-legacy-dex/sanitized-dexdump.txt"
+
+      echo "============================================================"
+      echo "VERIFY NO ANDROIDX IMPLEMENTATION"
+      echo "============================================================"
+
+      if grep -q 'androidx/' "$DUMP"; then
+        echo "FAIL: androidx/* remains in sanitized DEX:"
+        grep 'androidx/' "$DUMP" || true
+        exit 1
+      fi
+
+      echo "PASS: sanitized DEX contains no androidx/*."
+
+  # ============================================================
+  # 14. VERIFY ANDROID AUTO SDK STILL EXISTS
+  # ============================================================
+  - name: 14 - Verify Android Auto SDK remains
+    working-directory: navigation-v1-source
+    run: |
+      set -euo pipefail
+
+      DUMP="app/build/intermediates/sanitized-legacy-dex/sanitized-dexdump.txt"
+
+      echo "============================================================"
+      echo "VERIFY ANDROID AUTO SDK"
+      echo "============================================================"
+
+      if ! grep -q \
+        'com/google/android/apps/auto/sdk' \
+        "$DUMP"; then
+
+        echo "FAIL: com/google/android/apps/auto/sdk disappeared."
+        exit 1
+      fi
+
+      echo "PASS: com/google.android.apps.auto.sdk remains."
+
+      echo "Sample classes:"
+      grep \
+        'com/google/android/apps/auto/sdk' \
+        "$DUMP" \
+        | head -20 || true
+
+  # ============================================================
+  # 15. VERIFY ORIGINAL DEX WAS NOT MODIFIED
+  # ============================================================
+  - name: 15 - Verify original legacy DEX unchanged
+    working-directory: navigation-v1-source
+    run: |
+      set -euo pipefail
+
+      LEGACY_DEX="app/libs/aasdk-legacy.dex"
+      ORIGINAL_DUMP="build/legacy-dex-diagnostic/original-dexdump.txt"
+
+      echo "============================================================"
+      echo "VERIFY ORIGINAL LEGACY DEX"
+      echo "============================================================"
+
+      test -f "$LEGACY_DEX"
+
+      echo "Original DEX:"
+      sha256sum "$LEGACY_DEX"
+
+      echo "PASS: original aasdk-legacy.dex still exists."
+
+  # ============================================================
+  # 16. VERIFY ONLY BUILD OUTPUT WAS CREATED
+  # ============================================================
+  - name: 16 - Verify source tree integrity
+    run: |
+      set -euo pipefail
+
+      echo "============================================================"
+      echo "VERIFY SOURCE TREE INTEGRITY"
+      echo "============================================================"
+
+      git status --short
+
+      if git status --short | grep -E \
+        'navigation-v1-source/app/src/|navigation-v1-source/.*\.java$'; then
+
+        echo "FAIL: Java/source files unexpectedly changed."
+        exit 1
+      fi
+
+      echo "PASS: no Java/source modifications detected."
+
+  # ============================================================
+  # 17. SAVE SANITIZER REPORT
+  # ============================================================
+  - name: 17 - Prepare diagnostic report
+    if: always()
+    working-directory: navigation-v1-source
+    run: |
+      set -euo pipefail
+
+      REPORT_DIR="build/legacy-dex-diagnostic"
+      mkdir -p "$REPORT_DIR"
+
+      {
+        echo "CarAssistant Legacy DEX Sanitize Diagnostic"
+        echo "============================================"
+        echo
+        echo "Commit:"
+        git rev-parse HEAD || true
+        echo
+        echo "Build Gradle:"
+        sha256sum app/build.gradle || true
+        echo
+        echo "Original legacy DEX:"
+        sha256sum app/libs/aasdk-legacy.dex || true
+        echo
+        echo "Sanitized legacy DEX:"
+        sha256sum \
+          app/build/intermediates/sanitized-legacy-dex/release/classes.dex \
+          2>/dev/null || true
+        echo
+        echo "Sanitized DEX size:"
+        ls -lh \
+          app/build/intermediates/sanitized-legacy-dex/release/classes.dex \
+          2>/dev/null || true
+        echo
+        echo "Git status:"
+        git status --short || true
+      } > "$REPORT_DIR/sanitize-summary.txt"
+
+  # ============================================================
+  # 18. UPLOAD DIAGNOSTIC ARTIFACT
+  # ============================================================
+  - name: 18 - Upload sanitizer diagnostics
+    if: always()
+    uses: actions/upload-artifact@v4
+    with:
+      name: legacy-dex-sanitize-diagnostic
+      path: |
+        navigation-v1-source/build/legacy-dex-diagnostic/**
+        navigation-v1-source/app/build/intermediates/sanitized-legacy-dex/**
+      if-no-files-found: warn
+      retention-days: 14
+
+  # ============================================================
+  # 19. FINAL RESULT
+  # ============================================================
+  - name: 19 - Final result
+    if: success()
+    run: |
+      echo "============================================================"
+      echo "LEGACY DEX SANITIZE TEST: PASS"
+      echo "============================================================"
+      echo
+      echo "PASS:"
+      echo "- sanitizeLegacyDex"
+      echo "- five AndroidX classes removed"
+      echo "- no androidx/* remains"
+      echo "- Android Auto SDK remains"
+      echo "- original legacy DEX remains"
+      echo "- no Java/source files modified"
+      echo
+      echo "NEXT STEP:"
+      echo "Only after this workflow PASS, run assembleRelease."
+      echo "============================================================"
 
-      # ============================================================
-      # 9. RUN SANITIZER ONLY
-      # ============================================================
-      - name: 09 - Run sanitizeLegacyDex
-        working-directory: navigation-v1-source
-        run: |
-          set -euo pipefail
-
-          echo "============================================================"
-          echo "RUN SANITIZE LEGACY DEX"
-          echo "============================================================"
-
-          ./gradlew \
-            --stacktrace \
-            --info \
-            :app:sanitizeLegacyDex
-
-      # ============================================================
-      # 10. VERIFY SANITIZED DEX EXISTS
-      # ============================================================
-      - name: 10 - Verify sanitized DEX output
-        working-directory: navigation-v1-source
-        run: |
-          set -euo pipefail
-
-          SANITIZED_DEX="app/build/intermediates/sanitized-legacy-dex/release/classes.dex"
-
-          echo "============================================================"
-          echo "VERIFY SANITIZED DEX"
-          echo "============================================================"
-
-          if [ ! -f "$SANITIZED_DEX" ]; then
-            echo "FAIL: sanitized DEX does not exist:"
-            echo "$SANITIZED_DEX"
-            exit 1
-          fi
-
-          ls -lh "$SANITIZED_DEX"
-
-          echo "PASS: sanitized DEX exists."
-
-      # ============================================================
-      # 11. DEXDUMP SANITIZED DEX
-      # ============================================================
-      - name: 11 - Dump sanitized DEX
-        working-directory: navigation-v1-source
-        run: |
-          set -euo pipefail
-
-          SANITIZED_DEX="app/build/intermediates/sanitized-legacy-dex/release/classes.dex"
-
-          BUILD_TOOLS_DIR="$ANDROID_HOME/build-tools/$(ls "$ANDROID_HOME/build-tools" | sort -V | tail -1)"
-          DEXDUMP="$BUILD_TOOLS_DIR/dexdump"
-
-          test -x "$DEXDUMP"
-
-          mkdir -p app/build/intermediates/sanitized-legacy-dex
-
-          "$DEXDUMP" "$SANITIZED_DEX" \
-            > app/build/intermediates/sanitized-legacy-dex/sanitized-dexdump.txt
-
-          echo "PASS: sanitized DEX dump created."
-
-      # ============================================================
-      # 12. VERIFY EXACT FIVE ANDROIDX CLASSES ARE GONE
-      # ============================================================
-      - name: 12 - Verify five AndroidX classes removed
-        working-directory: navigation-v1-source
-        run: |
-          set -euo pipefail
-
-          DUMP="app/build/intermediates/sanitized-legacy-dex/sanitized-dexdump.txt"
-
-          echo "============================================================"
-          echo "VERIFY FIVE ANDROIDX CLASSES"
-          echo "============================================================"
-
-          test -f "$DUMP"
-
-          FAILED=0
-
-          check_absent() {
-            local CLASS_NAME="$1"
-
-            if grep -q "$CLASS_NAME" "$DUMP"; then
-              echo "FAIL: STILL PRESENT: $CLASS_NAME"
-              FAILED=1
-            else
-              echo "PASS removed: $CLASS_NAME"
-            fi
-          }
-
-          check_absent \
-            'Landroidx/core/app/CoreComponentFactory;'
-
-          check_absent \
-            'Landroidx/core/app/RemoteActionCompat;'
-
-          check_absent \
-            'Landroidx/core/app/RemoteActionCompatParcelizer;'
-
-          check_absent \
-            'Landroidx/core/graphics/drawable/IconCompat;'
-
-          check_absent \
-            'Landroidx/core/graphics/drawable/IconCompatParcelizer;'
-
-          if [ "$FAILED" -ne 0 ]; then
-            echo "============================================================"
-            echo "FAIL: ONE OR MORE TARGET ANDROIDX CLASSES REMAIN"
-            echo "============================================================"
-            exit 1
-          fi
-
-          echo "============================================================"
-          echo "PASS: ALL FIVE TARGET ANDROIDX CLASSES REMOVED"
-          echo "============================================================"
-
-      # ============================================================
-      # 13. VERIFY NO ANDROIDX IMPLEMENTATION REMAINS
-      # ============================================================
-      - name: 13 - Verify no androidx implementation remains
-        working-directory: navigation-v1-source
-        run: |
-          set -euo pipefail
-
-          DUMP="app/build/intermediates/sanitized-legacy-dex/sanitized-dexdump.txt"
-
-          echo "============================================================"
-          echo "VERIFY NO ANDROIDX IMPLEMENTATION"
-          echo "============================================================"
-
-          if grep -q 'androidx/' "$DUMP"; then
-            echo "FAIL: androidx/* remains in sanitized DEX:"
-            grep 'androidx/' "$DUMP" || true
-            exit 1
-          fi
-
-          echo "PASS: sanitized DEX contains no androidx/*."
-
-      # ============================================================
-      # 14. VERIFY ANDROID AUTO SDK STILL EXISTS
-      # ============================================================
-      - name: 14 - Verify Android Auto SDK remains
-        working-directory: navigation-v1-source
-        run: |
-          set -euo pipefail
-
-          DUMP="app/build/intermediates/sanitized-legacy-dex/sanitized-dexdump.txt"
-
-          echo "============================================================"
-          echo "VERIFY ANDROID AUTO SDK"
-          echo "============================================================"
-
-          if ! grep -q \
-            'com/google/android/apps/auto/sdk' \
-            "$DUMP"; then
-
-            echo "FAIL: com/google/android/apps/auto/sdk disappeared."
-            exit 1
-          fi
-
-          echo "PASS: com/google/android/apps/auto/sdk remains."
-
-          echo "Sample classes:"
-          grep \
-            'com/google/android/apps/auto/sdk' \
-            "$DUMP" \
-            | head -20 || true
-
-      # ============================================================
-      # 15. VERIFY ORIGINAL DEX WAS NOT MODIFIED
-      # ============================================================
-      - name: 15 - Verify original legacy DEX unchanged
-        working-directory: navigation-v1-source
-        run: |
-          set -euo pipefail
-
-          LEGACY_DEX="app/libs/aasdk-legacy.dex"
-          ORIGINAL_DUMP="build/legacy-dex-diagnostic/original-dexdump.txt"
-
-          echo "============================================================"
-          echo "VERIFY ORIGINAL LEGACY DEX"
-          echo "============================================================"
-
-          test -f "$LEGACY_DEX"
-
-          echo "Original DEX:"
-          sha256sum "$LEGACY_DEX"
-
-          echo "PASS: original aasdk-legacy.dex still exists."
-
-      # ============================================================
-      # 16. VERIFY ONLY BUILD OUTPUT WAS CREATED
-      # ============================================================
-      - name: 16 - Verify source tree integrity
-        run: |
-          set -euo pipefail
-
-          echo "============================================================"
-          echo "VERIFY SOURCE TREE INTEGRITY"
-          echo "============================================================"
-
-          git status --short
-
-          if git status --short | grep -E \
-            'navigation-v1-source/app/src/|navigation-v1-source/.*\.java$'; then
-
-            echo "FAIL: Java/source files unexpectedly changed."
-            exit 1
-          fi
-
-          echo "PASS: no Java/source modifications detected."
-
-      # ============================================================
-      # 17. SAVE SANITIZER REPORT
-      # ============================================================
-      - name: 17 - Prepare diagnostic report
-        if: always()
-        working-directory: navigation-v1-source
-        run: |
-          set -euo pipefail
-
-          REPORT_DIR="build/legacy-dex-diagnostic"
-          mkdir -p "$REPORT_DIR"
-
-          {
-            echo "CarAssistant Legacy DEX Sanitize Diagnostic"
-            echo "============================================"
-            echo
-            echo "Commit:"
-            git rev-parse HEAD || true
-            echo
-            echo "Build Gradle:"
-            sha256sum app/build.gradle || true
-            echo
-            echo "Original legacy DEX:"
-            sha256sum app/libs/aasdk-legacy.dex || true
-            echo
-            echo "Sanitized legacy DEX:"
-            sha256sum \
-              app/build/intermediates/sanitized-legacy-dex/release/classes.dex \
-              2>/dev/null || true
-            echo
-            echo "Sanitized DEX size:"
-            ls -lh \
-              app/build/intermediates/sanitized-legacy-dex/release/classes.dex \
-              2>/dev/null || true
-            echo
-            echo "Git status:"
-            git status --short || true
-          } > "$REPORT_DIR/sanitize-summary.txt"
-
-      # ============================================================
-      # 18. UPLOAD DIAGNOSTIC ARTIFACT
-      # ============================================================
-      - name: 18 - Upload sanitizer diagnostics
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: legacy-dex-sanitize-diagnostic
-          path: |
-            navigation-v1-source/build/legacy-dex-diagnostic/**
-            navigation-v1-source/app/build/intermediates/sanitized-legacy-dex/**
-          if-no-files-found: warn
-          retention-days: 14
-
-      # ============================================================
-      # 19. FINAL RESULT
-      # ============================================================
-      - name: 19 - Final result
-        if: success()
-        run: |
-          echo "============================================================"
-          echo "LEGACY DEX SANITIZE TEST: PASS"
-          echo "============================================================"
-          echo
-          echo "PASS:"
-          echo "- sanitizeLegacyDex"
-          echo "- five AndroidX classes removed"
-          echo "- no androidx/* remains"
-          echo "- Android Auto SDK remains"
-          echo "- original legacy DEX remains"
-          echo "- no Java/source files modified"
-          echo
-          echo "NEXT STEP:"
-          echo "Only after this workflow PASS, run assembleRelease."
-          echo "============================================================"
