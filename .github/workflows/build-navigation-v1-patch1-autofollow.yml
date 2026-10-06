@@ -428,10 +428,18 @@ jobs:
 
       # ============================================================
       # STEP 24
-      # ONLY CHANGE:
-      # Use project.tasks.configureEach instead of tasks.configureEach
+      #
+      # FIX:
+      # Both Debug and Release used:
+      #
+      # tasks.matching {...}.configureEach
+      #
+      # This caused:
+      # Cannot invoke method configureEach() on null object
+      #
+      # Patch BOTH hooks to project.tasks.configureEach.
       # ============================================================
-      - name: Patch release merge for aasdk legacy dex
+      - name: Patch legacy DEX task hooks
         shell: bash
         run: |
           set -euo pipefail
@@ -441,269 +449,191 @@ jobs:
 
           path = Path("app/build.gradle")
 
-          text = path.read_text(
-              encoding="utf-8"
+          text = path.read_text(encoding="utf-8")
+
+          # ------------------------------------------------------------
+          # DEBUG
+          # ------------------------------------------------------------
+          debug_start = text.find(
+              "tasks.matching {\n    it.name == 'mergeProjectDexDebug'"
           )
 
+          if debug_start < 0:
+              debug_start = text.find(
+                  "tasks.matching {"
+              )
+
+              if debug_start < 0:
+                  raise SystemExit(
+                      "ERROR: Debug tasks.matching block not found."
+                  )
+
+              debug_marker = text.find(
+                  "mergeProjectDexDebug",
+                  debug_start
+              )
+
+              if debug_marker < 0:
+                  raise SystemExit(
+                      "ERROR: mergeProjectDexDebug not found."
+                  )
+
+              debug_start = text.rfind(
+                  "tasks.matching {",
+                  0,
+                  debug_marker + 1
+              )
+
+          debug_open = text.find(
+              "{",
+              debug_start
+          )
+
+          if debug_open < 0:
+              raise SystemExit(
+                  "ERROR: Debug block opening brace not found."
+              )
+
+          # Find the complete matching block.
+          depth = 0
+          debug_end = None
+
+          for i in range(debug_open, len(text)):
+              if text[i] == "{":
+                  depth += 1
+              elif text[i] == "}":
+                  depth -= 1
+                  if depth == 0:
+                      debug_end = i + 1
+                      break
+
+          if debug_end is None:
+              raise SystemExit(
+                  "ERROR: Debug block end not found."
+              )
+
+          debug_block = text[debug_start:debug_end]
+
+          if "mergeProjectDexDebug" not in debug_block:
+              raise SystemExit(
+                  "ERROR: Located Debug block is incorrect."
+              )
+
+          debug_block = debug_block.replace(
+              "tasks.matching {\n    it.name == 'mergeProjectDexDebug'\n}.configureEach { task ->",
+              "project.tasks.configureEach { task ->\n\n    if (task.name != 'mergeProjectDexDebug') {\n        return\n    }"
+          )
+
+          text = (
+              text[:debug_start]
+              + debug_block
+              + text[debug_end:]
+          )
+
+          # ------------------------------------------------------------
+          # RELEASE
+          # ------------------------------------------------------------
           release_marker = "mergeDexRelease"
 
-          release_pos = text.find(
+          release_marker_pos = text.find(
               release_marker
           )
 
-          if release_pos < 0:
+          if release_marker_pos < 0:
               raise SystemExit(
-                  "ERROR: mergeDexRelease task is not present."
+                  "ERROR: mergeDexRelease not found."
               )
 
-          # If the release block is already correctly patched,
-          # do not patch it again.
-          release_section_start = text.rfind(
-              "project.tasks.configureEach",
-              0,
-              release_pos
-          )
-
-          release_matching_start = text.rfind(
+          release_start = text.rfind(
               "tasks.matching {",
               0,
-              release_pos
+              release_marker_pos
           )
 
-          if (
-              release_section_start >= 0
-              and release_section_start > release_matching_start
-              and "def d8Tool" in text[release_section_start:]
-              and "legacyDex.absolutePath" in text[release_section_start:]
-          ):
-              print(
-                  "Existing project.tasks.configureEach "
-                  "D8 release merge patch detected."
-              )
-              raise SystemExit(0)
-
-          legacy_marker = "tasks.matching {"
-
-          matching_pos = text.rfind(
-              legacy_marker,
+          project_release_start = text.rfind(
+              "project.tasks.configureEach",
               0,
-              release_pos
+              release_marker_pos
           )
 
-          if matching_pos < 0:
+          if project_release_start > release_start:
+              release_start = project_release_start
+
+          if release_start < 0:
               raise SystemExit(
-                  "ERROR: Existing release merge block "
-                  "was not found."
+                  "ERROR: Release task hook not found."
               )
 
-          brace_start = text.find(
+          release_open = text.find(
               "{",
-              matching_pos
+              release_start
           )
 
-          if brace_start < 0:
+          if release_open < 0:
               raise SystemExit(
-                  "ERROR: Cannot locate release merge "
-                  "block opening brace."
+                  "ERROR: Release block opening brace not found."
               )
 
           depth = 0
-          end = None
+          release_end = None
 
-          for index in range(
-              brace_start,
-              len(text)
-          ):
-              char = text[index]
-
-              if char == "{":
+          for i in range(release_open, len(text)):
+              if text[i] == "{":
                   depth += 1
-
-              elif char == "}":
+              elif text[i] == "}":
                   depth -= 1
-
                   if depth == 0:
-                      end = index + 1
+                      release_end = i + 1
                       break
 
-          if end is None:
+          if release_end is None:
               raise SystemExit(
-                  "ERROR: Cannot locate end of release "
-                  "merge block."
+                  "ERROR: Release block end not found."
               )
 
-          old_block = text[
-              matching_pos:end
+          release_block = text[
+              release_start:release_end
           ]
 
-          if "mergeDexRelease" not in old_block:
+          if "mergeDexRelease" not in release_block:
               raise SystemExit(
-                  "ERROR: Located block does not contain "
-                  "mergeDexRelease."
+                  "ERROR: Located Release block is incorrect."
               )
 
-          new_block = r'''
-          project.tasks.configureEach { task ->
+          release_block = release_block.replace(
+              "tasks.matching {\n    it.name == 'mergeDexRelease'\n}.configureEach { task ->",
+              "project.tasks.configureEach { task ->\n\n    if (task.name != 'mergeDexRelease') {\n        return\n    }"
+          )
 
-              if (task.name == 'mergeDexRelease') {
-
-                  task.doLast {
-
-                      def legacyDex =
-                              rootProject.file(
-                                      'app/libs/aasdk-legacy.dex'
-                              )
-
-                      if (!legacyDex.exists()) {
-                          throw new GradleException(
-                                  'Thiếu app/libs/aasdk-legacy.dex!'
-                          )
-                      }
-
-                      def outputFiles =
-                              task.outputs.files.files
-
-                      def dexFiles = []
-
-                      outputFiles.each { output ->
-
-                          if (output.isDirectory()) {
-
-                              output.eachFileRecurse { child ->
-
-                                  if (
-                                      child.isFile() &&
-                                      child.name ==~ /classes\d*\.dex/
-                                  ) {
-                                      dexFiles.add(child)
-                                  }
-                              }
-
-                          } else if (
-                              output.isFile() &&
-                              output.name ==~ /classes\d*\.dex/
-                          ) {
-                              dexFiles.add(output)
-                          }
-                      }
-
-                      dexFiles =
-                              dexFiles.unique {
-                                  it.absolutePath
-                              }
-
-                      if (dexFiles.isEmpty()) {
-                          throw new GradleException(
-                                  'Không tìm thấy DEX đầu ra '
-                                  + 'của mergeDexRelease.'
-                          )
-                      }
-
-                      def outputDir =
-                              dexFiles[0].parentFile
-
-                      def buildDirFile =
-                              project.layout
-                                      .buildDirectory
-                                      .asFile
-                                      .get()
-
-                      def tempDir =
-                              new File(
-                                      buildDirFile,
-                                      'intermediates/'
-                                      + 'dex_merged_temp'
-                              )
-
-                      tempDir.deleteDir()
-                      tempDir.mkdirs()
-
-                      def sdkDir =
-                              android.sdkDirectory
-                                      .absolutePath
-
-                      def buildToolsVersion =
-                              android.buildToolsVersion
-
-                      def d8Tool =
-                              "${sdkDir}/build-tools/"
-                              + "${buildToolsVersion}/d8"
-
-                      if (!file(d8Tool).exists()) {
-                          throw new GradleException(
-                                  'Không tìm thấy D8: '
-                                  + d8Tool
-                          )
-                      }
-
-                      project.exec {
-
-                          commandLine(
-                                  [
-                                          d8Tool,
-                                          '--min-api',
-                                          '29',
-                                          '--output',
-                                          tempDir.absolutePath
-                                  ] +
-                                  dexFiles*.absolutePath +
-                                  [
-                                          legacyDex.absolutePath
-                                  ]
-                          )
-                      }
-
-                      def mergedDex =
-                              new File(
-                                      tempDir,
-                                      'classes.dex'
-                              )
-
-                      if (!mergedDex.exists()) {
-                          throw new GradleException(
-                                  'D8 không tạo classes.dex.'
-                          )
-                      }
-
-                      dexFiles.each { dex ->
-                          dex.delete()
-                      }
-
-                      def finalDex =
-                              new File(
-                                      outputDir,
-                                      'classes.dex'
-                              )
-
-                      finalDex.bytes =
-                              mergedDex.bytes
-
-                      println(
-                              "D8 release merge completed: "
-                              + finalDex.absolutePath
-                      )
-                  }
-              }
-          }
-          '''
+          text = (
+              text[:release_start]
+              + release_block
+              + text[release_end:]
+          )
 
           path.write_text(
-              text[:matching_pos]
-              + new_block
-              + text[end:],
+              text,
               encoding="utf-8"
           )
 
           print(
-              "PASS: release merge block patched "
-              "to project.tasks.configureEach + D8."
+              "PASS: Debug and Release legacy DEX "
+              "task hooks patched."
           )
           PY
 
           echo
-          echo "=== Verify patched release block ==="
+          echo "=== Verify Debug hook ==="
 
-          grep -n -A12 -B3 \
+          grep -n -A8 -B3 \
+            "mergeProjectDexDebug" \
+            app/build.gradle \
+            | head -80
+
+          echo
+          echo "=== Verify Release hook ==="
+
+          grep -n -A8 -B3 \
             "mergeDexRelease" \
             app/build.gradle \
             | head -100
@@ -713,19 +643,11 @@ jobs:
 
       # ============================================================
       # STEP 25
-      # ONLY CHANGE:
-      # Verify project.tasks.configureEach for release.
-      #
-      # IMPORTANT:
-      # Debug mergeProjectDexDebug may still use tasks.matching.
-      # Do NOT reject all tasks.matching blocks.
       # ============================================================
-      - name: Verify release merge patch
+      - name: Verify Debug and Release task hooks
         shell: bash
         run: |
           set -euo pipefail
-
-          echo "=== Verify mergeDexRelease registration ==="
 
           python3 <<'PY'
           from pathlib import Path
@@ -736,37 +658,77 @@ jobs:
               encoding="utf-8"
           )
 
+          # ----------------------------------------------------------
+          # Debug verification
+          # ----------------------------------------------------------
+          debug_pos = text.find(
+              "mergeProjectDexDebug"
+          )
+
+          if debug_pos < 0:
+              raise SystemExit(
+                  "ERROR: mergeProjectDexDebug not found."
+              )
+
+          before_debug = text[:debug_pos]
+
+          debug_project = before_debug.rfind(
+              "project.tasks.configureEach"
+          )
+
+          debug_matching = before_debug.rfind(
+              "tasks.matching {"
+          )
+
+          if debug_project < 0:
+              raise SystemExit(
+                  "ERROR: Debug hook does not use "
+                  "project.tasks.configureEach."
+              )
+
+          if debug_matching > debug_project:
+              raise SystemExit(
+                  "ERROR: Debug hook still uses "
+                  "tasks.matching."
+              )
+
+          print(
+              "PASS: mergeProjectDexDebug uses "
+              "project.tasks.configureEach."
+          )
+
+          # ----------------------------------------------------------
+          # Release verification
+          # ----------------------------------------------------------
           release_pos = text.find(
               "mergeDexRelease"
           )
 
           if release_pos < 0:
               raise SystemExit(
-                  "ERROR: mergeDexRelease marker not found."
+                  "ERROR: mergeDexRelease not found."
               )
 
-          before_release = text[
-              :release_pos
-          ]
+          before_release = text[:release_pos]
 
-          project_configure = before_release.rfind(
+          release_project = before_release.rfind(
               "project.tasks.configureEach"
           )
 
-          last_matching = before_release.rfind(
+          release_matching = before_release.rfind(
               "tasks.matching {"
           )
 
-          if project_configure < 0:
+          if release_project < 0:
               raise SystemExit(
-                  "ERROR: project.tasks.configureEach "
-                  "was not found."
+                  "ERROR: Release hook does not use "
+                  "project.tasks.configureEach."
               )
 
-          if last_matching > project_configure:
+          if release_matching > release_project:
               raise SystemExit(
-                  "ERROR: release merge is still "
-                  "registered through tasks.matching."
+                  "ERROR: Release hook still uses "
+                  "tasks.matching."
               )
 
           print(
@@ -774,6 +736,9 @@ jobs:
               "project.tasks.configureEach."
           )
 
+          # ----------------------------------------------------------
+          # Legacy/R8 protections
+          # ----------------------------------------------------------
           if "R8DexFilter" in text:
               raise SystemExit(
                   "ERROR: R8DexFilter must not be present."
@@ -806,7 +771,7 @@ jobs:
           PY
 
           echo
-          echo "PASS: release merge patch verified."
+          echo "PASS: Debug and Release task hooks verified."
 
       # ============================================================
       # STEP 26
@@ -843,7 +808,6 @@ jobs:
 
       # ============================================================
       # STEP 28
-      # ONLY AFTER STEPS 25-27 PASS
       # ============================================================
       - name: Assemble Release APK
         shell: bash
