@@ -71,6 +71,12 @@ android {
 
 configurations {
     r8Tool
+
+    /*
+     * AndroidX Core được khai báo thành dependency chính thức
+     * để Gradle tự resolve trước khi sanitizeLegacyDex chạy.
+     */
+    androidxCoreTool
 }
 
 dependencies {
@@ -78,6 +84,12 @@ dependencies {
 
     compileOnly files('libs/xposed-api-82.jar')
     compileOnly files('libs/aasdk-legacy.jar')
+
+    /*
+     * Dependency chính thức của AndroidX Core.
+     * Không còn phụ thuộc vào việc file JAR đã có sẵn trong cache hay chưa.
+     */
+    androidxCoreTool "androidx.core:core:1.13.1"
 
     r8Tool "com.android.tools:r8:8.13.6"
 
@@ -110,52 +122,49 @@ def findR8Jar = {
     return selected
 }
 
+/*
+ * Resolve AndroidX Core chính thức thông qua Gradle.
+ *
+ * KHÔNG quét:
+ * ~/.gradle/caches/modules-2/files-2.1/...
+ *
+ * Gradle tự resolve:
+ * androidx.core:core:1.13.1
+ *
+ * Sau đó lấy trực tiếp JAR từ configuration đã resolve.
+ */
 def findAndroidXCoreJar = {
-    def candidates = []
 
-    def gradleUserHome =
-            System.getProperty("user.home") +
-            "/.gradle/caches/modules-2/files-2.1"
+    def androidXCoreFiles =
+            configurations.androidxCoreTool
+                    .resolve()
+                    .findAll {
+                        it.exists() &&
+                        it.isFile() &&
+                        it.name.toLowerCase().endsWith(".jar")
+                    }
 
-    def coreRoot =
-            file(gradleUserHome + "/androidx.core/core")
-
-    if (coreRoot.exists()) {
-        coreRoot.eachDir { versionDir ->
-            versionDir.eachDir { hashDir ->
-                fileTree(hashDir).matching {
-                    include "*.jar"
-                    include "**/*.jar"
-                }.files.each { f ->
-                    candidates << f
-                }
-            }
-        }
-    }
-
-    candidates = candidates.findAll {
-        it.exists() && it.isFile()
-    }
-
-    if (candidates.isEmpty()) {
+    if (androidXCoreFiles.isEmpty()) {
         throw new GradleException(
-                "Không tìm thấy androidx.core:core trong Gradle cache."
+                "Gradle không resolve được androidx.core:core:1.13.1"
         )
     }
 
-    def preferred = candidates.find {
-        it.name == "core-1.13.1.jar"
+    def selected =
+            androidXCoreFiles.find {
+                it.name == "core-1.13.1.jar"
+            }
+
+    if (selected == null) {
+        selected = androidXCoreFiles[0]
     }
 
-    if (preferred != null) {
-        return preferred
-    }
+    logger.lifecycle(
+            "ANDROIDX CORE TOOL: " +
+            selected.absolutePath
+    )
 
-    candidates.sort {
-        a, b -> a.absolutePath <=> b.absolutePath
-    }
-
-    return candidates.last()
+    return selected
 }
 
 tasks.register("sanitizeLegacyDex") {
@@ -179,6 +188,7 @@ tasks.register("sanitizeLegacyDex") {
             new File(outputRoot, "legacy-r8-rules.pro")
 
     inputs.file(legacyDex)
+
     outputs.file(outputDex)
 
     doLast {
@@ -210,13 +220,19 @@ tasks.register("sanitizeLegacyDex") {
 -checkdiscard class androidx.core.graphics.drawable.IconCompatParcelizer
 '''.stripIndent()
 
+        /*
+         * Resolve cả hai dependency chính thức trước khi chạy R8.
+         */
         def r8Jar = findR8Jar()
 
+        def androidXCoreJar =
+                findAndroidXCoreJar()
+
         def androidJar =
-        new File(
-                android.sdkDirectory,
-                "platforms/android-${android.compileSdk}/android.jar"
-        )
+                new File(
+                        android.sdkDirectory,
+                        "platforms/android-${android.compileSdk}/android.jar"
+                )
 
         if (!androidJar.exists()) {
             throw new GradleException(
@@ -224,8 +240,6 @@ tasks.register("sanitizeLegacyDex") {
                     androidJar.absolutePath
             )
         }
-
-        def androidXCoreJar = findAndroidXCoreJar()
 
         logger.lifecycle("============================================================")
         logger.lifecycle("SANITIZE LEGACY DEX")
