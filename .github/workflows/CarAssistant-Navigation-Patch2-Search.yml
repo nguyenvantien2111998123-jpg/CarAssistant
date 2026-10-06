@@ -1,0 +1,1363 @@
+name: CarAssistant Navigation - Patch 2 Search
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  navigation-patch2-search:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Navigation V1 Core
+        uses: actions/checkout@v4
+        with:
+          ref: 3f6f007dfbf0144cf01c2dc989fe686a7b0b3491
+          fetch-depth: 1
+
+      - name: Verify Navigation V1 baseline
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          EXPECTED="3f6f007dfbf0144cf01c2dc989fe686a7b0b3491"
+          ACTUAL="$(git rev-parse HEAD)"
+
+          echo "EXPECTED=$EXPECTED"
+          echo "ACTUAL=$ACTUAL"
+
+          test "$ACTUAL" = "$EXPECTED"
+
+          SRC="v10-source/app/src/main/java/com/hieptran/aacast/doudou"
+
+          test -f v10-source/gradlew
+          test -f v10-source/app/build.gradle
+          test -f v10-source/app/src/main/AndroidManifest.xml
+
+          test -f "$SRC/NavigationMapView.java"
+          test -f "$SRC/V10CarActivity.java"
+
+          grep -Fq \
+            'org.maplibre.gl:android-sdk:11.11.0' \
+            v10-source/app/build.gradle
+
+          grep -Fq \
+            'package com.carassistant.v10;' \
+            "$SRC/NavigationMapView.java"
+
+          grep -Fq \
+            'class NavigationMapView' \
+            "$SRC/NavigationMapView.java"
+
+          echo "NAVIGATION V1 BASELINE: PASS"
+
+      - name: Capture protected Projection Core
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          SRC="v10-source/app/src/main/java/com/hieptran/aacast/doudou"
+
+          sha256sum \
+            "$SRC/V10ProjectionSession.java" \
+            "$SRC/V10DisplayController.java" \
+            "$SRC/V10SurfaceManager.java" \
+            "$SRC/V10TaskSession.java" \
+            "$SRC/V10SessionStore.java" \
+            > /tmp/core-before.sha256
+
+          echo "PROJECTION CORE HASH: CAPTURED"
+
+      - name: Verify Patch 1 is NOT included
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          FILE="v10-source/app/src/main/java/com/hieptran/aacast/doudou/NavigationMapView.java"
+
+          if grep -Fq 'CameraMode.TRACKING_GPS' "$FILE"; then
+            echo "ERROR: Patch 1 AutoFollow is already present."
+            echo "Patch 2 must be independent from Patch 1."
+            exit 1
+          fi
+
+          if grep -Fq 'trackingGesturesManagement(true)' "$FILE"; then
+            echo "ERROR: Patch 1 trackingGesturesManagement is already present."
+            exit 1
+          fi
+
+          if grep -Fq 'recenterButton' "$FILE"; then
+            echo "ERROR: Patch 1 Recenter UI is already present."
+            exit 1
+          fi
+
+          echo "PATCH 1 INDEPENDENCE: PASS"
+
+      - name: Add INTERNET permission
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          FILE="v10-source/app/src/main/AndroidManifest.xml"
+
+          if ! grep -Fq \
+            'android.permission.INTERNET' \
+            "$FILE"; then
+
+            sed -i \
+              '/<manifest /a\    <uses-permission android:name="android.permission.INTERNET" />' \
+              "$FILE"
+          fi
+
+          grep -Fq \
+            'android.permission.INTERNET' \
+            "$FILE"
+
+          grep -Fq \
+            'android.permission.ACCESS_FINE_LOCATION' \
+            "$FILE"
+
+          grep -Fq \
+            'android.permission.ACCESS_COARSE_LOCATION' \
+            "$FILE"
+
+          echo "INTERNET PERMISSION: PASS"
+          echo "LOCATION PERMISSIONS: PRESERVED"
+
+      - name: Apply Patch 2 - Search + Select Destination
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          FILE="v10-source/app/src/main/java/com/hieptran/aacast/doudou/NavigationMapView.java"
+
+          cat > "$FILE" <<'JAVA'
+          package com.carassistant.v10;
+
+          import android.Manifest;
+          import android.app.Activity;
+          import android.content.Context;
+          import android.content.pm.PackageManager;
+          import android.graphics.Color;
+          import android.graphics.drawable.GradientDrawable;
+          import android.location.Location;
+          import android.os.Bundle;
+          import android.os.Handler;
+          import android.os.Looper;
+          import android.view.Gravity;
+          import android.view.View;
+          import android.view.inputmethod.InputMethodManager;
+          import android.widget.Button;
+          import android.widget.EditText;
+          import android.widget.FrameLayout;
+          import android.widget.LinearLayout;
+          import android.widget.ScrollView;
+          import android.widget.TextView;
+
+          import org.json.JSONArray;
+          import org.json.JSONObject;
+          import org.maplibre.android.MapLibre;
+          import org.maplibre.android.camera.CameraUpdateFactory;
+          import org.maplibre.android.geometry.LatLng;
+          import org.maplibre.android.location.LocationComponentActivationOptions;
+          import org.maplibre.android.location.LocationComponentOptions;
+          import org.maplibre.android.maps.MapLibreMap;
+          import org.maplibre.android.maps.MapView;
+          import org.maplibre.android.maps.UiSettings;
+          import org.maplibre.android.style.layers.CircleLayer;
+          import org.maplibre.android.style.sources.GeoJsonSource;
+          import org.maplibre.geojson.Feature;
+          import org.maplibre.geojson.Point;
+
+          import java.io.BufferedReader;
+          import java.io.InputStream;
+          import java.io.InputStreamReader;
+          import java.net.HttpURLConnection;
+          import java.net.URL;
+          import java.net.URLEncoder;
+          import java.nio.charset.StandardCharsets;
+          import java.util.ArrayList;
+          import java.util.List;
+
+          public final class NavigationMapView extends FrameLayout {
+
+              private static final int LOCATION_REQUEST = 4101;
+
+              private static final String DESTINATION_SOURCE =
+                      "carassistant-patch2-destination-source";
+
+              private static final String DESTINATION_LAYER =
+                      "carassistant-patch2-destination-layer";
+
+              private final MapView mapView;
+
+              private final Handler mainHandler =
+                      new Handler(Looper.getMainLooper());
+
+              private MapLibreMap map;
+
+              private EditText searchInput;
+
+              private TextView searchButton;
+
+              private TextView searchStatus;
+
+              private LinearLayout resultsPanel;
+
+              private LinearLayout resultsList;
+
+              private GeoJsonSource destinationSource;
+
+              private CircleLayer destinationLayer;
+
+              public NavigationMapView(Context context) {
+                  super(context);
+
+                  setBackgroundColor(Color.BLACK);
+
+                  MapLibre.getInstance(
+                          context.getApplicationContext());
+
+                  mapView = new MapView(context);
+
+                  mapView.onCreate(
+                          new Bundle());
+
+                  addView(
+                          mapView,
+                          new LayoutParams(
+                                  -1,
+                                  -1));
+
+                  mapView.getMapAsync(
+                          this::onMapReady);
+              }
+
+              private void onMapReady(
+                      MapLibreMap readyMap) {
+
+                  map = readyMap;
+
+                  UiSettings ui =
+                          map.getUiSettings();
+
+                  ui.setCompassEnabled(false);
+                  ui.setZoomGesturesEnabled(true);
+                  ui.setScrollGesturesEnabled(true);
+                  ui.setRotateGesturesEnabled(true);
+                  ui.setTiltGesturesEnabled(false);
+
+                  map.setStyle(
+                          "https://tiles.openfreemap.org/styles/liberty",
+                          style -> {
+                              enableLocation();
+                              createSearchUi();
+                              createDestinationLayer();
+                          });
+              }
+
+              private void enableLocation() {
+
+                  if (map == null) {
+                      return;
+                  }
+
+                  Context context =
+                          getContext();
+
+                  if (context == null) {
+                      return;
+                  }
+
+                  if (context.checkSelfPermission(
+                          Manifest.permission.ACCESS_FINE_LOCATION)
+                          != PackageManager.PERMISSION_GRANTED) {
+
+                      if (context instanceof Activity) {
+
+                          ((Activity) context)
+                                  .requestPermissions(
+                                          new String[]{
+                                                  Manifest.permission.ACCESS_FINE_LOCATION,
+                                                  Manifest.permission.ACCESS_COARSE_LOCATION
+                                          },
+                                          LOCATION_REQUEST);
+                      }
+
+                      return;
+                  }
+
+                  LocationComponentOptions options =
+                          LocationComponentOptions
+                                  .builder(context)
+                                  .pulseEnabled(true)
+                                  .build();
+
+                  LocationComponentActivationOptions activation =
+                          LocationComponentActivationOptions
+                                  .builder(
+                                          context,
+                                          map.getStyle())
+                                  .locationComponentOptions(
+                                          options)
+                                  .build();
+
+                  map.getLocationComponent()
+                          .activateLocationComponent(
+                                  activation);
+
+                  map.getLocationComponent()
+                          .setLocationComponentEnabled(true);
+              }
+
+              private void createSearchUi() {
+
+                  if (searchInput != null) {
+                      return;
+                  }
+
+                  LinearLayout searchBox =
+                          new LinearLayout(getContext());
+
+                  searchBox.setOrientation(
+                          LinearLayout.VERTICAL);
+
+                  searchBox.setPadding(
+                          dp(10),
+                          dp(10),
+                          dp(10),
+                          dp(10));
+
+                  GradientDrawable background =
+                          new GradientDrawable();
+
+                  background.setColor(
+                          Color.rgb(
+                                  15,
+                                  20,
+                                  26));
+
+                  background.setCornerRadius(
+                          dp(16));
+
+                  background.setStroke(
+                          dp(1),
+                          Color.rgb(
+                                  70,
+                                  85,
+                                  100));
+
+                  searchBox.setBackground(
+                          background);
+
+                  searchInput =
+                          new EditText(getContext());
+
+                  searchInput.setSingleLine(true);
+                  searchInput.setTextColor(Color.WHITE);
+                  searchInput.setHintTextColor(
+                          Color.LTGRAY);
+                  searchInput.setHint(
+                          "Tìm địa điểm...");
+                  searchInput.setTextSize(15);
+                  searchInput.setPadding(
+                          dp(14),
+                          0,
+                          dp(14),
+                          0);
+
+                  GradientDrawable inputBackground =
+                          new GradientDrawable();
+
+                  inputBackground.setColor(
+                          Color.rgb(
+                                  29,
+                                  35,
+                                  42));
+
+                  inputBackground.setCornerRadius(
+                          dp(12));
+
+                  searchInput.setBackground(
+                          inputBackground);
+
+                  searchBox.addView(
+                          searchInput,
+                          new LinearLayout.LayoutParams(
+                                  -1,
+                                  dp(52)));
+
+                  LinearLayout buttonRow =
+                          new LinearLayout(getContext());
+
+                  buttonRow.setGravity(
+                          Gravity.CENTER_VERTICAL);
+
+                  searchButton =
+                          createActionButton(
+                                  "TÌM");
+
+                  searchButton.setOnClickListener(
+                          v -> startSearch());
+
+                  buttonRow.addView(
+                          searchButton,
+                          new LinearLayout.LayoutParams(
+                                  dp(86),
+                                  dp(48)));
+
+                  searchStatus =
+                          createStatusText();
+
+                  buttonRow.addView(
+                          searchStatus,
+                          new LinearLayout.LayoutParams(
+                                  0,
+                                  dp(48),
+                                  1f));
+
+                  searchBox.addView(
+                          buttonRow);
+
+                  resultsPanel =
+                          new LinearLayout(getContext());
+
+                  resultsPanel.setOrientation(
+                          LinearLayout.VERTICAL);
+
+                  resultsPanel.setVisibility(
+                          View.GONE);
+
+                  GradientDrawable resultsBackground =
+                          new GradientDrawable();
+
+                  resultsBackground.setColor(
+                          Color.rgb(
+                                  10,
+                                  14,
+                                  19));
+
+                  resultsBackground.setCornerRadius(
+                          dp(14));
+
+                  resultsPanel.setBackground(
+                          resultsBackground);
+
+                  resultsList =
+                          new LinearLayout(getContext());
+
+                  resultsList.setOrientation(
+                          LinearLayout.VERTICAL);
+
+                  ScrollView scroll =
+                          new ScrollView(getContext());
+
+                  scroll.addView(
+                          resultsList,
+                          new ScrollView.LayoutParams(
+                                  -1,
+                                  -2));
+
+                  resultsPanel.addView(
+                          scroll,
+                          new LinearLayout.LayoutParams(
+                                  -1,
+                                  dp(270)));
+
+                  searchBox.addView(
+                          resultsPanel,
+                          new LinearLayout.LayoutParams(
+                                  -1,
+                                  -2));
+
+                  LayoutParams params =
+                          new LayoutParams(
+                                  dp(430),
+                                  -2,
+                                  Gravity.TOP
+                                          | Gravity.START);
+
+                  params.setMargins(
+                          dp(18),
+                          dp(18),
+                          dp(18),
+                          0);
+
+                  addView(
+                          searchBox,
+                          params);
+
+                  searchInput.setOnEditorActionListener(
+                          (v, actionId, event) -> {
+                              startSearch();
+                              return true;
+                          });
+              }
+
+              private TextView createActionButton(
+                      String label) {
+
+                  TextView button =
+                          new TextView(getContext());
+
+                  button.setText(label);
+                  button.setTextColor(Color.WHITE);
+                  button.setTextSize(13);
+                  button.setGravity(
+                          Gravity.CENTER);
+
+                  GradientDrawable background =
+                          new GradientDrawable();
+
+                  background.setColor(
+                          Color.rgb(
+                                  35,
+                                  55,
+                                  70));
+
+                  background.setCornerRadius(
+                          dp(12));
+
+                  button.setBackground(
+                          background);
+
+                  return button;
+              }
+
+              private TextView createStatusText() {
+
+                  TextView status =
+                          new TextView(getContext());
+
+                  status.setText("");
+                  status.setTextColor(Color.LTGRAY);
+                  status.setTextSize(12);
+                  status.setGravity(
+                          Gravity.CENTER_VERTICAL);
+
+                  status.setPadding(
+                          dp(12),
+                          0,
+                          dp(4),
+                          0);
+
+                  return status;
+              }
+
+              private void startSearch() {
+
+                  if (searchInput == null) {
+                      return;
+                  }
+
+                  String query =
+                          searchInput
+                                  .getText()
+                                  .toString()
+                                  .trim();
+
+                  if (query.isEmpty()) {
+
+                      setSearchStatus(
+                              "Nhập địa điểm cần tìm.");
+
+                      return;
+                  }
+
+                  hideKeyboard();
+
+                  searchButton.setEnabled(false);
+
+                  setSearchStatus(
+                          "Đang tìm...");
+
+                  resultsPanel.setVisibility(
+                          View.VISIBLE);
+
+                  resultsList.removeAllViews();
+
+                  new Thread(
+                          () -> performSearch(query),
+                          "CarAssistant-Patch2-Search")
+                          .start();
+              }
+
+              private void performSearch(
+                      String query) {
+
+                  HttpURLConnection connection =
+                          null;
+
+                  try {
+
+                      String encoded =
+                              URLEncoder.encode(
+                                      query,
+                                      StandardCharsets.UTF_8.name());
+
+                      String endpoint =
+                              "https://nominatim.openstreetmap.org/search"
+                              + "?format=json"
+                              + "&limit=6"
+                              + "&q="
+                              + encoded;
+
+                      URL url =
+                              new URL(endpoint);
+
+                      connection =
+                              (HttpURLConnection)
+                                      url.openConnection();
+
+                      connection.setRequestMethod(
+                              "GET");
+
+                      connection.setConnectTimeout(
+                              10000);
+
+                      connection.setReadTimeout(
+                              10000);
+
+                      connection.setRequestProperty(
+                              "Accept",
+                              "application/json");
+
+                      connection.setRequestProperty(
+                              "User-Agent",
+                              "CarAssistant-Navigation-Patch2/1.0");
+
+                      int responseCode =
+                              connection.getResponseCode();
+
+                      if (responseCode
+                              != HttpURLConnection.HTTP_OK) {
+
+                          throw new IllegalStateException(
+                                  "HTTP "
+                                  + responseCode);
+                      }
+
+                      String body =
+                              readStream(
+                                      connection
+                                              .getInputStream());
+
+                      JSONArray array =
+                              new JSONArray(body);
+
+                      ArrayList<SearchResult> results =
+                              new ArrayList<>();
+
+                      for (int i = 0;
+                           i < array.length();
+                           i++) {
+
+                          JSONObject item =
+                                  array.getJSONObject(i);
+
+                          String latText =
+                                  item.optString(
+                                          "lat",
+                                          "");
+
+                          String lonText =
+                                  item.optString(
+                                          "lon",
+                                          "");
+
+                          if (latText.isEmpty()
+                                  || lonText.isEmpty()) {
+                              continue;
+                          }
+
+                          double latitude =
+                                  Double.parseDouble(
+                                          latText);
+
+                          double longitude =
+                                  Double.parseDouble(
+                                          lonText);
+
+                          String name =
+                                  item.optString(
+                                          "display_name",
+                                          query);
+
+                          results.add(
+                                  new SearchResult(
+                                          name,
+                                          latitude,
+                                          longitude));
+                      }
+
+                      mainHandler.post(
+                              () -> showSearchResults(
+                                      results));
+
+                  } catch (Exception error) {
+
+                      String message =
+                              error.getMessage();
+
+                      if (message == null
+                              || message.isEmpty()) {
+                          message =
+                                  "Không tìm được địa điểm.";
+                      }
+
+                      final String finalMessage =
+                              message;
+
+                      mainHandler.post(
+                              () -> showSearchError(
+                                      finalMessage));
+
+                  } finally {
+
+                      if (connection != null) {
+                          connection.disconnect();
+                      }
+                  }
+              }
+
+              private String readStream(
+                      InputStream stream)
+                      throws Exception {
+
+                  StringBuilder builder =
+                          new StringBuilder();
+
+                  BufferedReader reader =
+                          new BufferedReader(
+                                  new InputStreamReader(
+                                          stream,
+                                          StandardCharsets.UTF_8));
+
+                  String line;
+
+                  while ((line =
+                          reader.readLine()) != null) {
+
+                      builder.append(line);
+                  }
+
+                  reader.close();
+
+                  return builder.toString();
+              }
+
+              private void showSearchResults(
+                      List<SearchResult> results) {
+
+                  searchButton.setEnabled(true);
+
+                  resultsList.removeAllViews();
+
+                  if (results.isEmpty()) {
+
+                      setSearchStatus(
+                              "Không có kết quả.");
+
+                      resultsPanel.setVisibility(
+                              View.VISIBLE);
+
+                      return;
+                  }
+
+                  setSearchStatus(
+                          results.size()
+                                  + " kết quả");
+
+                  resultsPanel.setVisibility(
+                          View.VISIBLE);
+
+                  for (SearchResult result :
+                          results) {
+
+                      addResultItem(result);
+                  }
+              }
+
+              private void showSearchError(
+                      String message) {
+
+                  searchButton.setEnabled(true);
+
+                  resultsList.removeAllViews();
+
+                  setSearchStatus(
+                          "Lỗi tìm kiếm");
+
+                  TextView error =
+                          new TextView(getContext());
+
+                  error.setText(
+                          "Không tìm được địa điểm.\n"
+                          + message);
+
+                  error.setTextColor(
+                          Color.WHITE);
+
+                  error.setTextSize(13);
+
+                  error.setPadding(
+                          dp(14),
+                          dp(14),
+                          dp(14),
+                          dp(14));
+
+                  resultsList.addView(
+                          error,
+                          new LinearLayout.LayoutParams(
+                                  -1,
+                                  -2));
+
+                  resultsPanel.setVisibility(
+                          View.VISIBLE);
+              }
+
+              private void addResultItem(
+                      SearchResult result) {
+
+                  TextView item =
+                          new TextView(getContext());
+
+                  item.setText(
+                          result.name);
+
+                  item.setTextColor(
+                          Color.WHITE);
+
+                  item.setTextSize(13);
+
+                  item.setGravity(
+                          Gravity.CENTER_VERTICAL);
+
+                  item.setPadding(
+                          dp(14),
+                          dp(8),
+                          dp(14),
+                          dp(8));
+
+                  GradientDrawable background =
+                          new GradientDrawable();
+
+                  background.setColor(
+                          Color.rgb(
+                                  27,
+                                  34,
+                                  41));
+
+                  background.setCornerRadius(
+                          dp(10));
+
+                  item.setBackground(
+                          background);
+
+                  item.setOnClickListener(
+                          v -> selectDestination(
+                                  result));
+
+                  LinearLayout.LayoutParams params =
+                          new LinearLayout.LayoutParams(
+                                  -1,
+                                  dp(62));
+
+                  params.setMargins(
+                          dp(6),
+                          dp(5),
+                          dp(6),
+                          dp(5));
+
+                  resultsList.addView(
+                          item,
+                          params);
+              }
+
+              private void selectDestination(
+                      SearchResult result) {
+
+                  if (map == null
+                          || result == null) {
+                      return;
+                  }
+
+                  LatLng target =
+                          new LatLng(
+                                  result.latitude,
+                                  result.longitude);
+
+                  map.animateCamera(
+                          CameraUpdateFactory
+                                  .newLatLngZoom(
+                                          target,
+                                          15.0),
+                          700);
+
+                  showDestinationMarker(
+                          result.latitude,
+                          result.longitude);
+
+                  setSearchStatus(
+                          "Đã chọn điểm đến");
+
+                  resultsPanel.setVisibility(
+                          View.GONE);
+
+                  hideKeyboard();
+              }
+
+              private void createDestinationLayer() {
+
+                  if (map == null
+                          || map.getStyle() == null) {
+                      return;
+                  }
+
+                  try {
+
+                      if (map.getStyle()
+                              .getLayer(
+                                      DESTINATION_LAYER)
+                              == null) {
+
+                          destinationSource =
+                                  new GeoJsonSource(
+                                          DESTINATION_SOURCE);
+
+                          map.getStyle()
+                                  .addSource(
+                                          destinationSource);
+
+                          destinationLayer =
+                                  new CircleLayer(
+                                          DESTINATION_LAYER,
+                                          DESTINATION_SOURCE);
+
+                          destinationLayer
+                                  .withProperties(
+                                          org.maplibre.android.style.layers.PropertyFactory
+                                                  .circleRadius(9f),
+                                          org.maplibre.android.style.layers.PropertyFactory
+                                                  .circleColor(
+                                                          Color.rgb(
+                                                                  220,
+                                                                  60,
+                                                                  60)),
+                                          org.maplibre.android.style.layers.PropertyFactory
+                                                  .circleStrokeColor(
+                                                          Color.WHITE),
+                                          org.maplibre.android.style.layers.PropertyFactory
+                                                  .circleStrokeWidth(3f));
+
+                          map.getStyle()
+                                  .addLayer(
+                                          destinationLayer);
+                      }
+
+                  } catch (Exception ignored) {
+                  }
+              }
+
+              private void showDestinationMarker(
+                      double latitude,
+                      double longitude) {
+
+                  if (map == null) {
+                      return;
+                  }
+
+                  if (map.getStyle() == null) {
+                      return;
+                  }
+
+                  try {
+
+                      if (destinationSource == null) {
+
+                          createDestinationLayer();
+                      }
+
+                      if (destinationSource == null) {
+                          return;
+                      }
+
+                      Point point =
+                              Point.fromLngLat(
+                                      longitude,
+                                      latitude);
+
+                      destinationSource.setGeoJson(
+                              Feature.fromGeometry(
+                                      point));
+
+                  } catch (Exception ignored) {
+                  }
+              }
+
+              private void setSearchStatus(
+                      String text) {
+
+                  if (searchStatus != null) {
+                      searchStatus.setText(text);
+                  }
+              }
+
+              private void hideKeyboard() {
+
+                  if (searchInput == null) {
+                      return;
+                  }
+
+                  InputMethodManager manager =
+                          (InputMethodManager)
+                                  getContext()
+                                          .getSystemService(
+                                                  Context.INPUT_METHOD_SERVICE);
+
+                  if (manager != null) {
+
+                      manager.hideSoftInputFromWindow(
+                              searchInput.getWindowToken(),
+                              0);
+                  }
+              }
+
+              public void zoomIn() {
+
+                  if (map == null) {
+                      return;
+                  }
+
+                  double zoom =
+                          map.getCameraPosition()
+                                  .zoom;
+
+                  map.animateCamera(
+                          CameraUpdateFactory.zoomTo(
+                                  Math.min(
+                                          20.0,
+                                          zoom + 1.0)),
+                          250);
+              }
+
+              public void zoomOut() {
+
+                  if (map == null) {
+                      return;
+                  }
+
+                  double zoom =
+                          map.getCameraPosition()
+                                  .zoom;
+
+                  map.animateCamera(
+                          CameraUpdateFactory.zoomTo(
+                                  Math.max(
+                                          1.0,
+                                          zoom - 1.0)),
+                          250);
+              }
+
+              public void recenter() {
+
+                  if (map == null) {
+                      return;
+                  }
+
+                  try {
+
+                      Location location =
+                              map.getLocationComponent()
+                                      .getLastKnownLocation();
+
+                      if (location == null) {
+                          return;
+                      }
+
+                      map.animateCamera(
+                              CameraUpdateFactory
+                                      .newLatLngZoom(
+                                              new LatLng(
+                                                      location.getLatitude(),
+                                                      location.getLongitude()),
+                                              16.0),
+                              500);
+
+                  } catch (Exception ignored) {
+                  }
+              }
+
+              public void onHostResume() {
+                  mapView.onResume();
+              }
+
+              public void onHostPause() {
+                  mapView.onPause();
+              }
+
+              public void onHostDestroy() {
+                  mapView.onDestroy();
+              }
+
+              private int dp(float value) {
+
+                  return Math.round(
+                          value
+                          * getResources()
+                                  .getDisplayMetrics()
+                                  .density);
+              }
+
+              private static final class SearchResult {
+
+                  final String name;
+
+                  final double latitude;
+
+                  final double longitude;
+
+                  SearchResult(
+                          String name,
+                          double latitude,
+                          double longitude) {
+
+                      this.name = name;
+                      this.latitude = latitude;
+                      this.longitude = longitude;
+                  }
+              }
+          }
+          JAVA
+
+          test -f "$FILE"
+
+          grep -Fq \
+            'class NavigationMapView' \
+            "$FILE"
+
+          grep -Fq \
+            'Nominatim' \
+            "$FILE"
+
+          grep -Fq \
+            'nominatim.openstreetmap.org/search' \
+            "$FILE"
+
+          grep -Fq \
+            'public void selectDestination' \
+            "$FILE" || true
+
+          grep -Fq \
+            'selectDestination(' \
+            "$FILE"
+
+          grep -Fq \
+            'createDestinationLayer' \
+            "$FILE"
+
+          grep -Fq \
+            'GeoJsonSource' \
+            "$FILE"
+
+          grep -Fq \
+            'CircleLayer' \
+            "$FILE"
+
+          grep -Fq \
+            'newLatLngZoom' \
+            "$FILE"
+
+          echo "PATCH 2: SEARCH + SELECT DESTINATION: APPLIED"
+
+      - name: Verify Patch 2 scope
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          git diff --check
+
+          echo "Changed files:"
+          git diff --name-only
+
+          EXPECTED1="v10-source/app/src/main/AndroidManifest.xml"
+          EXPECTED2="v10-source/app/src/main/java/com/hieptran/aacast/doudou/NavigationMapView.java"
+
+          CHANGED="$(git diff --name-only)"
+
+          echo "$CHANGED" | grep -Fxq "$EXPECTED1"
+          echo "$CHANGED" | grep -Fxq "$EXPECTED2"
+
+          COUNT="$(printf '%s\n' "$CHANGED" | sed '/^$/d' | wc -l)"
+
+          test "$COUNT" -eq 2
+
+          echo "PATCH 2 FILE SCOPE: PASS"
+
+      - name: Verify Patch 2 does not contain Route
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          FILE="v10-source/app/src/main/java/com/hieptran/aacast/doudou/NavigationMapView.java"
+
+          if grep -Fq 'OSRM' "$FILE"; then
+            echo "ERROR: Route/OSRM must not be included in Patch 2."
+            exit 1
+          fi
+
+          if grep -Fq 'route/' "$FILE"; then
+            echo "ERROR: Route endpoint must not be included in Patch 2."
+            exit 1
+          fi
+
+          if grep -Fq 'NavigationRouteController' "$FILE"; then
+            echo "ERROR: Route controller must not be included."
+            exit 1
+          fi
+
+          if grep -Fq 'NavigationRouteRenderer' "$FILE"; then
+            echo "ERROR: Route renderer must not be included."
+            exit 1
+          fi
+
+          echo "ROUTE EXCLUSION: PASS"
+
+      - name: Verify Projection Core unchanged
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          SRC="v10-source/app/src/main/java/com/hieptran/aacast/doudou"
+
+          sha256sum \
+            "$SRC/V10ProjectionSession.java" \
+            "$SRC/V10DisplayController.java" \
+            "$SRC/V10SurfaceManager.java" \
+            "$SRC/V10TaskSession.java" \
+            "$SRC/V10SessionStore.java" \
+            > /tmp/core-after.sha256
+
+          cmp \
+            /tmp/core-before.sha256 \
+            /tmp/core-after.sha256
+
+          echo "PROJECTION CORE: UNCHANGED"
+
+      - name: Verify V10CarActivity unchanged
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          if git diff --name-only | grep -Fxq \
+            "v10-source/app/src/main/java/com/hieptran/aacast/doudou/V10CarActivity.java"; then
+
+            echo "ERROR: V10CarActivity.java must not be changed by Patch 2."
+            exit 1
+          fi
+
+          echo "V10CarActivity: UNCHANGED"
+
+      - name: Setup Java 17
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Compile Patch 2
+        working-directory: v10-source
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          chmod +x ./gradlew
+
+          ./gradlew \
+            :app:compileDebugJavaWithJavac \
+            --no-daemon \
+            --stacktrace
+
+          echo "PATCH 2 JAVA COMPILE: PASS"
+
+      - name: Assemble Patch 2 APK
+        working-directory: v10-source
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          ./gradlew \
+            :app:assembleDebug \
+            --no-daemon \
+            --stacktrace
+
+          test -f \
+            app/build/outputs/apk/debug/app-debug.apk
+
+          echo "PATCH 2 APK BUILD: PASS"
+
+      - name: Package Patch 2
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          cp \
+            v10-source/app/build/outputs/apk/debug/app-debug.apk \
+            CarAssistant-Navigation-Patch2-Search.apk
+
+          sha256sum \
+            CarAssistant-Navigation-Patch2-Search.apk \
+            > CarAssistant-Navigation-Patch2-Search.sha256
+
+          printf '%s\n' \
+            "CORE=Navigation V1" \
+            "PATCH=Search + Select Destination" \
+            "SEARCH=Nominatim" \
+            "DESTINATION=MapLibre marker" \
+            "ROUTE=NOT INCLUDED" \
+            "AUTOFOLLOW=NOT INCLUDED" \
+            "RECENTER=NOT INCLUDED" \
+            "PROJECTION_CORE=UNCHANGED" \
+            "V10CarActivity=UNCHANGED" \
+            "SOURCE=NavigationMapView.java + AndroidManifest.xml" \
+            > CarAssistant-Navigation-Patch2-Search.txt
+
+          echo "PATCH 2 PACKAGE: PASS"
+
+      - name: Upload Patch 2
+        uses: actions/upload-artifact@v4
+        with:
+          name: CarAssistant-Navigation-Patch2-Search
+          path: |
+            CarAssistant-Navigation-Patch2-Search.apk
+            CarAssistant-Navigation-Patch2-Search.sha256
+            CarAssistant-Navigation-Patch2-Search.txt
+          if-no-files-found: error
+          retention-days: 90
+
+      - name: Final Patch 2 result
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          echo "=============================================="
+          echo "CARASSISTANT NAVIGATION - PATCH 2"
+          echo "SEARCH + SELECT DESTINATION"
+          echo "=============================================="
+          echo ""
+          echo "CORE: Navigation V1"
+          echo "SEARCH: NOMINATIM"
+          echo "SELECT DESTINATION: ENABLED"
+          echo "DESTINATION MARKER: ENABLED"
+          echo "ROUTE: NOT INCLUDED"
+          echo "PATCH 1 AUTOFOLLOW: NOT INCLUDED"
+          echo "PATCH 1 RECENTER: NOT INCLUDED"
+          echo "V10CarActivity: UNCHANGED"
+          echo "PROJECTION CORE: UNCHANGED"
+          echo "SOURCE:"
+          echo "  NavigationMapView.java"
+          echo "  AndroidManifest.xml"
+          echo ""
+          echo "BUILD: PASS"
+          echo "=============================================="
