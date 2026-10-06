@@ -636,7 +636,15 @@ jobs:
       # ONLY NEW PATCH:
       # Fix duplicate AndroidX classes inside aasdk-legacy.dex.
       #
-      # AGP 8.13.0 / Gradle toolchain is used.
+      # Project AGP:
+      #   com.android.application 8.13.0
+      #
+      # Exact AGP builder cache:
+      #   ~/.gradle/caches/modules-2/files-2.1/
+      #   com.android.tools.build/builder/8.13.0/<hash>/
+      #   builder-8.13.0.jar
+      #
+      # AGP 8.13.0 embeds R8/D8 8.13.6 in builder-8.13.0.jar.
       #
       # The repository build.gradle is modified only in the CI
       # workspace. No source/build.gradle change is committed.
@@ -663,37 +671,80 @@ jobs:
           new_lines = [
               "        /*",
               "         * CI PATCH:",
-              "         * aasdk-legacy.dex contains AndroidX classes that are already",
-              "         * supplied by the normal application dependency graph.",
               "         *",
-              "         * Resolve the R8/D8 tool used by the Android Gradle Plugin",
-              "         * through the Gradle cache instead of assuming a standalone",
-              "         * R8 installation.",
+              "         * AGP in this project is 8.13.0.",
+              "         * AGP 8.13.0 embeds R8/D8 8.13.6 inside",
+              "         * com.android.tools.build:builder:8.13.0.",
+              "         *",
+              "         * Do NOT search the standalone com.android.tools:r8 cache.",
+              "         * Resolve the exact AGP builder JAR instead.",
               "         */",
               "",
-              "        def r8Root = new File(",
+              "        def builderRoot = new File(",
               "                System.getProperty('user.home'),",
-              "                '.gradle/caches/modules-2/files-2.1/com.android.tools/r8'",
+              "                '.gradle/caches/modules-2/files-2.1/com.android.tools.build/builder/8.13.0'",
               "        )",
               "",
-              "        def r8Candidates = fileTree(r8Root).matching {",
-              "            include '**/r8-*.jar'",
-              "        }.files.toList()",
-              "",
-              "        if (r8Candidates.isEmpty()) {",
+              "        if (!builderRoot.exists()) {",
               "            throw new GradleException(",
-              "                    'Không tìm thấy R8 của AGP trong Gradle cache: '",
-              "                            + r8Root.absolutePath",
+              "                    'Không tìm thấy thư mục AGP builder 8.13.0: '",
+              "                            + builderRoot.absolutePath",
               "            )",
               "        }",
               "",
-              "        def r8Jar = r8Candidates.sort { a, b ->",
+              "        def builderCandidates = fileTree(builderRoot).matching {",
+              "            include '**/builder-8.13.0.jar'",
+              "        }.files.toList()",
+              "",
+              "        if (builderCandidates.isEmpty()) {",
+              "            throw new GradleException(",
+              "                    'Không tìm thấy builder-8.13.0.jar trong: '",
+              "                            + builderRoot.absolutePath",
+              "            )",
+              "        }",
+              "",
+              "        def agpBuilderJar = builderCandidates.sort { a, b ->",
               "            b.lastModified() <=> a.lastModified()",
               "        }.first()",
               "",
               "        println(",
-              "                'Using AGP R8: '",
-              "                        + r8Jar.absolutePath",
+              "                'EXACT AGP BUILDER: '",
+              "                        + agpBuilderJar.absolutePath",
+              "        )",
+              "",
+              "        def builderListingOutput = new ByteArrayOutputStream()",
+              "",
+              "        project.exec {",
+              "            standardOutput = builderListingOutput",
+              "            commandLine(",
+              "                    'jar',",
+              "                    'tf',",
+              "                    agpBuilderJar.absolutePath",
+              "            )",
+              "        }",
+              "",
+              "        def builderListing = builderListingOutput.toString('UTF-8')",
+              "",
+              "        if (!builderListing.contains(",
+              "                'com/android/tools/r8/R8.class'",
+              "        )) {",
+              "            throw new GradleException(",
+              "                    'builder-8.13.0.jar không chứa R8.class: '",
+              "                            + agpBuilderJar.absolutePath",
+              "            )",
+              "        }",
+              "",
+              "        if (!builderListing.contains(",
+              "                'com/android/tools/r8/D8.class'",
+              "        )) {",
+              "            throw new GradleException(",
+              "                    'builder-8.13.0.jar không chứa D8.class: '",
+              "                            + agpBuilderJar.absolutePath",
+              "            )",
+              "        }",
+              "",
+              "        println(",
+              "                'Verified AGP builder contains R8.class and D8.class.'",
               "        )",
               "",
               "        def filteredLegacyDex = new File(",
@@ -738,11 +789,15 @@ jobs:
               "            )",
               "        }",
               "",
+              "        /*",
+              "         * Filter only aasdk-legacy.dex.",
+              "         * The normal application dex files are NOT passed to R8.",
+              "         */",
               "        project.exec {",
               "            commandLine(",
               "                    'java',",
               "                    '-cp',",
-              "                    r8Jar.absolutePath,",
+              "                    agpBuilderJar.absolutePath,",
               "                    'com.android.tools.r8.R8',",
               "                    '--release',",
               "                    '--min-api',",
@@ -764,12 +819,19 @@ jobs:
               "        }",
               "",
               "        println(",
-              "                'Using filtered aasdk legacy dex: '",
+              "                'Filtered legacy dex: '",
               "                        + filteredLegacyDex.absolutePath",
               "        )",
               "",
+              "        /*",
+              "         * Use D8 from the SAME AGP builder JAR.",
+              "         * This keeps R8/D8 on the exact AGP 8.13.0 toolchain.",
+              "         */",
               "        def finalD8Args = [",
-              "                d8Tool,",
+              "                'java',",
+              "                '-cp',",
+              "                agpBuilderJar.absolutePath,",
+              "                'com.android.tools.r8.D8',",
               "                '--min-api',",
               "                '29',",
               "                '--output',",
@@ -801,13 +863,13 @@ jobs:
           )
 
           print(
-              "CI-only AGP R8/D8 release merge patch applied."
+              "CI-only exact AGP 8.13.0 builder R8/D8 patch applied."
           )
           PY
 
           echo "Checking patched merge section:"
-          grep -n -A120 -B8 \
-            "finalD8Args" \
+          grep -n -A145 -B8 \
+            "agpBuilderJar" \
             app/build.gradle
 
       - name: Verify release merge patch
@@ -815,19 +877,20 @@ jobs:
         run: |
           set -e
 
-          grep -q "r8Root" app/build.gradle
-          grep -q "r8Candidates" app/build.gradle
+          grep -q "builder-8.13.0.jar" app/build.gradle
           grep -q "com.android.tools.r8.R8" app/build.gradle
+          grep -q "com.android.tools.r8.D8" app/build.gradle
           grep -q "filteredLegacyDex" app/build.gradle
           grep -q "aasdk_legacy_filtered" app/build.gradle
           grep -q "finalD8Args" app/build.gradle
           grep -q "com.google.android.apps.auto.sdk.**" app/build.gradle
 
-          if grep -q "commandLine(\s*\[" app/build.gradle; then
-            echo "Checking commandLine list syntax manually..."
+          if grep -q "com.android.tools/r8" app/build.gradle; then
+            echo "ERROR: standalone R8 cache path must not be used."
+            exit 1
           fi
 
-          echo "AGP R8/D8 release merge patch verified."
+          echo "Exact AGP 8.13.0 builder R8/D8 release merge patch verified."
 
       - name: Assemble Release APK
         shell: bash
