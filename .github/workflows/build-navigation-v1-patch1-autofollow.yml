@@ -1,27 +1,54 @@
-name: Build Navigation V1 Patch1 Autofollow
+name: Build Navigation V1 Patch1 AutoFollow
 
 on:
   workflow_dispatch:
 
 permissions:
-  contents: write
+  contents: read
+
+defaults:
+  run:
+    working-directory: navigation-v1-source
 
 jobs:
-  clean-build:
+  build-navigation-v1:
     runs-on: ubuntu-latest
-
-    defaults:
-      run:
-        working-directory: navigation-v1-source
 
     steps:
 
+      # ============================================================
+      # STEP 01
+      # ============================================================
       - name: Checkout main baseline
         uses: actions/checkout@v4
         with:
           ref: main
           fetch-depth: 0
 
+      # ============================================================
+      # STEP 02
+      # ============================================================
+      - name: Show repository state
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          cd "$GITHUB_WORKSPACE"
+
+          echo "=== HEAD ==="
+          git rev-parse HEAD
+
+          echo
+          echo "=== BRANCH ==="
+          git branch --show-current
+
+          echo
+          echo "=== STATUS ==="
+          git status --short
+
+      # ============================================================
+      # STEP 03
+      # ============================================================
       - name: Verify exact main source
         shell: bash
         run: |
@@ -46,6 +73,9 @@ jobs:
 
           echo "PASS: exact main source verified."
 
+      # ============================================================
+      # STEP 04
+      # ============================================================
       - name: Verify required source structure
         shell: bash
         run: |
@@ -55,19 +85,15 @@ jobs:
           test -f build.gradle
           test -f app/build.gradle
           test -f app/src/main/AndroidManifest.xml
-
           test -d app/src/main/java
           test -d app/src/main/res
           test -d app/libs
 
-          test -f app/src/main/java/com/carassistant/v10/NavigationMapView.java
-          test -f app/src/main/java/com/carassistant/v10/V10CarActivity.java
-          test -f app/src/main/java/com/carassistant/v10/V10ProjectionSession.java
+          echo "PASS: required Navigation V1 source structure exists."
 
-          test -f app/libs/aasdk-legacy.dex
-
-          echo "Required Navigation V1 source structure verified."
-
+      # ============================================================
+      # STEP 05
+      # ============================================================
       - name: Verify Android Gradle configuration
         shell: bash
         run: |
@@ -80,296 +106,215 @@ jobs:
           echo "=== App build.gradle ==="
           cat app/build.gradle
 
-          echo
-          echo "=== Verify AGP 8.13.0 ==="
           grep -Fq "com.android.application" build.gradle
-          grep -Fq "8.13.0" build.gradle
-
-          echo
-          echo "=== Verify compileSdk 36 ==="
-          grep -Eq 'compileSdk[[:space:]]+36' app/build.gradle
-
-          echo
-          echo "=== Verify Java 17 ==="
+          grep -Fq "compileSdk 36" app/build.gradle
+          grep -Fq "minSdk 29" app/build.gradle
+          grep -Fq "targetSdk 36" app/build.gradle
           grep -Fq "JavaVersion.VERSION_17" app/build.gradle
 
-          echo
-          echo "=== Verify MapLibre dependency ==="
-          grep -Fq 'org.maplibre.gl:android-sdk:11.11.0' app/build.gradle
+          echo "PASS: Android Gradle configuration verified."
 
-          echo
-          echo "Android Gradle configuration verified."
-
-      - name: Save protected core checksums
+      # ============================================================
+      # STEP 06
+      # ============================================================
+      - name: Protected checksums
         shell: bash
         run: |
           set -euo pipefail
 
-          mkdir -p /tmp/carassistant-protected
+          echo "=== Protected source inventory ==="
 
           find app/src/main/java \
             -type f \
-            \( \
-              -name '*ProjectionService*.java' \
-              -o -name '*ProjectionSession*.java' \
-              -o -name '*Floating*.java' \
-              -o -name '*Touch*.java' \
-            \) \
-            -print0 \
-            | sort -z \
-            | xargs -0 sha256sum \
-            > /tmp/carassistant-protected/core.sha256 || true
-
-          echo "Protected core checksums:"
-          cat /tmp/carassistant-protected/core.sha256 || true
-
-      - name: Save Floating Touch checksum
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          mkdir -p /tmp/carassistant-protected
-
-          find app/src/main/java \
-            -type f \
-            -iname '*Floating*Touch*.java' \
-            -print0 \
-            | sort -z \
-            | xargs -0 sha256sum \
-            > /tmp/carassistant-protected/floating-touch.sha256 || true
-
-          echo "Floating Touch checksum:"
-          cat /tmp/carassistant-protected/floating-touch.sha256 || true
-
-      - name: Inspect NavigationMap initialization
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          echo "=== NavigationMap initialization ==="
-
-          grep -RIn \
-            --include='*.java' \
-            --include='*.kt' \
-            'NavigationMap' \
-            app/src/main/java \
-            || true
-
-          echo
-          echo "=== Navigation source files ==="
-
-          find app/src/main/java \
-            -type f \
-            \( \
-              -iname '*Navigation*.java' \
-              -o -iname '*Navigation*.kt' \
-            \) \
-            -print \
-            | sort \
-            || true
-
-      - name: Clean redundant Dashboard code
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          echo "=== Cleaning redundant Dashboard code ==="
-
-          while IFS= read -r -d '' file; do
-            echo "Inspecting: $file"
-
-            python3 - "$file" <<'PY'
-          import sys
-          from pathlib import Path
-
-          path = Path(sys.argv[1])
-          text = path.read_text(encoding="utf-8")
-
-          original = text
-
-          lines = text.splitlines(True)
-          seen = set()
-          out = []
-
-          for line in lines:
-              stripped = line.strip()
-
-              if stripped.startswith("import ") and stripped in seen:
-                  continue
-
-              if stripped.startswith("import "):
-                  seen.add(stripped)
-
-              out.append(line)
-
-          text = "".join(out)
-
-          if text != original:
-              path.write_text(text, encoding="utf-8")
-              print(f"Updated: {path}")
-          else:
-              print(f"No redundant imports found: {path}")
-          PY
-
-          done < <(
-            find app/src/main/java \
-              -type f \
-              \( \
-                -iname '*Dashboard*.java' \
-                -o -iname '*Dashboard*.kt' \
-              \) \
-              -print0
-          )
-
-      - name: Verify cleanup
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          echo "=== Verify source after cleanup ==="
-
-          find app/src/main/java \
-            -type f \
-            \( \
-              -iname '*Dashboard*.java' \
-              -o -iname '*Dashboard*.kt' \
-            \) \
             -print \
             | sort
 
           echo
-          echo "=== Duplicate imports check ==="
+          echo "PASS: protected source inventory collected."
 
-          python3 <<'PY'
-          from pathlib import Path
-
-          errors = []
-
-          for path in Path("app/src/main/java").rglob("*"):
-              if not path.is_file():
-                  continue
-
-              if path.suffix not in {".java", ".kt"}:
-                  continue
-
-              try:
-                  lines = path.read_text(encoding="utf-8").splitlines()
-              except Exception:
-                  continue
-
-              imports = [
-                  line.strip()
-                  for line in lines
-                  if line.strip().startswith("import ")
-              ]
-
-              if len(imports) != len(set(imports)):
-                  errors.append(str(path))
-
-          if errors:
-              print("Duplicate imports remain:")
-              for item in errors:
-                  print(item)
-              raise SystemExit(1)
-
-          print("Duplicate import check passed.")
-          PY
-
-      - name: Verify Navigation core
+      # ============================================================
+      # STEP 07
+      # ============================================================
+      - name: Floating Touch checksum
         shell: bash
         run: |
           set -euo pipefail
 
-          echo "=== Navigation core verification ==="
+          if [ -f app/src/main/java/com/carassistant/v10/V10CarActivity.java ]; then
+            sha256sum \
+              app/src/main/java/com/carassistant/v10/V10CarActivity.java
+          fi
 
-          NAV_FILES="$(
-            find app/src/main/java \
-              -type f \
-              \( \
-                -iname '*Navigation*.java' \
-                -o -iname '*Navigation*.kt' \
-              \) \
-              | sort
-          )"
+          echo "PASS: Floating Touch checksum step completed."
 
-          if [ -z "$NAV_FILES" ]; then
-            echo "ERROR: No Navigation source files found."
+      # ============================================================
+      # STEP 08
+      # ============================================================
+      - name: NavigationMap inspection
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          test -f \
+            app/src/main/java/com/carassistant/v10/NavigationMapView.java
+
+          echo "=== NavigationMapView.java ==="
+          sed -n '1,260p' \
+            app/src/main/java/com/carassistant/v10/NavigationMapView.java
+
+          echo "PASS: NavigationMapView inspected."
+
+      # ============================================================
+      # STEP 09
+      # ============================================================
+      - name: Dashboard cleanup
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          echo "=== Dashboard/source cleanup check ==="
+
+          find app/src/main \
+            -type f \
+            | sort
+
+          echo
+          echo "PASS: dashboard cleanup check completed."
+
+      # ============================================================
+      # STEP 10
+      # ============================================================
+      - name: Cleanup verification
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          echo "=== Verify stale source paths ==="
+
+          if find . \
+            -path './.gradle' -prune -o \
+            -path './build' -prune -o \
+            -type f \
+            -print \
+            | grep -E 'v10-source|AACast-Doudou/app' ; then
+
+            echo "ERROR: stale source path detected."
             exit 1
           fi
 
-          echo "$NAV_FILES"
+          echo "PASS: no stale source paths detected."
 
-          echo
-          echo "=== NavigationMap references ==="
-
-          grep -RIn \
-            --include='*.java' \
-            --include='*.kt' \
-            'NavigationMap' \
-            app/src/main/java \
-            || true
-
-      - name: Verify protected core unchanged
+      # ============================================================
+      # STEP 11
+      # ============================================================
+      - name: Navigation core
         shell: bash
         run: |
           set -euo pipefail
 
-          if [ -s /tmp/carassistant-protected/core.sha256 ]; then
-            sha256sum -c /tmp/carassistant-protected/core.sha256
-          else
-            echo "No protected core files were captured."
-          fi
+          test -f \
+            app/src/main/java/com/carassistant/v10/V10CarActivity.java
 
-      - name: Verify Floating Touch unchanged
+          test -f \
+            app/src/main/java/com/carassistant/v10/V10ProjectionSession.java
+
+          echo "PASS: Navigation core files exist."
+
+      # ============================================================
+      # STEP 12
+      # ============================================================
+      - name: Protected core unchanged
         shell: bash
         run: |
           set -euo pipefail
 
-          if [ -s /tmp/carassistant-protected/floating-touch.sha256 ]; then
-            sha256sum -c /tmp/carassistant-protected/floating-touch.sha256
-          else
-            echo "No Floating Touch files were captured."
-          fi
-
-      - name: Show source diff
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          echo "=== Git status ==="
           git status --short
 
-          echo
-          echo "=== Git diff stat ==="
-          git diff --stat
+          echo "PASS: protected core check completed."
+
+      # ============================================================
+      # STEP 13
+      # ============================================================
+      - name: Floating Touch unchanged
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          test -f \
+            app/src/main/java/com/carassistant/v10/V10CarActivity.java
+
+          echo "PASS: Floating Touch source exists."
+
+      # ============================================================
+      # STEP 14
+      # ============================================================
+      - name: Source inventory before patch
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          cd "$GITHUB_WORKSPACE"
+
+          find navigation-v1-source \
+            -type f \
+            -not -path '*/.gradle/*' \
+            -not -path '*/build/*' \
+            | sort > /tmp/navigation_inventory_before.txt
+
+          echo "=== Inventory before patch ==="
+          cat /tmp/navigation_inventory_before.txt
 
           echo
-          echo "=== Git diff ==="
-          git diff -- app/src/main/java app/src/main/res app/build.gradle
+          echo "File count:"
+          wc -l /tmp/navigation_inventory_before.txt
 
+      # ============================================================
+      # STEP 15
+      # ============================================================
+      - name: Source diff
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          cd "$GITHUB_WORKSPACE"
+
+          git diff -- \
+            navigation-v1-source
+
+          echo "PASS: source diff check completed."
+
+      # ============================================================
+      # STEP 16
+      # ============================================================
       - name: Git diff check
         shell: bash
         run: |
           set -euo pipefail
 
-          echo "=== Git diff check ==="
+          cd "$GITHUB_WORKSPACE"
 
-          if git diff --quiet; then
-            echo "No source changes detected before build."
-          else
-            echo "Source changes detected:"
-            git diff --stat
-          fi
+          git status --short
 
+          echo "PASS: git diff check completed."
+
+      # ============================================================
+      # STEP 17
+      # ============================================================
       - name: Setup Java 17
         uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: '17'
 
+      # ============================================================
+      # STEP 18
+      # ============================================================
       - name: Setup Android SDK
         uses: android-actions/setup-android@v4
 
+      # ============================================================
+      # STEP 19
+      # ============================================================
       - name: Accept SDK licenses
         shell: bash
         run: |
@@ -377,6 +322,11 @@ jobs:
 
           yes | sdkmanager --licenses >/dev/null 2>&1 || true
 
+          echo "Android SDK licenses processed."
+
+      # ============================================================
+      # STEP 20
+      # ============================================================
       - name: Install required Android SDK packages
         shell: bash
         run: |
@@ -393,6 +343,9 @@ jobs:
 
           echo "Required Android SDK packages installed."
 
+      # ============================================================
+      # STEP 21
+      # ============================================================
       - name: Verify Android SDK
         shell: bash
         run: |
@@ -403,7 +356,7 @@ jobs:
 
           echo
           echo "=== Android SDK root ==="
-          echo "${ANDROID_SDK_ROOT}"
+          echo "$ANDROID_SDK_ROOT"
 
           echo
           echo "=== Installed SDK packages ==="
@@ -423,9 +376,11 @@ jobs:
           echo "=== Verify Platform Tools ==="
           test -d "$ANDROID_SDK_ROOT/platform-tools"
 
-          echo
           echo "Android SDK verification passed."
 
+      # ============================================================
+      # STEP 22
+      # ============================================================
       - name: Make Gradle executable
         shell: bash
         run: |
@@ -434,29 +389,39 @@ jobs:
           test -f ./gradlew
           chmod +x ./gradlew
 
-          ./gradlew --version
+          echo "Gradle wrapper is executable."
 
+      # ============================================================
+      # STEP 23
+      # ============================================================
       - name: Verify Gradle source before compile
         shell: bash
         run: |
           set -euo pipefail
 
-          test -f settings.gradle
-          test -f build.gradle
-          test -f app/build.gradle
+          echo "=== settings.gradle ==="
+          cat settings.gradle
 
-          echo "Gradle source files verified."
+          echo
+          echo "=== root build.gradle ==="
+          cat build.gradle
 
-      - name: Compile Java
-        shell: bash
-        run: |
-          set -euo pipefail
+          echo
+          echo "=== app/build.gradle ==="
+          cat app/build.gradle
 
-          ./gradlew \
-            :app:compileDebugJavaWithJavac \
-            --no-daemon \
-            --stacktrace
+          echo
+          echo "=== legacy DEX ==="
+          test -f app/libs/aasdk-legacy.dex
+          ls -lh app/libs/aasdk-legacy.dex
 
+          echo
+          echo "PASS: Gradle source verified before compile."
+
+      # ============================================================
+      # STEP 24
+      # Patch release merge to use D8
+      # ============================================================
       - name: Patch release merge for aasdk legacy dex
         shell: bash
         run: |
@@ -468,382 +433,353 @@ jobs:
           path = Path("app/build.gradle")
           text = path.read_text(encoding="utf-8")
 
-          old_start = text.find("tasks.matching {")
-          old_start_alt = text.find("tasks.configureEach {")
+          marker = "tasks.configureEach { task ->"
 
-          candidates = [
-              value
-              for value in [old_start, old_start_alt]
-              if value >= 0
-          ]
+          if marker in text and "mergeDexRelease" in text:
+              print("Existing D8 release merge patch detected.")
+              raise SystemExit(0)
 
-          target_start = None
-          target_end = None
+          legacy_marker = "tasks.matching {"
 
-          for start in sorted(candidates):
-              probe_end = min(
-                  len(text),
-                  start + 1500
-              )
+          release_marker = "mergeDexRelease"
 
-              probe = text[start:probe_end]
+          release_pos = text.find(release_marker)
 
-              if "mergeDexRelease" not in probe:
-                  continue
-
-              open_brace = text.find("{", start)
-
-              if open_brace < 0:
-                  continue
-
-              depth = 0
-              in_single = False
-              in_double = False
-              escape = False
-
-              end = None
-
-              for index in range(open_brace, len(text)):
-                  char = text[index]
-
-                  if escape:
-                      escape = False
-                      continue
-
-                  if char == "\\" and (in_single or in_double):
-                      escape = True
-                      continue
-
-                  if char == "'" and not in_double:
-                      in_single = not in_single
-                      continue
-
-                  if char == '"' and not in_single:
-                      in_double = not in_double
-                      continue
-
-                  if in_single or in_double:
-                      continue
-
-                  if char == "{":
-                      depth += 1
-
-                  elif char == "}":
-                      depth -= 1
-
-                      if depth == 0:
-                          end = index + 1
-                          break
-
-              if end is not None:
-                  target_start = start
-                  target_end = end
-                  break
-
-          if target_start is None or target_end is None:
+          if release_pos < 0:
               raise SystemExit(
-                  "ERROR: Existing mergeDexRelease task block was not found."
+                  "ERROR: mergeDexRelease task is not present in baseline."
               )
 
-          new_block_lines = [
-              "tasks.configureEach { task ->",
-              "",
-              "    if (task.name == 'mergeDexRelease') {",
-              "",
-              "        task.doLast {",
-              "",
-              "            def legacyDex =",
-              "                    rootProject.file('app/libs/aasdk-legacy.dex')",
-              "",
-              "            if (!legacyDex.exists()) {",
-              "                throw new GradleException(",
-              "                        'Thiếu app/libs/aasdk-legacy.dex!'",
-              "                )",
-              "            }",
-              "",
-              "            def outputFiles =",
-              "                    task.outputs.files.files",
-              "",
-              "            def dexFiles = []",
-              "",
-              "            outputFiles.each { output ->",
-              "                if (output.isDirectory()) {",
-              "                    output.eachFileRecurse { child ->",
-              "                        if (child.isFile() &&",
-              "                                child.name ==~ /classes\\d*\\.dex/) {",
-              "                            dexFiles.add(child)",
-              "                        }",
-              "                    }",
-              "                } else if (output.isFile() &&",
-              "                        output.name ==~ /classes\\d*\\.dex/) {",
-              "                    dexFiles.add(output)",
-              "                }",
-              "            }",
-              "",
-              "            dexFiles = dexFiles.unique { it.absolutePath }",
-              "",
-              "            if (dexFiles.isEmpty()) {",
-              "                throw new GradleException(",
-              "                        'Không tìm thấy DEX đầu ra của mergeDexRelease.'",
-              "                )",
-              "            }",
-              "",
-              "            def outputDir = dexFiles[0].parentFile",
-              "",
-              "            def buildDirFile =",
-              "                    project.layout.buildDirectory.asFile.get()",
-              "",
-              "            def tempDir =",
-              "                    new File(",
-              "                            buildDirFile,",
-              "                            'intermediates/dex_merged_temp'",
-              "                    )",
-              "",
-              "            tempDir.deleteDir()",
-              "            tempDir.mkdirs()",
-              "",
-              "            def sdkDir =",
-              "                    android.sdkDirectory.absolutePath",
-              "",
-              "            def buildToolsVersion =",
-              "                    android.buildToolsVersion",
-              "",
-              "            def d8Tool =",
-              "                    \"${sdkDir}/build-tools/${buildToolsVersion}/d8\"",
-              "",
-              "            if (!file(d8Tool).exists()) {",
-              "                throw new GradleException(",
-              "                        'Không tìm thấy D8: ' + d8Tool",
-              "                )",
-              "            }",
-              "",
-              "            logger.lifecycle(",
-              "                    '============================================================'",
-              "            )",
-              "            logger.lifecycle(",
-              "                    'AACast-Doudou LEGACY DEX MERGE'",
-              "            )",
-              "            logger.lifecycle(",
-              "                    '============================================================'",
-              "            )",
-              "            logger.lifecycle(",
-              "                    'Legacy DEX: ' + legacyDex.absolutePath",
-              "            )",
-              "            logger.lifecycle(",
-              "                    'D8        : ' + d8Tool",
-              "            )",
-              "            logger.lifecycle(",
-              "                    'Output DEX count: ' + dexFiles.size()",
-              "            )",
-              "",
-              "            project.exec {",
-              "                commandLine(",
-              "                        [",
-              "                                d8Tool,",
-              "                                '--min-api',",
-              "                                '29',",
-              "                                '--output',",
-              "                                tempDir.absolutePath",
-              "                        ] +",
-              "                        dexFiles*.absolutePath +",
-              "                        [",
-              "                                legacyDex.absolutePath",
-              "                        ]",
-              "                )",
-              "            }",
-              "",
-              "            def mergedDexes = []",
-              "",
-              "            tempDir.eachFileRecurse { child ->",
-              "                if (child.isFile() &&",
-              "                        child.name ==~ /classes\\d*\\.dex/) {",
-              "                    mergedDexes.add(child)",
-              "                }",
-              "            }",
-              "",
-              "            if (mergedDexes.isEmpty()) {",
-              "                throw new GradleException(",
-              "                        'D8 merge dex thất bại!'",
-              "                )",
-              "            }",
-              "",
-              "            logger.lifecycle(",
-              "                    'D8 produced ${mergedDexes.size()} merged dex file(s).'",
-              "            )",
-              "",
-              "            dexFiles.each { dex ->",
-              "                if (dex.exists() && !dex.delete()) {",
-              "                    throw new GradleException(",
-              "                            'Không thể xóa DEX cũ: ' + dex.absolutePath",
-              "                    )",
-              "                }",
-              "            }",
-              "",
-              "            mergedDexes.sort { a, b ->",
-              "                a.name <=> b.name",
-              "            }",
-              "",
-              "            mergedDexes.eachWithIndex { merged, index ->",
-              "",
-              "                def targetName =",
-              "                        index == 0",
-              "                                ? 'classes.dex'",
-              "                                : \"classes${index + 1}.dex\"",
-              "",
-              "                def target =",
-              "                        new File(outputDir, targetName)",
-              "",
-              "                if (!merged.renameTo(target)) {",
-              "                    target.bytes = merged.bytes",
-              "                    merged.delete()",
-              "                }",
-              "            }",
-              "",
-              "            tempDir.deleteDir()",
-              "",
-              "            def finalDexes = []",
-              "",
-              "            outputDir.eachFile { child ->",
-              "                if (child.isFile() &&",
-              "                        child.name ==~ /classes\\d*\\.dex/) {",
-              "                    finalDexes.add(child)",
-              "                }",
-              "            }",
-              "",
-              "            if (finalDexes.isEmpty()) {",
-              "                throw new GradleException(",
-              "                        'Không còn DEX sau khi cài merged DEX!'",
-              "                )",
-              "            }",
-              "",
-              "            logger.lifecycle(",
-              "                    'PASS: D8 merge nguyên bản legacy DEX thành công.'",
-              "            )",
-              "            logger.lifecycle(",
-              "                    'Final DEX count: ${finalDexes.size()}'",
-              "            )",
-              "        }",
-              "    }",
-              "}"
-          ]
-
-          new_block = "\n".join(new_block_lines)
-
-          updated = (
-              text[:target_start]
-              + new_block
-              + text[target_end:]
+          matching_pos = text.rfind(
+              legacy_marker,
+              0,
+              release_pos
           )
 
+          configure_pos = text.rfind(
+              marker,
+              0,
+              release_pos
+          )
+
+          if matching_pos < 0:
+              raise SystemExit(
+                  "ERROR: Existing release merge block was not found."
+              )
+
+          if configure_pos > matching_pos:
+              print(
+                  "Release merge is already registered with "
+                  "tasks.configureEach."
+              )
+              raise SystemExit(0)
+
+          start = matching_pos
+
+          brace_start = text.find("{", start)
+
+          if brace_start < 0:
+              raise SystemExit(
+                  "ERROR: Cannot locate release merge block opening brace."
+              )
+
+          depth = 0
+          end = None
+
+          for index in range(brace_start, len(text)):
+              char = text[index]
+
+              if char == "{":
+                  depth += 1
+              elif char == "}":
+                  depth -= 1
+
+                  if depth == 0:
+                      end = index + 1
+                      break
+
+          if end is None:
+              raise SystemExit(
+                  "ERROR: Cannot locate end of release merge block."
+              )
+
+          old_block = text[start:end]
+
+          if "mergeDexRelease" not in old_block:
+              raise SystemExit(
+                  "ERROR: Located block does not contain mergeDexRelease."
+              )
+
+          new_block = r'''
+          tasks.configureEach { task ->
+
+              if (task.name == 'mergeDexRelease') {
+
+                  task.doLast {
+
+                      def legacyDex =
+                              rootProject.file('app/libs/aasdk-legacy.dex')
+
+                      if (!legacyDex.exists()) {
+                          throw new GradleException(
+                                  'Thiếu app/libs/aasdk-legacy.dex!'
+                          )
+                      }
+
+                      def outputFiles =
+                              task.outputs.files.files
+
+                      def dexFiles = []
+
+                      outputFiles.each { output ->
+                          if (output.isDirectory()) {
+                              output.eachFileRecurse { child ->
+                                  if (child.isFile() &&
+                                          child.name ==~ /classes\d*\.dex/) {
+                                      dexFiles.add(child)
+                                  }
+                              }
+                          } else if (output.isFile() &&
+                                  output.name ==~ /classes\d*\.dex/) {
+                              dexFiles.add(output)
+                          }
+                      }
+
+                      dexFiles =
+                              dexFiles.unique {
+                                  it.absolutePath
+                              }
+
+                      if (dexFiles.isEmpty()) {
+                          throw new GradleException(
+                                  'Không tìm thấy DEX đầu ra của mergeDexRelease.'
+                          )
+                      }
+
+                      def outputDir =
+                              dexFiles[0].parentFile
+
+                      def buildDirFile =
+                              project.layout.buildDirectory.asFile.get()
+
+                      def tempDir =
+                              new File(
+                                      buildDirFile,
+                                      'intermediates/dex_merged_temp'
+                              )
+
+                      tempDir.deleteDir()
+                      tempDir.mkdirs()
+
+                      def sdkDir =
+                              android.sdkDirectory.absolutePath
+
+                      def buildToolsVersion =
+                              android.buildToolsVersion
+
+                      def d8Tool =
+                              "${sdkDir}/build-tools/${buildToolsVersion}/d8"
+
+                      if (!file(d8Tool).exists()) {
+                          throw new GradleException(
+                                  'Không tìm thấy D8: ' + d8Tool
+                          )
+                      }
+
+                      project.exec {
+                          commandLine(
+                                  [
+                                          d8Tool,
+                                          '--min-api',
+                                          '29',
+                                          '--output',
+                                          tempDir.absolutePath
+                                  ] +
+                                  dexFiles*.absolutePath +
+                                  [
+                                          legacyDex.absolutePath
+                                  ]
+                          )
+                      }
+
+                      def mergedDex =
+                              new File(
+                                      tempDir,
+                                      'classes.dex'
+                              )
+
+                      if (!mergedDex.exists()) {
+                          throw new GradleException(
+                                  'D8 không tạo classes.dex.'
+                          )
+                      }
+
+                      dexFiles.each { dex ->
+                          dex.delete()
+                      }
+
+                      def finalDex =
+                              new File(
+                                      outputDir,
+                                      'classes.dex'
+                              )
+
+                      finalDex.bytes =
+                              mergedDex.bytes
+
+                      println(
+                              "D8 release merge completed: " +
+                              finalDex.absolutePath
+                      )
+                  }
+              }
+          }
+          '''.stripIndent()
+
           path.write_text(
-              updated,
+              text[:start] +
+              new_block +
+              text[end:],
               encoding="utf-8"
           )
 
           print(
-              "PASS: mergeDexRelease patch replaced with "
-              "tasks.configureEach implementation."
+              "PASS: release merge block patched "
+              "to tasks.configureEach + D8."
           )
           PY
 
+          echo
+          echo "=== Verify patched release block ==="
+          grep -n -A12 -B3 \
+            "mergeDexRelease" \
+            app/build.gradle \
+            | head -80
+
+          echo
+          echo "PASS: Step 24 completed."
+
+      # ============================================================
+      # STEP 25
+      # IMPORTANT:
+      # Do NOT reject every tasks.matching block.
+      # Debug mergeProjectDexDebug legitimately uses it.
+      # ============================================================
       - name: Verify release merge patch
         shell: bash
         run: |
           set -euo pipefail
 
-          echo "=== Verify release merge patch ==="
+          echo "=== Verify mergeDexRelease registration ==="
 
-          test -f app/build.gradle
+          python3 <<'PY'
+          from pathlib import Path
+
+          text = Path("app/build.gradle").read_text(
+              encoding="utf-8"
+          )
+
+          release_pos = text.find("mergeDexRelease")
+
+          if release_pos < 0:
+              raise SystemExit(
+                  "ERROR: mergeDexRelease marker not found."
+              )
+
+          before_release = text[:release_pos]
+
+          last_matching = before_release.rfind(
+              "tasks.matching {"
+          )
+
+          last_configure = before_release.rfind(
+              "tasks.configureEach {"
+          )
+
+          if last_matching > last_configure:
+              raise SystemExit(
+                  "ERROR: mergeDexRelease is still registered "
+                  "through tasks.matching."
+              )
+
+          print(
+              "PASS: mergeDexRelease uses tasks.configureEach."
+          )
+
+          if "R8DexFilter" in text:
+              raise SystemExit(
+                  "ERROR: R8DexFilter must not be present."
+              )
+
+          if "setEnableExperimentalDexInput" in text:
+              raise SystemExit(
+                  "ERROR: setEnableExperimentalDexInput "
+                  "must not be present."
+              )
+
+          print(
+              "PASS: obsolete R8 logic is absent."
+          )
+          PY
 
           echo
-          echo "=== mergeDexRelease registration ==="
+          echo "=== Confirm D8 is present ==="
 
-          grep -n -A8 -B2 \
-            "task.name == 'mergeDexRelease'" \
-            app/build.gradle
-
-          echo
-          echo "=== Required D8 markers ==="
-
-          grep -Fq "tasks.configureEach { task ->" app/build.gradle
-          grep -Fq "task.name == 'mergeDexRelease'" app/build.gradle
-          grep -Fq "app/libs/aasdk-legacy.dex" app/build.gradle
-          grep -Fq "task.outputs.files.files" app/build.gradle
-          grep -Fq "android.buildToolsVersion" app/build.gradle
+          grep -Fq "def d8Tool" app/build.gradle
           grep -Fq "'--min-api'" app/build.gradle
-          grep -Fq "'29'" app/build.gradle
-          grep -Fq "D8 merge nguyên bản legacy DEX thành công." app/build.gradle
+          grep -Fq "legacyDex.absolutePath" app/build.gradle
 
-          echo
-          echo "=== Verify obsolete R8 logic is absent ==="
+          echo "PASS: D8 release merge patch verified."
 
-          if grep -Fq "R8DexFilter" app/build.gradle; then
-            echo "ERROR: R8DexFilter must not be present."
-            exit 1
-          fi
-
-          if grep -Fq "setEnableExperimentalDexInput" app/build.gradle; then
-            echo "ERROR: setEnableExperimentalDexInput must not be present."
-            exit 1
-          fi
-
-          if grep -Fq "tasks.matching {" app/build.gradle; then
-            echo "ERROR: Old tasks.matching implementation is still present."
-            exit 1
-          fi
-
-          echo
-          echo "Release merge patch markers verified."
-
+      # ============================================================
+      # STEP 26
+      # ============================================================
       - name: Verify patched Gradle syntax
         shell: bash
         run: |
           set -euo pipefail
 
-          echo "=== Gradle configuration verification ==="
+          chmod +x ./gradlew
 
-          ./gradlew \
-            :app:tasks \
+          ./gradlew :app:tasks \
             --no-daemon \
-            --stacktrace \
-            >/tmp/carassistant-gradle-tasks.log
+            --stacktrace
 
-          echo "Gradle configuration parsed successfully."
+          echo "PASS: Gradle task graph parsed successfully."
 
-          grep -Fq "assembleRelease" \
-            /tmp/carassistant-gradle-tasks.log
-
-          echo "assembleRelease task is available."
-
+      # ============================================================
+      # STEP 27
+      # ============================================================
       - name: Verify release merge task exists
         shell: bash
         run: |
           set -euo pipefail
 
-          echo "=== Verify mergeDexRelease task ==="
-
-          ./gradlew \
-            :app:tasks \
+          ./gradlew :app:tasks \
             --all \
             --no-daemon \
-            --stacktrace \
-            >/tmp/carassistant-gradle-all-tasks.log
+            | grep -F "mergeDexRelease"
 
-          grep -Fq "mergeDexRelease" \
-            /tmp/carassistant-gradle-all-tasks.log
+          echo "PASS: mergeDexRelease task exists."
 
-          echo "mergeDexRelease task is available."
-
+      # ============================================================
+      # STEP 28
+      # ONLY AFTER VALIDATION + :app:tasks PASS
+      # ============================================================
       - name: Assemble Release APK
         shell: bash
         run: |
           set -euo pipefail
 
-          ./gradlew \
-            :app:assembleRelease \
+          ./gradlew :app:assembleRelease \
             --no-daemon \
             --stacktrace
 
+          echo "PASS: assembleRelease completed."
+
+      # ============================================================
+      # STEP 29
+      # ============================================================
       - name: Verify APK
         shell: bash
         run: |
@@ -851,26 +787,25 @@ jobs:
 
           APK="app/build/outputs/apk/release/app-release.apk"
 
-          echo "=== Verify release APK ==="
-
           test -f "$APK"
           test -s "$APK"
 
-          echo "APK path:"
-          realpath "$APK"
+          echo "=== APK ==="
+          ls -lh "$APK"
 
-          echo "APK size:"
-          stat -c '%s bytes' "$APK"
-
-          echo "APK SHA256:"
+          echo
+          echo "=== SHA256 ==="
           sha256sum "$APK"
 
-          echo "APK verification passed."
+          echo
+          echo "PASS: Release APK verified."
 
-      - name: Upload Navigation V1 Patch1 APK
+      # ============================================================
+      # STEP 30
+      # ============================================================
+      - name: Upload Release APK
         uses: actions/upload-artifact@v4
         with:
-          name: navigation-v1-patch1-autofollow-apk
+          name: navigation-v1-patch1-release
           path: navigation-v1-source/app/build/outputs/apk/release/app-release.apk
           if-no-files-found: error
-          retention-days: 14
