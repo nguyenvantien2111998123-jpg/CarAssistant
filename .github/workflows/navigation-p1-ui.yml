@@ -1018,129 +1018,154 @@ jobs:
           echo
           echo "PASS: assembleRelease completed."
 
-      # ============================================================
-      # STEP 33 - DEX DIAGNOSTIC
+            # ============================================================
+      # STEP 33
       #
-      # CHỈ CHẨN ĐOÁN.
-      # KHÔNG SỬA CÁCH ĐÓNG GÓI.
-      # KHÔNG SỬA NAVIGATION/PATCH 1.
+      # DIAGNOSTIC:
+      # Không dùng wildcard trực tiếp với unzip.
+      # Lấy chính xác danh sách classes*.dex từ APK rồi trích
+      # từng entry bằng unzip -p để tránh unzip trả exit code 1.
       # ============================================================
-      - name: Diagnose APK DEX before Step 34
+      - name: Diagnose APK DEX before verification
         shell: bash
         run: |
           set -euo pipefail
 
           APK="app/build/outputs/apk/release/app-release.apk"
           LEGACY="app/libs/aasdk-legacy.dex"
+          OUT="/tmp/apk_dex_diagnosis"
 
           test -f "$APK"
           test -s "$APK"
           test -f "$LEGACY"
           test -s "$LEGACY"
 
+          rm -rf "$OUT"
+          mkdir -p "$OUT"
+
           echo "=== APK ==="
           ls -lh "$APK"
 
           echo
-          echo "=== LEGACY DEX ==="
-          ls -lh "$LEGACY"
-
-          LEGACY_SHA="$(sha256sum "$LEGACY" | awk '{print $1}')"
+          echo "=== APK SHA256 ==="
+          sha256sum "$APK" | tee "$OUT/apk.sha256"
 
           echo
-          echo "=== SOURCE LEGACY DEX SHA256 ==="
-          echo "$LEGACY_SHA"
+          echo "=== SOURCE LEGACY DEX ==="
+          ls -lh "$LEGACY"
+          sha256sum "$LEGACY" | tee "$OUT/legacy.sha256"
 
-          rm -rf /tmp/apk_dex_diagnosis
-          mkdir -p /tmp/apk_dex_diagnosis
+          LEGACY_SHA="$(awk '{print $1}' "$OUT/legacy.sha256")"
 
-          unzip -q "$APK" \
-            'classes*.dex' \
-            -d /tmp/apk_dex_diagnosis
+          echo
+          echo "=== DEX ENTRIES INSIDE APK ==="
 
-          mapfile -t APK_DEX_FILES < <(
-            find /tmp/apk_dex_diagnosis \
-              -type f \
-              -name 'classes*.dex' \
-              -print \
-              | sort
-          )
+          unzip -Z1 "$APK" \
+            | grep -E '^classes[0-9]*\.dex$' \
+            | sort -V \
+            | tee "$OUT/apk_dex_entries.txt" \
+            || true
 
-          if [ "${#APK_DEX_FILES[@]}" -eq 0 ]; then
-            echo "ERROR: no classes*.dex found inside APK."
+          if [ ! -s "$OUT/apk_dex_entries.txt" ]; then
+            echo "ERROR: no classes*.dex entries found inside APK."
+            echo
+            echo "=== ALL APK ENTRIES ==="
+            unzip -Z1 "$APK" | sed -n '1,240p'
             exit 1
           fi
 
+          mapfile -t DEX_ENTRIES < "$OUT/apk_dex_entries.txt"
+
           echo
-          echo "=== APK DEX FILES ==="
+          echo "DEX entry count: ${#DEX_ENTRIES[@]}"
+          printf '%s\n' "${DEX_ENTRIES[@]}"
+
+          echo
+          echo "=== EXTRACT AND HASH EVERY APK DEX ==="
+
+          : > "$OUT/dex_sha256.txt"
+          : > "$OUT/dex_sizes.txt"
 
           MATCH_COUNT=0
+          MATCH_ENTRY=""
 
-          for DEX_FILE in "${APK_DEX_FILES[@]}"; do
-            DEX_NAME="$(basename "$DEX_FILE")"
-            DEX_SHA="$(sha256sum "$DEX_FILE" | awk '{print $1}')"
-            DEX_SIZE="$(stat -c '%s' "$DEX_FILE")"
+          for ENTRY in "${DEX_ENTRIES[@]}"; do
+            NAME="$(basename "$ENTRY")"
+            DEST="$OUT/$NAME"
 
-            echo "$DEX_NAME"
-            echo "  size = $DEX_SIZE bytes"
-            echo "  sha256 = $DEX_SHA"
+            echo
+            echo "--- $ENTRY ---"
 
-            if [ "$DEX_SHA" = "$LEGACY_SHA" ]; then
-              echo "  >>> EXACT SHA256 MATCH <<<"
+            unzip -p "$APK" "$ENTRY" > "$DEST"
+
+            test -s "$DEST"
+
+            SIZE="$(stat -c '%s' "$DEST")"
+            SHA="$(sha256sum "$DEST" | awk '{print $1}')"
+
+            echo "Name   : $NAME"
+            echo "Size   : $SIZE bytes"
+            echo "SHA256 : $SHA"
+
+            printf '%s %s %s\n' "$NAME" "$SIZE" "$SHA" \
+              | tee -a "$OUT/dex_sha256.txt"
+
+            printf '%s %s\n' "$NAME" "$SIZE" \
+              >> "$OUT/dex_sizes.txt"
+
+            if [ "$SHA" = "$LEGACY_SHA" ]; then
               MATCH_COUNT=$((MATCH_COUNT + 1))
+              MATCH_ENTRY="$NAME"
             fi
-
-            echo
           done
-
-          echo "=== SUMMARY ==="
-          echo "Source legacy SHA256 = $LEGACY_SHA"
-          echo "APK DEX count        = ${#APK_DEX_FILES[@]}"
-          echo "Exact SHA256 matches = $MATCH_COUNT"
-
-          mkdir -p /tmp/navigation-v1-dex-diagnosis
-
-          cp "$APK" \
-            /tmp/navigation-v1-dex-diagnosis/app-release.apk
-
-          cp "$LEGACY" \
-            /tmp/navigation-v1-dex-diagnosis/aasdk-legacy.dex
-
-          sha256sum "$APK" \
-            > /tmp/navigation-v1-dex-diagnosis/apk.sha256
-
-          sha256sum "$LEGACY" \
-            > /tmp/navigation-v1-dex-diagnosis/legacy-dex.sha256
-
-          for DEX_FILE in "${APK_DEX_FILES[@]}"; do
-            cp "$DEX_FILE" \
-              "/tmp/navigation-v1-dex-diagnosis/$(basename "$DEX_FILE")"
-          done
-
-          {
-            echo "Source legacy SHA256 = $LEGACY_SHA"
-            echo "APK DEX count = ${#APK_DEX_FILES[@]}"
-            echo "Exact SHA256 matches = $MATCH_COUNT"
-            echo
-            echo "=== APK DEX SHA256 ==="
-
-            for DEX_FILE in "${APK_DEX_FILES[@]}"; do
-              sha256sum "$DEX_FILE"
-            done
-          } > /tmp/navigation-v1-dex-diagnosis/dex-report.txt
 
           echo
-          echo "PASS: DEX diagnosis completed."
+          echo "=== EXACT LEGACY DEX MATCH ==="
+          echo "Source legacy SHA256 : $LEGACY_SHA"
+          echo "Exact match count    : $MATCH_COUNT"
+          echo "Matched entry        : ${MATCH_ENTRY:-NONE}"
+
+          echo "Source legacy SHA256 : $LEGACY_SHA" \
+            > "$OUT/match_result.txt"
+
+          echo "Exact match count    : $MATCH_COUNT" \
+            >> "$OUT/match_result.txt"
+
+          echo "Matched entry        : ${MATCH_ENTRY:-NONE}" \
+            >> "$OUT/match_result.txt"
+
+          echo
+          echo "=== BYTE COMPARISON WHEN EXACT MATCH EXISTS ==="
+
+          if [ "$MATCH_COUNT" -eq 1 ]; then
+            cmp -s "$LEGACY" "$OUT/$MATCH_ENTRY"
+            echo "PASS: $MATCH_ENTRY is byte-for-byte identical to aasdk-legacy.dex."
+          else
+            echo "No unique match; byte comparison skipped."
+          fi
+
+          echo
+          echo "=== DIAGNOSTIC FILES ==="
+
+          find "$OUT" \
+            -maxdepth 1 \
+            -type f \
+            -printf '%f\n' \
+            | sort
+
+          echo
+          echo "PASS: APK DEX diagnostic completed without wildcard unzip failure."
 
       # ============================================================
-      # STEP 33B - UPLOAD DIAGNOSTIC ARTIFACT
+      # STEP 33B
       # ============================================================
-      - name: Upload APK DEX diagnosis
+      - name: Upload APK DEX diagnostic
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: navigation-v1-apk-dex-diagnosis
-          path: /tmp/navigation-v1-dex-diagnosis
-          if-no-files-found: error
+          path: /tmp/apk_dex_diagnosis
+          if-no-files-found: warn
 
       # ============================================================
       # STEP 34
