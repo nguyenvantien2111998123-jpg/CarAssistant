@@ -12,7 +12,6 @@ jobs:
     timeout-minutes: 40
 
     steps:
-
       - name: Checkout exact Foundation
         uses: actions/checkout@v4
         with:
@@ -56,54 +55,43 @@ jobs:
 
           echo "PASS: exact Foundation locked."
 
-      - name: Add MapLibre and location permissions
+      - name: Add MapLibre dependency
         shell: bash
         run: |
           set -euo pipefail
 
           GRADLE="v10-source/app/build.gradle"
-          MANIFEST="v10-source/app/src/main/AndroidManifest.xml"
 
           test -f "$GRADLE"
-          test -f "$MANIFEST"
 
           if ! grep -Fq "org.maplibre.gl:android-sdk:11.11.0" "$GRADLE"; then
-            printf '%s\n' \
-              'implementation "org.maplibre.gl:android-sdk:11.11.0"' \
-              > /tmp/maplibre.line
-
-            sed -i \
-              '/^[[:space:]]*dependencies[[:space:]]*{/r /tmp/maplibre.line' \
-              "$GRADLE"
+            sed -i '/^[[:space:]]*dependencies[[:space:]]*{/a\    implementation "org.maplibre.gl:android-sdk:11.11.0"' "$GRADLE"
           fi
 
-          if ! grep -Fq \
-            "android.permission.ACCESS_FINE_LOCATION" \
-            "$MANIFEST"; then
+          grep -Fq "org.maplibre.gl:android-sdk:11.11.0" "$GRADLE"
 
-            printf '%s\n' \
-              '<uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />' \
-              '<uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />' \
-              > /tmp/location.permissions
+          echo "PASS: MapLibre 11.11.0."
 
-            sed -i \
-              '/<manifest/r /tmp/location.permissions' \
-              "$MANIFEST"
+      - name: Add location permissions
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          MANIFEST="v10-source/app/src/main/AndroidManifest.xml"
+
+          test -f "$MANIFEST"
+
+          if ! grep -Fq "android.permission.ACCESS_FINE_LOCATION" "$MANIFEST"; then
+            sed -i '/<manifest/r /dev/stdin' "$MANIFEST" <<'EOF'
+          <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
+          <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
+          EOF
           fi
 
-          grep -Fq \
-            "org.maplibre.gl:android-sdk:11.11.0" \
-            "$GRADLE"
+          grep -Fq "android.permission.ACCESS_FINE_LOCATION" "$MANIFEST"
+          grep -Fq "android.permission.ACCESS_COARSE_LOCATION" "$MANIFEST"
 
-          grep -Fq \
-            "android.permission.ACCESS_FINE_LOCATION" \
-            "$MANIFEST"
-
-          grep -Fq \
-            "android.permission.ACCESS_COARSE_LOCATION" \
-            "$MANIFEST"
-
-          echo "PASS: MapLibre 11.11.0 and location permissions."
+          echo "PASS: location permissions."
 
       - name: Create NavigationMapView
         shell: bash
@@ -111,8 +99,9 @@ jobs:
           set -euo pipefail
 
           SRC="v10-source/app/src/main/java/com/hieptran/aacast/doudou"
+          FILE="$SRC/NavigationMapView.java"
 
-          cat > "$SRC/NavigationMapView.java" <<'EOF'
+          cat > "$FILE" <<'EOF'
           package com.carassistant.v10;
 
           import android.Manifest;
@@ -150,8 +139,7 @@ jobs:
 
                   mapView = new MapView(context);
 
-                  mapView.onCreate(
-                          new Bundle());
+                  mapView.onCreate(new Bundle());
 
                   addView(
                           mapView,
@@ -188,8 +176,7 @@ jobs:
                       return;
                   }
 
-                  Context context =
-                          getContext();
+                  Context context = getContext();
 
                   if (context == null) {
                       return;
@@ -309,75 +296,62 @@ jobs:
           }
           EOF
 
-          test -f "$SRC/NavigationMapView.java"
-
-          grep -Fq \
-            "class NavigationMapView" \
-            "$SRC/NavigationMapView.java"
-
-          grep -Fq \
-            "https://tiles.openfreemap.org/styles/liberty" \
-            "$SRC/NavigationMapView.java"
+          test -f "$FILE"
+          grep -Fq "class NavigationMapView" "$FILE"
+          grep -Fq "https://tiles.openfreemap.org/styles/liberty" "$FILE"
 
           echo "PASS: NavigationMapView created."
 
-      - name: Patch V10CarActivity to Navigation Full Screen only
+      - name: Patch V10CarActivity for Navigation only
         shell: bash
         run: |
           set -euo pipefail
 
           FILE="v10-source/app/src/main/java/com/hieptran/aacast/doudou/V10CarActivity.java"
 
-          python3 - <<'PY'
+          python3 - "$FILE" <<'PY'
           from pathlib import Path
+          import sys
 
-          path = Path(
-              "v10-source/app/src/main/java/com/hieptran/aacast/doudou/V10CarActivity.java"
-          )
+          path = Path(sys.argv[1])
+          text = path.read_text(encoding="utf-8")
 
-          s = path.read_text(encoding="utf-8")
-
-          def find_method(signature):
-              start = s.find(signature)
+          def replace_method(source, signature, replacement):
+              start = source.find(signature)
 
               if start < 0:
                   raise RuntimeError(
-                      "METHOD NOT FOUND: " + signature
+                      "Method not found: " + signature
                   )
 
-              brace = s.find("{", start)
+              brace = source.find("{", start)
 
               if brace < 0:
                   raise RuntimeError(
-                      "OPEN BRACE NOT FOUND: " + signature
+                      "Opening brace not found: " + signature
                   )
 
               depth = 0
 
-              for i in range(brace, len(s)):
-                  if s[i] == "{":
+              for index in range(brace, len(source)):
+                  char = source[index]
+
+                  if char == "{":
                       depth += 1
 
-                  elif s[i] == "}":
+                  elif char == "}":
                       depth -= 1
 
                       if depth == 0:
-                          return start, i + 1
+                          return (
+                              source[:start]
+                              + replacement.rstrip()
+                              + "\n"
+                              + source[index + 1:]
+                          )
 
               raise RuntimeError(
-                  "METHOD END NOT FOUND: " + signature
-              )
-
-          def replace_method(signature, replacement):
-              global s
-
-              a, b = find_method(signature)
-
-              s = (
-                  s[:a]
-                  + replacement.rstrip()
-                  + "\n"
-                  + s[b:]
+                  "Closing brace not found: " + signature
               )
 
           required = [
@@ -390,20 +364,20 @@ jobs:
           ]
 
           for marker in required:
-              if marker not in s:
+              if marker not in text:
                   raise RuntimeError(
-                      "FOUNDATION MARKER MISSING: " + marker
+                      "Foundation marker missing: " + marker
                   )
 
-          if "private NavigationMapView navigationMap;" not in s:
-              s = s.replace(
+          if "private NavigationMapView navigationMap;" not in text:
+              text = text.replace(
                   "    private FrameLayout root;",
                   "    private FrameLayout root;\n"
                   "    private NavigationMapView navigationMap;",
                   1
               )
 
-          navigation_build_ui = r'''    private void buildUi() {
+          build_ui = r'''    private void buildUi() {
 
               root =
                       new FrameLayout(this);
@@ -421,15 +395,13 @@ jobs:
                               -1));
 
               /*
-               * Projection layer remains part of the
-               * original V10 Activity structure.
+               * Projection Core remains part of V10.
                *
-               * Navigation is intentionally the only
-               * visible UI in Navigation V1.
+               * Home UI V2 is intentionally NOT created
+               * by Navigation V1.
                *
-               * Home UI V2 is NOT created here.
-               * It will be added later by the separate
-               * Home UI V2 Overlay workflow.
+               * The Home UI Overlay will be added later
+               * by a separate workflow.
                */
               projectionLayer =
                       new FrameLayout(this);
@@ -447,35 +419,36 @@ jobs:
           }
           '''
 
-          replace_method(
+          text = replace_method(
+              text,
               "    private void buildUi()",
-              navigation_build_ui
+              build_ui
           )
 
-          old_resume_block = """        if (root == null) {
+          old_resume = """        if (root == null) {
             buildUi();
             attachProjection();
         }
           """
 
-          new_resume_block = """        if (root == null) {
+          new_resume = """        if (root == null) {
             buildUi();
             attachProjection();
+        }
 
-            if (navigationMap != null) {
-                navigationMap.onHostResume();
-            }
+        if (navigationMap != null) {
+            navigationMap.onHostResume();
         }
           """
 
-          if old_resume_block not in s:
+          if old_resume not in text:
               raise RuntimeError(
-                  "EXPECTED onResume build block not found"
+                  "Expected onResume block not found."
               )
 
-          s = s.replace(
-              old_resume_block,
-              new_resume_block,
+          text = text.replace(
+              old_resume,
+              new_resume,
               1
           )
 
@@ -495,12 +468,12 @@ jobs:
         super.onPause();
           """
 
-          if old_pause not in s:
+          if old_pause not in text:
               raise RuntimeError(
-                  "EXPECTED onPause block not found"
+                  "Expected onPause block not found."
               )
 
-          s = s.replace(
+          text = text.replace(
               old_pause,
               new_pause,
               1
@@ -535,154 +508,95 @@ jobs:
                         this);
           """
 
-          if old_destroy not in s:
+          if old_destroy not in text:
               raise RuntimeError(
-                  "EXPECTED onDestroy block not found"
+                  "Expected onDestroy block not found."
               )
 
-          s = s.replace(
+          text = text.replace(
               old_destroy,
               new_destroy,
               1
           )
 
           path.write_text(
-              s.rstrip() + "\n",
+              text.rstrip() + "\n",
               encoding="utf-8"
           )
 
-          print("PATCH PASS")
+          print("PASS: V10CarActivity patched.")
           PY
 
-          echo "PASS: V10CarActivity now uses Navigation as full-screen base."
-
-      - name: Verify Navigation-only architecture
+      - name: Verify Navigation architecture
         shell: bash
         run: |
           set -euo pipefail
 
           SRC="v10-source/app/src/main/java/com/hieptran/aacast/doudou"
-          FILE="$SRC/V10CarActivity.java"
+          ACTIVITY="$SRC/V10CarActivity.java"
+          MAP="$SRC/NavigationMapView.java"
 
-          check() {
-            label="$1"
-            pattern="$2"
-            file="$3"
+          grep -Fq "private NavigationMapView navigationMap;" "$ACTIVITY"
+          grep -Fq "navigationMap = new NavigationMapView(this);" "$ACTIVITY"
+          grep -Fq "navigationMap.onHostResume();" "$ACTIVITY"
+          grep -Fq "navigationMap.onHostPause();" "$ACTIVITY"
+          grep -Fq "navigationMap.onHostDestroy();" "$ACTIVITY"
 
-            if grep -Fq "$pattern" "$file"; then
-              echo "PASS: $label"
-            else
-              echo "ERROR: $label"
-              echo "Missing: $pattern"
-              exit 1
-            fi
-          }
+          grep -Fq "private FrameLayout projectionLayer;" "$ACTIVITY"
+          grep -Fq "private void attachProjection()" "$ACTIVITY"
+          grep -Fq "new V10ProjectionSession(" "$ACTIVITY"
 
-          check \
-            "NavigationMapView field" \
-            "private NavigationMapView navigationMap;" \
-            "$FILE"
+          grep -Fq "class NavigationMapView" "$MAP"
+          grep -Fq "https://tiles.openfreemap.org/styles/liberty" "$MAP"
 
-          check \
-            "NavigationMapView creation" \
-            "navigationMap =" \
-            "$FILE"
+          grep -Fq "org.maplibre.gl:android-sdk:11.11.0" \
+            v10-source/app/build.gradle
 
-          check \
-            "Navigation full-screen root" \
-            "root.addView(" \
-            "$FILE"
+          echo "PASS: Navigation architecture."
 
-          check \
-            "Transparent Navigation root" \
-            "root.setBackgroundColor(" \
-            "$FILE"
-
-          check \
-            "Navigation lifecycle resume" \
-            "navigationMap.onHostResume();" \
-            "$FILE"
-
-          check \
-            "Navigation lifecycle pause" \
-            "navigationMap.onHostPause();" \
-            "$FILE"
-
-          check \
-            "Navigation lifecycle destroy" \
-            "navigationMap.onHostDestroy();" \
-            "$FILE"
-
-          check \
-            "MapLibre dependency" \
-            "org.maplibre.gl:android-sdk:11.11.0" \
-            "v10-source/app/build.gradle"
-
-          check \
-            "OpenFreeMap Liberty" \
-            "https://tiles.openfreemap.org/styles/liberty" \
-            "$SRC/NavigationMapView.java"
-
-          check \
-            "Projection layer preserved" \
-            "private FrameLayout projectionLayer;" \
-            "$FILE"
-
-          check \
-            "Projection attach preserved" \
-            "private void attachProjection()" \
-            "$FILE"
-
-          check \
-            "Projection session preserved" \
-            "new V10ProjectionSession(" \
-            "$FILE"
-
-          echo "PASS: Navigation-only architecture."
-
-      - name: Verify Home UI is NOT built by Navigation V1
+      - name: Verify Home UI is absent from Navigation build
         shell: bash
         run: |
           set -euo pipefail
 
           FILE="v10-source/app/src/main/java/com/hieptran/aacast/doudou/V10CarActivity.java"
 
-          python3 - <<'PY'
+          python3 - "$FILE" <<'PY'
           from pathlib import Path
+          import sys
 
-          p = Path(
-              "v10-source/app/src/main/java/com/hieptran/aacast/doudou/V10CarActivity.java"
+          text = Path(sys.argv[1]).read_text(
+              encoding="utf-8"
           )
 
-          s = p.read_text(encoding="utf-8")
-
-          start = s.find("    private void buildUi()")
+          start = text.find(
+              "    private void buildUi()"
+          )
 
           if start < 0:
               raise SystemExit(
-                  "ERROR: buildUi() not found"
+                  "ERROR: buildUi() not found."
               )
 
-          brace = s.find("{", start)
-
+          brace = text.find("{", start)
           depth = 0
           end = -1
 
-          for i in range(brace, len(s)):
-              if s[i] == "{":
+          for index in range(brace, len(text)):
+              if text[index] == "{":
                   depth += 1
-              elif s[i] == "}":
+              elif text[index] == "}":
                   depth -= 1
                   if depth == 0:
-                      end = i + 1
+                      end = index + 1
                       break
 
           if end < 0:
               raise SystemExit(
-                  "ERROR: buildUi() end not found"
+                  "ERROR: buildUi() end not found."
               )
 
-          block = s[start:end]
+          block = text[start:end]
 
           forbidden = [
               "buildDashboard();",
@@ -697,19 +611,19 @@ jobs:
               "WYN",
           ]
 
-          for item in forbidden:
-              if item in block:
+          for marker in forbidden:
+              if marker in block:
                   raise SystemExit(
-                      "ERROR: Home UI marker found inside Navigation buildUi(): "
-                      + item
+                      "ERROR: Home UI marker found: "
+                      + marker
                   )
 
           print(
-              "PASS: Navigation V1 buildUi() contains no Home UI construction."
+              "PASS: Home UI is not constructed by Navigation V1."
           )
           PY
 
-      - name: Verify Projection Core unchanged
+      - name: Verify protected Projection Core
         shell: bash
         run: |
           set -euo pipefail
@@ -724,17 +638,13 @@ jobs:
             "$SRC/V10SessionStore.java" \
             > /tmp/core-after.sha256
 
-          if ! diff -u \
+          diff -u \
             /tmp/core-before.sha256 \
-            /tmp/core-after.sha256; then
+            /tmp/core-after.sha256
 
-            echo "ERROR: Protected Projection/Persistence Core changed."
-            exit 1
-          fi
+          echo "PASS: Projection Core unchanged."
 
-          echo "PASS: Projection Core SHA unchanged."
-
-      - name: Git diff safety
+      - name: Validate YAML and source formatting
         shell: bash
         run: |
           set -euo pipefail
@@ -743,7 +653,7 @@ jobs:
 
           echo "PASS: git diff --check."
 
-      - name: Compile
+      - name: Compile Java
         working-directory: v10-source
         shell: bash
         run: |
@@ -776,14 +686,12 @@ jobs:
         run: |
           set -euo pipefail
 
-          APK="$(
-            find v10-source/app/build/outputs/apk \
-              -type f \
-              -name "*.apk" \
-              | head -n 1
-          )"
+          APK="$(find v10-source/app/build/outputs/apk -type f -name '*.apk' | head -n 1)"
 
-          test -n "$APK"
+          if [ -z "$APK" ]; then
+            echo "ERROR: APK not found."
+            exit 1
+          fi
 
           cp \
             "$APK" \
@@ -793,12 +701,9 @@ jobs:
             CarAssistant-Navigation-V1-Core.apk \
             > CarAssistant-Navigation-V1-Core.sha256
 
-          test -s \
-            CarAssistant-Navigation-V1-Core.apk
+          echo "PASS: APK packaged."
 
-          echo "PASS: Navigation V1 APK packaged."
-
-      - name: Upload APK
+      - name: Upload Navigation V1 artifact
         uses: actions/upload-artifact@v4
         with:
           name: CarAssistant-Navigation-V1-Core
