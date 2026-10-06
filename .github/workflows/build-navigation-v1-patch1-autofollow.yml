@@ -423,16 +423,26 @@ jobs:
 
           ls -lh app/libs/aasdk-legacy.dex
 
+          sha256sum app/libs/aasdk-legacy.dex
+
           echo
           echo "PASS: Gradle source verified before compile."
 
       # ============================================================
       # STEP 24
       #
-      # Patch chính xác Debug + Release bằng exact-string replacement.
-      # Không dùng brace parsing.
+      # QUAN TRỌNG:
+      # Debug vẫn giữ nguyên legacy DEX riêng.
+      #
+      # Release KHÔNG đưa legacy DEX vào D8.
+      # AGP chỉ merge app + dependency DEX.
+      # Sau đó copy nguyên bản legacy DEX thành classesN.dex.
+      #
+      # Không lọc AndroidX.
+      # Không xóa Android Auto legacy.
+      # Không R8.
       # ============================================================
-      - name: Patch legacy DEX task hooks
+      - name: Patch legacy DEX task hooks safely
         shell: bash
         run: |
           set -euo pipefail
@@ -479,80 +489,162 @@ jobs:
 
           if debug_count != 1:
               raise SystemExit(
-                  "ERROR: Expected exactly 1 Debug legacy DEX hook, "
-                  f"found {debug_count}."
+                  "ERROR: Expected exactly 1 Debug legacy DEX hook."
               )
 
           if release_count != 1:
               raise SystemExit(
-                  "ERROR: Expected exactly 1 Release legacy DEX hook, "
-                  f"found {release_count}."
+                  "ERROR: Expected exactly 1 Release legacy DEX hook."
               )
 
           text = text.replace(old_debug, new_debug, 1)
-          text = text.replace(old_release, new_release, 1)
 
-          remaining_debug = text.count(old_debug)
-          remaining_release = text.count(old_release)
+          release_start = text.find(old_release)
 
-          print(f"Debug old hook remaining   = {remaining_debug}")
-          print(f"Release old hook remaining = {remaining_release}")
-
-          if remaining_debug != 0:
+          if release_start < 0:
               raise SystemExit(
-                  "ERROR: Old Debug tasks.matching hook still exists."
+                  "ERROR: Release legacy DEX hook disappeared unexpectedly."
               )
 
-          if remaining_release != 0:
+          distribution_marker = (
+              "// ============================================================\n"
+              "// Distribution APK"
+          )
+
+          distribution_start = text.find(
+              distribution_marker,
+              release_start
+          )
+
+          if distribution_start < 0:
               raise SystemExit(
-                  "ERROR: Old Release tasks.matching hook still exists."
+                  "ERROR: Distribution APK marker not found."
               )
 
-          patched_debug_count = text.count(new_debug)
-          patched_release_count = text.count(new_release)
+          safe_release = """project.tasks.configureEach { task ->
 
-          print(f"Patched Debug hook count   = {patched_debug_count}")
-          print(f"Patched Release hook count = {patched_release_count}")
+              if (task.name != 'mergeDexRelease') {
+                  return
+              }
 
-          if patched_debug_count != 1:
-              raise SystemExit(
-                  "ERROR: Expected exactly 1 patched Debug hook, "
-                  f"found {patched_debug_count}."
-              )
+              task.doLast {
 
-          if patched_release_count != 1:
-              raise SystemExit(
-                  "ERROR: Expected exactly 1 patched Release hook, "
-                  f"found {patched_release_count}."
-              )
+                  def legacyDex =
+                          rootProject.file('app/libs/aasdk-legacy.dex')
+
+                  if (!legacyDex.exists()) {
+                      throw new GradleException(
+                              "Thiếu app/libs/aasdk-legacy.dex!"
+                      )
+                  }
+
+                  def outputDir =
+                          task.outputDir.get().asFile
+
+                  def dexFilter = {
+                      it.isFile() &&
+                      it.name ==~ /classes\\d*\\.dex/
+                  } as FileFilter
+
+                  def appDexes =
+                          outputDir
+                                  .listFiles(dexFilter)
+                                  ?.toList() ?: []
+
+                  if (appDexes.isEmpty()) {
+                      throw new GradleException(
+                              "Không tìm thấy classes*.dex sau mergeDexRelease trong " +
+                              outputDir
+                      )
+                  }
+
+                  def nextIndex = 2
+
+                  while (
+                          new File(
+                                  outputDir,
+                                  "classes" + nextIndex + ".dex"
+                          ).exists()
+                  ) {
+                      nextIndex++
+                  }
+
+                  def target =
+                          new File(
+                                  outputDir,
+                                  "classes" + nextIndex + ".dex"
+                          )
+
+                  target.bytes = legacyDex.bytes
+
+                  logger.lifecycle(
+                          "============================================================"
+                  )
+
+                  logger.lifecycle(
+                          "AACast-Doudou LEGACY DEX APPEND"
+                  )
+
+                  logger.lifecycle(
+                          "============================================================"
+                  )
+
+                  logger.lifecycle(
+                          "AGP app DEX count : " + appDexes.size()
+                  )
+
+                  logger.lifecycle(
+                          "Legacy DEX        : " + legacyDex.absolutePath
+                  )
+
+                  logger.lifecycle(
+                          "Appended DEX      : " + target.absolutePath
+                  )
+
+                  logger.lifecycle(
+                          "PASS: nguyên bản legacy DEX được đóng gói thành DEX riêng."
+                  )
+
+                  logger.lifecycle(
+                          "PASS: không chạy D8 merge legacy DEX."
+                  )
+
+                  logger.lifecycle(
+                          "PASS: không lọc hoặc xóa class Android Auto legacy."
+                  )
+              }
+          }
+
+          """
+
+          text = (
+              text[:release_start]
+              + safe_release
+              + text[distribution_start:]
+          )
 
           path.write_text(text, encoding="utf-8")
 
-          print("PASS: Debug legacy DEX hook patched exactly once.")
-          print("PASS: Release legacy DEX hook patched exactly once.")
-          print("PASS: Old Debug/Release hooks are completely absent.")
-          print("PASS: Step 24 exact-string replacement completed.")
+          print("PASS: Debug hook patched safely.")
+          print("PASS: Release hook converted to raw DEX append.")
+          print("PASS: legacy DEX will NOT be supplied to D8.")
+          print("PASS: aasdk-legacy.dex remains byte-for-byte unchanged.")
           PY
 
           echo
-          echo "=== Verify Debug hook ==="
-          grep -n -A10 -B3 "mergeProjectDexDebug" app/build.gradle | head -100
+          echo "=== Release hook after patch ==="
 
-          echo
-          echo "=== Verify Release hook ==="
-          grep -n -A10 -B3 "mergeDexRelease" app/build.gradle | head -120
+          grep -n -A95 -B5 \
+            "AACast-Doudou LEGACY DEX APPEND" \
+            app/build.gradle
 
           echo
           echo "PASS: Step 24 completed."
 
       # ============================================================
       # STEP 25
-      #
-      # Verify bằng exact-string.
-      # Không dùng text.find() vì tên task có thể xuất hiện
-      # trong comment trước hook thật.
       # ============================================================
-      - name: Verify Debug and Release task hooks
+      - name: Verify safe legacy DEX hooks
         shell: bash
         run: |
           set -euo pipefail
@@ -560,10 +652,11 @@ jobs:
           python3 <<'PY'
           from pathlib import Path
 
-          path = Path("app/build.gradle")
-          text = path.read_text(encoding="utf-8")
+          text = Path("app/build.gradle").read_text(
+              encoding="utf-8"
+          )
 
-          expected_debug = (
+          debug_hook = (
               "project.tasks.configureEach { task ->\n"
               "\n"
               "    if (task.name != 'mergeProjectDexDebug') {\n"
@@ -571,7 +664,7 @@ jobs:
               "    }"
           )
 
-          expected_release = (
+          release_hook = (
               "project.tasks.configureEach { task ->\n"
               "\n"
               "    if (task.name != 'mergeDexRelease') {\n"
@@ -591,85 +684,52 @@ jobs:
               "}.configureEach { task ->"
           )
 
-          debug_count = text.count(expected_debug)
-          release_count = text.count(expected_release)
-
-          old_debug_count = text.count(old_debug)
-          old_release_count = text.count(old_release)
-
-          print(f"Patched Debug hook count   = {debug_count}")
-          print(f"Patched Release hook count = {release_count}")
-          print(f"Old Debug hook count       = {old_debug_count}")
-          print(f"Old Release hook count     = {old_release_count}")
-
-          if debug_count != 1:
+          if text.count(debug_hook) != 1:
               raise SystemExit(
-                  "ERROR: Expected exactly 1 patched Debug hook, "
-                  f"found {debug_count}."
+                  "ERROR: Debug configureEach hook is not exactly 1."
               )
 
-          if release_count != 1:
+          if text.count(release_hook) != 1:
               raise SystemExit(
-                  "ERROR: Expected exactly 1 patched Release hook, "
-                  f"found {release_count}."
+                  "ERROR: Release configureEach hook is not exactly 1."
               )
 
-          if old_debug_count != 0:
+          if old_debug in text:
               raise SystemExit(
-                  "ERROR: Old Debug tasks.matching hook still exists."
+                  "ERROR: old Debug tasks.matching hook remains."
               )
 
-          if old_release_count != 0:
+          if old_release in text:
               raise SystemExit(
-                  "ERROR: Old Release tasks.matching hook still exists."
+                  "ERROR: old Release tasks.matching hook remains."
               )
 
-          if "R8DexFilter" in text:
+          if "project.exec {" in text:
               raise SystemExit(
-                  "ERROR: R8DexFilter must not be present."
+                  "ERROR: legacy DEX must not be passed to project.exec/D8."
               )
 
-          if "setEnableExperimentalDexInput" in text:
+          if "def d8Tool" in text:
               raise SystemExit(
-                  "ERROR: setEnableExperimentalDexInput "
-                  "must not be present."
-              )
-
-          if "def d8Tool" not in text:
-              raise SystemExit(
-                  "ERROR: D8 tool definition is missing."
+                  "ERROR: old custom D8 legacy merge remains."
               )
 
           if "legacyDex.absolutePath" not in text:
               raise SystemExit(
-                  "ERROR: legacy DEX input is missing."
+                  "ERROR: legacy DEX reference missing."
               )
 
-          print(
-              "PASS: Debug hook uses "
-              "project.tasks.configureEach exactly once."
-          )
+          if "target.bytes = legacyDex.bytes" not in text:
+              raise SystemExit(
+                  "ERROR: raw legacy DEX append is missing."
+              )
 
-          print(
-              "PASS: Release hook uses "
-              "project.tasks.configureEach exactly once."
-          )
-
-          print(
-              "PASS: Old Debug/Release tasks.matching hooks are absent."
-          )
-
-          print(
-              "PASS: obsolete R8 logic is absent."
-          )
-
-          print(
-              "PASS: D8 legacy DEX merge implementation is present."
-          )
-
-          print(
-              "PASS: Step 25 hook verification completed."
-          )
+          print("PASS: Debug hook is safe.")
+          print("PASS: Release hook is safe.")
+          print("PASS: old tasks.matching hooks are absent.")
+          print("PASS: custom D8 legacy merge is absent.")
+          print("PASS: raw legacy DEX append is present.")
+          print("PASS: legacy DEX is not filtered.")
           PY
 
       # ============================================================
@@ -707,6 +767,267 @@ jobs:
 
       # ============================================================
       # STEP 28
+      #
+      # Lấy dependency tree chính xác của releaseRuntimeClasspath.
+      # ============================================================
+      - name: Resolve and record release dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          ./gradlew :app:dependencies \
+            --configuration releaseRuntimeClasspath \
+            --no-daemon \
+            > /tmp/releaseRuntimeClasspath.txt
+
+          echo "=== releaseRuntimeClasspath ==="
+          cat /tmp/releaseRuntimeClasspath.txt
+
+          echo
+          echo "=== AndroidX dependencies ==="
+
+          grep -Ei \
+            'androidx|com\.android\.support' \
+            /tmp/releaseRuntimeClasspath.txt \
+            || true
+
+          echo
+          echo "PASS: releaseRuntimeClasspath resolved."
+
+      # ============================================================
+      # STEP 29
+      #
+      # Chỉ merge app/dependency DEX.
+      # Hook sẽ thêm aasdk-legacy.dex thành DEX riêng.
+      # ============================================================
+      - name: Merge release DEX without legacy D8 merge
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          ./gradlew :app:mergeDexRelease \
+            --no-daemon \
+            --stacktrace
+
+          echo
+          echo "=== Release DEX files ==="
+
+          find app/build/intermediates/dex/release \
+            -type f \
+            -name '*.dex' \
+            -print \
+            | sort
+
+          echo
+          echo "PASS: mergeDexRelease completed."
+
+      # ============================================================
+      # STEP 30
+      #
+      # ĐỐI CHIẾU CHÍNH XÁC:
+      # legacy DEX vs DEX của app/dependency.
+      #
+      # Không sửa legacy DEX.
+      # Không lọc class.
+      # Chỉ tạo báo cáo.
+      # ============================================================
+      - name: Analyze exact legacy DEX class overlap
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          DEXDUMP="$ANDROID_SDK_ROOT/build-tools/36.0.0/dexdump"
+
+          test -x "$DEXDUMP"
+
+          LEGACY="app/libs/aasdk-legacy.dex"
+
+          test -f "$LEGACY"
+
+          find app/build/intermediates/dex/release \
+            -type f \
+            -name '*.dex' \
+            -not -path '*/legacy*/*' \
+            | sort > /tmp/app_dex_files.txt
+
+          if [ ! -s /tmp/app_dex_files.txt ]; then
+            echo "ERROR: no normal app DEX files found."
+            exit 1
+          fi
+
+          "$DEXDUMP" "$LEGACY" \
+            | sed -n \
+              "s/.*Class descriptor.*'\\(L[^']*;\\)'.*/\\1/p" \
+            | sort -u \
+            > /tmp/legacy_classes.txt
+
+          : > /tmp/app_classes.txt
+
+          while IFS= read -r dex; do
+            "$DEXDUMP" "$dex" \
+              | sed -n \
+                "s/.*Class descriptor.*'\\(L[^']*;\\)'.*/\\1/p" \
+              >> /tmp/app_classes.txt
+          done < /tmp/app_dex_files.txt
+
+          sort -u \
+            /tmp/app_classes.txt \
+            -o /tmp/app_classes.txt
+
+          comm -12 \
+            /tmp/legacy_classes.txt \
+            /tmp/app_classes.txt \
+            > /tmp/legacy_overlap_classes.txt
+
+          echo "=== LEGACY CLASS COUNT ==="
+          wc -l /tmp/legacy_classes.txt
+
+          echo
+          echo "=== APP/DEPENDENCY CLASS COUNT ==="
+          wc -l /tmp/app_classes.txt
+
+          echo
+          echo "=== EXACT OVERLAP COUNT ==="
+          wc -l /tmp/legacy_overlap_classes.txt
+
+          echo
+          echo "=== EXACT OVERLAP CLASSES ==="
+
+          cat /tmp/legacy_overlap_classes.txt
+
+          echo
+          echo "=== ANDROIDX OVERLAP ==="
+
+          grep '^Landroidx/' \
+            /tmp/legacy_overlap_classes.txt \
+            || true
+
+          echo
+          echo "=== ANDROID SUPPORT OVERLAP ==="
+
+          grep '^Landroid/support/' \
+            /tmp/legacy_overlap_classes.txt \
+            || true
+
+          echo
+          echo "=== GOOGLE AUTO / GMS LEGACY CLASSES ==="
+
+          grep -E \
+            '^Lcom/google/android/(gms/car|apps/auto)' \
+            /tmp/legacy_classes.txt \
+            | head -200 \
+            || true
+
+          echo
+          echo "=== Confirm known duplicate ==="
+
+          if grep -Fxq \
+            'Landroidx/core/app/RemoteActionCompatParcelizer;' \
+            /tmp/legacy_overlap_classes.txt; then
+
+            echo "CONFIRMED:"
+            echo "androidx.core.app.RemoteActionCompatParcelizer"
+            echo "is present in both legacy DEX and normal app/dependency DEX."
+          else
+            echo "WARNING:"
+            echo "known RemoteActionCompatParcelizer overlap was not found."
+          fi
+
+          echo
+          echo "=== Legacy DEX SHA256 ==="
+          sha256sum "$LEGACY"
+
+          echo
+          echo "PASS: exact DEX class overlap analysis completed."
+
+      # ============================================================
+      # STEP 31
+      #
+      # Kiểm tra xem overlap AndroidX đến từ JAR dependency nào.
+      # ============================================================
+      - name: Map overlapping classes to resolved dependency JARs
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          python3 <<'PY'
+          from pathlib import Path
+          from zipfile import ZipFile
+
+          overlap = Path(
+              "/tmp/legacy_overlap_classes.txt"
+          ).read_text(
+              encoding="utf-8"
+          ).splitlines()
+
+          overlap = {
+              x.strip()
+              for x in overlap
+              if x.strip()
+          }
+
+          wanted = {
+              x[1:-1] + ".class"
+              for x in overlap
+          }
+
+          cache = Path.home() / ".gradle" / "caches"
+
+          jars = list(
+              cache.rglob("*.jar")
+          )
+
+          print(
+              f"Gradle cache JAR count = {len(jars)}"
+          )
+
+          found = {}
+
+          for jar in jars:
+              try:
+                  with ZipFile(jar) as z:
+                      names = set(z.namelist())
+
+                      hits = wanted.intersection(names)
+
+                      for hit in hits:
+                          found.setdefault(
+                              hit,
+                              []
+                          ).append(
+                              str(jar)
+                          )
+              except Exception:
+                  continue
+
+          print()
+          print("=== OVERLAPPING CLASSES -> RESOLVED JAR ===")
+
+          for cls in sorted(overlap):
+              key = cls[1:-1] + ".class"
+
+              print()
+              print(cls)
+
+              matches = found.get(key, [])
+
+              if not matches:
+                  print(
+                      "  No Gradle-cache JAR found "
+                      "(may be app-generated or transformed)."
+                  )
+              else:
+                  for jar in matches[:20]:
+                      print(
+                          "  -> " + jar
+                      )
+
+          print()
+          print("PASS: dependency JAR attribution completed.")
+          PY
+
+      # ============================================================
+      # STEP 32
       # ============================================================
       - name: Assemble Release APK
         shell: bash
@@ -721,9 +1042,9 @@ jobs:
           echo "PASS: assembleRelease completed."
 
       # ============================================================
-      # STEP 29
+      # STEP 33
       # ============================================================
-      - name: Verify APK
+      - name: Verify APK and packaged DEX
         shell: bash
         run: |
           set -euo pipefail
@@ -741,14 +1062,92 @@ jobs:
           sha256sum "$APK"
 
           echo
+          echo "=== APK DEX entries ==="
+
+          unzip -l "$APK" \
+            | grep -E 'classes[0-9]*\.dex'
+
+          echo
+          echo "=== Check legacy DEX signature by SHA ==="
+
+          LEGACY_SHA="$(sha256sum app/libs/aasdk-legacy.dex | awk '{print $1}')"
+
+          unzip -p "$APK" classes2.dex \
+            > /tmp/apk_classes2.dex
+
+          APK_LEGACY_SHA="$(
+            sha256sum /tmp/apk_classes2.dex \
+            | awk '{print $1}'
+          )"
+
+          echo "Source legacy SHA = $LEGACY_SHA"
+          echo "APK classes2 SHA  = $APK_LEGACY_SHA"
+
+          if [ "$LEGACY_SHA" != "$APK_LEGACY_SHA" ]; then
+            echo "ERROR: classes2.dex is not byte-identical to aasdk-legacy.dex."
+            exit 1
+          fi
+
+          echo
+          echo "PASS: legacy DEX is packaged byte-for-byte unchanged."
           echo "PASS: Release APK verified."
 
       # ============================================================
-      # STEP 30
+      # STEP 34
+      # ============================================================
+      - name: Save diagnostic reports
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          mkdir -p /tmp/navigation-diagnostics
+
+          cp /tmp/releaseRuntimeClasspath.txt \
+            /tmp/navigation-diagnostics/
+
+          cp /tmp/legacy_classes.txt \
+            /tmp/navigation-diagnostics/
+
+          cp /tmp/app_classes.txt \
+            /tmp/navigation-diagnostics/
+
+          cp /tmp/legacy_overlap_classes.txt \
+            /tmp/navigation-diagnostics/
+
+          cp app/build.gradle \
+            /tmp/navigation-diagnostics/build.gradle.after-patch
+
+          echo "=== Diagnostic files ==="
+
+          find /tmp/navigation-diagnostics \
+            -type f \
+            -maxdepth 1 \
+            -print \
+            | sort
+
+          echo "PASS: diagnostic reports prepared."
+
+      # ============================================================
+      # STEP 35
       # ============================================================
       - name: Upload Release APK
         uses: actions/upload-artifact@v4
         with:
           name: navigation-v1-patch1-release
           path: navigation-v1-source/app/build/outputs/apk/release/app-release.apk
+          if-no-files-found: error
+
+      # ============================================================
+      # STEP 36
+      # ============================================================
+      - name: Upload DEX diagnostics
+        uses: actions/upload-artifact@v4
+        with:
+          name: navigation-v1-legacy-dex-diagnostics
+          path: |
+            /tmp/navigation-diagnostics/releaseRuntimeClasspath.txt
+            /tmp/navigation-diagnostics/legacy_classes.txt
+            /tmp/navigation-diagnostics/app_classes.txt
+            /tmp/navigation-diagnostics/legacy_overlap_classes.txt
+            /tmp/navigation-diagnostics/build.gradle.after-patch
           if-no-files-found: error
