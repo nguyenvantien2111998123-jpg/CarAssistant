@@ -1,0 +1,164 @@
+plugins {
+    id 'com.android.application'
+}
+
+def keystorePropsFile = rootProject.file('keystore.properties')
+def keystoreProps = new Properties()
+if (keystorePropsFile.exists()) {
+    keystoreProps.load(new FileInputStream(keystorePropsFile))
+}
+
+android {
+    namespace 'com.carassistant.v10'
+    compileSdk 36
+
+    defaultConfig {
+        applicationId "com.carassistant.v10"
+        minSdk 29
+        targetSdk 36
+        versionCode 3
+        versionName "1.0.0"
+    }
+
+    signingConfigs {
+        release {
+            if (keystorePropsFile.exists()) {
+                storeFile rootProject.file(keystoreProps['storeFile'])
+                storePassword keystoreProps['storePassword']
+                keyAlias keystoreProps['keyAlias']
+                keyPassword keystoreProps['keyPassword']
+            }
+        }
+    }
+
+    buildTypes {
+        debug {
+            minifyEnabled false
+        }
+        release {
+            // KHÔNG bật R8/minify: thư viện SDK đóng kèm (libs/aasdk-legacy.*) là bytecode
+            // đã qua xử lý sẵn. R8 chạy thêm có thể merge class và làm hỏng bytecode
+            // -> java.lang.InstantiationError khi Android Auto host CarActivity.
+            minifyEnabled false
+            shrinkResources false
+            if (keystorePropsFile.exists()) {
+                signingConfig signingConfigs.release
+            }
+        }
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+
+    packaging {
+        resources {
+            excludes += [
+                    'META-INF/MANIFEST.MF',
+                    'META-INF/*.kotlin_module',
+                    'META-INF/*.version',
+                    'META-INF/*.txt',
+                    'DebugProbesKt.bin'
+            ]
+        }
+    }
+
+    lint {
+        abortOnError false
+        checkReleaseBuilds false
+    }
+}
+
+dependencies {
+implementation "org.maplibre.gl:android-sdk:11.11.0"
+    // Xposed API: chỉ compile, runtime do LSPosed cung cấp (KHÔNG đóng gói).
+    compileOnly files('libs/xposed-api-82.jar')
+
+    // Android Auto SDK legacy — chỉ dùng để compile Java code.
+    // Khi đóng gói, dùng trực tiếp libs/aasdk-legacy.dex để giữ nguyên bytecode gốc,
+    // tránh VerifyError do chuyển đổi jar <-> dex làm hỏng constructor inlining.
+    compileOnly files('libs/aasdk-legacy.jar')
+
+    testImplementation 'junit:junit:4.13.2'
+}
+
+// Debug build: AGP không có task mergeDexDebug, dex được chia theo bucket trong
+// mergeProjectDexDebug. Thêm SDK dex như một bucket riêng để app debug (Android Studio
+// Run) cũng có com.google.android.apps.auto.sdk, nếu không gearhead bind service sẽ
+// ClassNotFoundException vì thiếu class cha CarActivityService.
+tasks.matching { it.name == 'mergeProjectDexDebug' }.configureEach { task ->
+    task.doLast {
+        def legacyDex = rootProject.file('app/libs/aasdk-legacy.dex')
+        if (!legacyDex.exists()) {
+            throw new GradleException("Thiếu app/libs/aasdk-legacy.dex!")
+        }
+        def bucket = new File(task.outputDir.get().asFile, "legacy_sdk")
+        bucket.deleteDir()
+        bucket.mkdirs()
+        new File(bucket, "classes.dex").bytes = legacyDex.bytes
+    }
+}
+
+tasks.matching { it.name == 'mergeDexRelease' }.configureEach { task ->
+    task.doLast {
+        def legacyDex = rootProject.file('app/libs/aasdk-legacy.dex')
+        if (!legacyDex.exists()) {
+            throw new GradleException("Thiếu app/libs/aasdk-legacy.dex!")
+        }
+        def outputDir = task.outputDir.get().asFile
+        def dexFilter = { it.isFile() && it.name ==~ /classes\d*\.dex/ } as FileFilter
+        def appDexes = outputDir.listFiles(dexFilter)?.toList() ?: []
+        if (appDexes.isEmpty()) {
+            throw new GradleException("Không tìm thấy classes*.dex trong " + outputDir)
+        }
+
+        def buildDirFile = project.layout.buildDirectory.asFile.get()
+        def tempDir = new File(buildDirFile, "intermediates/dex_merged_temp")
+        tempDir.deleteDir()
+        tempDir.mkdirs()
+
+        def sdkDir = android.sdkDirectory.absolutePath
+        def buildToolsVersion = android.buildToolsVersion
+        def d8Tool = "${sdkDir}/build-tools/${buildToolsVersion}/d8"
+
+        project.exec {
+            commandLine([d8Tool, '--min-api', '29', '--output', tempDir.absolutePath]
+                    + appDexes*.absolutePath + [legacyDex.absolutePath])
+        }
+
+        def mergedDexes = tempDir.listFiles(dexFilter)?.toList() ?: []
+        if (mergedDexes.isEmpty()) {
+            throw new GradleException("D8 merge dex thất bại!")
+        }
+
+        appDexes.each { it.delete() }
+        mergedDexes.each { merged ->
+            def target = new File(outputDir, merged.name)
+            if (!merged.renameTo(target)) {
+                target.bytes = merged.bytes
+                merged.delete()
+            }
+        }
+        tempDir.deleteDir()
+    }
+}
+
+tasks.register('distRelease', Copy) {
+    dependsOn 'assembleRelease'
+    def buildDirFile = project.layout.buildDirectory.asFile.get()
+    from "${buildDirFile}/outputs/apk/release/app-release.apk"
+    into "${rootDir}/dist"
+    rename 'app-release.apk', 'AACast-Doudou-v1.0.0.apk'
+    doLast {
+        def apkFile = file("${rootDir}/dist/AACast-Doudou-v1.0.0.apk")
+        if (apkFile.exists()) {
+            def sha256 = java.security.MessageDigest.getInstance("SHA-256")
+                    .digest(apkFile.bytes)
+                    .collect { String.format("%02x", it) }
+                    .join()
+            file("${rootDir}/dist/AACast-Doudou-v1.0.0.apk.sha256").text = "${sha256}  AACast-Doudou-v1.0.0.apk\n"
+        }
+    }
+}
+
