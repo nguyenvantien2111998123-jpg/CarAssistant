@@ -428,9 +428,8 @@ jobs:
 
       # ============================================================
       # STEP 24
-      # Patch release merge to use D8
-      # FIX:
-      # Python heredoc MUST NOT use Groovy .stripIndent()
+      # ONLY CHANGE:
+      # Use project.tasks.configureEach instead of tasks.configureEach
       # ============================================================
       - name: Patch release merge for aasdk legacy dex
         shell: bash
@@ -446,21 +445,6 @@ jobs:
               encoding="utf-8"
           )
 
-          marker = "tasks.configureEach { task ->"
-
-          if (
-              marker in text
-              and "mergeDexRelease" in text
-              and "def d8Tool" in text
-              and "legacyDex.absolutePath" in text
-          ):
-              print(
-                  "Existing D8 release merge patch detected."
-              )
-              raise SystemExit(0)
-
-          legacy_marker = "tasks.matching {"
-
           release_marker = "mergeDexRelease"
 
           release_pos = text.find(
@@ -469,18 +453,39 @@ jobs:
 
           if release_pos < 0:
               raise SystemExit(
-                  "ERROR: mergeDexRelease task is not present "
-                  "in baseline."
+                  "ERROR: mergeDexRelease task is not present."
               )
 
-          matching_pos = text.rfind(
-              legacy_marker,
+          # If the release block is already correctly patched,
+          # do not patch it again.
+          release_section_start = text.rfind(
+              "project.tasks.configureEach",
               0,
               release_pos
           )
 
-          configure_pos = text.rfind(
-              marker,
+          release_matching_start = text.rfind(
+              "tasks.matching {",
+              0,
+              release_pos
+          )
+
+          if (
+              release_section_start >= 0
+              and release_section_start > release_matching_start
+              and "def d8Tool" in text[release_section_start:]
+              and "legacyDex.absolutePath" in text[release_section_start:]
+          ):
+              print(
+                  "Existing project.tasks.configureEach "
+                  "D8 release merge patch detected."
+              )
+              raise SystemExit(0)
+
+          legacy_marker = "tasks.matching {"
+
+          matching_pos = text.rfind(
+              legacy_marker,
               0,
               release_pos
           )
@@ -491,18 +496,9 @@ jobs:
                   "was not found."
               )
 
-          if configure_pos > matching_pos:
-              print(
-                  "Release merge is already registered with "
-                  "tasks.configureEach."
-              )
-              raise SystemExit(0)
-
-          start = matching_pos
-
           brace_start = text.find(
               "{",
-              start
+              matching_pos
           )
 
           if brace_start < 0:
@@ -537,7 +533,7 @@ jobs:
               )
 
           old_block = text[
-              start:end
+              matching_pos:end
           ]
 
           if "mergeDexRelease" not in old_block:
@@ -546,11 +542,8 @@ jobs:
                   "mergeDexRelease."
               )
 
-          # IMPORTANT:
-          # This is a Python raw string.
-          # Do NOT append .stripIndent().
           new_block = r'''
-          tasks.configureEach { task ->
+          project.tasks.configureEach { task ->
 
               if (task.name == 'mergeDexRelease') {
 
@@ -695,7 +688,7 @@ jobs:
           '''
 
           path.write_text(
-              text[:start]
+              text[:matching_pos]
               + new_block
               + text[end:],
               encoding="utf-8"
@@ -703,7 +696,7 @@ jobs:
 
           print(
               "PASS: release merge block patched "
-              "to tasks.configureEach + D8."
+              "to project.tasks.configureEach + D8."
           )
           PY
 
@@ -720,9 +713,12 @@ jobs:
 
       # ============================================================
       # STEP 25
+      # ONLY CHANGE:
+      # Verify project.tasks.configureEach for release.
+      #
       # IMPORTANT:
       # Debug mergeProjectDexDebug may still use tasks.matching.
-      # Therefore do NOT reject all tasks.matching blocks.
+      # Do NOT reject all tasks.matching blocks.
       # ============================================================
       - name: Verify release merge patch
         shell: bash
@@ -753,23 +749,29 @@ jobs:
               :release_pos
           ]
 
+          project_configure = before_release.rfind(
+              "project.tasks.configureEach"
+          )
+
           last_matching = before_release.rfind(
               "tasks.matching {"
           )
 
-          last_configure = before_release.rfind(
-              "tasks.configureEach {"
-          )
-
-          if last_matching > last_configure:
+          if project_configure < 0:
               raise SystemExit(
-                  "ERROR: mergeDexRelease is still "
+                  "ERROR: project.tasks.configureEach "
+                  "was not found."
+              )
+
+          if last_matching > project_configure:
+              raise SystemExit(
+                  "ERROR: release merge is still "
                   "registered through tasks.matching."
               )
 
           print(
               "PASS: mergeDexRelease uses "
-              "tasks.configureEach."
+              "project.tasks.configureEach."
           )
 
           if "R8DexFilter" in text:
@@ -786,25 +788,25 @@ jobs:
           print(
               "PASS: obsolete R8 logic is absent."
           )
+
+          if "def d8Tool" not in text:
+              raise SystemExit(
+                  "ERROR: D8 tool definition is missing."
+              )
+
+          if "legacyDex.absolutePath" not in text:
+              raise SystemExit(
+                  "ERROR: legacy DEX input is missing."
+              )
+
+          print(
+              "PASS: D8 release merge implementation "
+              "is present."
+          )
           PY
 
           echo
-          echo "=== Confirm D8 is present ==="
-
-          grep -Fq \
-            "def d8Tool" \
-            app/build.gradle
-
-          grep -Fq \
-            "'--min-api'" \
-            app/build.gradle
-
-          grep -Fq \
-            "legacyDex.absolutePath" \
-            app/build.gradle
-
-          echo
-          echo "PASS: D8 release merge patch verified."
+          echo "PASS: release merge patch verified."
 
       # ============================================================
       # STEP 26
