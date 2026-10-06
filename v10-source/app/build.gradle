@@ -106,11 +106,15 @@ tasks.matching { it.name == 'mergeDexRelease' }.configureEach { task ->
         if (!legacyDex.exists()) {
             throw new GradleException("Thiếu app/libs/aasdk-legacy.dex!")
         }
+
         def outputDir = task.outputDir.get().asFile
         def dexFilter = { it.isFile() && it.name ==~ /classes\d*\.dex/ } as FileFilter
         def appDexes = outputDir.listFiles(dexFilter)?.toList() ?: []
+
         if (appDexes.isEmpty()) {
-            throw new GradleException("Không tìm thấy classes*.dex trong " + outputDir)
+            throw new GradleException(
+                    "Không tìm thấy classes*.dex trong " + outputDir
+            )
         }
 
         def buildDirFile = project.layout.buildDirectory.asFile.get()
@@ -122,25 +126,57 @@ tasks.matching { it.name == 'mergeDexRelease' }.configureEach { task ->
         def buildToolsVersion = android.buildToolsVersion
         def d8Tool = "${sdkDir}/build-tools/${buildToolsVersion}/d8"
 
+        if (!file(d8Tool).exists()) {
+            throw new GradleException(
+                    "Không tìm thấy D8: " + d8Tool
+            )
+        }
+
         project.exec {
-            commandLine([d8Tool, '--min-api', '29', '--output', tempDir.absolutePath]
-                    + appDexes*.absolutePath + [legacyDex.absolutePath])
+            commandLine(
+                    [d8Tool,
+                     '--release',
+                     '--min-api', '29',
+                     '--output', tempDir.absolutePath]
+                    + appDexes*.absolutePath
+                    + [legacyDex.absolutePath]
+            )
         }
 
         def mergedDexes = tempDir.listFiles(dexFilter)?.toList() ?: []
+
         if (mergedDexes.isEmpty()) {
-            throw new GradleException("D8 merge dex thất bại!")
+            throw new GradleException(
+                    "D8 merge dex thất bại!"
+            )
         }
 
         appDexes.each { it.delete() }
+
         mergedDexes.each { merged ->
             def target = new File(outputDir, merged.name)
+
             if (!merged.renameTo(target)) {
                 target.bytes = merged.bytes
                 merged.delete()
             }
         }
+
         tempDir.deleteDir()
+
+        if ((outputDir.listFiles(dexFilter)?.toList() ?: []).isEmpty()) {
+            throw new GradleException(
+                    "Không còn classes*.dex sau khi merge!"
+            )
+        }
+
+        println("=== RELEASE DEX MERGE OK ===")
+        println("Legacy DEX: " + legacyDex.absolutePath)
+        println("Output: " + outputDir.absolutePath)
+        println(
+                "Merged dex count: " +
+                ((outputDir.listFiles(dexFilter)?.toList() ?: []).size())
+        )
     }
 }
 
