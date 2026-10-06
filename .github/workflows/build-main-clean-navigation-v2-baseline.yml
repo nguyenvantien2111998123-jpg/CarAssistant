@@ -658,138 +658,129 @@ jobs:
           path = Path("app/build.gradle")
           source = path.read_text(encoding="utf-8")
 
-          old = """        project.exec {
-            commandLine([d8Tool, '--min-api', '29', '--output', tempDir.absolutePath]
-                    + appDexes*.absolutePath + [legacyDex.absolutePath])
-        }
-"""
+          old_lines = [
+              "        project.exec {",
+              "            commandLine([d8Tool, '--min-api', '29', '--output', tempDir.absolutePath]",
+              "                    + appDexes*.absolutePath + [legacyDex.absolutePath])",
+              "        }",
+              ""
+          ]
 
-          new = """        /*
-         * CI PATCH:
-         * aasdk-legacy.dex contains AndroidX classes that are already
-         * supplied by the normal application dependency graph.
-         *
-         * Do not merge the legacy dex blindly because D8 reports:
-         *
-         * androidx.core.app.RemoteActionCompatParcelizer is defined multiple times
-         *
-         * The legacy SDK dex is retained for the Auto SDK classes, while
-         * AndroidX is supplied by the application's normal dependencies.
-         */
+          old = "\n".join(old_lines)
 
-        def filteredLegacyDex = new File(
-                buildDirFile,
-                "intermediates/aasdk_legacy_filtered/classes.dex"
-        )
+          new_lines = [
+              "        /*",
+              "         * CI PATCH:",
+              "         * aasdk-legacy.dex contains AndroidX classes that are already",
+              "         * supplied by the normal application dependency graph.",
+              "         *",
+              "         * Do not merge the legacy dex blindly because D8 reports:",
+              "         *",
+              "         * androidx.core.app.RemoteActionCompatParcelizer is defined multiple times",
+              "         *",
+              "         * The legacy SDK dex is retained for the Auto SDK classes, while",
+              "         * AndroidX is supplied by the application's normal dependencies.",
+              "         */",
+              "",
+              "        def filteredLegacyDex = new File(",
+              "                buildDirFile,",
+              "                \"intermediates/aasdk_legacy_filtered/classes.dex\"",
+              "        )",
+              "",
+              "        filteredLegacyDex.parentFile.mkdirs()",
+              "",
+              "        def r8Candidates = fileTree(",
+              "                new File(System.getProperty(\"user.home\"), \".gradle/caches/modules-2/files-2.1/com.android.tools.r8\")",
+              "        ).matching {",
+              "            include \"**/r8-*.jar\"",
+              "        }.files.toList()",
+              "",
+              "        if (r8Candidates.isEmpty()) {",
+              "            throw new GradleException(",
+              "                    \"Không tìm thấy R8 jar để lọc aasdk-legacy.dex.\"",
+              "            )",
+              "        }",
+              "",
+              "        def r8Jar = r8Candidates.sort { a, b ->",
+              "            b.lastModified() <=> a.lastModified()",
+              "        }.first()",
+              "",
+              "        def r8Rules = new File(",
+              "                buildDirFile,",
+              "                \"intermediates/aasdk_legacy_filtered/filter.pro\"",
+              "        )",
+              "",
+              "        r8Rules.parentFile.mkdirs()",
+              "",
+              "        r8Rules.text = [",
+              "                \"-dontoptimize\",",
+              "                \"-dontobfuscate\",",
+              "                \"-dontpreverify\",",
+              "                \"-ignorewarnings\",",
+              "                \"\",",
+              "                \"-keep class com.google.android.apps.auto.sdk.** { *; }\",",
+              "                \"\",",
+              "                \"-keep class com.google.android.gms.** { *; }\",",
+              "                \"-keep class com.google.protobuf.** { *; }\",",
+              "                \"\",",
+              "                \"-dontwarn **\"",
+              "        ].join(\"\\n\") + \"\\n\"",
+              "",
+              "        def androidJar = new File(",
+              "                android.sdkDirectory,",
+              "                \"platforms/android-\" + android.compileSdk + \"/android.jar\"",
+              "        )",
+              "",
+              "        if (!androidJar.exists()) {",
+              "            throw new GradleException(",
+              "                    \"Không tìm thấy android.jar: \" + androidJar",
+              "            )",
+              "        }",
+              "",
+              "        project.exec {",
+              "            commandLine(",
+              "                    \"java\",",
+              "                    \"-cp\",",
+              "                    r8Jar.absolutePath,",
+              "                    \"com.android.tools.r8.R8\",",
+              "                    \"--release\",",
+              "                    \"--min-api\",",
+              "                    \"29\",",
+              "                    \"--output\",",
+              "                    filteredLegacyDex.parentFile.absolutePath,",
+              "                    \"--lib\",",
+              "                    androidJar.absolutePath,",
+              "                    \"--pg-conf\",",
+              "                    r8Rules.absolutePath,",
+              "                    legacyDex.absolutePath",
+              "            )",
+              "        }",
+              "",
+              "        if (!filteredLegacyDex.exists()) {",
+              "            throw new GradleException(",
+              "                    \"R8 không tạo được filtered aasdk-legacy.dex!\"",
+              "            )",
+              "        }",
+              "",
+              "        println(",
+              "                \"Using filtered aasdk legacy dex: \"",
+              "                        + filteredLegacyDex.absolutePath",
+              "        )",
+              "",
+              "        project.exec {",
+              "            commandLine(",
+              "                    [d8Tool,",
+              "                     '--min-api',",
+              "                     '29',",
+              "                     '--output',",
+              "                     tempDir.absolutePath]",
+              "                    + appDexes*.absolutePath",
+              "                    + [filteredLegacyDex.absolutePath]",
+              "            )",
+              "        }"
+          ]
 
-        filteredLegacyDex.parentFile.mkdirs()
-
-        def r8Candidates = fileTree(
-                new File(System.getProperty("user.home"), ".gradle/caches/modules-2/files-2.1/com.android.tools/r8")
-        ).matching {
-            include "**/r8-*.jar"
-        }.files.toList()
-
-        if (r8Candidates.isEmpty()) {
-            throw new GradleException(
-                    "Không tìm thấy R8 jar để lọc aasdk-legacy.dex."
-            )
-        }
-
-        def r8Jar = r8Candidates.sort { a, b ->
-            b.lastModified() <=> a.lastModified()
-        }.first()
-
-        def r8Rules = new File(
-                buildDirFile,
-                "intermediates/aasdk_legacy_filtered/filter.pro"
-        )
-
-        r8Rules.parentFile.mkdirs()
-
-        r8Rules.text = '''
--dontoptimize
--dontobfuscate
--dontpreverify
--ignorewarnings
-
--keep class com.google.android.apps.auto.sdk.** { *; }
-
--keep class com.google.android.gms.** { *; }
--keep class com.google.protobuf.** { *; }
-
--dontwarn **
-'''.stripIndent()
-
-        def androidJar = new File(
-                android.sdkDirectory,
-                "platforms/android-" + android.compileSdk + "/android.jar"
-        )
-
-        if (!androidJar.exists()) {
-            throw new GradleException(
-                    "Không tìm thấy android.jar: " + androidJar
-            )
-        }
-
-        project.exec {
-            commandLine(
-                    "java",
-                    "-cp",
-                    r8Jar.absolutePath,
-                    "com.android.tools.r8.R8",
-                    "--release",
-                    "--min-api",
-                    "29",
-                    "--output",
-                    filteredLegacyDex.parentFile.absolutePath,
-                    "--lib",
-                    androidJar.absolutePath,
-                    "--pg-conf",
-                    r8Rules.absolutePath,
-                    legacyDex.absolutePath
-            )
-        }
-
-        if (!filteredLegacyDex.exists()) {
-            throw new GradleException(
-                    "R8 không tạo được filtered aasdk-legacy.dex!"
-            )
-        }
-
-        println(
-                "Using filtered aasdk legacy dex: "
-                        + filteredLegacyDex.absolutePath
-        )
-
-        project.exec {
-            commandLine(
-                    d8Tool,
-                    '--min-api',
-                    '29',
-                    '--output',
-                    tempDir.absolutePath
-            )
-
-            commandLine(
-                    d8Tool,
-                    '--min-api',
-                    '29',
-                    '--output',
-                    tempDir.absolutePath
-            )
-
-            commandLine(
-                    [d8Tool,
-                     '--min-api',
-                     '29',
-                     '--output',
-                     tempDir.absolutePath]
-                    + appDexes*.absolutePath
-                    + [filteredLegacyDex.absolutePath]
-            )
-        }
-"""
+          new = "\n".join(new_lines) + "\n"
 
           if source.count(old) != 1:
               raise SystemExit(
