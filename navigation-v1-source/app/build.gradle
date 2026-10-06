@@ -35,12 +35,13 @@ android {
         debug {
             minifyEnabled false
         }
+
         release {
-            // KHÔNG bật R8/minify: thư viện SDK đóng kèm (libs/aasdk-legacy.*) là bytecode
-            // đã qua xử lý sẵn. R8 chạy thêm có thể merge class và làm hỏng bytecode
-            // -> java.lang.InstantiationError khi Android Auto host CarActivity.
+            // KHÔNG bật R8/minify cho toàn bộ application.
+            // Legacy Android Auto SDK được xử lý riêng ở task sanitizeLegacyDex.
             minifyEnabled false
             shrinkResources false
+
             if (keystorePropsFile.exists()) {
                 signingConfig signingConfigs.release
             }
@@ -71,94 +72,570 @@ android {
 }
 
 dependencies {
-implementation "org.maplibre.gl:android-sdk:11.11.0"
-    // Xposed API: chỉ compile, runtime do LSPosed cung cấp (KHÔNG đóng gói).
+    implementation "org.maplibre.gl:android-sdk:11.11.0"
+
+    // Xposed API: chỉ compile, runtime do LSPosed cung cấp.
     compileOnly files('libs/xposed-api-82.jar')
 
-    // Android Auto SDK legacy — chỉ dùng để compile Java code.
-    // Khi đóng gói, dùng trực tiếp libs/aasdk-legacy.dex để giữ nguyên bytecode gốc,
-    // tránh VerifyError do chuyển đổi jar <-> dex làm hỏng constructor inlining.
+    // Android Auto SDK legacy:
+    // chỉ compile Java code.
+    // Runtime release dùng aasdk-legacy.dex đã sanitize.
     compileOnly files('libs/aasdk-legacy.jar')
 
     testImplementation 'junit:junit:4.13.2'
 }
 
-// Debug build: AGP không có task mergeDexDebug, dex được chia theo bucket trong
-// mergeProjectDexDebug. Thêm SDK dex như một bucket riêng để app debug (Android Studio
-// Run) cũng có com.google.android.apps.auto.sdk, nếu không gearhead bind service sẽ
-// ClassNotFoundException vì thiếu class cha CarActivityService.
-tasks.matching { it.name == 'mergeProjectDexDebug' }.configureEach { task ->
-    task.doLast {
-        def legacyDex = rootProject.file('app/libs/aasdk-legacy.dex')
-        if (!legacyDex.exists()) {
-            throw new GradleException("Thiếu app/libs/aasdk-legacy.dex!")
+
+/*
+ * ============================================================
+ * LEGACY DEX SANITIZATION
+ * ============================================================
+ *
+ * aasdk-legacy.dex chứa 5 class AndroidX:
+ *
+ *   androidx/core/app/CoreComponentFactory
+ *   androidx/core/app/RemoteActionCompat
+ *   androidx/core/app/RemoteActionCompatParcelizer
+ *   androidx/core/graphics/drawable/IconCompat
+ *   androidx/core/graphics/drawable/IconCompatParcelizer
+ *
+ * AndroidX chính thức hiện tại của app được cung cấp bởi:
+ *
+ *   androidx.core:core:1.13.1
+ *
+ * Do đó KHÔNG được đưa nguyên aasdk-legacy.dex vào D8 merge,
+ * vì D8 sẽ gặp duplicate class.
+ *
+ * Thay vào đó:
+ *
+ *   aasdk-legacy.dex
+ *          |
+ *          v
+ *       R8 shrink
+ *          |
+ *          v
+ * sanitized legacy dex
+ *          |
+ *          +---- không còn androidx/*
+ *          |
+ *          +---- giữ legacy Android Auto SDK
+ *
+ * Toàn bộ application vẫn minifyEnabled false.
+ * Chỉ legacy dex được xử lý riêng.
+ */
+
+
+/*
+ * Tìm R8 jar được AGP sử dụng.
+ *
+ * AGP đặt R8 trong Gradle/Android build tooling.
+ * Không đưa R8 thành dependency runtime của app.
+ */
+def findR8Jar = {
+    def candidates = []
+
+    def gradleUserHome = System.getProperty("user.home") + "/.gradle/caches/modules-2/files-2.1"
+
+    def r8Root = file(gradleUserHome + "/com.android.tools/r8")
+
+    if (r8Root.exists()) {
+        r8Root.eachDir { versionDir ->
+            versionDir.eachDir { hashDir ->
+                def jars = fileTree(hashDir) {
+                    include "**/r8-*.jar"
+                    include "**/r8.jar"
+                }
+
+                jars.files.each { f ->
+                    candidates << f
+                }
+            }
         }
-        def bucket = new File(task.outputDir.get().asFile, "legacy_sdk")
-        bucket.deleteDir()
-        bucket.mkdirs()
-        new File(bucket, "classes.dex").bytes = legacyDex.bytes
+    }
+
+    /*
+     * Fallback: tìm trong Android Gradle Plugin cache.
+     */
+    def agpRoot = file(gradleUserHome + "/com.android.tools.build/gradle")
+
+    if (agpRoot.exists()) {
+        agpRoot.eachDir { versionDir ->
+            versionDir.eachDir { hashDir ->
+                fileTree(hashDir).matching {
+                    include "**/r8*.jar"
+                }.files.each { f ->
+                    candidates << f
+                }
+            }
+        }
+    }
+
+    candidates = candidates.findAll { it.exists() }
+
+    if (candidates.isEmpty()) {
+        throw new GradleException(
+                "Không tìm thấy R8 jar trong Gradle cache. " +
+                "Không thể sanitize aasdk-legacy.dex."
+        )
+    }
+
+    /*
+     * Lấy jar mới nhất theo đường dẫn version/cache.
+     */
+    candidates.sort { a, b -> a.absolutePath <=> b.absolutePath }
+
+    return candidates.last()
+}
+
+
+/*
+ * ============================================================
+ * SANITIZE LEGACY DEX
+ * ============================================================
+ */
+tasks.register("sanitizeLegacyDex") {
+
+    def legacyDex = rootProject.file(
+            "app/libs/aasdk-legacy.dex"
+    )
+
+    def outputRoot = project.layout.buildDirectory
+            .dir("intermediates/sanitized-legacy-dex")
+            .get()
+            .asFile
+
+    def outputDir = new File(
+            outputRoot,
+            "release"
+    )
+
+    def outputDex = new File(
+            outputDir,
+            "classes.dex"
+    )
+
+    def rulesFile = new File(
+            outputRoot,
+            "legacy-r8-rules.pro"
+    )
+
+    inputs.file(legacyDex)
+
+    outputs.file(outputDex)
+
+    doLast {
+
+        if (!legacyDex.exists()) {
+            throw new GradleException(
+                    "Thiếu app/libs/aasdk-legacy.dex!"
+            )
+        }
+
+        outputDir.deleteDir()
+        outputDir.mkdirs()
+
+        /*
+         * IMPORTANT:
+         *
+         * Giữ toàn bộ legacy SDK.
+         *
+         * Riêng androidx.* được phép shrink.
+         *
+         * Nếu legacy SDK thật sự cần một class AndroidX,
+         * R8 sẽ nhìn thấy reference của nó và không được phép
+         * tùy tiện làm mất class đang được sử dụng.
+         *
+         * Mục tiêu là loại bỏ các AndroidX implementation
+         * được đóng nhúng bên trong legacy dex để AndroidX
+         * chính thức của app trở thành implementation duy nhất.
+         */
+        rulesFile.text = '''
+-dontobfuscate
+-dontoptimize
+-dontwarn **
+-keep class ** { *; }
+-keep,allowshrinking class androidx.** { *; }
+'''.stripIndent()
+
+        def r8Jar = findR8Jar()
+
+        def androidJar = new File(
+                android.sdkDirectory,
+                "platforms/${android.compileSdk}/android.jar"
+        )
+
+        if (!androidJar.exists()) {
+            throw new GradleException(
+                    "Không tìm thấy Android SDK android.jar: " +
+                    androidJar.absolutePath
+            )
+        }
+
+        println "============================================================"
+        println "SANITIZE aasdk-legacy.dex"
+        println "============================================================"
+        println "Input : " + legacyDex.absolutePath
+        println "Output: " + outputDex.absolutePath
+        println "R8   : " + r8Jar.absolutePath
+        println "Android API: " + androidJar.absolutePath
+        println "============================================================"
+
+        project.exec {
+            commandLine(
+                    "java",
+                    "-cp",
+                    r8Jar.absolutePath,
+                    "com.android.tools.r8.R8",
+
+                    "--release",
+
+                    "--min-api",
+                    "29",
+
+                    "--output",
+                    outputDir.absolutePath,
+
+                    "--lib",
+                    androidJar.absolutePath,
+
+                    "--pg-conf",
+                    rulesFile.absolutePath,
+
+                    legacyDex.absolutePath
+            )
+        }
+
+        if (!outputDex.exists()) {
+            throw new GradleException(
+                    "R8 không tạo được sanitized legacy dex!"
+            )
+        }
+
+        println "PASS: R8 đã tạo sanitized legacy dex."
+        println "Size: " + outputDex.length() + " bytes"
+
+        /*
+         * Kiểm tra AndroidX còn sót lại.
+         *
+         * Dùng dexdump của Android SDK.
+         */
+        def buildToolsDir = new File(
+                android.sdkDirectory,
+                "build-tools/${android.buildToolsVersion}"
+        )
+
+        def dexdump = new File(
+                buildToolsDir,
+                "dexdump"
+        )
+
+        if (!dexdump.exists()) {
+            throw new GradleException(
+                    "Không tìm thấy dexdump: " +
+                    dexdump.absolutePath
+            )
+        }
+
+        def dumpFile = new File(
+                outputRoot,
+                "sanitized-dexdump.txt"
+        )
+
+        project.exec {
+            standardOutput = new FileOutputStream(dumpFile)
+            commandLine(
+                    dexdump.absolutePath,
+                    outputDex.absolutePath
+            )
+        }
+
+        def dumpText = dumpFile.text
+
+        /*
+         * Không chấp nhận bất kỳ class androidx/* nào còn lại.
+         */
+        def remainingAndroidX = dumpText.readLines().findAll {
+            it.contains("androidx/")
+        }
+
+        if (!remainingAndroidX.isEmpty()) {
+            println "FAIL: AndroidX vẫn còn trong sanitized dex:"
+            remainingAndroidX.each {
+                println it
+            }
+
+            throw new GradleException(
+                    "Sanitized legacy dex vẫn chứa androidx/*."
+            )
+        }
+
+        println "PASS: sanitized legacy dex không còn androidx/*."
+
+        /*
+         * Android Auto legacy SDK phải vẫn còn.
+         */
+        if (!dumpText.contains("com/google/android/apps/auto/sdk")) {
+            throw new GradleException(
+                    "FAIL: sanitized dex không còn " +
+                    "com/google/android/apps/auto/sdk."
+            )
+        }
+
+        println(
+                "PASS: com/google/android/apps/auto/sdk vẫn còn."
+        )
+
+        println "============================================================"
+        println "SANITIZE LEGACY DEX: PASS"
+        println "============================================================"
     }
 }
 
-tasks.matching { it.name == 'mergeDexRelease' }.configureEach { task ->
+
+/*
+ * ============================================================
+ * DEBUG BUILD
+ * ============================================================
+ *
+ * Debug trước đây sử dụng legacy dex như một bucket riêng.
+ * Giữ nguyên cơ chế đó, nhưng dùng sanitized dex.
+ */
+tasks.matching {
+    it.name == 'mergeProjectDexDebug'
+}.configureEach { task ->
+
+    dependsOn tasks.named("sanitizeLegacyDex")
+
     task.doLast {
-        def legacyDex = rootProject.file('app/libs/aasdk-legacy.dex')
-        if (!legacyDex.exists()) {
-            throw new GradleException("Thiếu app/libs/aasdk-legacy.dex!")
-        }
-        def outputDir = task.outputDir.get().asFile
-        def dexFilter = { it.isFile() && it.name ==~ /classes\d*\.dex/ } as FileFilter
-        def appDexes = outputDir.listFiles(dexFilter)?.toList() ?: []
-        if (appDexes.isEmpty()) {
-            throw new GradleException("Không tìm thấy classes*.dex trong " + outputDir)
+
+        def sanitizedDex = new File(
+                project.layout.buildDirectory
+                        .dir("intermediates/sanitized-legacy-dex/release")
+                        .get()
+                        .asFile,
+                "classes.dex"
+        )
+
+        if (!sanitizedDex.exists()) {
+            throw new GradleException(
+                    "Thiếu sanitized legacy dex cho Debug!"
+            )
         }
 
-        def buildDirFile = project.layout.buildDirectory.asFile.get()
-        def tempDir = new File(buildDirFile, "intermediates/dex_merged_temp")
+        def bucket = new File(
+                task.outputDir.get().asFile,
+                "legacy_sdk"
+        )
+
+        bucket.deleteDir()
+        bucket.mkdirs()
+
+        new File(
+                bucket,
+                "classes.dex"
+        ).bytes = sanitizedDex.bytes
+
+        println(
+                "PASS: sanitized legacy dex đã được thêm vào Debug."
+        )
+    }
+}
+
+
+/*
+ * ============================================================
+ * RELEASE DEX MERGE
+ * ============================================================
+ *
+ * Tuyệt đối KHÔNG đưa aasdk-legacy.dex gốc vào D8.
+ *
+ * Chỉ dùng:
+ *
+ * build/intermediates/sanitized-legacy-dex/release/classes.dex
+ *
+ * để tránh duplicate AndroidX.
+ */
+tasks.matching {
+    it.name == 'mergeDexRelease'
+}.configureEach { task ->
+
+    dependsOn tasks.named("sanitizeLegacyDex")
+
+    task.doLast {
+
+        def sanitizedDex = new File(
+                project.layout.buildDirectory
+                        .dir("intermediates/sanitized-legacy-dex/release")
+                        .get()
+                        .asFile,
+                "classes.dex"
+        )
+
+        if (!sanitizedDex.exists()) {
+            throw new GradleException(
+                    "Thiếu sanitized legacy dex!"
+            )
+        }
+
+        def outputDir = task.outputDir.get().asFile
+
+        def dexFilter = {
+            it.isFile() &&
+                    it.name ==~ /classes\d*\.dex/
+        } as FileFilter
+
+        def appDexes =
+                outputDir.listFiles(dexFilter)?.toList() ?: []
+
+        if (appDexes.isEmpty()) {
+            throw new GradleException(
+                    "Không tìm thấy classes*.dex trong " +
+                    outputDir
+            )
+        }
+
+        /*
+         * D8 merge:
+         *
+         * app dexes
+         * +
+         * sanitized legacy dex
+         *
+         * AndroidX trong app dex đến từ AndroidX dependency
+         * chính thức, không phải legacy SDK nữa.
+         */
+        def buildDirFile =
+                project.layout.buildDirectory.asFile.get()
+
+        def tempDir = new File(
+                buildDirFile,
+                "intermediates/dex_merged_temp"
+        )
+
         tempDir.deleteDir()
         tempDir.mkdirs()
 
-        def sdkDir = android.sdkDirectory.absolutePath
-        def buildToolsVersion = android.buildToolsVersion
-        def d8Tool = "${sdkDir}/build-tools/${buildToolsVersion}/d8"
+        def sdkDir =
+                android.sdkDirectory.absolutePath
+
+        def buildToolsVersion =
+                android.buildToolsVersion
+
+        def d8Tool =
+                "${sdkDir}/build-tools/${buildToolsVersion}/d8"
+
+        println "============================================================"
+        println "MERGE RELEASE DEX"
+        println "============================================================"
+        println "App dex count     : " + appDexes.size()
+        println "Sanitized legacy  : " +
+                sanitizedDex.absolutePath
+        println "D8                : " + d8Tool
+        println "============================================================"
 
         project.exec {
-            commandLine([d8Tool, '--min-api', '29', '--output', tempDir.absolutePath]
-                    + appDexes*.absolutePath + [legacyDex.absolutePath])
+
+            commandLine(
+                    [
+                            d8Tool,
+                            '--min-api',
+                            '29',
+                            '--output',
+                            tempDir.absolutePath
+                    ]
+                    +
+                    appDexes*.absolutePath
+                    +
+                    [
+                            sanitizedDex.absolutePath
+                    ]
+            )
         }
 
-        def mergedDexes = tempDir.listFiles(dexFilter)?.toList() ?: []
+        def mergedDexes =
+                tempDir.listFiles(dexFilter)?.toList() ?: []
+
         if (mergedDexes.isEmpty()) {
-            throw new GradleException("D8 merge dex thất bại!")
+            throw new GradleException(
+                    "D8 merge dex thất bại!"
+            )
         }
 
-        appDexes.each { it.delete() }
+        appDexes.each {
+            it.delete()
+        }
+
         mergedDexes.each { merged ->
-            def target = new File(outputDir, merged.name)
+
+            def target =
+                    new File(
+                            outputDir,
+                            merged.name
+                    )
+
             if (!merged.renameTo(target)) {
                 target.bytes = merged.bytes
                 merged.delete()
             }
         }
+
         tempDir.deleteDir()
+
+        println "PASS: D8 merge release dex."
+        println "Merged dex count: " +
+                outputDir.listFiles(dexFilter)?.size()
     }
 }
 
+
+/*
+ * ============================================================
+ * DISTRIBUTION
+ * ============================================================
+ */
 tasks.register('distRelease', Copy) {
+
     dependsOn 'assembleRelease'
-    def buildDirFile = project.layout.buildDirectory.asFile.get()
+
+    def buildDirFile =
+            project.layout.buildDirectory.asFile.get()
+
     from "${buildDirFile}/outputs/apk/release/app-release.apk"
+
     into "${rootDir}/dist"
-    rename 'app-release.apk', 'AACast-Doudou-v1.0.0.apk'
+
+    rename(
+            'app-release.apk',
+            'AACast-Doudou-v1.0.0.apk'
+    )
+
     doLast {
-        def apkFile = file("${rootDir}/dist/AACast-Doudou-v1.0.0.apk")
+
+        def apkFile =
+                file(
+                        "${rootDir}/dist/" +
+                        "AACast-Doudou-v1.0.0.apk"
+                )
+
         if (apkFile.exists()) {
-            def sha256 = java.security.MessageDigest.getInstance("SHA-256")
-                    .digest(apkFile.bytes)
-                    .collect { String.format("%02x", it) }
-                    .join()
-            file("${rootDir}/dist/AACast-Doudou-v1.0.0.apk.sha256").text = "${sha256}  AACast-Doudou-v1.0.0.apk\n"
+
+            def sha256 =
+                    java.security.MessageDigest
+                            .getInstance("SHA-256")
+                            .digest(apkFile.bytes)
+                            .collect {
+                                String.format(
+                                        "%02x",
+                                        it
+                                )
+                            }
+                            .join()
+
+            file(
+                    "${rootDir}/dist/" +
+                    "AACast-Doudou-v1.0.0.apk.sha256"
+            ).text =
+                    "${sha256}  AACast-Doudou-v1.0.0.apk\n"
         }
     }
 }
-
