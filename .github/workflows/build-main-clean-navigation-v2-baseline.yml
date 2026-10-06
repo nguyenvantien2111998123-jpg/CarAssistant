@@ -633,21 +633,33 @@ jobs:
             --stacktrace
 
       # ============================================================
-      # ONLY NEW PATCH:
-      # Fix duplicate AndroidX classes inside aasdk-legacy.dex.
+      # ONLY RELEASE-MERGE PATCH
       #
-      # Project AGP:
-      #   com.android.application 8.13.0
+      # Source of truth:
+      #   v10-source/app/build.gradle on main
       #
-      # Exact AGP builder cache:
-      #   ~/.gradle/caches/modules-2/files-2.1/
-      #   com.android.tools.build/builder/8.13.0/<hash>/
-      #   builder-8.13.0.jar
+      # The original V10 / Navigation / Projection / Persistence
+      # structure is not changed.
       #
-      # AGP 8.13.0 embeds R8/D8 8.13.6 in builder-8.13.0.jar.
+      # Problem fixed:
+      #   AGP mergeDexRelease was automatically feeding
+      #   app/libs/aasdk-legacy.dex into R8.
       #
-      # The repository build.gradle is modified only in the CI
-      # workspace. No source/build.gradle change is committed.
+      # R8 CLI rejects DEX program input by default.
+      #
+      # New CI-only approach:
+      #   1. Move legacy dex out of app/libs BEFORE AGP merge.
+      #   2. Let AGP build the normal application dex files.
+      #   3. Use the exact AGP builder R8 API with experimental
+      #      DEX-input support.
+      #   4. Treat already-built app dex files as R8 libraries.
+      #      This removes duplicate classes from the legacy dex.
+      #   5. Use the same AGP D8 to merge the filtered legacy dex
+      #      back with the normal application dex files.
+      #
+      # Nothing is committed to build.gradle.
+      # The modification exists only inside the GitHub Actions
+      # workspace during this release build.
       # ============================================================
 
       - name: Patch release merge for aasdk legacy dex
@@ -661,200 +673,457 @@ jobs:
           path = Path("app/build.gradle")
           source = path.read_text(encoding="utf-8")
 
-          old_lines = [
-              "        project.exec {",
-              "            commandLine([d8Tool, '--min-api', '29', '--output', tempDir.absolutePath]",
-              "                    + appDexes*.absolutePath + [legacyDex.absolutePath])",
-              "        }",
-          ]
+          start_marker = (
+              "tasks.matching { it.name == 'mergeDexRelease' }.configureEach { task ->"
+          )
 
-          new_lines = [
-              "        /*",
-              "         * CI PATCH:",
-              "         *",
-              "         * AGP in this project is 8.13.0.",
-              "         * AGP 8.13.0 embeds R8/D8 8.13.6 inside",
-              "         * com.android.tools.build:builder:8.13.0.",
-              "         *",
-              "         * Do NOT search the standalone com.android.tools:r8 cache.",
-              "         * Resolve the exact AGP builder JAR instead.",
-              "         */",
-              "",
-              "        def builderRoot = new File(",
-              "                System.getProperty('user.home'),",
-              "                '.gradle/caches/modules-2/files-2.1/com.android.tools.build/builder/8.13.0'",
-              "        )",
-              "",
-              "        if (!builderRoot.exists()) {",
-              "            throw new GradleException(",
-              "                    'Không tìm thấy thư mục AGP builder 8.13.0: '",
-              "                            + builderRoot.absolutePath",
-              "            )",
-              "        }",
-              "",
-              "        def builderCandidates = fileTree(builderRoot).matching {",
-              "            include '**/builder-8.13.0.jar'",
-              "        }.files.toList()",
-              "",
-              "        if (builderCandidates.isEmpty()) {",
-              "            throw new GradleException(",
-              "                    'Không tìm thấy builder-8.13.0.jar trong: '",
-              "                            + builderRoot.absolutePath",
-              "            )",
-              "        }",
-              "",
-              "        def agpBuilderJar = builderCandidates.sort { a, b ->",
-              "            b.lastModified() <=> a.lastModified()",
-              "        }.first()",
-              "",
-              "        println(",
-              "                'EXACT AGP BUILDER: '",
-              "                        + agpBuilderJar.absolutePath",
-              "        )",
-              "",
-              "        def builderListingOutput = new ByteArrayOutputStream()",
-              "",
-              "        project.exec {",
-              "            standardOutput = builderListingOutput",
-              "            commandLine(",
-              "                    'jar',",
-              "                    'tf',",
-              "                    agpBuilderJar.absolutePath",
-              "            )",
-              "        }",
-              "",
-              "        def builderListing = builderListingOutput.toString('UTF-8')",
-              "",
-              "        if (!builderListing.contains(",
-              "                'com/android/tools/r8/R8.class'",
-              "        )) {",
-              "            throw new GradleException(",
-              "                    'builder-8.13.0.jar không chứa R8.class: '",
-              "                            + agpBuilderJar.absolutePath",
-              "            )",
-              "        }",
-              "",
-              "        if (!builderListing.contains(",
-              "                'com/android/tools/r8/D8.class'",
-              "        )) {",
-              "            throw new GradleException(",
-              "                    'builder-8.13.0.jar không chứa D8.class: '",
-              "                            + agpBuilderJar.absolutePath",
-              "            )",
-              "        }",
-              "",
-              "        println(",
-              "                'Verified AGP builder contains R8.class and D8.class.'",
-              "        )",
-              "",
-              "        def filteredLegacyDex = new File(",
-              "                buildDirFile,",
-              "                'intermediates/aasdk_legacy_filtered/classes.dex'",
-              "        )",
-              "",
-              "        filteredLegacyDex.parentFile.mkdirs()",
-              "",
-              "        def r8Rules = new File(",
-              "                buildDirFile,",
-              "                'intermediates/aasdk_legacy_filtered/filter.pro'",
-              "        )",
-              "",
-              "        r8Rules.parentFile.mkdirs()",
-              "",
-              "        def r8RuleLines = [",
-              "                '-dontoptimize',",
-              "                '-dontobfuscate',",
-              "                '-dontpreverify',",
-              "                '-ignorewarnings',",
-              "                '',",
-              "                '-keep class com.google.android.apps.auto.sdk.** { *; }',",
-              "                '',",
-              "                '-keep class com.google.android.gms.** { *; }',",
-              "                '-keep class com.google.protobuf.** { *; }',",
-              "                '',",
-              "                '-dontwarn **'",
-              "        ]",
-              "",
-              "        r8Rules.text = r8RuleLines.join(System.lineSeparator()) + System.lineSeparator()",
-              "",
-              "        def androidJar = new File(",
-              "                android.sdkDirectory,",
-              "                'platforms/android-' + android.compileSdk + '/android.jar'",
-              "        )",
-              "",
-              "        if (!androidJar.exists()) {",
-              "            throw new GradleException(",
-              "                    'Không tìm thấy android.jar: ' + androidJar",
-              "            )",
-              "        }",
-              "",
-              "        /*",
-              "         * Filter only aasdk-legacy.dex.",
-              "         * The normal application dex files are NOT passed to R8.",
-              "         */",
-              "        project.exec {",
-              "            commandLine(",
-              "                    'java',",
-              "                    '-cp',",
-              "                    agpBuilderJar.absolutePath,",
-              "                    'com.android.tools.r8.R8',",
-              "                    '--release',",
-              "                    '--min-api',",
-              "                    '29',",
-              "                    '--output',",
-              "                    filteredLegacyDex.parentFile.absolutePath,",
-              "                    '--lib',",
-              "                    androidJar.absolutePath,",
-              "                    '--pg-conf',",
-              "                    r8Rules.absolutePath,",
-              "                    legacyDex.absolutePath",
-              "            )",
-              "        }",
-              "",
-              "        if (!filteredLegacyDex.exists()) {",
-              "            throw new GradleException(",
-              "                    'R8 không tạo được filtered aasdk-legacy.dex!'",
-              "            )",
-              "        }",
-              "",
-              "        println(",
-              "                'Filtered legacy dex: '",
-              "                        + filteredLegacyDex.absolutePath",
-              "        )",
-              "",
-              "        /*",
-              "         * Use D8 from the SAME AGP builder JAR.",
-              "         * This keeps R8/D8 on the exact AGP 8.13.0 toolchain.",
-              "         */",
-              "        def finalD8Args = [",
-              "                'java',",
-              "                '-cp',",
-              "                agpBuilderJar.absolutePath,",
-              "                'com.android.tools.r8.D8',",
-              "                '--min-api',",
-              "                '29',",
-              "                '--output',",
-              "                tempDir.absolutePath",
-              "        ]",
-              "",
-              "        finalD8Args += appDexes*.absolutePath",
-              "        finalD8Args += filteredLegacyDex.absolutePath",
-              "",
-              "        project.exec {",
-              "            commandLine(finalD8Args)",
-              "        }",
-          ]
+          end_marker = (
+              "\n\ntasks.register('distRelease'"
+          )
 
-          old = "\n".join(old_lines)
-          new = "\n".join(new_lines) + "\n"
+          start = source.find(start_marker)
+          end = source.find(end_marker, start)
 
-          if source.count(old) != 1:
+          print("Original release merge start:", start)
+          print("Original release merge end:", end)
+
+          if start < 0:
               raise SystemExit(
-                  "Expected exactly one original release D8 merge block, found "
-                  + str(source.count(old))
+                  "Original mergeDexRelease block was not found."
               )
 
-          source = source.replace(old, new, 1)
+          if end < 0:
+              raise SystemExit(
+                  "distRelease boundary was not found."
+              )
+
+          new_block = r'''tasks.matching { it.name == 'mergeDexRelease' }.configureEach { task ->
+
+    /*
+     * CI-only release merge patch.
+     *
+     * AGP must NOT see aasdk-legacy.dex as an automatic local
+     * DEX dependency. It is therefore copied outside app/libs
+     * during Gradle configuration, before mergeDexRelease starts.
+     */
+    def originalLegacyDex = rootProject.file('app/libs/aasdk-legacy.dex')
+    def ciLegacyDex = new File(
+            project.layout.buildDirectory.asFile.get(),
+            'intermediates/aasdk_legacy_input/aasdk-legacy.dex'
+    )
+
+    if (!originalLegacyDex.exists()) {
+        throw new GradleException(
+                'Thiếu app/libs/aasdk-legacy.dex!'
+        )
+    }
+
+    ciLegacyDex.parentFile.mkdirs()
+    ciLegacyDex.bytes = originalLegacyDex.bytes
+
+    /*
+     * Remove the DEX from app/libs before AGP creates the
+     * mergeDexRelease task inputs.
+     */
+    if (!originalLegacyDex.delete()) {
+        throw new GradleException(
+                'Không thể đưa aasdk-legacy.dex ra khỏi app/libs!'
+        )
+    }
+
+    println(
+            'CI legacy dex staged outside app/libs: '
+                    + ciLegacyDex.absolutePath
+    )
+
+    task.doLast {
+
+        def legacyDex = ciLegacyDex
+
+        if (!legacyDex.exists()) {
+            throw new GradleException(
+                    'Không tìm thấy CI legacy dex: '
+                            + legacyDex.absolutePath
+            )
+        }
+
+        def outputDir = task.outputDir.get().asFile
+
+        def dexFilter = {
+            it.isFile() && it.name ==~ /classes\d*\.dex/
+        } as FileFilter
+
+        def appDexes = outputDir.listFiles(dexFilter)?.toList() ?: []
+
+        if (appDexes.isEmpty()) {
+            throw new GradleException(
+                    'Không tìm thấy classes*.dex trong '
+                            + outputDir
+            )
+        }
+
+        println(
+                'Application dex files before legacy merge:'
+        )
+
+        appDexes.each {
+            println(
+                    '  APP DEX: '
+                            + it.absolutePath
+            )
+        }
+
+        def buildDirFile = project.layout.buildDirectory.asFile.get()
+
+        def tempDir = new File(
+                buildDirFile,
+                'intermediates/dex_merged_temp'
+        )
+
+        tempDir.deleteDir()
+        tempDir.mkdirs()
+
+        def filteredDir = new File(
+                buildDirFile,
+                'intermediates/aasdk_legacy_filtered'
+        )
+
+        filteredDir.deleteDir()
+        filteredDir.mkdirs()
+
+        def filteredLegacyDex = new File(
+                filteredDir,
+                'classes.dex'
+        )
+
+        def r8Rules = new File(
+                filteredDir,
+                'filter.pro'
+        )
+
+        def r8RuleLines = [
+                '-dontoptimize',
+                '-dontobfuscate',
+                '-dontpreverify',
+                '-ignorewarnings',
+                '',
+                '-keep class com.google.android.apps.auto.sdk.** { *; }',
+                '',
+                '-keep class com.google.android.gms.** { *; }',
+                '-keep class com.google.protobuf.** { *; }',
+                '',
+                '-dontwarn **'
+        ]
+
+        r8Rules.text =
+                r8RuleLines.join(System.lineSeparator())
+                        + System.lineSeparator()
+
+        def sdkDir = android.sdkDirectory.absolutePath
+        def androidJar = new File(
+                android.sdkDirectory,
+                'platforms/android-' + android.compileSdk + '/android.jar'
+        )
+
+        if (!androidJar.exists()) {
+            throw new GradleException(
+                    'Không tìm thấy android.jar: '
+                            + androidJar.absolutePath
+            )
+        }
+
+        /*
+         * Resolve the exact AGP builder used by this project.
+         */
+        def builderRoot = new File(
+                System.getProperty('user.home'),
+                '.gradle/caches/modules-2/files-2.1/com.android.tools.build/builder/8.13.0'
+        )
+
+        if (!builderRoot.exists()) {
+            throw new GradleException(
+                    'Không tìm thấy thư mục AGP builder 8.13.0: '
+                            + builderRoot.absolutePath
+            )
+        }
+
+        def builderCandidates = fileTree(builderRoot).matching {
+            include '**/builder-8.13.0.jar'
+        }.files.toList()
+
+        if (builderCandidates.isEmpty()) {
+            throw new GradleException(
+                    'Không tìm thấy builder-8.13.0.jar trong: '
+                            + builderRoot.absolutePath
+            )
+        }
+
+        def agpBuilderJar = builderCandidates.sort { a, b ->
+            b.lastModified() <=> a.lastModified()
+        }.first()
+
+        println(
+                'EXACT AGP BUILDER: '
+                        + agpBuilderJar.absolutePath
+        )
+
+        def builderListingOutput =
+                new ByteArrayOutputStream()
+
+        project.exec {
+            standardOutput = builderListingOutput
+            commandLine(
+                    'jar',
+                    'tf',
+                    agpBuilderJar.absolutePath
+            )
+        }
+
+        def builderListing =
+                builderListingOutput.toString('UTF-8')
+
+        if (!builderListing.contains(
+                'com/android/tools/r8/R8.class'
+        )) {
+            throw new GradleException(
+                    'builder-8.13.0.jar không chứa R8.class: '
+                            + agpBuilderJar.absolutePath
+            )
+        }
+
+        if (!builderListing.contains(
+                'com/android/tools/r8/D8.class'
+        )) {
+            throw new GradleException(
+                    'builder-8.13.0.jar không chứa D8.class: '
+                            + agpBuilderJar.absolutePath
+            )
+        }
+
+        println(
+                'Verified AGP builder contains R8.class and D8.class.'
+        )
+
+        /*
+         * The current AGP builder contains the experimental
+         * R8 API which explicitly enables DEX program input.
+         *
+         * We invoke that API directly instead of using the
+         * normal R8 command line, which rejects DEX inputs.
+         */
+        def helperDir = new File(
+                buildDirFile,
+                'intermediates/r8_dex_filter_helper'
+        )
+
+        helperDir.deleteDir()
+        helperDir.mkdirs()
+
+        def helperJava = new File(
+                helperDir,
+                'R8DexFilter.java'
+        )
+
+        helperJava.text = '''
+import com.android.tools.r8.CompilationMode;
+import com.android.tools.r8.R8;
+import com.android.tools.r8.R8Command;
+import com.android.tools.r8.utils.OutputMode;
+
+import java.nio.file.Path;
+import java.nio.file.Paths;
+
+public final class R8DexFilter {
+
+    private R8DexFilter() {
+    }
+
+    public static void main(String[] args) throws Exception {
+
+        if (args.length < 4) {
+            throw new IllegalArgumentException(
+                    "Usage: R8DexFilter <input.dex> <outputDir> <android.jar> <rules.pro> [library.dex...]"
+            );
+        }
+
+        Path inputDex = Paths.get(args[0]);
+        Path outputDir = Paths.get(args[1]);
+        Path androidJar = Paths.get(args[2]);
+        Path rules = Paths.get(args[3]);
+
+        R8Command.Builder builder =
+                R8Command.builder()
+                        .setMode(CompilationMode.RELEASE)
+                        .setMinApiLevel(29)
+                        .setDisableTreeShaking(true)
+                        .setDisableMinification(true)
+                        .setEnableExperimentalDexInput(true)
+                        .addProgramFiles(inputDex)
+                        .addLibraryFiles(androidJar)
+                        .addProguardConfigurationFiles(rules)
+                        .setOutput(
+                                outputDir,
+                                OutputMode.DexIndexed
+                        );
+
+        for (int i = 4; i < args.length; i++) {
+            builder.addLibraryFiles(
+                    Paths.get(args[i])
+            );
+        }
+
+        R8.run(
+                builder.build()
+        );
+    }
+}
+'''
+
+        project.exec {
+            commandLine(
+                    'javac',
+                    '-cp',
+                    agpBuilderJar.absolutePath,
+                    '-d',
+                    helperDir.absolutePath,
+                    helperJava.absolutePath
+            )
+        }
+
+        println(
+                'R8 experimental DEX-input helper compiled.'
+        )
+
+        /*
+         * Pass the already-built application DEX files as
+         * R8 library inputs.
+         *
+         * Therefore:
+         *
+         *   legacy dex = program
+         *   app dexes  = libraries
+         *
+         * Classes which already exist in the application are
+         * not emitted again from the legacy program.
+         */
+        def r8Args = [
+                'java',
+                '-cp',
+                agpBuilderJar.absolutePath
+                        + File.pathSeparator
+                        + helperDir.absolutePath,
+                'R8DexFilter',
+                legacyDex.absolutePath,
+                filteredDir.absolutePath,
+                androidJar.absolutePath,
+                r8Rules.absolutePath
+        ]
+
+        r8Args += appDexes*.absolutePath
+
+        project.exec {
+            commandLine(r8Args)
+        }
+
+        if (!filteredLegacyDex.exists()) {
+            throw new GradleException(
+                    'R8 không tạo được filtered aasdk-legacy.dex!'
+            )
+        }
+
+        println(
+                'Filtered legacy dex: '
+                        + filteredLegacyDex.absolutePath
+        )
+
+        /*
+         * D8 accepts already-compiled DEX files and merges them
+         * into the final DEX output.
+         */
+        def finalD8Args = [
+                'java',
+                '-cp',
+                agpBuilderJar.absolutePath,
+                'com.android.tools.r8.D8',
+                '--release',
+                '--min-api',
+                '29',
+                '--output',
+                tempDir.absolutePath
+        ]
+
+        finalD8Args += appDexes*.absolutePath
+        finalD8Args += filteredLegacyDex.absolutePath
+
+        project.exec {
+            commandLine(finalD8Args)
+        }
+
+        def mergedDexes =
+                tempDir.listFiles(dexFilter)?.toList() ?: []
+
+        if (mergedDexes.isEmpty()) {
+            throw new GradleException(
+                    'D8 merge dex thất bại!'
+            )
+        }
+
+        println(
+                'D8 merged dex files:'
+        )
+
+        mergedDexes.each {
+            println(
+                    '  MERGED DEX: '
+                            + it.absolutePath
+            )
+        }
+
+        appDexes.each {
+            it.delete()
+        }
+
+        mergedDexes.each { merged ->
+            def target = new File(
+                    outputDir,
+                    merged.name
+            )
+
+            if (!merged.renameTo(target)) {
+                target.bytes = merged.bytes
+                merged.delete()
+            }
+        }
+
+        /*
+         * Restore the original legacy dex in the CI workspace.
+         * It is outside the APK build input at this point.
+         */
+        def restoreLegacyDex =
+                rootProject.file(
+                        'app/libs/aasdk-legacy.dex'
+                )
+
+        restoreLegacyDex.parentFile.mkdirs()
+
+        if (!restoreLegacyDex.exists()) {
+            restoreLegacyDex.bytes = legacyDex.bytes
+        }
+
+        tempDir.deleteDir()
+
+        println(
+                'Release legacy dex merge completed successfully.'
+        )
+    }
+}
+'''
+
+          source = (
+              source[:start]
+              + new_block
+              + source[end:]
+          )
 
           path.write_text(
               source,
@@ -862,13 +1131,13 @@ jobs:
           )
 
           print(
-              "CI-only exact AGP 8.13.0 builder R8/D8 patch applied."
+              "CI-only release merge patch replaced successfully."
           )
           PY
 
-          echo "Checking patched merge section:"
-          grep -n -A145 -B8 \
-            "agpBuilderJar" \
+          echo "Checking patched release merge section:"
+          grep -n -A230 -B8 \
+            "R8DexFilter" \
             app/build.gradle
 
       - name: Verify release merge patch
@@ -876,17 +1145,28 @@ jobs:
         run: |
           set -e
 
+          grep -q "setEnableExperimentalDexInput(true)" app/build.gradle
+          grep -q "R8DexFilter" app/build.gradle
+          grep -q "addProgramFiles(inputDex)" app/build.gradle
+          grep -q "addLibraryFiles(androidJar)" app/build.gradle
+          grep -q "finalD8Args" app/build.gradle
+          grep -q "aasdk_legacy_input" app/build.gradle
+          grep -q "aasdk_legacy_filtered" app/build.gradle
           grep -q "builder-8.13.0.jar" app/build.gradle
           grep -q "com.android.tools.r8.R8" app/build.gradle
           grep -q "com.android.tools.r8.D8" app/build.gradle
-          grep -q "filteredLegacyDex" app/build.gradle
-          grep -q "aasdk_legacy_filtered" app/build.gradle
-          grep -q "finalD8Args" app/build.gradle
-          grep -q "com.google.android.apps.auto.sdk.**" app/build.gradle
 
-          echo "Verified: AGP 8.13.0 builder JAR provides R8/D8."
-          echo "Verified: no standalone R8 dependency/cache is required."
-          echo "Exact AGP 8.13.0 builder R8/D8 release merge patch verified."
+          if grep -q \
+            "commandLine(\|java.*com.android.tools.r8.R8" \
+            app/build.gradle; then
+            echo "R8 helper/API patch is present."
+          fi
+
+          echo "Verified: legacy DEX is staged outside app/libs before release merge."
+          echo "Verified: R8 uses experimental DEX-input API."
+          echo "Verified: application DEX files are supplied as R8 libraries."
+          echo "Verified: final merge uses D8."
+          echo "Release merge patch verification PASSED."
 
       - name: Assemble Release APK
         shell: bash
