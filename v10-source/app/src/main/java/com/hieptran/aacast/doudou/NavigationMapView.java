@@ -89,19 +89,19 @@ public final class NavigationMapView extends FrameLayout {
                 controls,
                 "+",
                 "Zoom in",
-                this::zoomIn);
+                v -> zoomIn());
 
         addControlButton(
                 controls,
                 "−",
                 "Zoom out",
-                this::zoomOut);
+                v -> zoomOut());
 
         addControlButton(
                 controls,
                 "◎",
                 "Recenter to current location",
-                this::recenter);
+                v -> recenter());
 
         addView(
                 controls,
