@@ -1,4 +1,4 @@
-name: CarAssistant V3.2 - Commit Beep Fix to Main
+name: CarAssistant V3.2 - Beep Fix - Build Then Commit
 
 on:
   workflow_dispatch:
@@ -7,32 +7,417 @@ permissions:
   contents: write
 
 jobs:
-  commit-beep-fix:
+  build-and-commit:
     runs-on: ubuntu-latest
+    timeout-minutes: 40
 
     steps:
-      - name: Checkout main
+
+      # =========================================================
+      # 01. CHECKOUT - GIỮ NGUYÊN RUN 37577137162
+      # =========================================================
+      - name: Checkout current main source
         uses: actions/checkout@v4
         with:
           ref: main
-          fetch-depth: 0
+          fetch-depth: 1
 
-      - name: Locate NavigationMapView
+      # =========================================================
+      # 02. JAVA 17 - GIỮ NGUYÊN
+      # =========================================================
+      - name: Setup Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      # =========================================================
+      # 03. VERIFY CURRENT V10 SOURCE - GIỮ NGUYÊN
+      # =========================================================
+      - name: Verify current V10 source
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          SRC="v10-source"
+          JAVA_SRC="$SRC/app/src/main/java/com/hieptran/aacast/doudou"
+
+          echo "Checking current main source..."
+
+          test -d "$SRC"
+          test -f "$SRC/settings.gradle"
+          test -f "$SRC/build.gradle"
+          test -f "$SRC/gradlew"
+          test -f "$SRC/app/build.gradle"
+          test -f "$SRC/app/src/main/AndroidManifest.xml"
+
+          test -f "$JAVA_SRC/V10CarActivity.java"
+          test -f "$JAVA_SRC/V10ProjectionSession.java"
+          test -f "$JAVA_SRC/V10DisplayController.java"
+          test -f "$JAVA_SRC/V10SurfaceManager.java"
+          test -f "$JAVA_SRC/V10TaskSession.java"
+          test -f "$JAVA_SRC/V10SessionStore.java"
+          test -f "$JAVA_SRC/NavigationMapView.java"
+
+          echo "PASS: v10-source exists."
+          echo "PASS: Gradle files exist."
+          echo "PASS: AndroidManifest.xml exists."
+          echo "PASS: V10 CORE source exists."
+          echo "PASS: NavigationMapView.java exists."
+
+      # =========================================================
+      # 04. VERIFY OBSOLETE SOURCE - GIỮ NGUYÊN
+      # =========================================================
+      - name: Verify obsolete source directory is absent
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          if [ -e "navigation-v1-source" ]; then
+            echo "ERROR: Obsolete source directory exists."
+            exit 1
+          fi
+
+          echo "PASS: Obsolete source directory is absent."
+
+      # =========================================================
+      # 05. VERIFY GIT REVISION - GIỮ NGUYÊN
+      # =========================================================
+      - name: Verify current Git revision
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          CURRENT_COMMIT="$(git rev-parse HEAD)"
+          OLD_COMMIT="2c814a181d00cde9547a446927ae181e18cb9cbb"
+
+          echo "Current main commit:"
+          echo "$CURRENT_COMMIT"
+
+          if [ "$CURRENT_COMMIT" = "$OLD_COMMIT" ]; then
+            echo "ERROR: Repository is unexpectedly pointing to the old Foundation commit."
+            exit 1
+          fi
+
+          echo "PASS: Current main revision is not the old Foundation commit."
+
+      # =========================================================
+      # 06. VERIFY NAVIGATION DEPENDENCY + PERMISSIONS
+      # =========================================================
+      - name: Verify Navigation dependency and permissions
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          GRADLE="v10-source/app/build.gradle"
+          MANIFEST="v10-source/app/src/main/AndroidManifest.xml"
+
+          if grep -Fq "org.maplibre.gl:android-sdk:11.11.0" "$GRADLE"; then
+            echo "PASS: MapLibre dependency exists."
+          else
+            echo "ERROR: MapLibre dependency is missing."
+            exit 1
+          fi
+
+          if grep -Fq "android.permission.ACCESS_FINE_LOCATION" "$MANIFEST"; then
+            echo "PASS: ACCESS_FINE_LOCATION exists."
+          else
+            echo "ERROR: ACCESS_FINE_LOCATION is missing."
+            exit 1
+          fi
+
+          if grep -Fq "android.permission.ACCESS_COARSE_LOCATION" "$MANIFEST"; then
+            echo "PASS: ACCESS_COARSE_LOCATION exists."
+          else
+            echo "ERROR: ACCESS_COARSE_LOCATION is missing."
+            exit 1
+          fi
+
+      # =========================================================
+      # 07. VERIFY NAVIGATIONMAPVIEW - GIỮ NGUYÊN
+      # =========================================================
+      - name: Verify NavigationMapView source
         shell: bash
         run: |
           set -euo pipefail
 
           FILE="v10-source/app/src/main/java/com/hieptran/aacast/doudou/NavigationMapView.java"
 
-          if [ ! -f "$FILE" ]; then
-            echo "ERROR: NavigationMapView.java not found:"
-            echo "$FILE"
+          check() {
+            local label="$1"
+            local pattern="$2"
+
+            if grep -Fq "$pattern" "$FILE"; then
+              echo "PASS: $label"
+            else
+              echo "ERROR: $label"
+              echo "Missing: $pattern"
+              exit 1
+            fi
+          }
+
+          check "NavigationMapView class" "class NavigationMapView"
+          check "MapLibre initialization" "MapLibre.getInstance"
+          check "MapLibre map view" "new MapView"
+          check "Location component" "getLocationComponent"
+          check "OpenFreeMap Liberty style" "https://tiles.openfreemap.org/styles/liberty"
+          check "Zoom in" "public void zoomIn()"
+          check "Zoom out" "public void zoomOut()"
+          check "Recenter" "public void recenter()"
+          check "Host resume" "public void onHostResume()"
+          check "Host pause" "public void onHostPause()"
+          check "Host destroy" "public void onHostDestroy()"
+
+          echo "PASS: NavigationMapView source verification."
+
+      # =========================================================
+      # 08. VERIFY HOME UI V2 - GIỮ NGUYÊN
+      # =========================================================
+      - name: Verify Home UI V2 source
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          FILE="v10-source/app/src/main/java/com/hieptran/aacast/doudou/V10CarActivity.java"
+
+          check() {
+            local label="$1"
+            local pattern="$2"
+
+            if grep -Fq "$pattern" "$FILE"; then
+              echo "PASS: $label"
+            else
+              echo "ERROR: $label"
+              echo "Missing: $pattern"
+              exit 1
+            fi
+          }
+
+          check "V10CarActivity" "public final class V10CarActivity"
+          check "NavigationMapView field" "private NavigationMapView navigationMap;"
+          check "NavigationMapView creation" "navigationMap=new NavigationMapView(this);"
+
+          check "Transparent root" "root.setBackgroundColor(Color.TRANSPARENT);"
+          check "Transparent launcher layer" "launcherLayer.setBackgroundColor(Color.TRANSPARENT);"
+          check "Transparent dashboard" "dashboard.setBackgroundColor(Color.TRANSPARENT);"
+
+          check "APP selector" 'sidebarButton("APP CHỌN")'
+          check "TASKS control" '"TASKS"'
+          check "MEDIA card" '"MEDIA"'
+          check "WYN control" '"WYN"'
+
+          check "Quick launch limit" "Math.min(4,q.size())"
+          check "Real application icon" "i.loadIcon(pm)"
+
+          check "Navigation resume" "navigationMap.onHostResume()"
+          check "Navigation pause" "navigationMap.onHostPause()"
+          check "Navigation destroy" "navigationMap.onHostDestroy()"
+
+          echo "PASS: Home UI V2 source verification."
+
+      # =========================================================
+      # 09. VERIFY PROJECTION PERSISTENCE CORE - GIỮ NGUYÊN
+      # =========================================================
+      - name: Verify Projection Persistence CORE
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          SRC="v10-source/app/src/main/java/com/hieptran/aacast/doudou"
+
+          test -f "$SRC/V10ProjectionSession.java"
+          test -f "$SRC/V10DisplayController.java"
+          test -f "$SRC/V10SurfaceManager.java"
+          test -f "$SRC/V10TaskSession.java"
+          test -f "$SRC/V10SessionStore.java"
+
+          sha256sum \
+            "$SRC/V10ProjectionSession.java" \
+            "$SRC/V10DisplayController.java" \
+            "$SRC/V10SurfaceManager.java" \
+            "$SRC/V10TaskSession.java" \
+            "$SRC/V10SessionStore.java" \
+            > /tmp/core.sha256
+
+          echo "Protected CORE files:"
+          cat /tmp/core.sha256
+
+          echo "PASS: Projection/Persistence CORE files exist."
+
+      # =========================================================
+      # 10. VERIFY FLOATING TOUCH - GIỮ NGUYÊN
+      # =========================================================
+      - name: Verify Floating Touch controls
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          FILE="v10-source/app/src/main/java/com/hieptran/aacast/doudou/V10CarActivity.java"
+
+          check() {
+            local label="$1"
+            local pattern="$2"
+
+            if grep -Fq "$pattern" "$FILE"; then
+              echo "PASS: $label"
+            else
+              echo "ERROR: $label"
+              echo "Missing: $pattern"
+              exit 1
+            fi
+          }
+
+          check "Floating Touch creation" "createFloatingTouchKey()"
+          check "Floating Touch timing" "floatingDownTime"
+          check "Floating BACK" 'addFloatingMenuButton("BACK"'
+          check "Floating HOME" 'addFloatingMenuButton("HOME"'
+
+          echo "PASS: Floating Touch controls."
+
+      # =========================================================
+      # 11. VERIFY GRADLE CONFIGURATION - GIỮ NGUYÊN
+      # =========================================================
+      - name: Verify Gradle configuration
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          GRADLE="v10-source/app/build.gradle"
+
+          echo "Actual application configuration:"
+          grep -nE \
+            "namespace|applicationId|compileSdk|minSdk|targetSdk|versionCode|versionName|VERSION_17|android-sdk:11.11.0" \
+            "$GRADLE" || true
+
+          if grep -Fq "namespace 'com.carassistant.v10'" "$GRADLE"; then
+            echo "PASS: Namespace = com.carassistant.v10"
+          else
+            echo "ERROR: Namespace does not match current source."
             exit 1
           fi
 
-          echo "TARGET_FILE=$FILE"
+          if grep -Fq 'applicationId "com.carassistant.v10"' "$GRADLE"; then
+            echo "PASS: Application ID = com.carassistant.v10"
+          else
+            echo "ERROR: Application ID does not match current source."
+            exit 1
+          fi
 
-      - name: Patch only the validated V3.2 beep
+          if grep -Fq "compileSdk 36" "$GRADLE"; then
+            echo "PASS: Compile SDK = 36"
+          else
+            echo "ERROR: compileSdk 36 is missing."
+            exit 1
+          fi
+
+          if grep -Fq "minSdk 29" "$GRADLE"; then
+            echo "PASS: Min SDK = 29"
+          else
+            echo "ERROR: minSdk 29 is missing."
+            exit 1
+          fi
+
+          if grep -Fq "targetSdk 36" "$GRADLE"; then
+            echo "PASS: Target SDK = 36"
+          else
+            echo "ERROR: targetSdk 36 is missing."
+            exit 1
+          fi
+
+          if grep -Fq "JavaVersion.VERSION_17" "$GRADLE"; then
+            echo "PASS: Java 17 configuration."
+          else
+            echo "ERROR: Java 17 configuration is missing."
+            exit 1
+          fi
+
+          if grep -Fq "org.maplibre.gl:android-sdk:11.11.0" "$GRADLE"; then
+            echo "PASS: MapLibre 11.11.0."
+          else
+            echo "ERROR: MapLibre 11.11.0 is missing."
+            exit 1
+          fi
+
+          echo "PASS: Gradle configuration matches current v10-source."
+
+      # =========================================================
+      # 12. VERIFY ANDROID MANIFEST - GIỮ NGUYÊN
+      # =========================================================
+      - name: Verify AndroidManifest components
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          MANIFEST="v10-source/app/src/main/AndroidManifest.xml"
+
+          check() {
+            local label="$1"
+            local pattern="$2"
+
+            if grep -Fq "$pattern" "$MANIFEST"; then
+              echo "PASS: $label"
+            else
+              echo "ERROR: $label"
+              echo "Missing: $pattern"
+              exit 1
+            fi
+          }
+
+          check "V10LauncherActivity" 'com.carassistant.v10.V10LauncherActivity'
+          check "V10CarActivity" 'com.carassistant.v10.V10CarActivity'
+          check "V10ControlReceiver" 'com.carassistant.v10.V10ControlReceiver'
+          check "AACastCarService" 'com.carassistant.v10.AACastCarService'
+          check "DockStateProvider" 'com.carassistant.v10.DockStateProvider'
+          check "Android Auto projection category" 'com.google.android.gms.car.category.CATEGORY_PROJECTION'
+          check "Android Auto OEM projection category" 'com.google.android.gms.car.category.CATEGORY_PROJECTION_OEM'
+
+          echo "PASS: AndroidManifest components."
+
+      # =========================================================
+      # 13. VERIFY REPOSITORY - GIỮ NGUYÊN
+      # =========================================================
+      - name: Verify repository is build-only and source is untouched
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          echo "Repository root:"
+          git rev-parse --show-toplevel
+
+          echo "Current commit:"
+          git rev-parse HEAD
+
+          echo "Current branch/ref:"
+          git branch --show-current || true
+
+          echo "Source directory:"
+          ls -la v10-source
+
+          echo "PASS: Repository is ready for source build."
+
+      # =========================================================
+      # 14. VERIFY GRADLE WRAPPER - GIỮ NGUYÊN
+      # =========================================================
+      - name: Verify Gradle wrapper
+        working-directory: v10-source
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          test -f ./gradlew
+
+          chmod +x ./gradlew
+
+          echo "Gradle wrapper version:"
+          ./gradlew --version
+
+          echo "PASS: Gradle wrapper is executable."
+
+      # =========================================================
+      # 15. PATCH BEEP
+      # CHỈ SỬA NavigationMapView.java
+      # =========================================================
+      - name: Patch V3.2 voice start beep
         shell: bash
         run: |
           set -euo pipefail
@@ -40,341 +425,459 @@ jobs:
           FILE="v10-source/app/src/main/java/com/hieptran/aacast/doudou/NavigationMapView.java"
 
           python3 - "$FILE" <<'PY'
+          import re
           import sys
           from pathlib import Path
 
           path = Path(sys.argv[1])
           text = path.read_text(encoding="utf-8")
 
+          # Add Log import only if it is not already present.
           if "import android.util.Log;" not in text:
-              marker = "import android.view.Gravity;\n"
-
+              marker = "import android.view.Gravity;"
               if marker not in text:
                   raise SystemExit(
-                      "ERROR: Cannot find import insertion point."
+                      "ERROR: Cannot find android.view.Gravity import."
                   )
-
               text = text.replace(
                   marker,
-                  marker + "import android.util.Log;\n",
+                  marker + "\nimport android.util.Log;",
                   1
               )
 
-          old_lines = [
-              "    private void playVoiceStartTone() {",
-              "",
-              "        try {",
-              "",
-              "            if (toneGenerator != null) {",
-              "",
-              "                toneGenerator.release();",
-              "",
-              "                toneGenerator = null;",
-              "            }",
-              "",
-              "            toneGenerator =",
-              "                    new ToneGenerator(",
-              "                            AudioManager.STREAM_NOTIFICATION,",
-              "                            80);",
-              "",
-              "            toneGenerator.startTone(",
-              "                    ToneGenerator.TONE_PROP_BEEP,",
-              "                    120);",
-              "",
-              "        } catch (Exception ignored) {",
-              "        }",
-              "    }",
-              "",
-              "    /*",
-              "     * =========================================================",
-              "     * SEARCH",
-              "     * =========================================================",
-              "     */"
-          ]
+          pattern = re.compile(
+              r"    private void playVoiceStartTone\(\) \{.*?\n    \}\n\n",
+              re.S
+          )
 
-          old = "\n".join(old_lines) + "\n"
+          replacement = """    private static final String VOICE_TONE_TAG =
+            "CarAssistantVoice";
 
-          new_lines = [
-              "    private static final String VOICE_TONE_TAG = \"CarAssistantVoice\";",
-              "",
-              "    private void playVoiceStartTone() {",
-              "        try {",
-              "            if (toneGenerator != null) {",
-              "                try { toneGenerator.release(); } catch (Exception ignored) {}",
-              "                toneGenerator = null;",
-              "            }",
-              "",
-              "            AudioManager audioManager =",
-              "                    (AudioManager) getContext()",
-              "                            .getSystemService(Context.AUDIO_SERVICE);",
-              "",
-              "            int musicVolume = -1;",
-              "            int notificationVolume = -1;",
-              "",
-              "            if (audioManager != null) {",
-              "                try {",
-              "                    musicVolume = audioManager.getStreamVolume(",
-              "                            AudioManager.STREAM_MUSIC);",
-              "                } catch (Exception e) {",
-              "                    Log.w(VOICE_TONE_TAG, \"Không đọc được MUSIC volume\", e);",
-              "                }",
-              "",
-              "                try {",
-              "                    notificationVolume = audioManager.getStreamVolume(",
-              "                            AudioManager.STREAM_NOTIFICATION);",
-              "                } catch (Exception e) {",
-              "                    Log.w(VOICE_TONE_TAG,",
-              "                            \"Không đọc được NOTIFICATION volume\", e);",
-              "                }",
-              "            }",
-              "",
-              "            Log.i(VOICE_TONE_TAG,",
-              "                    \"Voice beep: MUSIC volume=\" + musicVolume",
-              "                            + \", NOTIFICATION volume=\" + notificationVolume);",
-              "",
-              "            toneGenerator = new ToneGenerator(",
-              "                    AudioManager.STREAM_MUSIC, 100);",
-              "",
-              "            boolean started = toneGenerator.startTone(",
-              "                    ToneGenerator.TONE_PROP_BEEP, 180);",
-              "",
-              "            Log.i(VOICE_TONE_TAG,",
-              "                    \"Voice beep MUSIC startTone=\" + started);",
-              "",
-              "            if (!started) {",
-              "                try { toneGenerator.release(); } catch (Exception ignored) {}",
-              "                toneGenerator = null;",
-              "",
-              "                toneGenerator = new ToneGenerator(",
-              "                        AudioManager.STREAM_NOTIFICATION, 100);",
-              "",
-              "                boolean fallbackStarted = toneGenerator.startTone(",
-              "                        ToneGenerator.TONE_PROP_BEEP, 180);",
-              "",
-              "                Log.i(VOICE_TONE_TAG,",
-              "                        \"Voice beep NOTIFICATION fallback startTone=\"",
-              "                                + fallbackStarted);",
-              "            }",
-              "",
-              "            voiceHandler.postDelayed(() -> {",
-              "                if (toneGenerator == null) return;",
-              "                try { toneGenerator.release(); } catch (Exception ignored) {}",
-              "                toneGenerator = null;",
-              "            }, 350L);",
-              "",
-              "        } catch (Exception e) {",
-              "            Log.e(VOICE_TONE_TAG, \"Voice beep FAILED\", e);",
-              "",
-              "            if (toneGenerator != null) {",
-              "                try { toneGenerator.release(); } catch (Exception ignored) {}",
-              "                toneGenerator = null;",
-              "            }",
-              "        }",
-              "    }",
-              "",
-              "    /*",
-              "     * =========================================================",
-              "     * SEARCH",
-              "     * =========================================================",
-              "     */"
-          ]
+    private void playVoiceStartTone() {
 
-          new = "\n".join(new_lines) + "\n"
+        ToneGenerator generator = null;
 
-          if old not in text:
-              if "VOICE_TONE_TAG" in text:
-                  raise SystemExit(
-                      "ERROR: Validated beep patch appears to already exist. "
-                      "Nothing was changed."
-                  )
+        try {
 
+            AudioManager audioManager =
+                    (AudioManager) getContext()
+                            .getSystemService(
+                                    Context.AUDIO_SERVICE);
+
+            if (audioManager == null) {
+                Log.w(
+                        VOICE_TONE_TAG,
+                        "AudioManager unavailable");
+                return;
+            }
+
+            int musicVolume =
+                    audioManager.getStreamVolume(
+                            AudioManager.STREAM_MUSIC);
+
+            int notificationVolume =
+                    audioManager.getStreamVolume(
+                            AudioManager.STREAM_NOTIFICATION);
+
+            /*
+             * Prefer STREAM_MUSIC because the Android Auto
+             * projection audio path normally follows the
+             * media stream.
+             */
+            if (musicVolume > 0) {
+
+                try {
+
+                    generator =
+                            new ToneGenerator(
+                                    AudioManager.STREAM_MUSIC,
+                                    100);
+
+                    generator.startTone(
+                            ToneGenerator.TONE_PROP_BEEP,
+                            180);
+
+                    voiceHandler.postDelayed(
+                            () -> {
+                                try {
+                                    if (toneGenerator != null) {
+                                        toneGenerator.release();
+                                        toneGenerator = null;
+                                    }
+                                } catch (Exception ignored) {
+                                }
+                            },
+                            350L);
+
+                    toneGenerator = generator;
+                    generator = null;
+
+                    Log.d(
+                            VOICE_TONE_TAG,
+                            "Voice start beep: STREAM_MUSIC");
+
+                    return;
+
+                } catch (Exception musicException) {
+
+                    Log.w(
+                            VOICE_TONE_TAG,
+                            "STREAM_MUSIC beep failed",
+                            musicException);
+
+                    if (generator != null) {
+                        try {
+                            generator.release();
+                        } catch (Exception ignored) {
+                        }
+                        generator = null;
+                    }
+                }
+            }
+
+            /*
+             * Fallback to notification stream when media
+             * volume is unavailable or muted.
+             */
+            if (notificationVolume > 0) {
+
+                try {
+
+                    generator =
+                            new ToneGenerator(
+                                    AudioManager.STREAM_NOTIFICATION,
+                                    100);
+
+                    generator.startTone(
+                            ToneGenerator.TONE_PROP_BEEP,
+                            180);
+
+                    voiceHandler.postDelayed(
+                            () -> {
+                                try {
+                                    if (toneGenerator != null) {
+                                        toneGenerator.release();
+                                        toneGenerator = null;
+                                    }
+                                } catch (Exception ignored) {
+                                }
+                            },
+                            350L);
+
+                    toneGenerator = generator;
+                    generator = null;
+
+                    Log.d(
+                            VOICE_TONE_TAG,
+                            "Voice start beep: STREAM_NOTIFICATION");
+
+                    return;
+
+                } catch (Exception notificationException) {
+
+                    Log.w(
+                            VOICE_TONE_TAG,
+                            "STREAM_NOTIFICATION beep failed",
+                            notificationException);
+                }
+            }
+
+            Log.w(
+                    VOICE_TONE_TAG,
+                    "Voice start beep skipped: audio stream muted");
+
+        } finally {
+
+            if (generator != null) {
+                try {
+                    generator.release();
+                } catch (Exception ignored) {
+                }
+            }
+        }
+    }
+
+"""
+
+          if not pattern.search(text):
               raise SystemExit(
-                  "ERROR: Expected original playVoiceStartTone() block "
-                  "was not found. Source may have changed."
+                  "ERROR: playVoiceStartTone() was not found."
               )
 
-          text = text.replace(old, new, 1)
+          text = pattern.sub(
+              replacement,
+              text,
+              count=1
+          )
 
-          path.write_text(text, encoding="utf-8")
+          path.write_text(
+              text,
+              encoding="utf-8"
+          )
 
-          print("Validated V3.2 beep patch applied.")
-
-          required = [
-              "VOICE_TONE_TAG",
-              "AudioManager.STREAM_MUSIC",
-              "AudioManager.STREAM_NOTIFICATION",
-              "ToneGenerator.TONE_PROP_BEEP, 180",
-              "voiceHandler.postDelayed",
-              "\"vi-VN\"",
-              "5000L",
-              "SpeechRecognizer"
-          ]
-
-          for item in required:
-              if item not in text:
-                  raise SystemExit(
-                      f"ERROR: Required source element missing after patch: {item}"
-                  )
-
-          print("Required Navigation V1 / Voice V3.2 elements preserved.")
+          print("PASS: Voice start beep patched.")
           PY
 
-      - name: Verify only NavigationMapView changed
+      # =========================================================
+      # 16. VERIFY BEEP + VOICE V3.2 + NAVIGATION V1
+      # =========================================================
+      - name: Verify beep patch and preserve V3.2 Navigation
         shell: bash
         run: |
           set -euo pipefail
 
           FILE="v10-source/app/src/main/java/com/hieptran/aacast/doudou/NavigationMapView.java"
 
-          echo "Changed files:"
-          git status --short
+          check() {
+            local label="$1"
+            local pattern="$2"
 
-          CHANGED_COUNT="$(git status --short | wc -l | tr -d ' ')"
+            if grep -Fq "$pattern" "$FILE"; then
+              echo "PASS: $label"
+            else
+              echo "ERROR: $label"
+              echo "Missing: $pattern"
+              exit 1
+            fi
+          }
 
-          if [ "$CHANGED_COUNT" != "1" ]; then
-            echo "ERROR: More than one file changed."
-            git status --short
+          # Beep patch
+          check "Voice tone tag" 'VOICE_TONE_TAG'
+          check "AudioManager media stream" 'AudioManager.STREAM_MUSIC'
+          check "AudioManager notification stream" 'AudioManager.STREAM_NOTIFICATION'
+          check "Beep tone" 'ToneGenerator.TONE_PROP_BEEP'
+          check "Beep duration" '180'
+          check "Tone release delay" 'voiceHandler.postDelayed'
+          check "ToneGenerator" 'ToneGenerator'
+
+          # Voice V3.2
+          check "Voice silence timeout" 'VOICE_SILENCE_TIMEOUT_MS = 5000L'
+          check "Vietnamese language" '"vi-VN"'
+          check "Partial results" 'RecognizerIntent.EXTRA_PARTIAL_RESULTS'
+          check "SpeechRecognizer" 'SpeechRecognizer'
+          check "startVoiceSearch" 'startVoiceSearch()'
+          check "performSearch" 'performSearch()'
+          check "Nominatim search" 'searchNominatim(query)'
+
+          # Navigation V1
+          check "Auto follow" 'startAutoFollow()'
+          check "Tracking camera mode" 'CameraMode.TRACKING'
+          check "MapLibre" 'MapLibre.getInstance'
+          check "OpenFreeMap" 'https://tiles.openfreemap.org/styles/liberty'
+
+          echo "PASS: Beep patch present."
+          echo "PASS: Voice V3.2 preserved."
+          echo "PASS: Navigation V1 preserved."
+
+      # =========================================================
+      # 17. VERIFY ONLY NavigationMapView WAS MODIFIED
+      # =========================================================
+      - name: Verify only NavigationMapView was modified
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          TARGET="v10-source/app/src/main/java/com/hieptran/aacast/doudou/NavigationMapView.java"
+
+          git diff --check
+
+          echo "Tracked files changed after beep patch:"
+          git diff --name-only
+
+          CHANGED_COUNT="$(git diff --name-only | wc -l | tr -d ' ')"
+
+          if [ "$CHANGED_COUNT" -ne 1 ]; then
+            echo "ERROR: Expected exactly 1 tracked modified file."
             exit 1
           fi
 
-          CHANGED_FILE="$(git status --short | awk '{print $2}')"
+          CHANGED_FILE="$(git diff --name-only)"
 
-          if [ "$CHANGED_FILE" != "$FILE" ]; then
-            echo "ERROR: Unexpected changed file:"
+          if [ "$CHANGED_FILE" != "$TARGET" ]; then
+            echo "ERROR: Unexpected modified file:"
             echo "$CHANGED_FILE"
             exit 1
           fi
 
-          echo "PASS: Only NavigationMapView.java changed."
+          echo "PASS: Only NavigationMapView.java is modified."
 
-      - name: Verify diff is beep-only
+          echo ""
+          echo "Beep patch diff:"
+          git diff -- "$TARGET"
+
+      # =========================================================
+      # 18. COMPILE - GIỮ NGUYÊN RUN 37577137162
+      # =========================================================
+      - name: Compile current V10 source
+        working-directory: v10-source
         shell: bash
         run: |
           set -euo pipefail
-
-          FILE="v10-source/app/src/main/java/com/hieptran/aacast/doudou/NavigationMapView.java"
-
-          git diff --check
-
-          echo "========== DIFF =========="
-          git diff -- "$FILE"
-          echo "========== END DIFF =========="
-
-          if grep -Fq 'AudioManager.STREAM_NOTIFICATION,' "$FILE" \
-             && grep -Fq '80);' "$FILE"; then
-            echo "WARNING: Found old-style notification ToneGenerator pattern."
-          fi
-
-          grep -Fq 'private static final String VOICE_TONE_TAG = "CarAssistantVoice";' "$FILE"
-          grep -Fq 'AudioManager.STREAM_MUSIC, 100' "$FILE"
-          grep -Fq 'ToneGenerator.TONE_PROP_BEEP, 180' "$FILE"
-          grep -Fq 'voiceHandler.postDelayed' "$FILE"
-          grep -Fq '350L' "$FILE"
-
-          echo "PASS: Validated beep implementation is present."
-
-      - name: Validate Navigation V1 and Voice V3.2 were not removed
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          FILE="v10-source/app/src/main/java/com/hieptran/aacast/doudou/NavigationMapView.java"
-
-          grep -Fq 'VOICE_SILENCE_TIMEOUT_MS = 5000L' "$FILE"
-          grep -Fq 'RecognizerIntent.EXTRA_LANGUAGE' "$FILE"
-          grep -Fq '"vi-VN"' "$FILE"
-          grep -Fq 'RecognizerIntent.EXTRA_PARTIAL_RESULTS' "$FILE"
-          grep -Fq 'SpeechRecognizer' "$FILE"
-          grep -Fq 'startVoiceSearch()' "$FILE"
-          grep -Fq 'performSearch()' "$FILE"
-          grep -Fq 'searchNominatim(query)' "$FILE"
-          grep -Fq 'startAutoFollow()' "$FILE"
-          grep -Fq 'CameraMode.TRACKING' "$FILE"
-
-          echo "PASS: Navigation V1 and Voice V3.2 core elements remain."
-
-      - name: Prepare Android SDK
-        uses: android-actions/setup-android@v3
-
-      - name: Install required Android SDK packages
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          SDKMANAGER="${ANDROID_SDK_ROOT}/cmdline-tools/latest/bin/sdkmanager"
-
-          if [ ! -x "$SDKMANAGER" ]; then
-            SDKMANAGER="${ANDROID_HOME}/cmdline-tools/latest/bin/sdkmanager"
-          fi
-
-          if [ ! -x "$SDKMANAGER" ]; then
-            SDKMANAGER="$(command -v sdkmanager || true)"
-          fi
-
-          if [ -z "$SDKMANAGER" ] || [ ! -x "$SDKMANAGER" ]; then
-            echo "ERROR: sdkmanager was not found after Android SDK setup."
-            echo "ANDROID_SDK_ROOT=${ANDROID_SDK_ROOT:-}"
-            echo "ANDROID_HOME=${ANDROID_HOME:-}"
-            exit 1
-          fi
-
-          echo "Using sdkmanager: $SDKMANAGER"
-
-          yes | "$SDKMANAGER" --licenses >/dev/null 2>&1 || true
-
-          "$SDKMANAGER" \
-            "platform-tools" \
-            "platforms;android-35" \
-            "build-tools;35.0.0"
-
-      - name: Build APK before commit
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          cd v10-source
 
           chmod +x ./gradlew
 
-          ./gradlew :app:assembleDebug \
+          ./gradlew \
             --no-daemon \
+            :app:compileDebugJavaWithJavac \
             --stacktrace
 
-      - name: Verify build succeeded and source is still the only change
+          echo "PASS: Java compile."
+
+      # =========================================================
+      # 19. ASSEMBLE APK - GIỮ NGUYÊN
+      # =========================================================
+      - name: Assemble current V10 APK
+        working-directory: v10-source
         shell: bash
         run: |
           set -euo pipefail
 
-          FILE="v10-source/app/src/main/java/com/hieptran/aacast/doudou/NavigationMapView.java"
-          APK="v10-source/app/build/outputs/apk/debug/app-debug.apk"
+          chmod +x ./gradlew
 
-          if [ ! -f "$APK" ]; then
-            echo "ERROR: APK not found:"
-            echo "$APK"
+          ./gradlew \
+            --no-daemon \
+            :app:assembleDebug \
+            --stacktrace
+
+          echo "PASS: APK assemble."
+
+      # =========================================================
+      # 20. LOCATE + VERIFY APK - GIỮ NGUYÊN
+      # =========================================================
+      - name: Locate and verify generated APK
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          APK="$(find v10-source/app/build/outputs/apk \
+            -type f \
+            -name "*.apk" \
+            | head -n 1)"
+
+          if [ -z "$APK" ]; then
+            echo "ERROR: Generated APK not found."
+            echo "APK output directory:"
+            find v10-source/app/build/outputs -maxdepth 5 -type f -print || true
             exit 1
           fi
+
+          echo "Generated APK:"
+          echo "$APK"
+
+          ls -lh "$APK"
+
+          test -s "$APK"
+
+          echo "PASS: Generated APK exists and is non-empty."
+
+      # =========================================================
+      # 21. PACKAGE APK - GIỮ NGUYÊN QUY TRÌNH
+      # =========================================================
+      - name: Package APK for Android Auto testing
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          APK="$(find v10-source/app/build/outputs/apk \
+            -type f \
+            -name "*.apk" \
+            | head -n 1)"
+
+          if [ -z "$APK" ]; then
+            echo "ERROR: APK not found."
+            exit 1
+          fi
+
+          cp "$APK" \
+            CarAssistant-Navigation-V1-Home-UI-V2-Overlay-Safe.apk
+
+          sha256sum \
+            CarAssistant-Navigation-V1-Home-UI-V2-Overlay-Safe.apk \
+            > CarAssistant-Navigation-V1-Home-UI-V2-Overlay-Safe.sha256
+
+          test -s \
+            CarAssistant-Navigation-V1-Home-UI-V2-Overlay-Safe.apk
+
+          echo ""
+          echo "========================================"
+          echo "APK READY FOR ANDROID AUTO TEST"
+          echo "========================================"
+
+          echo "APK:"
+          ls -lh \
+            CarAssistant-Navigation-V1-Home-UI-V2-Overlay-Safe.apk
+
+          echo ""
+          echo "SHA256:"
+          cat \
+            CarAssistant-Navigation-V1-Home-UI-V2-Overlay-Safe.sha256
+
+          echo ""
+          echo "PASS: APK package ready."
+
+      # =========================================================
+      # 22. UPLOAD APK - GIỮ NGUYÊN
+      # =========================================================
+      - name: Upload APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: CarAssistant-Navigation-V1-Home-UI-V2-Overlay-Safe
+          path: |
+            CarAssistant-Navigation-V1-Home-UI-V2-Overlay-Safe.apk
+            CarAssistant-Navigation-V1-Home-UI-V2-Overlay-Safe.sha256
+          if-no-files-found: error
+          retention-days: 14
+
+      # =========================================================
+      # 23. FINAL VERIFY - BUILD PASS TRƯỚC KHI COMMIT
+      # =========================================================
+      - name: Final verify before commit
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          TARGET="v10-source/app/src/main/java/com/hieptran/aacast/doudou/NavigationMapView.java"
+
+          echo "========================================"
+          echo "FINAL PRE-COMMIT VERIFICATION"
+          echo "========================================"
+
+          test -s \
+            CarAssistant-Navigation-V1-Home-UI-V2-Overlay-Safe.apk
+
+          test -s \
+            CarAssistant-Navigation-V1-Home-UI-V2-Overlay-Safe.sha256
 
           git diff --check
 
-          CHANGED_COUNT="$(git status --short | wc -l | tr -d ' ')"
+          CHANGED_COUNT="$(git diff --name-only | wc -l | tr -d ' ')"
 
-          if [ "$CHANGED_COUNT" != "1" ]; then
-            echo "ERROR: Build generated or modified unexpected tracked files."
-            git status --short
+          if [ "$CHANGED_COUNT" -ne 1 ]; then
+            echo "ERROR: More than one tracked file changed."
+            git diff --name-only
             exit 1
           fi
 
-          CHANGED_FILE="$(git status --short | awk '{print $2}')"
+          CHANGED_FILE="$(git diff --name-only)"
 
-          if [ "$CHANGED_FILE" != "$FILE" ]; then
-            echo "ERROR: Unexpected tracked change:"
+          if [ "$CHANGED_FILE" != "$TARGET" ]; then
+            echo "ERROR: Unexpected tracked file changed:"
             echo "$CHANGED_FILE"
             exit 1
           fi
 
-          echo "PASS: APK built successfully."
-          echo "PASS: Only NavigationMapView.java is modified."
+          echo "PASS: APK exists."
+          echo "PASS: APK package exists."
+          echo "PASS: SHA256 exists."
+          echo "PASS: Git diff is clean."
+          echo "PASS: Only NavigationMapView.java changed."
+          echo ""
+          echo "BUILD PASSED."
+          echo "COMMIT IS NOW ALLOWED."
 
+      # =========================================================
+      # 24. COMMIT - CHỈ SAU KHI BUILD PASS
+      # =========================================================
       - name: Commit beep fix to main
         shell: bash
         run: |
@@ -388,13 +891,35 @@ jobs:
           git add "$FILE"
 
           if git diff --cached --quiet; then
-            echo "No staged changes. Nothing to commit."
-            exit 0
+            echo "ERROR: No beep change is staged."
+            exit 1
+          fi
+
+          STAGED_FILES="$(git diff --cached --name-only)"
+
+          echo "Staged files:"
+          echo "$STAGED_FILES"
+
+          STAGED_COUNT="$(git diff --cached --name-only | wc -l | tr -d ' ')"
+
+          if [ "$STAGED_COUNT" -ne 1 ]; then
+            echo "ERROR: More than one file is staged."
+            exit 1
+          fi
+
+          if [ "$STAGED_FILES" != "$FILE" ]; then
+            echo "ERROR: Unexpected staged file."
+            exit 1
           fi
 
           git commit \
-            -m "fix: persist V3.2 voice start beep"
+            -m "fix: improve V3.2 voice start beep"
 
+          echo "PASS: Beep fix committed."
+
+      # =========================================================
+      # 25. PUSH MAIN
+      # =========================================================
       - name: Push commit to main
         shell: bash
         run: |
@@ -402,12 +927,18 @@ jobs:
 
           git push origin HEAD:main
 
-          echo "=================================================="
+          echo ""
+          echo "========================================"
           echo "SUCCESS"
-          echo "V3.2 beep patch has been committed to main."
-          echo "Only NavigationMapView.java was changed."
-          echo "=================================================="
+          echo "========================================"
+          echo "V3.2 beep fix has been committed to main."
+          echo "Only NavigationMapView.java was committed."
+          echo "APK build passed before commit."
+          echo "========================================"
 
+      # =========================================================
+      # 26. SHOW FINAL COMMIT
+      # =========================================================
       - name: Show final commit
         shell: bash
         run: |
