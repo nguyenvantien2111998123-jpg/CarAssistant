@@ -10,6 +10,7 @@ import android.graphics.Typeface;
 import android.location.Location;
 import android.media.AudioManager;
 import android.media.ToneGenerator;
+import android.util.Log;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
@@ -977,17 +978,72 @@ public final class NavigationMapView extends FrameLayout {
             voiceButton.setText("🎙");
         }
     }
-
     private void playVoiceStartTone() {
-
+        final String VOICE_TONE_TAG = "CarAssistantVoice";
         try {
-
             if (toneGenerator != null) {
-
                 toneGenerator.release();
-
                 toneGenerator = null;
             }
+            AudioManager audioManager =
+                    (AudioManager) getContext().getSystemService(
+                            Context.AUDIO_SERVICE);
+            if (audioManager != null) {
+                int musicVolume = audioManager.getStreamVolume(
+                        AudioManager.STREAM_MUSIC);
+                int notificationVolume = audioManager.getStreamVolume(
+                        AudioManager.STREAM_NOTIFICATION);
+                Log.d(
+                        VOICE_TONE_TAG,
+                        "STREAM_MUSIC volume=" + musicVolume + ", STREAM_NOTIFICATION volume=" + notificationVolume);
+            }
+            try {
+                toneGenerator = new ToneGenerator(
+                        AudioManager.STREAM_MUSIC, 100);
+                boolean started = toneGenerator.startTone(
+                        ToneGenerator.TONE_PROP_BEEP, 180);
+                if (!started) {
+                    toneGenerator.release();
+                    toneGenerator = null;
+                    toneGenerator = new ToneGenerator(
+                            AudioManager.STREAM_NOTIFICATION, 100);
+                    toneGenerator.startTone(
+                            ToneGenerator.TONE_PROP_BEEP, 180);
+                }
+            } catch (Exception musicException) {
+                Log.e(
+                        VOICE_TONE_TAG, "STREAM_MUSIC beep failed", musicException);
+                if (toneGenerator != null) {
+                    try {
+                        toneGenerator.release();
+                    } catch (Exception ignored) {
+                    }
+                    toneGenerator = null;
+                }
+                toneGenerator = new ToneGenerator(
+                        AudioManager.STREAM_NOTIFICATION, 100);
+                toneGenerator.startTone(
+                        ToneGenerator.TONE_PROP_BEEP, 180);
+            }
+            voiceHandler.postDelayed(
+                    new Runnable() {
+                        @Override
+                        public void run() {
+                            if (toneGenerator != null) {
+                                try {
+                                    toneGenerator.release();
+                                } catch (Exception ignored) {
+                                }
+                                toneGenerator = null;
+                            }
+                        }
+                    },
+                    350L);
+        } catch (Exception e) {
+            Log.e(
+                    VOICE_TONE_TAG, "Voice start beep failed", e);
+        }
+    }
 
             toneGenerator =
                     new ToneGenerator(
