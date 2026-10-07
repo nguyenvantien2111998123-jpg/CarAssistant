@@ -5,9 +5,15 @@ import android.app.Activity;
 import android.content.Context;
 import android.content.pm.PackageManager;
 import android.graphics.Color;
+import android.graphics.Typeface;
 import android.location.Location;
 import android.os.Bundle;
+import android.view.Gravity;
+import android.view.View;
 import android.widget.FrameLayout;
+import android.widget.LinearLayout;
+import android.widget.TextView;
+import android.graphics.drawable.GradientDrawable;
 
 import org.maplibre.android.MapLibre;
 import org.maplibre.android.camera.CameraUpdateFactory;
@@ -46,6 +52,136 @@ public final class NavigationMapView extends FrameLayout {
 
         mapView.getMapAsync(
                 this::onMapReady);
+
+        buildNavigationControls();
+    }
+
+    private void buildNavigationControls() {
+
+        LinearLayout controls =
+                new LinearLayout(getContext());
+
+        controls.setOrientation(
+                LinearLayout.VERTICAL);
+
+        controls.setGravity(
+                Gravity.CENTER);
+
+        controls.setPadding(
+                dp(4),
+                dp(4),
+                dp(4),
+                dp(4));
+
+        FrameLayout.LayoutParams containerParams =
+                new FrameLayout.LayoutParams(
+                        LayoutParams.WRAP_CONTENT,
+                        LayoutParams.WRAP_CONTENT,
+                        Gravity.TOP | Gravity.END);
+
+        containerParams.setMargins(
+                0,
+                dp(18),
+                dp(18),
+                0);
+
+        addControlButton(
+                controls,
+                "+",
+                "Zoom in",
+                this::zoomIn);
+
+        addControlButton(
+                controls,
+                "−",
+                "Zoom out",
+                this::zoomOut);
+
+        addControlButton(
+                controls,
+                "◎",
+                "Recenter to current location",
+                this::recenter);
+
+        addView(
+                controls,
+                containerParams);
+
+        controls.bringToFront();
+    }
+
+    private void addControlButton(
+            LinearLayout parent,
+            String label,
+            String description,
+            View.OnClickListener listener) {
+
+        TextView button =
+                new TextView(getContext());
+
+        button.setText(label);
+
+        button.setTextColor(
+                Color.WHITE);
+
+        button.setTextSize(24);
+
+        button.setGravity(
+                Gravity.CENTER);
+
+        button.setTypeface(
+                null,
+                Typeface.BOLD);
+
+        button.setContentDescription(
+                description);
+
+        button.setClickable(true);
+
+        button.setFocusable(true);
+
+        button.setElevation(
+                dp(8));
+
+        GradientDrawable background =
+                new GradientDrawable();
+
+        background.setColor(
+                Color.rgb(
+                        25,
+                        35,
+                        45));
+
+        background.setCornerRadius(
+                dp(14));
+
+        background.setStroke(
+                dp(2),
+                Color.rgb(
+                        80,
+                        170,
+                        230));
+
+        button.setBackground(
+                background);
+
+        button.setOnClickListener(
+                listener);
+
+        LinearLayout.LayoutParams params =
+                new LinearLayout.LayoutParams(
+                        dp(58),
+                        dp(58));
+
+        params.setMargins(
+                0,
+                dp(3),
+                0,
+                dp(3));
+
+        parent.addView(
+                button,
+                params);
     }
 
     private void onMapReady(
@@ -57,9 +193,13 @@ public final class NavigationMapView extends FrameLayout {
                 map.getUiSettings();
 
         ui.setCompassEnabled(false);
+
         ui.setZoomGesturesEnabled(true);
+
         ui.setScrollGesturesEnabled(true);
+
         ui.setRotateGesturesEnabled(true);
+
         ui.setTiltGesturesEnabled(false);
 
         map.setStyle(
@@ -85,6 +225,7 @@ public final class NavigationMapView extends FrameLayout {
                 != PackageManager.PERMISSION_GRANTED) {
 
             if (context instanceof Activity) {
+
                 ((Activity) context).requestPermissions(
                         new String[]{
                                 Manifest.permission.ACCESS_FINE_LOCATION,
@@ -107,7 +248,8 @@ public final class NavigationMapView extends FrameLayout {
                         .builder(
                                 context,
                                 map.getStyle())
-                        .locationComponentOptions(options)
+                        .locationComponentOptions(
+                                options)
                         .build();
 
         map.getLocationComponent()
@@ -159,6 +301,7 @@ public final class NavigationMapView extends FrameLayout {
         }
 
         try {
+
             Location location =
                     map.getLocationComponent()
                             .getLastKnownLocation();
@@ -181,14 +324,26 @@ public final class NavigationMapView extends FrameLayout {
     }
 
     public void onHostResume() {
+
         mapView.onResume();
     }
 
     public void onHostPause() {
+
         mapView.onPause();
     }
 
     public void onHostDestroy() {
+
         mapView.onDestroy();
+    }
+
+    private int dp(float value) {
+
+        return Math.round(
+                value
+                        * getResources()
+                                .getDisplayMetrics()
+                                .density);
     }
 }
