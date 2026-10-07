@@ -1,0 +1,809 @@
+name: CarAssistant V10 - Navigation Phase 4 Full UI Shared Host
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - name: Checkout immutable Navigation baseline
+        uses: actions/checkout@v4
+        with:
+          ref: d69dc922696a4876dbc1000154ce230b220a0ecd
+          fetch-depth: 1
+
+      - name: Setup Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Verify immutable baseline
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          EXPECTED_COMMIT="d69dc922696a4876dbc1000154ce230b220a0ecd"
+          EXPECTED_NAV_SHA="f65ed2bbce98b443458c5d9d11b07c1099ecb97e6699dd324875f451f4caf163"
+
+          ACTUAL_COMMIT="$(git rev-parse HEAD)"
+
+          echo "Expected commit:"
+          echo "$EXPECTED_COMMIT"
+
+          echo "Actual commit:"
+          echo "$ACTUAL_COMMIT"
+
+          if [ "$ACTUAL_COMMIT" != "$EXPECTED_COMMIT" ]; then
+            echo "ERROR: Immutable baseline mismatch."
+            exit 1
+          fi
+
+          NAV="v10-source/app/src/main/java/com/hieptran/aacast/doudou/NavigationMapView.java"
+
+          test -f "$NAV"
+
+          ACTUAL_NAV_SHA="$(sha256sum "$NAV" | awk '{print $1}')"
+
+          echo "Expected NavigationMapView SHA:"
+          echo "$EXPECTED_NAV_SHA"
+
+          echo "Actual NavigationMapView SHA:"
+          echo "$ACTUAL_NAV_SHA"
+
+          if [ "$ACTUAL_NAV_SHA" != "$EXPECTED_NAV_SHA" ]; then
+            echo "ERROR: NavigationMapView baseline SHA mismatch."
+            exit 1
+          fi
+
+          echo "PASS: Immutable Navigation baseline verified."
+
+      - name: Verify baseline source
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          SRC="v10-source"
+          JAVA_SRC="$SRC/app/src/main/java/com/hieptran/aacast/doudou"
+
+          test -d "$SRC"
+          test -f "$SRC/settings.gradle"
+          test -f "$SRC/build.gradle"
+          test -f "$SRC/gradlew"
+          test -f "$SRC/app/build.gradle"
+          test -f "$SRC/app/src/main/AndroidManifest.xml"
+
+          test -f "$JAVA_SRC/V10CarActivity.java"
+          test -f "$JAVA_SRC/V10LauncherActivity.java"
+          test -f "$JAVA_SRC/V10ProjectionSession.java"
+          test -f "$JAVA_SRC/V10DisplayController.java"
+          test -f "$JAVA_SRC/V10SurfaceManager.java"
+          test -f "$JAVA_SRC/V10TaskSession.java"
+          test -f "$JAVA_SRC/V10SessionStore.java"
+          test -f "$JAVA_SRC/NavigationMapView.java"
+
+          echo "PASS: Required source files exist."
+
+      - name: Create shared full Navigation Presentation host
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          FILE="v10-source/app/src/main/java/com/hieptran/aacast/doudou/NavigationPresentationView.java"
+
+          cat > "$FILE" <<'JAVA'
+          package com.carassistant.v10;
+
+          import android.content.Context;
+          import android.graphics.Color;
+          import android.view.View;
+          import android.view.ViewGroup;
+          import android.widget.FrameLayout;
+
+          /**
+           * Shared Navigation Presentation host.
+           *
+           * NavigationMapView remains the immutable Navigation Core + existing
+           * Navigation UI. This class does not duplicate MapLibre, GPS, voice,
+           * Nominatim, search, destination or navigation logic.
+           *
+           * Android Auto and Phone both host the same complete NavigationMapView
+           * through this shared Presentation layer.
+           */
+          public final class NavigationPresentationView extends FrameLayout {
+
+              private NavigationMapView navigationMap;
+
+              public NavigationPresentationView(Context context) {
+                  super(context);
+                  setBackgroundColor(Color.TRANSPARENT);
+                  setClipChildren(false);
+                  setClipToPadding(false);
+              }
+
+              public void setNavigationMap(NavigationMapView map) {
+                  if (map == navigationMap) {
+                      return;
+                  }
+
+                  if (navigationMap != null) {
+                      removeView(navigationMap);
+                  }
+
+                  navigationMap = map;
+
+                  if (navigationMap == null) {
+                      return;
+                  }
+
+                  ViewGroup parent = (ViewGroup) navigationMap.getParent();
+                  if (parent != null) {
+                      parent.removeView(navigationMap);
+                  }
+
+                  addView(
+                          navigationMap,
+                          0,
+                          new FrameLayout.LayoutParams(-1, -1));
+              }
+
+              public NavigationMapView getNavigationMap() {
+                  return navigationMap;
+              }
+
+              public void onHostResume() {
+                  if (navigationMap != null) {
+                      navigationMap.onHostResume();
+                  }
+              }
+
+              public void onHostPause() {
+                  if (navigationMap != null) {
+                      navigationMap.onHostPause();
+                  }
+              }
+
+              public void onHostDestroy() {
+                  if (navigationMap != null) {
+                      navigationMap.onHostDestroy();
+                  }
+              }
+          }
+          JAVA
+
+          echo "PASS: Shared full NavigationPresentationView created."
+
+      - name: Patch V10CarActivity to use shared full host
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          FILE="v10-source/app/src/main/java/com/hieptran/aacast/doudou/V10CarActivity.java"
+
+          python3 - <<'PY'
+          from pathlib import Path
+
+          path = Path("v10-source/app/src/main/java/com/hieptran/aacast/doudou/V10CarActivity.java")
+          s = path.read_text()
+
+          def replace_once(old, new, label):
+              global s
+              count = s.count(old)
+              if count != 1:
+                  raise SystemExit(
+                      f"ERROR: Expected exactly 1 occurrence for {label}, found {count}"
+                  )
+              s = s.replace(old, new)
+
+          replace_once(
+              "private NavigationMapView navigationMap;",
+              "private NavigationMapView navigationMap;\n    private NavigationPresentationView navigationPresentation;",
+              "NavigationPresentation field"
+          )
+
+          replace_once(
+              """        navigationMap=new NavigationMapView(this);
+        root.addView(
+                navigationMap,
+                new FrameLayout.LayoutParams(-1,-1));""",
+              """        navigationMap = new NavigationMapView(this);
+
+        navigationPresentation =
+                new NavigationPresentationView(this);
+
+        navigationPresentation.setNavigationMap(
+                navigationMap);
+
+        root.addView(
+                navigationPresentation,
+                new FrameLayout.LayoutParams(-1,-1));""",
+              "Navigation host creation"
+          )
+
+          replace_once(
+              "if (navigationMap != null) navigationMap.onHostResume();",
+              "if (navigationPresentation != null) navigationPresentation.onHostResume();",
+              "Navigation resume"
+          )
+
+          replace_once(
+              "if (navigationMap != null) navigationMap.onHostPause();",
+              "if (navigationPresentation != null) navigationPresentation.onHostPause();",
+              "Navigation pause"
+          )
+
+          replace_once(
+              "if (navigationMap != null) { navigationMap.onHostDestroy(); navigationMap = null; }",
+              """if (navigationPresentation != null) {
+            navigationPresentation.onHostDestroy();
+            navigationPresentation = null;
+        }
+        navigationMap = null;""",
+              "Navigation destroy"
+          )
+
+          path.write_text(s)
+          print("PASS: V10CarActivity patched.")
+          PY
+
+      - name: Patch V10CarActivity Navigation visibility
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          FILE="v10-source/app/src/main/java/com/hieptran/aacast/doudou/V10CarActivity.java"
+
+          python3 - <<'PY'
+          from pathlib import Path
+
+          path = Path("v10-source/app/src/main/java/com/hieptran/aacast/doudou/V10CarActivity.java")
+          s = path.read_text()
+
+          old = """        buildDashboard();
+        buildAppPanel();
+        setContentView(root);"""
+
+          new = """        buildDashboard();
+        buildAppPanel();
+
+        /*
+         * Phase 4:
+         * Navigation Presentation is the default Android Auto
+         * Navigation surface. The existing launcher remains in
+         * the source for the proven V10 projection workflow,
+         * but it is not placed above Navigation by default.
+         */
+        launcherLayer.setVisibility(View.GONE);
+        projectionLayer.setVisibility(View.GONE);
+        navigationPresentation.setVisibility(View.VISIBLE);
+
+        setContentView(root);"""
+
+          if s.count(old) != 1:
+              raise SystemExit(
+                  f"ERROR: buildUi insertion point count = {s.count(old)}"
+              )
+
+          s = s.replace(old, new)
+          path.write_text(s)
+
+          print("PASS: Android Auto Navigation Presentation is default surface.")
+          PY
+
+      - name: Patch V10CarActivity projection transitions
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          FILE="v10-source/app/src/main/java/com/hieptran/aacast/doudou/V10CarActivity.java"
+
+          python3 - <<'PY'
+          from pathlib import Path
+
+          path = Path("v10-source/app/src/main/java/com/hieptran/aacast/doudou/V10CarActivity.java")
+          s = path.read_text()
+
+          old = """    /* Start the existing proven V10 projection
+     * engine.
+     */
+    session.setTarget(
+            component);"""
+
+          if old not in s:
+              old = """    /*
+     * Start the existing proven V10 projection
+     * engine.
+     */
+    session.setTarget(
+            component);"""
+
+          if old not in s:
+              raise SystemExit(
+                  "ERROR: Projection start block not found."
+              )
+
+          new = """    /*
+     * Start the existing proven V10 projection
+     * engine.
+     *
+     * Navigation Presentation is temporarily hidden while
+     * an external projected application owns the surface.
+     */
+    if (navigationPresentation != null) {
+        navigationPresentation.setVisibility(View.GONE);
+    }
+
+    session.setTarget(
+            component);"""
+
+          s = s.replace(old, new, 1)
+
+          old_return = """        projectionLayer
+                .setVisibility(
+                        View.GONE);
+
+        launcherLayer
+                .setVisibility(
+                        View.VISIBLE);
+
+        dashboard
+                .setVisibility(
+                        View.VISIBLE);"""
+
+          new_return = """        projectionLayer
+                .setVisibility(
+                        View.GONE);
+
+        launcherLayer
+                .setVisibility(
+                        View.GONE);
+
+        dashboard
+                .setVisibility(
+                        View.GONE);
+
+        if (navigationPresentation != null) {
+            navigationPresentation.setVisibility(
+                    View.VISIBLE);
+        }"""
+
+          if s.count(old_return) != 1:
+              raise SystemExit(
+                  f"ERROR: returnToLauncher block count = {s.count(old_return)}"
+              )
+
+          s = s.replace(old_return, new_return, 1)
+
+          path.write_text(s)
+          print("PASS: Projection transitions patched.")
+          PY
+
+      - name: Patch V10LauncherActivity to host full Navigation
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          FILE="v10-source/app/src/main/java/com/hieptran/aacast/doudou/V10LauncherActivity.java"
+
+          python3 - <<'PY'
+          from pathlib import Path
+
+          path = Path("v10-source/app/src/main/java/com/hieptran/aacast/doudou/V10LauncherActivity.java")
+          s = path.read_text()
+
+          s = s.replace(
+              "import android.widget.LinearLayout;",
+              "import android.widget.LinearLayout;\nimport android.widget.FrameLayout;"
+          )
+
+          old_field = """    private LinearLayout root;
+    private LinearLayout dashboard;"""
+
+          new_field = """    private FrameLayout root;
+    private LinearLayout dashboard;
+    private NavigationMapView navigationMap;
+    private NavigationPresentationView navigationPresentation;"""
+
+          if s.count(old_field) != 1:
+              raise SystemExit(
+                  f"ERROR: Launcher field block count = {s.count(old_field)}"
+              )
+
+          s = s.replace(old_field, new_field, 1)
+
+          start = s.index("    private void buildUi() {")
+          end = s.index("\n    // ====================================================\n    // DASHBOARD", start)
+
+          new_build = """    private void buildUi() {
+
+        root =
+                new FrameLayout(this);
+
+        root.setBackgroundColor(
+                Color.TRANSPARENT);
+
+        navigationMap =
+                new NavigationMapView(this);
+
+        navigationPresentation =
+                new NavigationPresentationView(this);
+
+        navigationPresentation.setNavigationMap(
+                navigationMap);
+
+        root.addView(
+                navigationPresentation,
+                new FrameLayout.LayoutParams(
+                        -1,
+                        -1));
+
+        /*
+         * Keep the existing launcher implementation compiled and
+         * available for future shared controls, but Navigation is
+         * the complete Phone surface in Phase 4.
+         */
+        buildDashboard();
+        buildAppPanel();
+
+        dashboard.setVisibility(View.GONE);
+        appPanel.setVisibility(View.GONE);
+
+        setContentView(root);
+    }
+"""
+
+          s = s[:start] + new_build + s[end:]
+
+          old_create = """        buildUi();
+
+        loadApps();"""
+
+          new_create = """        buildUi();
+
+        loadApps();
+
+        if (navigationPresentation != null) {
+            navigationPresentation.onHostResume();
+        }"""
+
+          if s.count(old_create) != 1:
+              raise SystemExit(
+                  f"ERROR: Launcher onCreate insertion count = {s.count(old_create)}"
+              )
+
+          s = s.replace(old_create, new_create, 1)
+
+          old_destroy = """        handler.removeCallbacks(
+                clockTicker);
+
+        super.onDestroy();"""
+
+          new_destroy = """        handler.removeCallbacks(
+                clockTicker);
+
+        if (navigationPresentation != null) {
+            navigationPresentation.onHostDestroy();
+            navigationPresentation = null;
+        }
+
+        navigationMap = null;
+        root = null;
+
+        super.onDestroy();"""
+
+          if s.count(old_destroy) != 1:
+              raise SystemExit(
+                  f"ERROR: Launcher onDestroy block count = {s.count(old_destroy)}"
+              )
+
+          s = s.replace(old_destroy, new_destroy, 1)
+
+          old_oncreate = """        handler.post(
+                clockTicker);
+    }"""
+
+          new_oncreate = """        handler.post(
+                clockTicker);
+    }
+
+    @Override
+    protected void onPause() {
+        if (navigationPresentation != null) {
+            navigationPresentation.onHostPause();
+        }
+
+        super.onPause();
+    }
+"""
+
+          if s.count(old_oncreate) != 1:
+              raise SystemExit(
+                  f"ERROR: Launcher lifecycle insertion count = {s.count(old_oncreate)}"
+              )
+
+          s = s.replace(old_oncreate, new_oncreate, 1)
+
+          path.write_text(s)
+          print("PASS: V10LauncherActivity patched to shared full Navigation host.")
+          PY
+
+      - name: Verify Phase 4 architecture
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          JAVA_SRC="v10-source/app/src/main/java/com/hieptran/aacast/doudou"
+          PRESENTATION="$JAVA_SRC/NavigationPresentationView.java"
+          CAR="$JAVA_SRC/V10CarActivity.java"
+          PHONE="$JAVA_SRC/V10LauncherActivity.java"
+          NAV="$JAVA_SRC/NavigationMapView.java"
+
+          test -f "$PRESENTATION"
+
+          check() {
+            local label="$1"
+            local pattern="$2"
+            local file="$3"
+
+            if grep -Fq "$pattern" "$file"; then
+              echo "PASS: $label"
+            else
+              echo "ERROR: $label"
+              echo "Missing: $pattern"
+              echo "File: $file"
+              exit 1
+            fi
+          }
+
+          check "Shared Presentation class" "public final class NavigationPresentationView" "$PRESENTATION"
+          check "Shared Map host" "private NavigationMapView navigationMap;" "$PRESENTATION"
+          check "Shared Map setter" "setNavigationMap" "$PRESENTATION"
+          check "Shared resume" "onHostResume()" "$PRESENTATION"
+          check "Shared pause" "onHostPause()" "$PRESENTATION"
+          check "Shared destroy" "onHostDestroy()" "$PRESENTATION"
+
+          if grep -Fq "Mode" "$PRESENTATION"; then
+            echo "ERROR: Presentation Mode still exists."
+            exit 1
+          fi
+
+          if grep -Fq "PHONE_SUBSET" "$PRESENTATION"; then
+            echo "ERROR: PHONE_SUBSET still exists."
+            exit 1
+          fi
+
+          if grep -Fq "SpeechRecognizer" "$PRESENTATION"; then
+            echo "ERROR: SpeechRecognizer duplicated in Presentation."
+            exit 1
+          fi
+
+          if grep -Fq "nominatim.openstreetmap.org" "$PRESENTATION"; then
+            echo "ERROR: Nominatim duplicated in Presentation."
+            exit 1
+          fi
+
+          if grep -Fq "MapLibre" "$PRESENTATION"; then
+            echo "ERROR: MapLibre logic duplicated in Presentation."
+            exit 1
+          fi
+
+          check "Android Auto shared Presentation field" "private NavigationPresentationView navigationPresentation;" "$CAR"
+          check "Android Auto shared Presentation creation" "navigationPresentation = new NavigationPresentationView(this);" "$CAR"
+          check "Android Auto NavigationMap host" "navigationPresentation.setNavigationMap(" "$CAR"
+
+          check "Phone shared Presentation field" "private NavigationPresentationView navigationPresentation;" "$PHONE"
+          check "Phone shared Presentation creation" "navigationPresentation = new NavigationPresentationView(this);" "$PHONE"
+          check "Phone NavigationMap host" "navigationPresentation.setNavigationMap(" "$PHONE"
+
+          if grep -Fq "NavigationPhoneAdapterView" "$JAVA_SRC"/*.java; then
+            echo "ERROR: NavigationPhoneAdapterView must not exist in Phase 4."
+            exit 1
+          fi
+
+          echo "PASS: No PHONE_SUBSET architecture."
+          echo "PASS: No Phone-specific Navigation adapter."
+          echo "PASS: Shared Presentation contains the complete existing NavigationMapView UI."
+
+      - name: Verify NavigationMapView remained immutable
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          NAV="v10-source/app/src/main/java/com/hieptran/aacast/doudou/NavigationMapView.java"
+          EXPECTED="f65ed2bbce98b443458c5d9d11b07c1099ecb97e6699dd324875f451f4caf163"
+
+          ACTUAL="$(sha256sum "$NAV" | awk '{print $1}')"
+
+          echo "Expected:"
+          echo "$EXPECTED"
+
+          echo "Actual:"
+          echo "$ACTUAL"
+
+          if [ "$ACTUAL" != "$EXPECTED" ]; then
+            echo "ERROR: NavigationMapView.java was modified."
+            exit 1
+          fi
+
+          echo "PASS: NavigationMapView.java remains byte-identical."
+
+      - name: Verify Navigation core remains intact
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          FILE="v10-source/app/src/main/java/com/hieptran/aacast/doudou/NavigationMapView.java"
+
+          check() {
+            local label="$1"
+            local pattern="$2"
+
+            if grep -Fq "$pattern" "$FILE"; then
+              echo "PASS: $label"
+            else
+              echo "ERROR: $label"
+              echo "Missing: $pattern"
+              exit 1
+            fi
+          }
+
+          check "MapLibre" "MapLibre.getInstance"
+          check "MapView" "new MapView"
+          check "OpenFreeMap Liberty" "https://tiles.openfreemap.org/styles/liberty"
+          check "Nominatim" "https://nominatim.openstreetmap.org/search"
+          check "Vietnamese voice" "\"vi-VN\""
+          check "Voice timeout" "VOICE_SILENCE_TIMEOUT_MS = 5000L"
+          check "Location component" "getLocationComponent"
+          check "Zoom in" "public void zoomIn()"
+          check "Zoom out" "public void zoomOut()"
+          check "Recenter" "public void recenter()"
+          check "Host resume" "public void onHostResume()"
+          check "Host pause" "public void onHostPause()"
+          check "Host destroy" "public void onHostDestroy()"
+
+          echo "PASS: Existing Navigation engine/UI remains intact."
+
+      - name: Verify Gradle configuration
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          GRADLE="v10-source/app/build.gradle"
+
+          grep -Fq "namespace 'com.carassistant.v10'" "$GRADLE"
+          grep -Fq 'applicationId "com.carassistant.v10"' "$GRADLE"
+          grep -Fq "compileSdk 36" "$GRADLE"
+          grep -Fq "minSdk 29" "$GRADLE"
+          grep -Fq "targetSdk 36" "$GRADLE"
+          grep -Fq "JavaVersion.VERSION_17" "$GRADLE"
+          grep -Fq "org.maplibre.gl:android-sdk:11.11.0" "$GRADLE"
+
+          echo "PASS: Gradle configuration verified."
+
+      - name: Verify AndroidManifest
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          MANIFEST="v10-source/app/src/main/AndroidManifest.xml"
+
+          grep -Fq "com.carassistant.v10.V10LauncherActivity" "$MANIFEST"
+          grep -Fq "com.carassistant.v10.V10CarActivity" "$MANIFEST"
+          grep -Fq "com.carassistant.v10.V10ControlReceiver" "$MANIFEST"
+          grep -Fq "com.carassistant.v10.AACastCarService" "$MANIFEST"
+          grep -Fq "com.carassistant.v10.DockStateProvider" "$MANIFEST"
+          grep -Fq "com.google.android.gms.car.category.CATEGORY_PROJECTION" "$MANIFEST"
+          grep -Fq "com.google.android.gms.car.category.CATEGORY_PROJECTION_OEM" "$MANIFEST"
+
+          echo "PASS: AndroidManifest components verified."
+
+      - name: Verify Gradle wrapper
+        working-directory: v10-source
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          test -f ./gradlew
+          chmod +x ./gradlew
+          ./gradlew --version
+
+          echo "PASS: Gradle wrapper ready."
+
+      - name: Compile Phase 4 Java source
+        working-directory: v10-source
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          chmod +x ./gradlew
+
+          ./gradlew \
+            --no-daemon \
+            :app:compileDebugJavaWithJavac \
+            --stacktrace
+
+          echo "PASS: Phase 4 Java compile."
+
+      - name: Assemble Phase 4 APK
+        working-directory: v10-source
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          chmod +x ./gradlew
+
+          ./gradlew \
+            --no-daemon \
+            :app:assembleDebug \
+            --stacktrace
+
+          echo "PASS: Phase 4 APK assemble."
+
+      - name: Locate APK
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          APK="$(find v10-source/app/build/outputs/apk \
+            -type f \
+            -name "*.apk" \
+            | head -n 1)"
+
+          if [ -z "$APK" ]; then
+            echo "ERROR: APK not found."
+            find v10-source/app/build/outputs \
+              -maxdepth 5 \
+              -type f \
+              -print || true
+            exit 1
+          fi
+
+          echo "APK=$APK" >> "$GITHUB_ENV"
+
+          ls -lh "$APK"
+          test -s "$APK"
+
+          echo "PASS: APK exists."
+
+      - name: Package Phase 4 APK
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          cp "$APK" \
+            CarAssistant-Navigation-Phase4-Full-UI-Host.apk
+
+          sha256sum \
+            CarAssistant-Navigation-Phase4-Full-UI-Host.apk \
+            > CarAssistant-Navigation-Phase4-Full-UI-Host.sha256
+
+          echo ""
+          echo "========================================"
+          echo "PHASE 4 APK READY"
+          echo "========================================"
+
+          ls -lh \
+            CarAssistant-Navigation-Phase4-Full-UI-Host.apk
+
+          echo ""
+          echo "SHA256:"
+          cat \
+            CarAssistant-Navigation-Phase4-Full-UI-Host.sha256
+
+          echo ""
+          echo "PASS: Phase 4 APK package ready."
+
+      - name: Upload Phase 4 APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: CarAssistant-Navigation-Phase4-Full-UI-Host
+          path: |
+            CarAssistant-Navigation-Phase4-Full-UI-Host.apk
+            CarAssistant-Navigation-Phase4-Full-UI-Host.sha256
+          if-no-files-found: error
+          retention-days: 14
