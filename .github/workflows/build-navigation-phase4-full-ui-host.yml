@@ -33,6 +33,7 @@ jobs:
           NAV="v10-source/app/src/main/java/com/hieptran/aacast/doudou/NavigationMapView.java"
 
           test -f "$NAV"
+
           ACTUAL_NAV_SHA="$(sha256sum "$NAV" | awk '{print $1}')"
 
           if [ "$ACTUAL_NAV_SHA" != "$EXPECTED_NAV_SHA" ]; then
@@ -54,22 +55,29 @@ jobs:
 
           import android.content.Context;
           import android.graphics.Color;
-          import android.view.View;
           import android.view.ViewGroup;
           import android.widget.FrameLayout;
 
-          public final class NavigationPresentationView extends FrameLayout {
+          public final class NavigationPresentationView
+                  extends FrameLayout {
 
               private NavigationMapView navigationMap;
 
-              public NavigationPresentationView(Context context) {
+              public NavigationPresentationView(
+                      Context context) {
+
                   super(context);
-                  setBackgroundColor(Color.TRANSPARENT);
+
+                  setBackgroundColor(
+                          Color.TRANSPARENT);
+
                   setClipChildren(false);
                   setClipToPadding(false);
               }
 
-              public void setNavigationMap(NavigationMapView map) {
+              public void setNavigationMap(
+                      NavigationMapView map) {
+
                   if (map == navigationMap) {
                       return;
                   }
@@ -84,42 +92,57 @@ jobs:
                       return;
                   }
 
-                  ViewGroup parent = (ViewGroup) navigationMap.getParent();
+                  ViewGroup parent =
+                          (ViewGroup)
+                                  navigationMap
+                                          .getParent();
+
                   if (parent != null) {
-                      parent.removeView(navigationMap);
+                      parent.removeView(
+                              navigationMap);
                   }
 
                   addView(
                           navigationMap,
                           0,
-                          new FrameLayout.LayoutParams(-1, -1));
+                          new FrameLayout.LayoutParams(
+                                  -1,
+                                  -1));
               }
 
-              public NavigationMapView getNavigationMap() {
+              public NavigationMapView
+                      getNavigationMap() {
+
                   return navigationMap;
               }
 
               public void onHostResume() {
+
                   if (navigationMap != null) {
-                      navigationMap.onHostResume();
+                      navigationMap
+                              .onHostResume();
                   }
               }
 
               public void onHostPause() {
+
                   if (navigationMap != null) {
-                      navigationMap.onHostPause();
+                      navigationMap
+                              .onHostPause();
                   }
               }
 
               public void onHostDestroy() {
+
                   if (navigationMap != null) {
-                      navigationMap.onHostDestroy();
+                      navigationMap
+                              .onHostDestroy();
                   }
               }
           }
           JAVA
 
-          echo "PASS: NavigationPresentationView host created."
+          echo "PASS: Shared NavigationPresentationView created."
 
       - name: Patch V10CarActivity (Android Auto Shared Host)
         shell: bash
@@ -128,99 +151,113 @@ jobs:
 
           python3 - <<'PY'
           from pathlib import Path
+          import re
 
           path = Path(
               "v10-source/app/src/main/java/com/hieptran/aacast/doudou/V10CarActivity.java"
           )
+
           s = path.read_text()
 
-          def replace_smart(old_pattern, new_text, label):
-              global s
-
-              lines = [
-                  line.strip()
-                  for line in s.splitlines()
-                  if line.strip()
-              ]
-
-              full_clean = " ".join(lines)
-              clean_old = " ".join(
-                  line.strip()
-                  for line in old_pattern.splitlines()
-                  if line.strip()
+          def replace_once(
+              source,
+              pattern,
+              replacement,
+              label
+          ):
+              result, count = re.subn(
+                  pattern,
+                  replacement,
+                  source,
+                  count=1,
+                  flags=re.MULTILINE
               )
 
-              if clean_old not in full_clean:
+              if count != 1:
                   raise SystemExit(
-                      f"ERROR: Target block for '{label}' not found in source."
+                      f"ERROR: Could not patch {label}."
                   )
 
-              if old_pattern in s:
-                  s = s.replace(old_pattern, new_text, 1)
-              else:
-                  import re
+              return result
 
-                  regex = r"\s*".join(
-                      map(re.escape, old_pattern.split())
-                  )
+          # --------------------------------------------------
+          # 1. Add shared Presentation field.
+          # --------------------------------------------------
 
-                  s, count = re.subn(
-                      regex,
-                      new_text,
-                      s,
-                      count=1
-                  )
-
-                  if count != 1:
-                      raise SystemExit(
-                          f"ERROR: Failed to replace '{label}' safely."
-                      )
-
-          # 1. Field
-          replace_smart(
-              "private NavigationMapView navigationMap;",
-              "private NavigationMapView navigationMap;\n"
-              "    private NavigationPresentationView navigationPresentation;",
-              "CarActivity field"
+          s = replace_once(
+              s,
+              r"(\s*private NavigationMapView navigationMap;)",
+              r"\1\n"
+              r"    private NavigationPresentationView "
+              r"navigationPresentation;",
+              "V10CarActivity navigationPresentation field"
           )
 
-          # 2. Host creation
-          old_wrapper = "\n".join([
-              "navigationMap=new NavigationMapView(this);",
-              "root.addView(",
-              "        navigationMap,",
-              "        new FrameLayout.LayoutParams(-1,-1));"
-          ])
+          # --------------------------------------------------
+          # 2. Replace direct NavigationMapView root child
+          #    with NavigationPresentationView host.
+          # --------------------------------------------------
 
-          new_wrapper = "\n".join([
-              "navigationMap = new NavigationMapView(this);",
-              "navigationPresentation = new NavigationPresentationView(this);",
-              "navigationPresentation.setNavigationMap(navigationMap);",
-              "root.addView(",
-              "        navigationPresentation,",
-              "        new FrameLayout.LayoutParams(-1,-1));"
-          ])
-
-          replace_smart(
-              old_wrapper,
-              new_wrapper,
-              "CarActivity wrapper"
+          old_block = re.escape(
+              """navigationMap=new NavigationMapView(this);
+          root.addView(
+                  navigationMap,
+                  new FrameLayout.LayoutParams(-1,-1));"""
           )
 
-          # 3. Lifecycle
-          replace_smart(
-              "if (navigationMap != null) navigationMap.onHostResume();",
-              "if (navigationPresentation != null) "
-              "navigationPresentation.onHostResume();",
-              "CarActivity resume"
+          new_block = """navigationMap = new NavigationMapView(this);
+          navigationPresentation =
+                  new NavigationPresentationView(this);
+
+          navigationPresentation.setNavigationMap(
+                  navigationMap);
+
+          root.addView(
+                  navigationPresentation,
+                  new FrameLayout.LayoutParams(
+                          -1,
+                          -1));"""
+
+          s = replace_once(
+              s,
+              old_block,
+              new_block,
+              "V10CarActivity NavigationPresentation host"
           )
 
-          replace_smart(
-              "if (navigationMap != null) navigationMap.onHostPause();",
-              "if (navigationPresentation != null) "
-              "navigationPresentation.onHostPause();",
-              "CarActivity pause"
+          # --------------------------------------------------
+          # 3. Resume lifecycle.
+          # --------------------------------------------------
+
+          s = replace_once(
+              s,
+              r"if \(navigationMap != null\) "
+              r"navigationMap\.onHostResume\(\);",
+              """if (navigationPresentation != null) {
+                      navigationPresentation
+                              .onHostResume();
+                  }""",
+              "V10CarActivity resume"
           )
+
+          # --------------------------------------------------
+          # 4. Pause lifecycle.
+          # --------------------------------------------------
+
+          s = replace_once(
+              s,
+              r"if \(navigationMap != null\) "
+              r"navigationMap\.onHostPause\(\);",
+              """if (navigationPresentation != null) {
+                      navigationPresentation
+                              .onHostPause();
+                  }""",
+              "V10CarActivity pause"
+          )
+
+          # --------------------------------------------------
+          # 5. Destroy lifecycle.
+          # --------------------------------------------------
 
           old_destroy = (
               "if (navigationMap != null) { "
@@ -228,178 +265,322 @@ jobs:
               "navigationMap = null; }"
           )
 
-          new_destroy = "\n".join([
-              "if (navigationPresentation != null) {",
-              "    navigationPresentation.onHostDestroy();",
-              "    navigationPresentation = null;",
-              "}",
-              "navigationMap = null;"
-          ])
+          new_destroy = """if (navigationPresentation != null) {
+                  navigationPresentation
+                          .onHostDestroy();
+                  navigationPresentation = null;
+              }
 
-          replace_smart(
+              navigationMap = null;"""
+
+          if old_destroy not in s:
+              raise SystemExit(
+                  "ERROR: V10CarActivity destroy block "
+                  "not found."
+              )
+
+          s = s.replace(
               old_destroy,
               new_destroy,
-              "CarActivity destroy"
+              1
           )
 
           path.write_text(s)
 
-          print("PASS: V10CarActivity patched safely.")
+          print(
+              "PASS: V10CarActivity patched with "
+              "shared NavigationPresentationView."
+          )
           PY
 
-      - name: Patch V10LauncherActivity (Phone FrameLayout & LayoutParams Patch)
+      - name: Patch V10LauncherActivity (Preserve LinearLayout Root)
         shell: bash
         run: |
           set -euo pipefail
 
           python3 - <<'PY'
           from pathlib import Path
+          import re
 
           path = Path(
               "v10-source/app/src/main/java/com/hieptran/aacast/doudou/V10LauncherActivity.java"
           )
+
           s = path.read_text()
 
-          # 1. Add FrameLayout import
+          # --------------------------------------------------
+          # IMPORTANT ARCHITECTURE RULE
+          #
+          # Keep the existing Launcher root as:
+          #
+          #     LinearLayout root
+          #
+          # Do NOT convert it to FrameLayout.
+          #
+          # A new FrameLayout contentHost is placed outside
+          # the existing root so all existing Launcher
+          # LinearLayout.LayoutParams remain valid.
+          # --------------------------------------------------
+
+          # --------------------------------------------------
+          # 1. Add FrameLayout import.
+          # --------------------------------------------------
+
           if "import android.widget.FrameLayout;" not in s:
+
+              marker = (
+                  "import android.widget.LinearLayout;"
+              )
+
+              if marker not in s:
+                  raise SystemExit(
+                      "ERROR: LinearLayout import not found."
+                  )
+
               s = s.replace(
-                  "import android.widget.LinearLayout;",
-                  "import android.widget.LinearLayout;\n"
-                  "import android.widget.FrameLayout;"
-              )
-
-          # 2. Add fields
-          s = s.replace(
-              "private LinearLayout root;",
-              "private FrameLayout root;\n"
-              "    private NavigationMapView navigationMap;\n"
-              "    private NavigationPresentationView navigationPresentation;"
-          )
-
-          # 3. Change root to FrameLayout.
-          # IMPORTANT:
-          # Baseline source uses a multiline initialization:
-          #
-          # root =
-          #         new LinearLayout(this);
-          #
-          # Therefore this must be patched explicitly.
-
-          old_root_init = """root =
-                  new LinearLayout(this);"""
-
-          new_root_init = """root =
-                  new FrameLayout(this);"""
-
-          if old_root_init not in s:
-              raise SystemExit(
-                  "ERROR: V10LauncherActivity root initialization "
-                  "block not found."
-              )
-
-          s = s.replace(
-              old_root_init,
-              new_root_init,
-              1
-          )
-
-          # FrameLayout has no setOrientation().
-          old_root_orientation = """root.setOrientation(
-                  LinearLayout.VERTICAL);"""
-
-          if old_root_orientation not in s:
-              raise SystemExit(
-                  "ERROR: V10LauncherActivity root orientation "
-                  "block not found."
-              )
-
-          s = s.replace(
-              old_root_orientation,
-              "",
-              1
-          )
-
-          # 4. Patch direct-child LayoutParams.
-          s = s.replace(
-              "new LinearLayout.LayoutParams(-1, -1)",
-              "new FrameLayout.LayoutParams(-1, -1)"
-          )
-
-          s = s.replace(
-              """new LinearLayout.LayoutParams(
-                          -1,
-                          -1)""",
-              """new FrameLayout.LayoutParams(
-                          -1,
-                          -1)"""
-          )
-
-          # 5. Attach Navigation Presentation Layer before setContentView
-          old_set_content = "setContentView(root);"
-
-          new_set_content = "\n".join([
-              "navigationMap = new NavigationMapView(this);",
-              "navigationPresentation = new NavigationPresentationView(this);",
-              "navigationPresentation.setNavigationMap(navigationMap);",
-              "root.addView(navigationPresentation, "
-              "new FrameLayout.LayoutParams(-1, -1));",
-              "setContentView(root);"
-          ])
-
-          if old_set_content in s:
-              s = s.replace(
-                  old_set_content,
-                  new_set_content,
+                  marker,
+                  marker
+                  + "\n"
+                  + "import android.widget.FrameLayout;",
                   1
               )
 
-          # 6. Lifecycle Management
-          old_destroy = "protected void onDestroy() {"
+          # --------------------------------------------------
+          # 2. Add new fields without changing root type.
+          # --------------------------------------------------
 
-          if "@Override\n    protected void onDestroy() {" in s:
-              old_destroy = "@Override\n    protected void onDestroy() {"
+          field_marker = (
+              "    private LinearLayout root;"
+          )
 
-          new_lifecycles = "\n".join([
-              "@Override",
-              "protected void onResume() {",
-              "    super.onResume();",
-              "    if (navigationPresentation != null) {",
-              "        navigationPresentation.onHostResume();",
-              "    }",
-              "}",
-              "",
-              "@Override",
-              "protected void onPause() {",
-              "    if (navigationPresentation != null) {",
-              "        navigationPresentation.onHostPause();",
-              "    }",
-              "    super.onPause();",
-              "}",
-              "",
-              "@Override",
-              "protected void onDestroy() {",
-              "    if (navigationPresentation != null) {",
-              "        navigationPresentation.onHostDestroy();",
-              "        navigationPresentation = null;",
-              "    }",
-              "    navigationMap = null;"
-          ])
+          field_replacement = """    private LinearLayout root;
 
-          if old_destroy not in s:
+              private FrameLayout contentHost;
+
+              private NavigationMapView navigationMap;
+
+              private NavigationPresentationView
+                      navigationPresentation;"""
+
+          if field_marker not in s:
               raise SystemExit(
-                  "ERROR: V10LauncherActivity onDestroy() not found."
+                  "ERROR: V10LauncherActivity root field "
+                  "not found."
               )
 
           s = s.replace(
-              old_destroy,
-              new_lifecycles,
+              field_marker,
+              field_replacement,
+              1
+          )
+
+          # --------------------------------------------------
+          # 3. Keep the existing root exactly as LinearLayout.
+          #
+          # No root type conversion.
+          # No orientation removal.
+          # --------------------------------------------------
+
+          expected_root = """root =
+                  new LinearLayout(this);
+
+              root.setOrientation(
+                  LinearLayout.VERTICAL);"""
+
+          if expected_root not in s:
+              raise SystemExit(
+                  "ERROR: V10LauncherActivity existing "
+                  "LinearLayout root syntax changed. "
+                  "Workflow stopped intentionally."
+              )
+
+          # --------------------------------------------------
+          # 4. Replace only the final setContentView(root)
+          #    with an outer FrameLayout host.
+          #
+          # Existing dashboard/appPanel remain children
+          # of the original LinearLayout root.
+          # --------------------------------------------------
+
+          old_set_content = (
+              "        setContentView(root);"
+          )
+
+          new_set_content = """        navigationMap =
+                  new NavigationMapView(this);
+
+              navigationPresentation =
+                  new NavigationPresentationView(this);
+
+              navigationPresentation.setNavigationMap(
+                      navigationMap);
+
+              contentHost =
+                  new FrameLayout(this);
+
+              contentHost.setBackgroundColor(
+                      Color.TRANSPARENT);
+
+              contentHost.addView(
+                      root,
+                      new FrameLayout.LayoutParams(
+                              -1,
+                              -1));
+
+              contentHost.addView(
+                      navigationPresentation,
+                      new FrameLayout.LayoutParams(
+                              -1,
+                              -1));
+
+              setContentView(
+                      contentHost);"""
+
+          if old_set_content not in s:
+              raise SystemExit(
+                  "ERROR: V10LauncherActivity "
+                  "setContentView(root) not found."
+              )
+
+          s = s.replace(
+              old_set_content,
+              new_set_content,
+              1
+          )
+
+          # --------------------------------------------------
+          # 5. Add lifecycle forwarding before onDestroy().
+          #
+          # Baseline has no onResume/onPause.
+          # --------------------------------------------------
+
+          destroy_marker = """    @Override
+              protected void onDestroy() {"""
+
+          lifecycle_block = """    @Override
+              protected void onResume() {
+
+                  super.onResume();
+
+                  if (navigationPresentation != null) {
+                      navigationPresentation
+                              .onHostResume();
+                  }
+              }
+
+              @Override
+              protected void onPause() {
+
+                  if (navigationPresentation != null) {
+                      navigationPresentation
+                              .onHostPause();
+                  }
+
+                  super.onPause();
+              }
+
+              @Override
+              protected void onDestroy() {"""
+
+          if destroy_marker not in s:
+              raise SystemExit(
+                  "ERROR: V10LauncherActivity onDestroy "
+                  "marker not found."
+              )
+
+          s = s.replace(
+              destroy_marker,
+              lifecycle_block,
+              1
+          )
+
+          # --------------------------------------------------
+          # 6. Extend existing onDestroy cleanup.
+          # --------------------------------------------------
+
+          old_destroy_body = """        handler.removeCallbacks(
+                  clockTicker);
+
+              super.onDestroy();"""
+
+          new_destroy_body = """        handler.removeCallbacks(
+                  clockTicker);
+
+              if (navigationPresentation != null) {
+                  navigationPresentation
+                          .onHostDestroy();
+                  navigationPresentation = null;
+              }
+
+              navigationMap = null;
+              contentHost = null;
+
+              super.onDestroy();"""
+
+          if old_destroy_body not in s:
+              raise SystemExit(
+                  "ERROR: V10LauncherActivity onDestroy "
+                  "body not found."
+              )
+
+          s = s.replace(
+              old_destroy_body,
+              new_destroy_body,
               1
           )
 
           path.write_text(s)
 
-          print("PASS: V10LauncherActivity patched successfully.")
+          print(
+              "PASS: V10LauncherActivity patched safely."
+          )
+          print(
+              "PASS: Existing LinearLayout root preserved."
+          )
+          print(
+              "PASS: Existing Launcher LayoutParams preserved."
+          )
+          print(
+              "PASS: NavigationPresentationView attached "
+              "through outer FrameLayout contentHost."
+          )
           PY
+
+      - name: Verify patched architecture before compile
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          LAUNCHER="v10-source/app/src/main/java/com/hieptran/aacast/doudou/V10LauncherActivity.java"
+          CAR="v10-source/app/src/main/java/com/hieptran/aacast/doudou/V10CarActivity.java"
+
+          echo "Checking V10LauncherActivity..."
+
+          grep -q "private LinearLayout root;" "$LAUNCHER"
+          grep -q "root =" "$LAUNCHER"
+          grep -q "new LinearLayout(this)" "$LAUNCHER"
+          grep -q "root.setOrientation" "$LAUNCHER"
+          grep -q "private FrameLayout contentHost;" "$LAUNCHER"
+          grep -q "private NavigationMapView navigationMap;" "$LAUNCHER"
+          grep -q "NavigationPresentationView" "$LAUNCHER"
+          grep -q "contentHost.addView" "$LAUNCHER"
+          grep -q "setContentView(" "$LAUNCHER"
+          grep -q "protected void onResume()" "$LAUNCHER"
+          grep -q "protected void onPause()" "$LAUNCHER"
+          grep -q "navigationPresentation.onHostResume()" "$LAUNCHER"
+          grep -q "navigationPresentation.onHostPause()" "$LAUNCHER"
+          grep -q "navigationPresentation.onHostDestroy()" "$LAUNCHER"
+
+          echo "Checking V10CarActivity..."
+
+          grep -q "private NavigationPresentationView navigationPresentation;" "$CAR"
+          grep -q "navigationPresentation = new NavigationPresentationView(this);" "$CAR"
+          grep -q "navigationPresentation.setNavigationMap(navigationMap);" "$CAR"
+          grep -q "navigationPresentation.onHostResume()" "$CAR"
+          grep -q "navigationPresentation.onHostPause()" "$CAR"
+          grep -q "navigationPresentation.onHostDestroy()" "$CAR"
+
+          echo "PASS: Shared Presentation architecture verified."
 
       - name: Compile Java source
         working-directory: v10-source
@@ -408,7 +589,11 @@ jobs:
           set -euo pipefail
 
           chmod +x ./gradlew
-          ./gradlew --no-daemon :app:compileDebugJavaWithJavac --stacktrace
+
+          ./gradlew \
+            --no-daemon \
+            :app:compileDebugJavaWithJavac \
+            --stacktrace
 
           echo "PASS: Phase 4 Java compile successful."
 
@@ -418,7 +603,10 @@ jobs:
         run: |
           set -euo pipefail
 
-          ./gradlew --no-daemon :app:assembleDebug --stacktrace
+          ./gradlew \
+            --no-daemon \
+            :app:assembleDebug \
+            --stacktrace
 
           echo "PASS: Phase 4 APK assemble successful."
 
@@ -428,12 +616,13 @@ jobs:
           set -euo pipefail
 
           EXPECTED_NAV_SHA="f65ed2bbce98b443458c5d9d11b07c1099ecb97e6699dd324875f451f4caf163"
+
           NAV="v10-source/app/src/main/java/com/hieptran/aacast/doudou/NavigationMapView.java"
 
           ACTUAL_NAV_SHA="$(sha256sum "$NAV" | awk '{print $1}')"
 
           if [ "$ACTUAL_NAV_SHA" != "$EXPECTED_NAV_SHA" ]; then
-            echo "ERROR: NavigationMapView was unexpectedly modified!"
+            echo "ERROR: NavigationMapView was unexpectedly modified."
             exit 1
           fi
 
@@ -444,15 +633,26 @@ jobs:
         run: |
           set -euo pipefail
 
-          APK="$(find v10-source/app/build/outputs/apk -type f -name "*.apk" | head -n 1)"
+          APK="$(
+            find \
+              v10-source/app/build/outputs/apk \
+              -type f \
+              -name "*.apk" \
+              | head -n 1
+          )"
 
           if [ -z "$APK" ]; then
             echo "ERROR: APK output not found."
             exit 1
           fi
 
-          cp "$APK" CarAssistant-Navigation-Phase4-Full-UI-Host.apk
-          sha256sum CarAssistant-Navigation-Phase4-Full-UI-Host.apk > CarAssistant-Navigation-Phase4-Full-UI-Host.sha256
+          cp \
+            "$APK" \
+            CarAssistant-Navigation-Phase4-Full-UI-Host.apk
+
+          sha256sum \
+            CarAssistant-Navigation-Phase4-Full-UI-Host.apk \
+            > CarAssistant-Navigation-Phase4-Full-UI-Host.sha256
 
           echo "PASS: Phase 4 APK ready."
 
