@@ -20,6 +20,7 @@ import org.maplibre.android.camera.CameraUpdateFactory;
 import org.maplibre.android.geometry.LatLng;
 import org.maplibre.android.location.LocationComponentActivationOptions;
 import org.maplibre.android.location.LocationComponentOptions;
+import org.maplibre.android.location.modes.CameraMode;
 import org.maplibre.android.maps.MapLibreMap;
 import org.maplibre.android.maps.MapView;
 import org.maplibre.android.maps.UiSettings;
@@ -27,6 +28,7 @@ import org.maplibre.android.maps.UiSettings;
 public final class NavigationMapView extends FrameLayout {
 
     private static final int LOCATION_REQUEST = 4101;
+    private static final double AUTO_FOLLOW_ZOOM = 16.0;
 
     private final MapView mapView;
     private MapLibreMap map;
@@ -100,7 +102,7 @@ public final class NavigationMapView extends FrameLayout {
         addControlButton(
                 controls,
                 "◎",
-                "Recenter to current location",
+                "Recenter and resume auto follow",
                 v -> recenter());
 
         addView(
@@ -241,6 +243,7 @@ public final class NavigationMapView extends FrameLayout {
                 LocationComponentOptions
                         .builder(context)
                         .pulseEnabled(true)
+                        .trackingGesturesManagement(true)
                         .build();
 
         LocationComponentActivationOptions activation =
@@ -258,6 +261,31 @@ public final class NavigationMapView extends FrameLayout {
 
         map.getLocationComponent()
                 .setLocationComponentEnabled(true);
+
+        startAutoFollow();
+    }
+
+    private void startAutoFollow() {
+
+        if (map == null) {
+            return;
+        }
+
+        try {
+
+            map.getLocationComponent()
+                    .setCameraMode(
+                            CameraMode.TRACKING,
+                            800L,
+                            AUTO_FOLLOW_ZOOM,
+                            null,
+                            0.0,
+                            null);
+
+        } catch (Exception ignored) {
+
+            recenter();
+        }
     }
 
     public void zoomIn() {
@@ -307,17 +335,20 @@ public final class NavigationMapView extends FrameLayout {
                             .getLastKnownLocation();
 
             if (location == null) {
+
+                startAutoFollow();
+
                 return;
             }
 
-            map.animateCamera(
-                    CameraUpdateFactory
-                            .newLatLngZoom(
-                                    new LatLng(
-                                            location.getLatitude(),
-                                            location.getLongitude()),
-                                    16.0),
-                    500);
+            map.getLocationComponent()
+                    .setCameraMode(
+                            CameraMode.TRACKING,
+                            500L,
+                            AUTO_FOLLOW_ZOOM,
+                            null,
+                            0.0,
+                            null);
 
         } catch (Exception ignored) {
         }
