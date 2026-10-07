@@ -1,0 +1,1385 @@
+name: CarAssistant Navigation Phase 2 - Phone Adapter
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build-navigation-phase2-phone-adapter:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+
+    steps:
+
+      # ============================================================
+      # 1. CHECKOUT IMMUTABLE NAVIGATION BASELINE
+      # ============================================================
+      - name: Checkout immutable Navigation baseline 37607447583
+        uses: actions/checkout@v4
+        with:
+          ref: d69dc922696a4876dbc1000154ce230b220a0ecd
+          fetch-depth: 1
+
+      - name: Verify immutable baseline
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          EXPECTED="d69dc922696a4876dbc1000154ce230b220a0ecd"
+          ACTUAL="$(git rev-parse HEAD)"
+
+          echo "Expected baseline: $EXPECTED"
+          echo "Actual baseline:   $ACTUAL"
+
+          if [ "$ACTUAL" != "$EXPECTED" ]; then
+            echo "ERROR: Wrong baseline."
+            exit 1
+          fi
+
+          echo "PASS: Baseline = run 37607447583."
+          echo "PASS: Commit = $ACTUAL."
+
+      # ============================================================
+      # 2. JAVA 17
+      # ============================================================
+      - name: Setup Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      # ============================================================
+      # 3. VERIFY SOURCE
+      # ============================================================
+      - name: Verify Navigation source
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          SRC="v10-source"
+          JAVA_SRC="$SRC/app/src/main/java/com/hieptran/aacast/doudou"
+
+          test -d "$SRC"
+          test -f "$SRC/gradlew"
+          test -f "$SRC/app/build.gradle"
+          test -f "$SRC/app/src/main/AndroidManifest.xml"
+
+          test -f "$JAVA_SRC/NavigationMapView.java"
+          test -f "$JAVA_SRC/V10CarActivity.java"
+          test -f "$JAVA_SRC/V10LauncherActivity.java"
+
+          echo "PASS: Navigation source exists."
+          echo "PASS: NavigationMapView exists."
+          echo "PASS: V10CarActivity exists."
+          echo "PASS: V10LauncherActivity exists."
+
+      # ============================================================
+      # 4. LOCK NAVIGATION CORE
+      # ============================================================
+      - name: Lock NavigationMapView CORE
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          FILE="v10-source/app/src/main/java/com/hieptran/aacast/doudou/NavigationMapView.java"
+
+          BEFORE="$(sha256sum "$FILE" | awk '{print $1}')"
+
+          echo "NavigationMapView baseline SHA256:"
+          echo "$BEFORE"
+
+          echo "$BEFORE  $FILE" > /tmp/navigation_core.sha256
+
+          grep -Fq "class NavigationMapView" "$FILE"
+          grep -Fq "MapLibre.getInstance" "$FILE"
+          grep -Fq "https://tiles.openfreemap.org/styles/liberty" "$FILE"
+          grep -Fq "nominatim.openstreetmap.org" "$FILE"
+          grep -Fq "SpeechRecognizer" "$FILE"
+          grep -Fq '"vi-VN"' "$FILE"
+
+          grep -Fq "public void zoomIn()" "$FILE"
+          grep -Fq "public void zoomOut()" "$FILE"
+          grep -Fq "public void recenter()" "$FILE"
+
+          grep -Fq "public void onHostResume()" "$FILE"
+          grep -Fq "public void onHostPause()" "$FILE"
+          grep -Fq "public void onHostDestroy()" "$FILE"
+
+          echo "PASS: Navigation CORE locked."
+
+      # ============================================================
+      # 5. VERIFY ANDROID AUTO HOST
+      # ============================================================
+      - name: Verify Android Auto host
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          FILE="v10-source/app/src/main/java/com/hieptran/aacast/doudou/V10CarActivity.java"
+
+          grep -Fq "public final class V10CarActivity" "$FILE"
+          grep -Fq "extends CarActivity" "$FILE"
+          grep -Fq "private NavigationMapView navigationMap;" "$FILE"
+
+          echo "PASS: V10CarActivity is Android Auto host."
+
+      # ============================================================
+      # 6. CREATE CANONICAL NAVIGATION PRESENTATION
+      #
+      # IMPORTANT:
+      # This is the SAME Presentation Layer for AA and Phone.
+      #
+      # ANDROID_AUTO = canonical presentation
+      # PHONE_SUBSET = selected subset of canonical presentation
+      # ============================================================
+      - name: Create canonical NavigationPresentationView
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          FILE="v10-source/app/src/main/java/com/hieptran/aacast/doudou/NavigationPresentationView.java"
+
+          cat > "$FILE" <<'JAVA'
+          package com.carassistant.v10;
+
+          import android.content.Context;
+          import android.graphics.Color;
+          import android.graphics.Typeface;
+          import android.graphics.drawable.GradientDrawable;
+          import android.view.Gravity;
+          import android.view.View;
+          import android.widget.FrameLayout;
+          import android.widget.LinearLayout;
+          import android.widget.TextView;
+
+          /**
+           * Canonical Navigation Presentation Layer.
+           *
+           * Android Auto is the primary presentation target.
+           *
+           * PHONE_SUBSET exposes a selected subset of the same
+           * Presentation Layer on the phone.
+           *
+           * NavigationMapView remains the Navigation CORE.
+           */
+          public final class NavigationPresentationView
+                  extends FrameLayout {
+
+              public enum Mode {
+                  ANDROID_AUTO,
+                  PHONE_SUBSET
+              }
+
+              private NavigationMapView navigationMap;
+
+              private final Mode mode;
+
+              private TextView routeStatus;
+              private TextView gpsStatus;
+              private TextView title;
+
+              private LinearLayout topBar;
+              private LinearLayout controls;
+              private LinearLayout bottomBar;
+
+              public NavigationPresentationView(
+                      Context context,
+                      Mode mode) {
+
+                  super(context);
+
+                  this.mode = mode;
+
+                  setClickable(false);
+                  setFocusable(false);
+
+                  buildPresentation();
+
+                  applyMode();
+              }
+
+              public void setNavigationMap(
+                      NavigationMapView map) {
+
+                  navigationMap = map;
+              }
+
+              public Mode getMode() {
+
+                  return mode;
+              }
+
+              public void setRouteStatus(
+                      String status) {
+
+                  if (routeStatus == null) {
+                      return;
+                  }
+
+                  routeStatus.setText(
+                          status == null
+                                  ? ""
+                                  : status);
+              }
+
+              public void setGpsStatus(
+                      String status) {
+
+                  if (gpsStatus == null) {
+                      return;
+                  }
+
+                  gpsStatus.setText(
+                          status == null
+                                  ? ""
+                                  : status);
+              }
+
+              /**
+               * PHONE_SUBSET currently exposes:
+               *
+               * - title
+               * - GPS status
+               * - map controls
+               * - route status
+               *
+               * The actual Navigation CORE remains shared.
+               */
+              private void applyMode() {
+
+                  if (mode == Mode.ANDROID_AUTO) {
+                      return;
+                  }
+
+                  if (mode == Mode.PHONE_SUBSET) {
+                      return;
+                  }
+              }
+
+              private void buildPresentation() {
+
+                  // =================================================
+                  // TOP BAR
+                  // =================================================
+
+                  topBar =
+                          new LinearLayout(getContext());
+
+                  topBar.setOrientation(
+                          LinearLayout.HORIZONTAL);
+
+                  topBar.setGravity(
+                          Gravity.CENTER_VERTICAL);
+
+                  topBar.setPadding(
+                          dp(16),
+                          dp(8),
+                          dp(16),
+                          dp(8));
+
+                  topBar.setBackground(
+                          background(
+                                  Color.argb(
+                                          205,
+                                          10,
+                                          16,
+                                          22),
+                                  dp(16)));
+
+                  title =
+                          text(
+                                  mode == Mode.ANDROID_AUTO
+                                          ? "CAR ASSISTANT"
+                                          : "Bản đồ điều hướng",
+                                  16,
+                                  Color.WHITE);
+
+                  title.setTypeface(
+                          Typeface.DEFAULT,
+                          Typeface.BOLD);
+
+                  topBar.addView(
+                          title,
+                          new LinearLayout.LayoutParams(
+                                  0,
+                                  -1,
+                                  1f));
+
+                  gpsStatus =
+                          text(
+                                  "GPS",
+                                  12,
+                                  Color.WHITE);
+
+                  gpsStatus.setGravity(
+                          Gravity.CENTER);
+
+                  topBar.addView(
+                          gpsStatus,
+                          new LinearLayout.LayoutParams(
+                                  dp(70),
+                                  -1));
+
+                  FrameLayout.LayoutParams topParams =
+                          new FrameLayout.LayoutParams(
+                                  -1,
+                                  dp(54),
+                                  Gravity.TOP);
+
+                  topParams.setMargins(
+                          dp(18),
+                          dp(14),
+                          dp(18),
+                          0);
+
+                  addView(
+                          topBar,
+                          topParams);
+
+                  // =================================================
+                  // RIGHT CONTROLS
+                  // =================================================
+
+                  controls =
+                          new LinearLayout(getContext());
+
+                  controls.setOrientation(
+                          LinearLayout.VERTICAL);
+
+                  controls.setGravity(
+                          Gravity.CENTER);
+
+                  addControl(
+                          controls,
+                          "+",
+                          "Zoom in",
+                          v -> {
+
+                              if (navigationMap != null) {
+                                  navigationMap.zoomIn();
+                              }
+                          });
+
+                  addControl(
+                          controls,
+                          "−",
+                          "Zoom out",
+                          v -> {
+
+                              if (navigationMap != null) {
+                                  navigationMap.zoomOut();
+                              }
+                          });
+
+                  addControl(
+                          controls,
+                          "◎",
+                          "Recenter",
+                          v -> {
+
+                              if (navigationMap != null) {
+                                  navigationMap.recenter();
+                              }
+                          });
+
+                  FrameLayout.LayoutParams controlParams =
+                          new FrameLayout.LayoutParams(
+                                  dp(62),
+                                  -2,
+                                  Gravity.TOP | Gravity.END);
+
+                  controlParams.setMargins(
+                          0,
+                          dp(82),
+                          dp(18),
+                          0);
+
+                  addView(
+                          controls,
+                          controlParams);
+
+                  // =================================================
+                  // BOTTOM ROUTE STATUS
+                  // =================================================
+
+                  bottomBar =
+                          new LinearLayout(getContext());
+
+                  bottomBar.setOrientation(
+                          LinearLayout.VERTICAL);
+
+                  bottomBar.setGravity(
+                          Gravity.CENTER_VERTICAL);
+
+                  bottomBar.setPadding(
+                          dp(16),
+                          dp(8),
+                          dp(16),
+                          dp(8));
+
+                  bottomBar.setBackground(
+                          background(
+                                  Color.argb(
+                                          205,
+                                          10,
+                                          16,
+                                          22),
+                                  dp(16)));
+
+                  routeStatus =
+                          text(
+                                  "Sẵn sàng dẫn đường",
+                                  14,
+                                  Color.WHITE);
+
+                  routeStatus.setGravity(
+                          Gravity.CENTER_VERTICAL);
+
+                  bottomBar.addView(
+                          routeStatus,
+                          new LinearLayout.LayoutParams(
+                                  -1,
+                                  dp(36)));
+
+                  FrameLayout.LayoutParams bottomParams =
+                          new FrameLayout.LayoutParams(
+                                  -1,
+                                  dp(58),
+                                  Gravity.BOTTOM);
+
+                  bottomParams.setMargins(
+                          dp(18),
+                          0,
+                          dp(18),
+                          dp(16));
+
+                  addView(
+                          bottomBar,
+                          bottomParams);
+              }
+
+              private void addControl(
+                      LinearLayout parent,
+                      String label,
+                      String description,
+                      OnClickListener listener) {
+
+                  TextView button =
+                          text(
+                                  label,
+                                  25,
+                                  Color.WHITE);
+
+                  button.setGravity(
+                          Gravity.CENTER);
+
+                  button.setTypeface(
+                          Typeface.DEFAULT,
+                          Typeface.BOLD);
+
+                  button.setContentDescription(
+                          description);
+
+                  button.setClickable(true);
+                  button.setFocusable(true);
+
+                  GradientDrawable bg =
+                          background(
+                                  Color.argb(
+                                          190,
+                                          20,
+                                          30,
+                                          40),
+                                  dp(14));
+
+                  bg.setStroke(
+                          dp(1),
+                          Color.argb(
+                                  150,
+                                  80,
+                                  170,
+                                  230));
+
+                  button.setBackground(bg);
+
+                  button.setOnClickListener(
+                          listener);
+
+                  LinearLayout.LayoutParams params =
+                          new LinearLayout.LayoutParams(
+                                  dp(58),
+                                  dp(58));
+
+                  params.setMargins(
+                          0,
+                          dp(3),
+                          0,
+                          dp(3));
+
+                  parent.addView(
+                          button,
+                          params);
+              }
+
+              private TextView text(
+                      String value,
+                      float size,
+                      int color) {
+
+                  TextView view =
+                          new TextView(getContext());
+
+                  view.setText(value);
+                  view.setTextSize(size);
+                  view.setTextColor(color);
+
+                  return view;
+              }
+
+              private GradientDrawable background(
+                      int color,
+                      float radius) {
+
+                  GradientDrawable drawable =
+                          new GradientDrawable();
+
+                  drawable.setColor(color);
+                  drawable.setCornerRadius(radius);
+
+                  return drawable;
+              }
+
+              private int dp(float value) {
+
+                  return Math.round(
+                          value
+                                  * getResources()
+                                          .getDisplayMetrics()
+                                          .density);
+              }
+          }
+          JAVA
+
+          test -s "$FILE"
+
+          echo "PASS: Canonical NavigationPresentationView created."
+          echo "PASS: ANDROID_AUTO mode exists."
+          echo "PASS: PHONE_SUBSET mode exists."
+
+      # ============================================================
+      # 7. ATTACH CANONICAL PRESENTATION TO ANDROID AUTO
+      # ============================================================
+      - name: Attach canonical Presentation to Android Auto
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          FILE="v10-source/app/src/main/java/com/hieptran/aacast/doudou/V10CarActivity.java"
+
+          python3 - <<'PY'
+          from pathlib import Path
+          import re
+
+          path = Path(
+              "v10-source/app/src/main/java/com/hieptran/aacast/doudou/V10CarActivity.java"
+          )
+
+          s = path.read_text(encoding="utf-8")
+
+          if "private NavigationPresentationView navigationPresentation;" not in s:
+
+              pattern = re.compile(
+                  r"(\s*private\s+NavigationMapView\s+navigationMap\s*;)"
+              )
+
+              match = pattern.search(s)
+
+              if not match:
+                  raise SystemExit(
+                      "ERROR: NavigationMapView field anchor not found."
+                  )
+
+              s = (
+                  s[:match.end()]
+                  + "\n    private NavigationPresentationView navigationPresentation;"
+                  + s[match.end():]
+              )
+
+          if "NavigationPresentationView.Mode.ANDROID_AUTO" not in s:
+
+              pattern = re.compile(
+                  r"(FrameLayout\s+main\s*=\s*new\s+FrameLayout\s*\(\s*this\s*\)\s*;)"
+              )
+
+              match = pattern.search(s)
+
+              if not match:
+                  raise SystemExit(
+                      "ERROR: FrameLayout main anchor not found."
+                  )
+
+              replacement = (
+                  match.group(1)
+                  + "\n\n"
+                  "        navigationPresentation = new NavigationPresentationView("
+                  "\n"
+                  "                this,"
+                  "\n"
+                  "                NavigationPresentationView.Mode.ANDROID_AUTO);"
+                  "\n\n"
+                  "        navigationPresentation.setNavigationMap("
+                  "\n"
+                  "                navigationMap);"
+                  "\n\n"
+                  "        main.addView("
+                  "\n"
+                  "                navigationPresentation,"
+                  "\n"
+                  "                new FrameLayout.LayoutParams(-1, -1));"
+              )
+
+              s = (
+                  s[:match.start()]
+                  + replacement
+                  + s[match.end():]
+              )
+
+          path.write_text(s, encoding="utf-8")
+          PY
+
+          grep -Fq \
+            "NavigationPresentationView.Mode.ANDROID_AUTO" \
+            "$FILE"
+
+          grep -Fq \
+            "navigationPresentation.setNavigationMap" \
+            "$FILE"
+
+          echo "PASS: Canonical Presentation attached to Android Auto."
+
+      # ============================================================
+      # 8. CREATE PHONE ADAPTER
+      #
+      # IMPORTANT:
+      # The adapter does NOT contain Navigation logic.
+      #
+      # It only hosts the canonical Presentation in PHONE_SUBSET mode.
+      # ============================================================
+      - name: Create NavigationPhoneAdapterView
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          FILE="v10-source/app/src/main/java/com/hieptran/aacast/doudou/NavigationPhoneAdapterView.java"
+
+          cat > "$FILE" <<'JAVA'
+          package com.carassistant.v10;
+
+          import android.content.Context;
+          import android.graphics.Color;
+          import android.view.View;
+          import android.widget.FrameLayout;
+
+          /**
+           * Phone Presentation Adapter / Preview.
+           *
+           * IMPORTANT:
+           * - Phone is NOT the source of truth.
+           * - Android Auto Presentation remains canonical.
+           * - This adapter simply exposes the PHONE_SUBSET mode
+           *   of NavigationPresentationView.
+           * - Navigation CORE remains NavigationMapView.
+           */
+          public final class NavigationPhoneAdapterView
+                  extends FrameLayout {
+
+              private NavigationMapView navigationMap;
+
+              private NavigationPresentationView presentationView;
+
+              public NavigationPhoneAdapterView(
+                      Context context) {
+
+                  super(context);
+
+                  setClipChildren(false);
+                  setClipToPadding(false);
+
+                  setBackgroundColor(
+                          Color.TRANSPARENT);
+
+                  presentationView =
+                          new NavigationPresentationView(
+                                  context,
+                                  NavigationPresentationView.Mode.PHONE_SUBSET);
+
+                  addView(
+                          presentationView,
+                          new FrameLayout.LayoutParams(
+                                  -1,
+                                  -1));
+              }
+
+              public void setNavigationMap(
+                      NavigationMapView map) {
+
+                  navigationMap = map;
+
+                  presentationView.setNavigationMap(
+                          map);
+              }
+
+              public NavigationPresentationView
+                      getPresentationView() {
+
+                  return presentationView;
+              }
+
+              public void setRouteStatus(
+                      String status) {
+
+                  presentationView.setRouteStatus(
+                          status);
+              }
+
+              public void setGpsStatus(
+                      String status) {
+
+                  presentationView.setGpsStatus(
+                          status);
+              }
+          }
+          JAVA
+
+          test -s "$FILE"
+
+          grep -Fq \
+            "NavigationPresentationView.Mode.PHONE_SUBSET" \
+            "$FILE"
+
+          grep -Fq \
+            "private NavigationMapView navigationMap;" \
+            "$FILE"
+
+          grep -Fq \
+            "presentationView.setNavigationMap" \
+            "$FILE"
+
+          echo "PASS: Phone Adapter created."
+          echo "PASS: Adapter delegates to canonical Presentation."
+
+      # ============================================================
+      # 9. PATCH PHONE HOST
+      # ============================================================
+      - name: Patch V10LauncherActivity with Phone Adapter
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          python3 <<'PY'
+          from pathlib import Path
+          import re
+
+          path = Path(
+              "v10-source/app/src/main/java/com/hieptran/aacast/doudou/V10LauncherActivity.java"
+          )
+
+          text = path.read_text(encoding="utf-8")
+
+          # --------------------------------------------------------
+          # FRAME LAYOUT IMPORT
+          # --------------------------------------------------------
+          if "import android.widget.FrameLayout;" not in text:
+
+              anchor = (
+                  "import android.view.View;\n"
+                  "import android.widget.GridLayout;"
+              )
+
+              replacement = (
+                  "import android.view.View;\n"
+                  "import android.widget.FrameLayout;\n"
+                  "import android.widget.GridLayout;"
+              )
+
+              if anchor not in text:
+                  raise SystemExit(
+                      "ERROR: FrameLayout import anchor not found."
+                  )
+
+              text = text.replace(
+                  anchor,
+                  replacement,
+                  1
+              )
+
+          # --------------------------------------------------------
+          # ROOT FIELD
+          # --------------------------------------------------------
+          if "private FrameLayout root;" not in text:
+
+              old_root = "    private LinearLayout root;\n"
+
+              if old_root not in text:
+                  raise SystemExit(
+                      "ERROR: root field anchor not found."
+                  )
+
+              text = text.replace(
+                  old_root,
+                  "    private FrameLayout root;\n",
+                  1
+              )
+
+          # --------------------------------------------------------
+          # NAVIGATION FIELDS
+          # --------------------------------------------------------
+          if "private NavigationMapView navigationMap;" not in text:
+
+              anchor = "    private LinearLayout dock;\n"
+
+              replacement = (
+                  "    private LinearLayout dock;\n\n"
+                  "    // Phone Navigation Adapter\n"
+                  "    private NavigationMapView navigationMap;\n"
+                  "    private NavigationPhoneAdapterView navigationPhoneAdapter;\n"
+              )
+
+              if anchor not in text:
+                  raise SystemExit(
+                      "ERROR: dock field anchor not found."
+                  )
+
+              text = text.replace(
+                  anchor,
+                  replacement,
+                  1
+              )
+
+          # --------------------------------------------------------
+          # LIFECYCLE
+          # --------------------------------------------------------
+          if "navigationMap.onHostResume()" not in text:
+
+              anchor = (
+                  "    @Override\n"
+                  "    protected void onDestroy() {\n\n"
+                  "        handler.removeCallbacks(\n"
+                  "                clockTicker);\n\n"
+                  "        super.onDestroy();\n"
+                  "    }\n"
+              )
+
+              replacement = (
+                  "    @Override\n"
+                  "    protected void onResume() {\n\n"
+                  "        super.onResume();\n\n"
+                  "        if (navigationMap != null) {\n"
+                  "            navigationMap.onHostResume();\n"
+                  "        }\n"
+                  "    }\n\n"
+                  "    @Override\n"
+                  "    protected void onPause() {\n\n"
+                  "        if (navigationMap != null) {\n"
+                  "            navigationMap.onHostPause();\n"
+                  "        }\n\n"
+                  "        super.onPause();\n"
+                  "    }\n\n"
+                  "    @Override\n"
+                  "    protected void onDestroy() {\n\n"
+                  "        handler.removeCallbacks(\n"
+                  "                clockTicker);\n\n"
+                  "        if (navigationMap != null) {\n"
+                  "            navigationMap.onHostDestroy();\n"
+                  "        }\n\n"
+                  "        super.onDestroy();\n"
+                  "    }\n"
+              )
+
+              if anchor not in text:
+                  raise SystemExit(
+                      "ERROR: onDestroy anchor not found."
+                  )
+
+              text = text.replace(
+                  anchor,
+                  replacement,
+                  1
+              )
+
+          # --------------------------------------------------------
+          # REPLACE buildUi()
+          # --------------------------------------------------------
+          pattern = re.compile(
+              r"    private void buildUi\(\) \{.*?"
+              r"        setContentView\(root\);\n"
+              r"    \}",
+              re.DOTALL
+          )
+
+          match = pattern.search(text)
+
+          if not match:
+              raise SystemExit(
+                  "ERROR: V10LauncherActivity buildUi() not found."
+              )
+
+          new_build_ui = """    private void buildUi() {
+
+          // ======================================================
+          // PHONE ROOT
+          // ======================================================
+
+          root =
+                  new FrameLayout(this);
+
+          root.setBackgroundColor(
+                  Color.rgb(
+                          7,
+                          9,
+                          12));
+
+          // ======================================================
+          // REAL NAVIGATION CORE
+          // ======================================================
+
+          navigationMap =
+                  new NavigationMapView(this);
+
+          root.addView(
+                  navigationMap,
+                  new FrameLayout.LayoutParams(
+                          -1,
+                          -1));
+
+          // ======================================================
+          // CANONICAL PRESENTATION
+          // THROUGH PHONE ADAPTER
+          // ======================================================
+
+          navigationPhoneAdapter =
+                  new NavigationPhoneAdapterView(
+                          this);
+
+          navigationPhoneAdapter.setNavigationMap(
+                  navigationMap);
+
+          root.addView(
+                  navigationPhoneAdapter,
+                  new FrameLayout.LayoutParams(
+                          -1,
+                          -1));
+
+          // ======================================================
+          // EXISTING LAUNCHER UI
+          // ======================================================
+
+          dashboard =
+                  new LinearLayout(this);
+
+          dashboard.setOrientation(
+                  LinearLayout.VERTICAL);
+
+          dashboard.setVisibility(
+                  View.GONE);
+
+          buildDashboard();
+
+          buildAppPanel();
+
+          if (appPanel != null) {
+              appPanel.setVisibility(
+                      View.GONE);
+          }
+
+          setContentView(root);
+          }"""
+
+          text = (
+              text[:match.start()]
+              + new_build_ui
+              + text[match.end():]
+          )
+
+          path.write_text(text)
+
+          print(
+              "PASS: V10LauncherActivity now hosts Phone Adapter."
+          )
+          PY
+
+      # ============================================================
+      # 10. VERIFY PHONE ADAPTER HOST
+      # ============================================================
+      - name: Verify Phone Adapter integration
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          FILE="v10-source/app/src/main/java/com/hieptran/aacast/doudou/V10LauncherActivity.java"
+
+          grep -Fq \
+            "import android.widget.FrameLayout;" \
+            "$FILE"
+
+          grep -Fq \
+            "private FrameLayout root;" \
+            "$FILE"
+
+          grep -Fq \
+            "private NavigationMapView navigationMap;" \
+            "$FILE"
+
+          grep -Fq \
+            "private NavigationPhoneAdapterView navigationPhoneAdapter;" \
+            "$FILE"
+
+          grep -Fq \
+            "new NavigationMapView(this)" \
+            "$FILE"
+
+          grep -Fq \
+            "new NavigationPhoneAdapterView" \
+            "$FILE"
+
+          grep -Fq \
+            "navigationPhoneAdapter.setNavigationMap" \
+            "$FILE"
+
+          grep -Fq \
+            "navigationMap.onHostResume()" \
+            "$FILE"
+
+          grep -Fq \
+            "navigationMap.onHostPause()" \
+            "$FILE"
+
+          grep -Fq \
+            "navigationMap.onHostDestroy()" \
+            "$FILE"
+
+          echo "PASS: Phone uses real NavigationMapView."
+          echo "PASS: Phone uses NavigationPhoneAdapterView."
+          echo "PASS: Phone adapter delegates to canonical Presentation."
+
+      # ============================================================
+      # 11. VERIFY AA DOES NOT USE PHONE ADAPTER
+      # ============================================================
+      - name: Verify Android Auto remains canonical
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          FILE="v10-source/app/src/main/java/com/hieptran/aacast/doudou/V10CarActivity.java"
+
+          if grep -Fq \
+            "NavigationPhoneAdapterView" \
+            "$FILE"; then
+
+            echo "ERROR: Android Auto host contains Phone Adapter."
+            exit 1
+          fi
+
+          grep -Fq \
+            "NavigationPresentationView.Mode.ANDROID_AUTO" \
+            "$FILE"
+
+          grep -Fq \
+            "navigationPresentation.setNavigationMap" \
+            "$FILE"
+
+          echo "PASS: Android Auto uses canonical Presentation."
+          echo "PASS: Phone Adapter is not attached to AA."
+
+      # ============================================================
+      # 12. VERIFY PRESENTATION DOES NOT CONTAIN NAVIGATION CORE
+      # ============================================================
+      - name: Verify Presentation has no duplicated Navigation CORE
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          FILE="v10-source/app/src/main/java/com/hieptran/aacast/doudou/NavigationPresentationView.java"
+
+          if grep -Eq \
+            "MapLibre|SpeechRecognizer|LocationManager|FusedLocation|Nominatim|OkHttp|Retrofit" \
+            "$FILE"; then
+
+            echo "ERROR: Navigation CORE/provider detected in Presentation."
+            exit 1
+          fi
+
+          grep -Fq \
+            "private NavigationMapView navigationMap;" \
+            "$FILE"
+
+          grep -Fq \
+            "navigationMap.zoomIn();" \
+            "$FILE"
+
+          grep -Fq \
+            "navigationMap.zoomOut();" \
+            "$FILE"
+
+          grep -Fq \
+            "navigationMap.recenter();" \
+            "$FILE"
+
+          echo "PASS: Presentation contains UI/delegation only."
+
+      # ============================================================
+      # 13. VERIFY PHONE ADAPTER DOES NOT CONTAIN NAVIGATION CORE
+      # ============================================================
+      - name: Verify Phone Adapter is adapter only
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          FILE="v10-source/app/src/main/java/com/hieptran/aacast/doudou/NavigationPhoneAdapterView.java"
+
+          if grep -Eq \
+            "MapLibre|SpeechRecognizer|LocationManager|FusedLocation|Nominatim|OkHttp|Retrofit" \
+            "$FILE"; then
+
+            echo "ERROR: Navigation CORE/provider detected in Phone Adapter."
+            exit 1
+          fi
+
+          grep -Fq \
+            "NavigationPresentationView.Mode.PHONE_SUBSET" \
+            "$FILE"
+
+          grep -Fq \
+            "presentationView.setNavigationMap" \
+            "$FILE"
+
+          echo "PASS: Phone Adapter contains no Navigation engine/provider."
+          echo "PASS: Phone Adapter only delegates to canonical Presentation."
+
+      # ============================================================
+      # 14. VERIFY NavigationMapView IS BYTE-IDENTICAL
+      # ============================================================
+      - name: Verify NavigationMapView remains byte-identical
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          FILE="v10-source/app/src/main/java/com/hieptran/aacast/doudou/NavigationMapView.java"
+
+          AFTER="$(sha256sum "$FILE" | awk '{print $1}')"
+          BEFORE="$(awk '{print $1}' /tmp/navigation_core.sha256)"
+
+          echo "NavigationMapView BEFORE: $BEFORE"
+          echo "NavigationMapView AFTER:  $AFTER"
+
+          if [ "$BEFORE" != "$AFTER" ]; then
+            echo "ERROR: NavigationMapView changed."
+            exit 1
+          fi
+
+          echo "PASS: NavigationMapView unchanged."
+
+      # ============================================================
+      # 15. VERIFY PROJECTION / PERSISTENCE CORE
+      # ============================================================
+      - name: Verify existing Projection and Persistence CORE
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          SRC="v10-source/app/src/main/java/com/hieptran/aacast/doudou"
+
+          test -f "$SRC/V10ProjectionSession.java"
+          test -f "$SRC/V10DisplayController.java"
+          test -f "$SRC/V10SurfaceManager.java"
+          test -f "$SRC/V10TaskSession.java"
+          test -f "$SRC/V10SessionStore.java"
+
+          echo "PASS: Existing Projection/Persistence CORE preserved."
+
+      # ============================================================
+      # 16. VERIFY PATCH SCOPE
+      # ============================================================
+      - name: Verify patch scope
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          echo "Changed files:"
+          git status --short
+
+          if git status --short | grep -E \
+            "NavigationMapView.java"; then
+
+            echo "ERROR: NavigationMapView was modified."
+            exit 1
+          fi
+
+          echo "PASS: Navigation CORE file untouched."
+
+      # ============================================================
+      # 17. VERIFY GRADLE
+      # ============================================================
+      - name: Verify Gradle configuration
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          GRADLE="v10-source/app/build.gradle"
+
+          grep -Fq \
+            "namespace 'com.carassistant.v10'" \
+            "$GRADLE"
+
+          grep -Fq \
+            'applicationId "com.carassistant.v10"' \
+            "$GRADLE"
+
+          grep -Fq \
+            "compileSdk 36" \
+            "$GRADLE"
+
+          grep -Fq \
+            "minSdk 29" \
+            "$GRADLE"
+
+          grep -Fq \
+            "targetSdk 36" \
+            "$GRADLE"
+
+          grep -Fq \
+            "JavaVersion.VERSION_17" \
+            "$GRADLE"
+
+          grep -Fq \
+            "org.maplibre.gl:android-sdk:11.11.0" \
+            "$GRADLE"
+
+          echo "PASS: Gradle configuration verified."
+
+      # ============================================================
+      # 18. COMPILE
+      # ============================================================
+      - name: Compile Phase 2
+        working-directory: v10-source
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          chmod +x ./gradlew
+
+          ./gradlew \
+            --no-daemon \
+            :app:compileDebugJavaWithJavac \
+            --stacktrace
+
+          echo "PASS: Phase 2 Java compilation."
+
+      # ============================================================
+      # 19. ASSEMBLE APK
+      # ============================================================
+      - name: Assemble Phase 2 APK
+        working-directory: v10-source
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          chmod +x ./gradlew
+
+          ./gradlew \
+            --no-daemon \
+            :app:assembleDebug \
+            --stacktrace
+
+          echo "PASS: Phase 2 APK assembled."
+
+      # ============================================================
+      # 20. VERIFY APK
+      # ============================================================
+      - name: Verify Phase 2 APK
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          APK="v10-source/app/build/outputs/apk/debug/app-debug.apk"
+
+          test -s "$APK"
+
+          cp "$APK" \
+            CarAssistant-Navigation-Phase2-Phone-Adapter.apk
+
+          sha256sum \
+            CarAssistant-Navigation-Phase2-Phone-Adapter.apk \
+            > CarAssistant-Navigation-Phase2-Phone-Adapter.sha256
+
+          echo "=============================================="
+          echo "NAVIGATION PHASE 2 PHONE ADAPTER APK"
+          echo "=============================================="
+
+          ls -lh \
+            CarAssistant-Navigation-Phase2-Phone-Adapter.apk
+
+          echo ""
+          echo "SHA256:"
+          cat \
+            CarAssistant-Navigation-Phase2-Phone-Adapter.sha256
+
+          echo ""
+          echo "PASS: Phase 2 APK ready."
+
+      # ============================================================
+      # 21. UPLOAD APK
+      # ============================================================
+      - name: Upload Phase 2 APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: CarAssistant-Navigation-Phase2-Phone-Adapter
+          path: |
+            CarAssistant-Navigation-Phase2-Phone-Adapter.apk
+            CarAssistant-Navigation-Phase2-Phone-Adapter.sha256
+          if-no-files-found: error
+          retention-days: 14
+
+      # ============================================================
+      # 22. FINAL ARCHITECTURE CHECK
+      # ============================================================
+      - name: Final Phase 2 architecture check
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          EXPECTED="d69dc922696a4876dbc1000154ce230b220a0ecd"
+          ACTUAL="$(git rev-parse HEAD)"
+
+          if [ "$ACTUAL" != "$EXPECTED" ]; then
+            echo "ERROR: Immutable baseline changed."
+            exit 1
+          fi
+
+          echo "=============================================="
+          echo "PHASE 2 FINAL RESULT"
+          echo "=============================================="
+          echo ""
+          echo "PASS: Immutable Navigation baseline preserved."
+          echo "PASS: NavigationMapView preserved."
+          echo "PASS: Android Auto Presentation is canonical."
+          echo "PASS: Phone uses NavigationPhoneAdapterView."
+          echo "PASS: Phone uses PHONE_SUBSET."
+          echo "PASS: No duplicated Navigation engine."
+          echo "PASS: Java compilation."
+          echo "PASS: APK build."
+          echo ""
+          echo "ARCHITECTURE:"
+          echo ""
+          echo "NavigationMapView"
+          echo "       |"
+          echo "       v"
+          echo "NavigationPresentationView"
+          echo "   /             \\"
+          echo "AA canonical     PHONE_SUBSET"
+          echo "     |                |"
+          echo "V10CarActivity   Phone Adapter"
+          echo ""
+          echo "=============================================="
