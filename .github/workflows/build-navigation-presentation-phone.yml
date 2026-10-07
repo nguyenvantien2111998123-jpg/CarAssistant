@@ -15,8 +15,10 @@ jobs:
 
       # ============================================================
       # 1. CHECKOUT EXACT IMMUTABLE BASELINE
-      #    Run: 37607447583
-      #    Commit: d69dc922696a4876dbc1000154ce230b220a0ecd
+      #
+      # Run: 37607447583
+      # Commit:
+      # d69dc922696a4876dbc1000154ce230b220a0ecd
       # ============================================================
       - name: Checkout baseline 37607447583
         uses: actions/checkout@v4
@@ -44,10 +46,10 @@ jobs:
           EXPECTED="d69dc922696a4876dbc1000154ce230b220a0ecd"
           ACTUAL="$(git rev-parse HEAD)"
 
-          echo "Expected:"
+          echo "Expected baseline:"
           echo "$EXPECTED"
 
-          echo "Actual:"
+          echo "Actual checkout:"
           echo "$ACTUAL"
 
           if [ "$ACTUAL" != "$EXPECTED" ]; then
@@ -58,7 +60,7 @@ jobs:
           echo "PASS: Exact baseline 37607447583."
 
       # ============================================================
-      # 4. VERIFY SOURCE STRUCTURE
+      # 4. VERIFY REQUIRED SOURCE
       # ============================================================
       - name: Verify baseline source
         shell: bash
@@ -84,7 +86,7 @@ jobs:
       # ============================================================
       # 5. VERIFY PHONE ACTIVITY
       # ============================================================
-      - name: Verify V10LauncherActivity is phone launcher
+      - name: Verify V10LauncherActivity
         shell: bash
         run: |
           set -euo pipefail
@@ -101,12 +103,14 @@ jobs:
           grep -Fq '<action android:name="android.intent.action.MAIN" />' "$MANIFEST"
           grep -Fq '<category android:name="android.intent.category.LAUNCHER" />' "$MANIFEST"
 
-          echo "PASS: V10LauncherActivity is the phone launcher Activity."
+          echo "PASS: V10LauncherActivity is the phone launcher."
 
       # ============================================================
-      # 6. VERIFY ANDROID AUTO ACTIVITY IS NOT TARGET
+      # 6. VERIFY ANDROID AUTO ACTIVITY
+      #
+      # DO NOT PATCH THIS ACTIVITY.
       # ============================================================
-      - name: Verify V10CarActivity remains separate
+      - name: Verify V10CarActivity
         shell: bash
         run: |
           set -euo pipefail
@@ -116,13 +120,11 @@ jobs:
           grep -Fq "package com.carassistant.v10;" "$FILE"
           grep -Fq "public final class V10CarActivity" "$FILE"
           grep -Fq "extends CarActivity" "$FILE"
-          grep -Fq "private NavigationMapView navigationMap;" "$FILE"
 
           echo "PASS: V10CarActivity remains Android Auto host."
-          echo "PASS: Phone patch will not target V10CarActivity."
 
       # ============================================================
-      # 7. VERIFY MAPLIBRE / LOCATION
+      # 7. VERIFY NAVIGATION DEPENDENCIES
       # ============================================================
       - name: Verify Navigation dependencies
         shell: bash
@@ -144,7 +146,7 @@ jobs:
       # ============================================================
       # 8. LOCK NAVIGATIONMAPVIEW BEFORE PATCH
       # ============================================================
-      - name: Lock NavigationMapView before patch
+      - name: Lock NavigationMapView baseline
         shell: bash
         run: |
           set -euo pipefail
@@ -161,9 +163,11 @@ jobs:
           grep -Fq "getLocationComponent" "$FILE"
 
           grep -Fq "https://tiles.openfreemap.org/styles/liberty" "$FILE"
+
           grep -Fq "nominatim.openstreetmap.org" "$FILE"
 
           grep -Fq "SpeechRecognizer" "$FILE"
+          grep -Fq 'RecognizerIntent.LANGUAGE_MODEL_FREE_FORM' "$FILE"
           grep -Fq '"vi-VN"' "$FILE"
           grep -Fq "VOICE_SILENCE_TIMEOUT_MS = 5000L" "$FILE"
           grep -Fq "playVoiceStartTone" "$FILE"
@@ -179,14 +183,18 @@ jobs:
           echo "PASS: NavigationMapView baseline locked."
 
       # ============================================================
-      # 9. CREATE PRESENTATION LAYER
+      # 9. CREATE NavigationOverlayView
+      #
+      # IMPORTANT:
+      # Use the REAL NavigationMapView.
+      # No fake NavigationMap interface.
       # ============================================================
-      - name: Create NavigationPresentationLayer
+      - name: Create NavigationOverlayView
         shell: bash
         run: |
           set -euo pipefail
 
-          FILE="v10-source/app/src/main/java/com/hieptran/aacast/doudou/NavigationPresentationLayer.java"
+          FILE="v10-source/app/src/main/java/com/hieptran/aacast/doudou/NavigationOverlayView.java"
 
           cat > "$FILE" <<'JAVA'
           package com.carassistant.v10;
@@ -195,34 +203,40 @@ jobs:
           import android.graphics.Color;
           import android.graphics.Typeface;
           import android.graphics.drawable.GradientDrawable;
+          import android.util.AttributeSet;
           import android.view.Gravity;
           import android.widget.FrameLayout;
           import android.widget.LinearLayout;
           import android.widget.TextView;
 
           /**
-           * Phone Navigation Presentation Layer.
+           * Navigation Presentation / Overlay Layer.
            *
-           * IMPORTANT:
-           * This class is UI/presentation only.
+           * PHONE ONLY.
            *
-           * NavigationMapView remains the existing navigation core.
-           * No MapLibre, GPS, Nominatim, SpeechRecognizer or routing
-           * engine is created here.
+           * This class contains UI only.
+           *
+           * NavigationMapView remains the Navigation CORE.
+           * No MapLibre, GPS, Nominatim, SpeechRecognizer,
+           * routing engine or location provider is created here.
            */
-          public final class NavigationPresentationLayer
-                  extends FrameLayout {
+          public class NavigationOverlayView extends FrameLayout {
 
-              private final NavigationMapView navigationMap;
+              private NavigationMapView navigationMap;
 
-              public NavigationPresentationLayer(
-                      Context context,
-                      NavigationMapView navigationMap) {
-
+              public NavigationOverlayView(Context context) {
                   super(context);
+                  init();
+              }
 
-                  this.navigationMap = navigationMap;
+              public NavigationOverlayView(
+                      Context context,
+                      AttributeSet attrs) {
+                  super(context, attrs);
+                  init();
+              }
 
+              private void init() {
                   setClipChildren(false);
                   setClipToPadding(false);
                   setBackgroundColor(Color.TRANSPARENT);
@@ -232,74 +246,15 @@ jobs:
                   buildBottomBar();
               }
 
-              private int dp(int value) {
-                  return (int) (
-                          value
-                                  * getResources()
-                                          .getDisplayMetrics()
-                                          .density
-                          + 0.5f);
+              public void setNavigationMap(
+                      NavigationMapView map) {
+
+                  this.navigationMap = map;
               }
 
-              private GradientDrawable roundedBackground(
-                      int color,
-                      int radiusDp) {
-
-                  GradientDrawable drawable =
-                          new GradientDrawable();
-
-                  drawable.setColor(color);
-
-                  drawable.setCornerRadius(
-                          dp(radiusDp));
-
-                  drawable.setStroke(
-                          dp(1),
-                          Color.argb(
-                                  90,
-                                  255,
-                                  255,
-                                  255));
-
-                  return drawable;
-              }
-
-              private TextView createButton(
-                      String text,
-                      String description) {
-
-                  TextView button =
-                          new TextView(getContext());
-
-                  button.setText(text);
-                  button.setTextColor(Color.WHITE);
-                  button.setTextSize(20);
-
-                  button.setTypeface(
-                          Typeface.DEFAULT,
-                          Typeface.BOLD);
-
-                  button.setGravity(
-                          Gravity.CENTER);
-
-                  button.setContentDescription(
-                          description);
-
-                  button.setClickable(true);
-                  button.setFocusable(true);
-
-                  button.setBackground(
-                          roundedBackground(
-                                  Color.argb(
-                                          175,
-                                          20,
-                                          28,
-                                          36),
-                                  14));
-
-                  return button;
-              }
-
+              // ====================================================
+              // TOP BAR
+              // ====================================================
               private void buildTopBar() {
 
                   LinearLayout bar =
@@ -313,14 +268,14 @@ jobs:
 
                   bar.setPadding(
                           dp(12),
-                          dp(6),
+                          dp(8),
                           dp(12),
-                          dp(6));
+                          dp(8));
 
                   bar.setBackground(
                           roundedBackground(
                                   Color.argb(
-                                          190,
+                                          175,
                                           12,
                                           18,
                                           24),
@@ -329,9 +284,13 @@ jobs:
                   TextView title =
                           new TextView(getContext());
 
-                  title.setText("NAVIGATION");
-                  title.setTextColor(Color.WHITE);
-                  title.setTextSize(15);
+                  title.setText(
+                          "Bản đồ điều hướng");
+
+                  title.setTextColor(
+                          Color.WHITE);
+
+                  title.setTextSize(16);
 
                   title.setTypeface(
                           Typeface.DEFAULT,
@@ -351,9 +310,14 @@ jobs:
                           new TextView(getContext());
 
                   status.setText("GPS");
-                  status.setTextColor(Color.WHITE);
+
+                  status.setTextColor(
+                          Color.WHITE);
+
                   status.setTextSize(12);
-                  status.setGravity(Gravity.CENTER);
+
+                  status.setGravity(
+                          Gravity.CENTER);
 
                   bar.addView(
                           status,
@@ -376,6 +340,9 @@ jobs:
                   addView(bar, params);
               }
 
+              // ====================================================
+              // SIDE CONTROLS
+              // ====================================================
               private void buildSideControls() {
 
                   LinearLayout controls =
@@ -408,7 +375,12 @@ jobs:
                                   "Phóng to bản đồ");
 
                   zoomIn.setOnClickListener(
-                          v -> navigationMap.zoomIn());
+                          v -> {
+
+                              if (navigationMap != null) {
+                                  navigationMap.zoomIn();
+                              }
+                          });
 
                   TextView zoomOut =
                           createButton(
@@ -416,7 +388,12 @@ jobs:
                                   "Thu nhỏ bản đồ");
 
                   zoomOut.setOnClickListener(
-                          v -> navigationMap.zoomOut());
+                          v -> {
+
+                              if (navigationMap != null) {
+                                  navigationMap.zoomOut();
+                              }
+                          });
 
                   TextView recenter =
                           createButton(
@@ -424,7 +401,12 @@ jobs:
                                   "Đưa bản đồ về vị trí hiện tại");
 
                   recenter.setOnClickListener(
-                          v -> navigationMap.recenter());
+                          v -> {
+
+                              if (navigationMap != null) {
+                                  navigationMap.recenter();
+                              }
+                          });
 
                   controls.addView(
                           zoomIn,
@@ -457,9 +439,14 @@ jobs:
                           dp(8),
                           0);
 
-                  addView(controls, params);
+                  addView(
+                          controls,
+                          params);
               }
 
+              // ====================================================
+              // BOTTOM BAR
+              // ====================================================
               private void buildBottomBar() {
 
                   LinearLayout bar =
@@ -472,10 +459,10 @@ jobs:
                           Gravity.CENTER);
 
                   bar.setPadding(
-                          dp(6),
-                          dp(4),
-                          dp(6),
-                          dp(4));
+                          dp(12),
+                          dp(8),
+                          dp(12),
+                          dp(8));
 
                   bar.setBackground(
                           roundedBackground(
@@ -486,25 +473,30 @@ jobs:
                                           24),
                                   16));
 
-                  addBottomItem(
-                          bar,
-                          "MAP",
-                          "Bản đồ");
+                  TextView infoText =
+                          new TextView(getContext());
 
-                  addBottomItem(
-                          bar,
-                          "SEARCH",
-                          "Tìm kiếm");
+                  infoText.setText(
+                          "Đang tìm tuyến đường tốt nhất...");
 
-                  addBottomItem(
-                          bar,
-                          "ROUTE",
-                          "Tuyến đường");
+                  infoText.setTextColor(
+                          Color.WHITE);
+
+                  infoText.setTextSize(14);
+
+                  infoText.setGravity(
+                          Gravity.CENTER);
+
+                  bar.addView(
+                          infoText,
+                          new LinearLayout.LayoutParams(
+                                  LayoutParams.MATCH_PARENT,
+                                  LayoutParams.WRAP_CONTENT));
 
                   FrameLayout.LayoutParams params =
                           new FrameLayout.LayoutParams(
                                   LayoutParams.MATCH_PARENT,
-                                  dp(54),
+                                  dp(60),
                                   Gravity.BOTTOM);
 
                   params.setMargins(
@@ -513,59 +505,112 @@ jobs:
                           dp(8),
                           dp(8));
 
-                  addView(bar, params);
+                  addView(
+                          bar,
+                          params);
               }
 
-              private void addBottomItem(
-                      LinearLayout parent,
-                      String label,
-                      String description) {
+              // ====================================================
+              // BUTTON
+              // ====================================================
+              private TextView createButton(
+                      String symbol,
+                      String tooltip) {
 
-                  TextView item =
+                  TextView button =
                           new TextView(getContext());
 
-                  item.setText(label);
-                  item.setTextColor(Color.WHITE);
-                  item.setTextSize(12);
-                  item.setGravity(Gravity.CENTER);
-                  item.setContentDescription(description);
+                  button.setText(symbol);
 
-                  parent.addView(
-                          item,
-                          new LinearLayout.LayoutParams(
-                                  0,
-                                  LayoutParams.MATCH_PARENT,
-                                  1f));
+                  button.setTextColor(
+                          Color.WHITE);
+
+                  button.setTextSize(20);
+
+                  button.setGravity(
+                          Gravity.CENTER);
+
+                  button.setContentDescription(
+                          tooltip);
+
+                  button.setFocusable(true);
+
+                  button.setClickable(true);
+
+                  button.setBackground(
+                          roundedBackground(
+                                  Color.argb(
+                                          150,
+                                          20,
+                                          28,
+                                          36),
+                                  12));
+
+                  return button;
+              }
+
+              // ====================================================
+              // BACKGROUND
+              // ====================================================
+              private GradientDrawable roundedBackground(
+                      int color,
+                      float cornerRadiusDp) {
+
+                  GradientDrawable drawable =
+                          new GradientDrawable();
+
+                  drawable.setColor(color);
+
+                  drawable.setCornerRadius(
+                          dp((int) cornerRadiusDp));
+
+                  return drawable;
+              }
+
+              // ====================================================
+              // DP
+              // ====================================================
+              private int dp(int value) {
+
+                  return (int) (
+                          value
+                                  * getResources()
+                                          .getDisplayMetrics()
+                                          .density
+                          + 0.5f);
               }
           }
           JAVA
 
           grep -Fq "package com.carassistant.v10;" "$FILE"
-          grep -Fq "class NavigationPresentationLayer" "$FILE"
-          grep -Fq "NavigationMapView navigationMap" "$FILE"
+          grep -Fq "class NavigationOverlayView" "$FILE"
+          grep -Fq "private NavigationMapView navigationMap;" "$FILE"
+          grep -Fq "setNavigationMap" "$FILE"
           grep -Fq "navigationMap.zoomIn()" "$FILE"
           grep -Fq "navigationMap.zoomOut()" "$FILE"
           grep -Fq "navigationMap.recenter()" "$FILE"
 
-          echo "PASS: Presentation Layer created."
+          echo "PASS: NavigationOverlayView created."
 
       # ============================================================
       # 10. PATCH V10LauncherActivity
       #
-      # IMPORTANT:
-      # - PHONE ACTIVITY ONLY
-      # - Do NOT modify NavigationMapView
-      # - Do NOT modify V10CarActivity
+      # PHONE HOST:
+      #
+      # NavigationMapView
+      #       ↓
+      # NavigationOverlayView
+      #
+      # V10CarActivity is NOT modified.
       # ============================================================
-      - name: Attach Navigation to V10LauncherActivity
+      - name: Patch V10LauncherActivity phone host
         shell: bash
         run: |
           set -euo pipefail
 
-          FILE="v10-source/app/src/main/java/com/hieptran/aacast/doudou/V10LauncherActivity.java"
-
           python3 <<'PY'
           from pathlib import Path
+          import re
 
           path = Path(
               "v10-source/app/src/main/java/com/hieptran/aacast/doudou/V10LauncherActivity.java"
@@ -574,163 +619,112 @@ jobs:
           text = path.read_text()
 
           # --------------------------------------------------------
-          # IMPORT FrameLayout
+          # IMPORT FRAME LAYOUT
           # --------------------------------------------------------
-          old_import = (
-              "import android.view.View;\n"
-              "import android.widget.GridLayout;"
-          )
-
-          new_import = (
-              "import android.view.View;\n"
-              "import android.widget.FrameLayout;\n"
-              "import android.widget.GridLayout;"
-          )
-
           if "import android.widget.FrameLayout;" not in text:
-              if old_import not in text:
-                  raise SystemExit(
-                      "ERROR: V10LauncherActivity import anchor not found."
-                  )
-
-              text = text.replace(
-                  old_import,
-                  new_import,
-                  1
+              anchor = (
+                  "import android.view.View;\n"
+                  "import android.widget.GridLayout;"
               )
+              replacement = (
+                  "import android.view.View;\n"
+                  "import android.widget.FrameLayout;\n"
+                  "import android.widget.GridLayout;"
+              )
+              if anchor not in text:
+                  raise SystemExit("ERROR: FrameLayout import anchor not found.")
+              text = text.replace(anchor, replacement, 1)
 
           # --------------------------------------------------------
-          # ROOT TYPE
+          # ROOT FIELD
           # --------------------------------------------------------
-          old_field = "    private LinearLayout root;\n"
+          old_root_field = "    private LinearLayout root;\n"
+          new_root_field = "    private FrameLayout root;\n"
 
-          new_field = "    private FrameLayout root;\n"
-
-          if old_field not in text:
-              raise SystemExit(
-                  "ERROR: V10LauncherActivity root field anchor not found."
-              )
-
-          text = text.replace(
-              old_field,
-              new_field,
-              1
-          )
+          if old_root_field not in text:
+              if "private FrameLayout root;" not in text:
+                  raise SystemExit("ERROR: root field anchor not found.")
+          else:
+              text = text.replace(old_root_field, new_root_field, 1)
 
           # --------------------------------------------------------
           # NAVIGATION FIELDS
           # --------------------------------------------------------
-          marker = (
-              "    private LinearLayout dock;\n"
-          )
-
-          addition = (
-              "    private LinearLayout dock;\n"
-              "\n"
-              "    // Phone Navigation Presentation\n"
-              "    private NavigationMapView navigationMap;\n"
-              "    private NavigationPresentationLayer navigationPresentationLayer;\n"
-          )
-
           if "private NavigationMapView navigationMap;" not in text:
-              if marker not in text:
-                  raise SystemExit(
-                      "ERROR: dock field anchor not found."
-                  )
-
-              text = text.replace(
-                  marker,
-                  addition,
-                  1
+              anchor = "    private LinearLayout dock;\n"
+              replacement = (
+                  "    private LinearLayout dock;\n\n"
+                  "    // Phone Navigation host\n"
+                  "    private NavigationMapView navigationMap;\n"
+                  "    private NavigationOverlayView navigationOverlayView;\n"
               )
+              if anchor not in text:
+                  raise SystemExit("ERROR: dock field anchor not found.")
+              text = text.replace(anchor, replacement, 1)
 
           # --------------------------------------------------------
           # LIFECYCLE
           # --------------------------------------------------------
-          old_destroy = """    @Override
-          protected void onDestroy() {
-
-          handler.removeCallbacks(
-                  clockTicker);
-
-          super.onDestroy();
-          }
-          """
-
-          new_destroy = """    @Override
-          protected void onResume() {
-
-          super.onResume();
-
-          if (navigationMap != null) {
-              navigationMap.onHostResume();
-          }
-          }
-
-          @Override
-          protected void onPause() {
-
-          if (navigationMap != null) {
-              navigationMap.onHostPause();
-          }
-
-          super.onPause();
-          }
-
-          @Override
-          protected void onDestroy() {
-
-          handler.removeCallbacks(
-                  clockTicker);
-
-          if (navigationMap != null) {
-              navigationMap.onHostDestroy();
-          }
-
-          super.onDestroy();
-          }
-          """
-
           if "protected void onResume()" not in text:
-              if old_destroy not in text:
-                  raise SystemExit(
-                      "ERROR: onDestroy() anchor not found."
-                  )
-
-              text = text.replace(
-                  old_destroy,
-                  new_destroy,
-                  1
+              anchor = (
+                  "    @Override\n"
+                  "    protected void onDestroy() {\n\n"
+                  "        handler.removeCallbacks(\n"
+                  "                clockTicker);\n\n"
+                  "        super.onDestroy();\n"
+                  "    }\n"
               )
 
+              replacement = (
+                  "    @Override\n"
+                  "    protected void onResume() {\n\n"
+                  "        super.onResume();\n\n"
+                  "        if (navigationMap != null) {\n"
+                  "            navigationMap.onHostResume();\n"
+                  "        }\n"
+                  "    }\n\n"
+                  "    @Override\n"
+                  "    protected void onPause() {\n\n"
+                  "        if (navigationMap != null) {\n"
+                  "            navigationMap.onHostPause();\n"
+                  "        }\n\n"
+                  "        super.onPause();\n"
+                  "    }\n\n"
+                  "    @Override\n"
+                  "    protected void onDestroy() {\n\n"
+                  "        handler.removeCallbacks(\n"
+                  "                clockTicker);\n\n"
+                  "        if (navigationMap != null) {\n"
+                  "            navigationMap.onHostDestroy();\n"
+                  "        }\n\n"
+                  "        super.onDestroy();\n"
+                  "    }\n"
+              )
+
+              if anchor not in text:
+                  raise SystemExit("ERROR: onDestroy anchor not found.")
+              text = text.replace(anchor, replacement, 1)
+
           # --------------------------------------------------------
-          # BUILD UI ROOT
+          # REPLACE buildUi()
           # --------------------------------------------------------
-          old_root = """    private void buildUi() {
+          build_ui_pattern = re.compile(
+              r"    private void buildUi\(\) \{.*?"
+              r"        setContentView\(root\);\n"
+              r"    \}",
+              re.DOTALL
+          )
 
-          root =
-                  new LinearLayout(this);
+          match = build_ui_pattern.search(text)
 
-          root.setOrientation(
-                  LinearLayout.VERTICAL);
+          if not match:
+              raise SystemExit("ERROR: V10LauncherActivity buildUi() not found.")
 
-          root.setPadding(
-                  dp(18),
-                  dp(12),
-                  dp(18),
-                  dp(8));
+          new_build_ui = """    private void buildUi() {
 
-          root.setBackgroundColor(
-                  Color.rgb(
-                          7,
-                          9,
-                          12));
-
-          dashboard =
-                  new LinearLayout(this);
-          """
-
-          new_root = """    private void buildUi() {
+          // ======================================================
+          // PHONE ROOT
+          // ======================================================
 
           root =
                   new FrameLayout(this);
@@ -741,9 +735,10 @@ jobs:
                           9,
                           12));
 
-          // ------------------------------------------------------
-          // REAL NAVIGATION MAP
-          // ------------------------------------------------------
+          // ======================================================
+          // REAL NAVIGATION CORE
+          // ======================================================
+
           navigationMap =
                   new NavigationMapView(this);
 
@@ -753,177 +748,59 @@ jobs:
                           -1,
                           -1));
 
-          // ------------------------------------------------------
-          // NAVIGATION PRESENTATION
-          // ------------------------------------------------------
-          navigationPresentationLayer =
-                  new NavigationPresentationLayer(
-                          this,
-                          navigationMap);
+          // ======================================================
+          // NAVIGATION PRESENTATION / OVERLAY
+          // ======================================================
+
+          navigationOverlayView =
+                  new NavigationOverlayView(
+                          this);
+
+          navigationOverlayView.setNavigationMap(
+                  navigationMap);
 
           root.addView(
-                  navigationPresentationLayer,
+                  navigationOverlayView,
                   new FrameLayout.LayoutParams(
                           -1,
                           -1));
 
-          // ------------------------------------------------------
-          // EXISTING DASHBOARD
-          // ------------------------------------------------------
+          // ======================================================
+          // EXISTING LAUNCHER UI
+          // ======================================================
+
           dashboard =
                   new LinearLayout(this);
 
           dashboard.setOrientation(
                   LinearLayout.VERTICAL);
 
-          dashboard.setPadding(
-                  dp(18),
-                  dp(12),
-                  dp(18),
-                  dp(8));
+          dashboard.setVisibility(
+                  View.GONE);
 
-          dashboard.setBackgroundColor(
-                  Color.rgb(
-                          7,
-                          9,
-                          12));
+          buildDashboard();
 
-          """
+          buildAppPanel();
 
-          if "navigationMap =\n                new NavigationMapView(this);" not in text:
-              if old_root not in text:
-                  raise SystemExit(
-                      "ERROR: V10LauncherActivity buildUi root anchor not found."
-                  )
+          if (appPanel != null) {
+              appPanel.setVisibility(
+                      View.GONE);
+          }
 
-              text = text.replace(
-                  old_root,
-                  new_root,
-                  1
-              )
+          setContentView(root);
+          }"""
 
-          # --------------------------------------------------------
-          # Keep dashboard above the map.
-          # The Navigation UI will be exposed through the dashboard
-          # MAP area after the dashboard's MAP card is replaced.
-          # --------------------------------------------------------
-
-          # --------------------------------------------------------
-          # REPLACE EXISTING FAKE MAP CARD
-          # WITH REAL NAVIGATION CONTAINER
-          # --------------------------------------------------------
-          old_map = """        // MAP
-
-          LinearLayout map =
-                  card();
-
-          map.addView(
-                  text(
-                          "MAP",
-                          12,
-                          Color.LTGRAY));
-
-          TextView mapText =
-                  text(
-                          "Navigation",
-                          28,
-                          Color.WHITE);
-
-          mapText.setGravity(
-                  Gravity.CENTER);
-
-          map.addView(
-                  mapText,
-                  new LinearLayout.LayoutParams(
-                          -1,
-                          0,
-                          1));
-
-          content.addView(
-                  map,
-                  new LinearLayout.LayoutParams(
-                          -1,
-                          0,
-                          2));
-          """
-
-          new_map = """        // MAP
-          //
-          // NavigationMapView + NavigationPresentationLayer
-          // are already hosted by the phone root.
-          //
-          // The dashboard must not cover the real navigation map.
-          // Therefore the dashboard MAP area is transparent and
-          // only provides the existing layout slot.
-
-          LinearLayout map =
-                  card();
-
-          map.setBackgroundColor(
-                  Color.TRANSPARENT);
-
-          TextView mapLabel =
-                  text(
-                          "NAVIGATION",
-                          12,
-                          Color.LTGRAY);
-
-          map.addView(
-                  mapLabel,
-                  new LinearLayout.LayoutParams(
-                          -1,
-                          dp(30)));
-
-          content.addView(
-                  map,
-                  new LinearLayout.LayoutParams(
-                          -1,
-                          0,
-                          2));
-          """
-
-          if "TextView mapText =" in text:
-              if old_map not in text:
-                  raise SystemExit(
-                      "ERROR: Existing V10LauncherActivity MAP block not found."
-                  )
-
-              text = text.replace(
-                  old_map,
-                  new_map,
-                  1
-              )
-
-          # --------------------------------------------------------
-          # The dashboard itself would still cover the map.
-          # Make dashboard background transparent and let the real
-          # NavigationMapView remain visible.
-          # --------------------------------------------------------
-          text = text.replace(
-              """          dashboard.setBackgroundColor(
-                  Color.rgb(
-                          7,
-                          9,
-                          12));
-          """,
-              """          dashboard.setBackgroundColor(
-                  Color.TRANSPARENT);
-          """,
-              1
-          )
+          text = text[:match.start()] + new_build_ui + text[match.end():]
 
           path.write_text(text)
 
-          print("PASS: V10LauncherActivity patched.")
-          print("PASS: Real NavigationMapView added to phone root.")
-          print("PASS: NavigationPresentationLayer added to phone root.")
-          print("PASS: Existing V10LauncherActivity retained.")
+          print("PASS: V10LauncherActivity patched as Phone Navigation host.")
           PY
 
       # ============================================================
-      # 11. VERIFY PHONE PATCH
+      # 11. VERIFY PHONE HOST
       # ============================================================
-      - name: Verify phone Presentation integration
+      - name: Verify V10LauncherActivity Navigation host
         shell: bash
         run: |
           set -euo pipefail
@@ -933,40 +810,50 @@ jobs:
           grep -Fq "import android.widget.FrameLayout;" "$FILE"
 
           grep -Fq "private FrameLayout root;" "$FILE"
+
           grep -Fq "private NavigationMapView navigationMap;" "$FILE"
-          grep -Fq "private NavigationPresentationLayer navigationPresentationLayer;" "$FILE"
+
+          grep -Fq "private NavigationOverlayView navigationOverlayView;" "$FILE"
 
           grep -Fq "navigationMap =" "$FILE"
           grep -Fq "new NavigationMapView(this)" "$FILE"
 
-          grep -Fq "navigationPresentationLayer =" "$FILE"
-          grep -Fq "new NavigationPresentationLayer" "$FILE"
+          grep -Fq "navigationOverlayView =" "$FILE"
+          grep -Fq "new NavigationOverlayView" "$FILE"
+
+          grep -Fq "navigationOverlayView.setNavigationMap" "$FILE"
 
           grep -Fq "navigationMap.onHostResume()" "$FILE"
           grep -Fq "navigationMap.onHostPause()" "$FILE"
           grep -Fq "navigationMap.onHostDestroy()" "$FILE"
 
-          echo "PASS: Phone Navigation integration verified."
+          echo "PASS: V10LauncherActivity hosts real NavigationMapView."
+          echo "PASS: V10LauncherActivity hosts NavigationOverlayView."
 
       # ============================================================
-      # 12. VERIFY V10CarActivity WAS NOT MODIFIED
+      # 12. VERIFY ANDROID AUTO HOST UNTOUCHED
       # ============================================================
-      - name: Verify Android Auto host remains untouched
+      - name: Verify V10CarActivity untouched
         shell: bash
         run: |
           set -euo pipefail
 
           FILE="v10-source/app/src/main/java/com/hieptran/aacast/doudou/V10CarActivity.java"
 
-          if grep -Fq "NavigationPresentationLayer" "$FILE"; then
-            echo "ERROR: Android Auto V10CarActivity was modified."
+          if grep -Fq "NavigationOverlayView" "$FILE"; then
+            echo "ERROR: V10CarActivity contains Phone overlay."
             exit 1
           fi
 
-          echo "PASS: V10CarActivity untouched by Phone Presentation patch."
+          if grep -Fq "NavigationPresentationLayer" "$FILE"; then
+            echo "ERROR: V10CarActivity contains Phone Presentation Layer."
+            exit 1
+          fi
+
+          echo "PASS: V10CarActivity untouched."
 
       # ============================================================
-      # 13. VERIFY NAVIGATIONMAPVIEW SHA AFTER PATCH
+      # 13. VERIFY NAVIGATIONMAPVIEW SHA
       # ============================================================
       - name: Verify NavigationMapView unchanged
         shell: bash
@@ -980,28 +867,34 @@ jobs:
           BEFORE="$(cut -d' ' -f1 /tmp/navigation-map-before.sha256)"
           AFTER="$(cut -d' ' -f1 /tmp/navigation-map-after.sha256)"
 
-          echo "Before: $BEFORE"
-          echo "After : $AFTER"
+          echo "NavigationMapView before:"
+          echo "$BEFORE"
+
+          echo "NavigationMapView after:"
+          echo "$AFTER"
 
           if [ "$BEFORE" != "$AFTER" ]; then
-            echo "ERROR: NavigationMapView was modified."
+            echo "ERROR: NavigationMapView changed."
             exit 1
           fi
 
           echo "PASS: NavigationMapView byte-for-byte unchanged."
 
       # ============================================================
-      # 14. VERIFY PRESENTATION LAYER DOES NOT CREATE NAV CORE
+      # 14. VERIFY OVERLAY IS PRESENTATION ONLY
       # ============================================================
-      - name: Verify Presentation Layer only
+      - name: Verify Overlay contains no Navigation engine
         shell: bash
         run: |
           set -euo pipefail
 
-          FILE="v10-source/app/src/main/java/com/hieptran/aacast/doudou/NavigationPresentationLayer.java"
+          FILE="v10-source/app/src/main/java/com/hieptran/aacast/doudou/NavigationOverlayView.java"
 
-          if grep -Eq "MapLibre|SpeechRecognizer|LocationManager|FusedLocation|Nominatim|OkHttp|Retrofit" "$FILE"; then
-            echo "ERROR: Presentation Layer contains Navigation core/provider code."
+          if grep -Eq \
+            "MapLibre|SpeechRecognizer|LocationManager|FusedLocation|Nominatim|OkHttp|Retrofit" \
+            "$FILE"; then
+
+            echo "ERROR: Navigation engine/provider code detected in overlay."
             exit 1
           fi
 
@@ -1010,30 +903,51 @@ jobs:
           grep -Fq "navigationMap.zoomOut()" "$FILE"
           grep -Fq "navigationMap.recenter()" "$FILE"
 
-          echo "PASS: Presentation Layer is UI/delegation only."
+          echo "PASS: Overlay is UI/delegation only."
 
       # ============================================================
-      # 15. VERIFY ONLY EXPECTED JAVA FILES CHANGED
+      # 15. VERIFY NO FAKE NavigationMap INTERFACE
       # ============================================================
-      - name: Verify patch scope
+      - name: Verify real NavigationMapView integration
         shell: bash
         run: |
           set -euo pipefail
 
-          echo "Changed files:"
-          git status --short
+          FILE="v10-source/app/src/main/java/com/hieptran/aacast/doudou/NavigationOverlayView.java"
 
-          if git status --short | grep -E "NavigationMapView.java|V10CarActivity.java"; then
-            echo "ERROR: Protected Navigation/AA file changed."
+          if grep -Fq "interface NavigationMap" "$FILE"; then
+            echo "ERROR: Fake NavigationMap interface detected."
             exit 1
           fi
 
-          echo "PASS: Protected files are untouched."
+          grep -Fq "private NavigationMapView navigationMap;" "$FILE"
+
+          echo "PASS: Overlay uses real NavigationMapView."
 
       # ============================================================
-      # 16. GRADLE CHECK
+      # 16. VERIFY PATCH SCOPE
       # ============================================================
-      - name: Gradle check
+      - name: Verify protected source files remain untouched
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          echo "Changed files after patch:"
+          git status --short
+
+          if git status --short | grep -E \
+            "NavigationMapView.java|V10CarActivity.java"; then
+
+            echo "ERROR: Protected source file changed."
+            exit 1
+          fi
+
+          echo "PASS: Protected files remain untouched."
+
+      # ============================================================
+      # 17. COMPILE JAVA
+      # ============================================================
+      - name: Compile Java
         working-directory: v10-source
         shell: bash
         run: |
@@ -1046,8 +960,10 @@ jobs:
             --no-daemon \
             --stacktrace
 
+          echo "PASS: Java compilation."
+
       # ============================================================
-      # 17. BUILD APK
+      # 18. ASSEMBLE APK
       # ============================================================
       - name: Assemble Debug APK
         working-directory: v10-source
@@ -1060,8 +976,10 @@ jobs:
             --no-daemon \
             --stacktrace
 
+          echo "PASS: Debug APK assembled."
+
       # ============================================================
-      # 18. VERIFY APK
+      # 19. VERIFY APK
       # ============================================================
       - name: Verify APK
         shell: bash
@@ -1072,26 +990,28 @@ jobs:
 
           test -f "$APK"
 
+          echo "APK:"
           ls -lh "$APK"
 
+          echo "APK SHA256:"
           sha256sum "$APK"
 
           echo "PASS: APK exists."
 
       # ============================================================
-      # 19. UPLOAD APK
+      # 20. UPLOAD APK
       # ============================================================
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: carassistant-navigation-presentation-phone
+          name: carassistant-navigation-overlay-phone
           path: v10-source/app/build/outputs/apk/debug/app-debug.apk
           if-no-files-found: error
 
       # ============================================================
-      # 20. FINAL IMMUTABLE BASELINE CHECK
+      # 21. FINAL BASELINE LOCK
       # ============================================================
-      - name: Final baseline protection check
+      - name: Final baseline lock
         shell: bash
         run: |
           set -euo pipefail
@@ -1107,9 +1027,11 @@ jobs:
           echo "========================================"
           echo "FINAL RESULT"
           echo "========================================"
-          echo "PASS: Baseline 37607447583 remains locked."
+          echo "PASS: Baseline 37607447583 locked."
           echo "PASS: NavigationMapView unchanged."
+          echo "PASS: Navigation CORE unchanged."
           echo "PASS: V10CarActivity untouched."
-          echo "PASS: V10LauncherActivity is the Phone host."
-          echo "PASS: Phone Navigation Presentation attached."
-          echo "PASS: APK built successfully."
+          echo "PASS: V10LauncherActivity is Phone host."
+          echo "PASS: NavigationOverlayView attached."
+          echo "PASS: Java compilation."
+          echo "PASS: APK build."
