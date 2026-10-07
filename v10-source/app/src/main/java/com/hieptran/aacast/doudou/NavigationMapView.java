@@ -3,11 +3,15 @@ package com.carassistant.v10;
 import android.Manifest;
 import android.app.Activity;
 import android.content.Context;
+import android.content.Intent;
 import android.content.pm.PackageManager;
 import android.graphics.Color;
 import android.graphics.Typeface;
 import android.location.Location;
 import android.os.Bundle;
+import android.speech.RecognitionListener;
+import android.speech.RecognizerIntent;
+import android.speech.SpeechRecognizer;
 import android.view.Gravity;
 import android.view.View;
 import android.view.inputmethod.EditorInfo;
@@ -43,6 +47,8 @@ import java.util.ArrayList;
 public final class NavigationMapView extends FrameLayout {
 
     private static final int LOCATION_REQUEST = 4101;
+    private static final int MICROPHONE_REQUEST = 4102;
+
     private static final double AUTO_FOLLOW_ZOOM = 16.0;
     private static final double DESTINATION_ZOOM = 15.0;
 
@@ -51,7 +57,11 @@ public final class NavigationMapView extends FrameLayout {
 
     private EditText searchInput;
     private TextView searchButton;
+    private TextView voiceButton;
     private LinearLayout searchResults;
+
+    private SpeechRecognizer speechRecognizer;
+
     private Marker destinationMarker;
 
     private volatile boolean destroyed;
@@ -122,11 +132,13 @@ public final class NavigationMapView extends FrameLayout {
         searchInput.setHintTextColor(Color.LTGRAY);
         searchInput.setHint("Tìm địa điểm...");
         searchInput.setTextSize(16);
+
         searchInput.setPadding(
                 dp(10),
                 0,
                 dp(8),
                 0);
+
         searchInput.setImeOptions(
                 EditorInfo.IME_ACTION_SEARCH);
 
@@ -137,30 +149,87 @@ public final class NavigationMapView extends FrameLayout {
                         -1,
                         1f));
 
+        /*
+         * V3.1 — VOICE SEARCH
+         */
+        voiceButton =
+                new TextView(getContext());
+
+        voiceButton.setText("🎙");
+        voiceButton.setTextColor(Color.WHITE);
+        voiceButton.setTextSize(22);
+
+        voiceButton.setTypeface(
+                null,
+                Typeface.BOLD);
+
+        voiceButton.setGravity(
+                Gravity.CENTER);
+
+        voiceButton.setContentDescription(
+                "Tìm kiếm bằng giọng nói");
+
+        voiceButton.setClickable(true);
+
+        GradientDrawable voiceBg =
+                new GradientDrawable();
+
+        voiceBg.setColor(
+                Color.argb(
+                        150,
+                        29,
+                        40,
+                        51));
+
+        voiceBg.setCornerRadius(
+                dp(12));
+
+        voiceButton.setBackground(voiceBg);
+        voiceButton.setAlpha(0.82f);
+
+        searchBox.addView(
+                voiceButton,
+                new LinearLayout.LayoutParams(
+                        dp(52),
+                        dp(48)));
+
+        /*
+         * Tìm kiếm bằng chữ
+         */
         searchButton =
                 new TextView(getContext());
 
         searchButton.setText("⌕");
         searchButton.setTextColor(Color.WHITE);
         searchButton.setTextSize(25);
+
         searchButton.setTypeface(
                 null,
                 Typeface.BOLD);
-        searchButton.setGravity(Gravity.CENTER);
+
+        searchButton.setGravity(
+                Gravity.CENTER);
+
         searchButton.setContentDescription(
                 "Tìm địa điểm");
+
         searchButton.setClickable(true);
 
         GradientDrawable buttonBg =
                 new GradientDrawable();
 
         buttonBg.setColor(
-                Color.rgb(29, 40, 51));
+                Color.argb(
+                        150,
+                        29,
+                        40,
+                        51));
 
         buttonBg.setCornerRadius(
                 dp(12));
 
         searchButton.setBackground(buttonBg);
+        searchButton.setAlpha(0.82f);
 
         searchBox.addView(
                 searchButton,
@@ -178,7 +247,7 @@ public final class NavigationMapView extends FrameLayout {
          * Vùng an toàn:
          * - left 112dp: tránh Home UI bên trái
          * - right 94dp: tránh cụm + / − / ◎ bên phải
-         * - top 18dp: nằm trong vùng trống phía trên bản đồ
+         * - top 18dp
          */
         searchParams.setMargins(
                 dp(112),
@@ -217,7 +286,9 @@ public final class NavigationMapView extends FrameLayout {
 
         searchResults.setBackground(resultsBg);
         searchResults.setElevation(dp(12));
-        searchResults.setVisibility(View.GONE);
+
+        searchResults.setVisibility(
+                View.GONE);
 
         FrameLayout.LayoutParams resultsParams =
                 new FrameLayout.LayoutParams(
@@ -235,20 +306,295 @@ public final class NavigationMapView extends FrameLayout {
                 searchResults,
                 resultsParams);
 
+        voiceButton.setOnClickListener(
+                v -> startVoiceSearch());
+
         searchButton.setOnClickListener(
                 v -> performSearch());
 
         searchInput.setOnEditorActionListener(
                 (v, actionId, event) -> {
-                    if (actionId == EditorInfo.IME_ACTION_SEARCH) {
+
+                    if (actionId ==
+                            EditorInfo.IME_ACTION_SEARCH) {
+
                         performSearch();
+
                         return true;
                     }
+
                     return false;
                 });
     }
 
+    /*
+     * =========================================================
+     * V3.1 VOICE SEARCH
+     * =========================================================
+     */
+
+    private void startVoiceSearch() {
+
+        if (!SpeechRecognizer.isRecognitionAvailable(
+                getContext())) {
+
+            showSearchMessage(
+                    "Thiết bị không hỗ trợ nhận dạng giọng nói");
+
+            return;
+        }
+
+        if (getContext().checkSelfPermission(
+                Manifest.permission.RECORD_AUDIO)
+                != PackageManager.PERMISSION_GRANTED) {
+
+            if (getContext() instanceof Activity) {
+
+                ((Activity) getContext()).requestPermissions(
+                        new String[]{
+                                Manifest.permission.RECORD_AUDIO
+                        },
+                        MICROPHONE_REQUEST);
+
+                showSearchMessage(
+                        "Cho phép microphone rồi bấm 🎙 lại");
+
+            } else {
+
+                showSearchMessage(
+                        "Không thể xin quyền microphone");
+            }
+
+            return;
+        }
+
+        hideKeyboard();
+
+        if (voiceButton != null) {
+            voiceButton.setText("…");
+        }
+
+        showSearchMessage(
+                "Đang nghe…");
+
+        stopVoiceRecognizer();
+
+        speechRecognizer =
+                SpeechRecognizer.createSpeechRecognizer(
+                        getContext());
+
+        speechRecognizer.setRecognitionListener(
+                new RecognitionListener() {
+
+                    @Override
+                    public void onReadyForSpeech(
+                            Bundle params) {
+
+                        showSearchMessage(
+                                "Đang nghe…");
+                    }
+
+                    @Override
+                    public void onBeginningOfSpeech() {
+
+                        showSearchMessage(
+                                "Đang nghe…");
+                    }
+
+                    @Override
+                    public void onRmsChanged(
+                            float rmsdB) {
+                    }
+
+                    @Override
+                    public void onBufferReceived(
+                            byte[] buffer) {
+                    }
+
+                    @Override
+                    public void onEndOfSpeech() {
+
+                        showSearchMessage(
+                                "Đang xử lý giọng nói…");
+                    }
+
+                    @Override
+                    public void onError(
+                            int error) {
+
+                        if (voiceButton != null) {
+                            voiceButton.setText("🎙");
+                        }
+
+                        String message;
+
+                        switch (error) {
+
+                            case SpeechRecognizer.ERROR_NO_MATCH:
+
+                                message =
+                                        "Không nhận dạng được câu nói";
+
+                                break;
+
+                            case SpeechRecognizer.ERROR_SPEECH_TIMEOUT:
+
+                                message =
+                                        "Không nghe thấy giọng nói";
+
+                                break;
+
+                            case SpeechRecognizer.ERROR_NETWORK:
+                            case SpeechRecognizer.ERROR_NETWORK_TIMEOUT:
+
+                                message =
+                                        "Lỗi kết nối nhận dạng giọng nói";
+
+                                break;
+
+                            case SpeechRecognizer.ERROR_INSUFFICIENT_PERMISSIONS:
+
+                                message =
+                                        "Chưa được cấp quyền microphone";
+
+                                break;
+
+                            default:
+
+                                message =
+                                        "Không thể nhận dạng giọng nói";
+
+                                break;
+                        }
+
+                        showSearchMessage(
+                                message);
+
+                        stopVoiceRecognizer();
+                    }
+
+                    @Override
+                    public void onResults(
+                            Bundle results) {
+
+                        if (voiceButton != null) {
+                            voiceButton.setText("🎙");
+                        }
+
+                        ArrayList<String> matches =
+                                results.getStringArrayList(
+                                        SpeechRecognizer.RESULTS_RECOGNITION);
+
+                        if (matches == null
+                                || matches.isEmpty()) {
+
+                            showSearchMessage(
+                                    "Không nhận dạng được địa điểm");
+
+                            stopVoiceRecognizer();
+
+                            return;
+                        }
+
+                        String spoken =
+                                matches.get(0);
+
+                        /*
+                         * Đưa kết quả nhận dạng
+                         * trực tiếp vào ô tìm kiếm.
+                         */
+                        if (searchInput != null) {
+
+                            searchInput.setText(
+                                    spoken);
+
+                            searchInput.setSelection(
+                                    searchInput.length());
+                        }
+
+                        stopVoiceRecognizer();
+
+                        /*
+                         * Tự động tìm kiếm.
+                         */
+                        performSearch();
+                    }
+
+                    @Override
+                    public void onPartialResults(
+                            Bundle partialResults) {
+                    }
+
+                    @Override
+                    public void onEvent(
+                            int eventType,
+                            Bundle params) {
+                    }
+                });
+
+        Intent intent =
+                new Intent(
+                        RecognizerIntent.ACTION_RECOGNIZE_SPEECH);
+
+        intent.putExtra(
+                RecognizerIntent.EXTRA_LANGUAGE_MODEL,
+                RecognizerIntent.LANGUAGE_MODEL_FREE_FORM);
+
+        /*
+         * Nhận tiếng Việt.
+         */
+        intent.putExtra(
+                RecognizerIntent.EXTRA_LANGUAGE,
+                "vi-VN");
+
+        intent.putExtra(
+                RecognizerIntent.EXTRA_LANGUAGE_PREFERENCE,
+                "vi-VN");
+
+        intent.putExtra(
+                RecognizerIntent.EXTRA_MAX_RESULTS,
+                5);
+
+        intent.putExtra(
+                RecognizerIntent.EXTRA_PARTIAL_RESULTS,
+                false);
+
+        speechRecognizer.startListening(
+                intent);
+    }
+
+    private void stopVoiceRecognizer() {
+
+        if (speechRecognizer == null) {
+            return;
+        }
+
+        try {
+            speechRecognizer.stopListening();
+        } catch (Exception ignored) {
+        }
+
+        try {
+            speechRecognizer.cancel();
+        } catch (Exception ignored) {
+        }
+
+        try {
+            speechRecognizer.destroy();
+        } catch (Exception ignored) {
+        }
+
+        speechRecognizer = null;
+    }
+
+    /*
+     * =========================================================
+     * EXISTING V3 SEARCH
+     * =========================================================
+     */
+
     private void performSearch() {
+
         if (searchInput == null) {
             return;
         }
@@ -259,8 +605,10 @@ public final class NavigationMapView extends FrameLayout {
                         .trim();
 
         if (query.isEmpty()) {
+
             showSearchMessage(
                     "Nhập địa điểm cần tìm");
+
             return;
         }
 
@@ -270,17 +618,21 @@ public final class NavigationMapView extends FrameLayout {
             searchButton.setText("…");
         }
 
-        showSearchMessage("Đang tìm...");
+        showSearchMessage(
+                "Đang tìm...");
 
         new Thread(
                 () -> searchNominatim(query))
                 .start();
     }
 
-    private void searchNominatim(String query) {
+    private void searchNominatim(
+            String query) {
+
         HttpURLConnection connection = null;
 
         try {
+
             String encoded =
                     URLEncoder.encode(
                             query,
@@ -300,8 +652,12 @@ public final class NavigationMapView extends FrameLayout {
                             url.openConnection();
 
             connection.setRequestMethod("GET");
-            connection.setConnectTimeout(8000);
-            connection.setReadTimeout(10000);
+
+            connection.setConnectTimeout(
+                    8000);
+
+            connection.setReadTimeout(
+                    10000);
 
             connection.setRequestProperty(
                     "User-Agent",
@@ -311,8 +667,10 @@ public final class NavigationMapView extends FrameLayout {
                     connection.getResponseCode();
 
             if (code != HttpURLConnection.HTTP_OK) {
+
                 postSearchMessage(
                         "Không tìm được địa điểm");
+
                 return;
             }
 
@@ -330,7 +688,9 @@ public final class NavigationMapView extends FrameLayout {
 
             String line;
 
-            while ((line = reader.readLine()) != null) {
+            while ((line =
+                    reader.readLine()) != null) {
+
                 body.append(line);
             }
 
@@ -367,10 +727,12 @@ public final class NavigationMapView extends FrameLayout {
 
                 if (latText.isEmpty()
                         || lonText.isEmpty()) {
+
                     continue;
                 }
 
                 try {
+
                     double lat =
                             Double.parseDouble(
                                     latText);
@@ -385,11 +747,13 @@ public final class NavigationMapView extends FrameLayout {
                                     lat,
                                     lon));
 
-                } catch (NumberFormatException ignored) {
+                } catch (
+                        NumberFormatException ignored) {
                 }
             }
 
-            postSearchResults(results);
+            postSearchResults(
+                    results);
 
         } catch (Exception ignored) {
 
@@ -408,6 +772,7 @@ public final class NavigationMapView extends FrameLayout {
             final ArrayList<SearchResult> results) {
 
         post(() -> {
+
             if (destroyed) {
                 return;
             }
@@ -419,8 +784,10 @@ public final class NavigationMapView extends FrameLayout {
             searchResults.removeAllViews();
 
             if (results.isEmpty()) {
+
                 showSearchMessage(
                         "Không có kết quả phù hợp");
+
                 return;
             }
 
@@ -429,12 +796,19 @@ public final class NavigationMapView extends FrameLayout {
                 TextView row =
                         new TextView(getContext());
 
-                row.setText(result.name);
-                row.setTextColor(Color.WHITE);
+                row.setText(
+                        result.name);
+
+                row.setTextColor(
+                        Color.WHITE);
+
                 row.setTextSize(14);
+
                 row.setGravity(
                         Gravity.CENTER_VERTICAL);
+
                 row.setMaxLines(2);
+
                 row.setEllipsize(
                         android.text.TextUtils.TruncateAt.END);
 
@@ -448,15 +822,20 @@ public final class NavigationMapView extends FrameLayout {
                         new GradientDrawable();
 
                 rowBg.setColor(
-                        Color.rgb(28, 38, 48));
+                        Color.rgb(
+                                28,
+                                38,
+                                48));
 
                 rowBg.setCornerRadius(
                         dp(10));
 
-                row.setBackground(rowBg);
+                row.setBackground(
+                        rowBg);
 
                 row.setOnClickListener(
-                        v -> selectDestination(result));
+                        v -> selectDestination(
+                                result));
 
                 LinearLayout.LayoutParams rowParams =
                         new LinearLayout.LayoutParams(
@@ -482,6 +861,8 @@ public final class NavigationMapView extends FrameLayout {
             searchButton.bringToFront();
 
             searchInput.bringToFront();
+
+            voiceButton.bringToFront();
         });
     }
 
@@ -498,9 +879,15 @@ public final class NavigationMapView extends FrameLayout {
                 new TextView(getContext());
 
         row.setText(message);
-        row.setTextColor(Color.WHITE);
+
+        row.setTextColor(
+                Color.WHITE);
+
         row.setTextSize(14);
-        row.setGravity(Gravity.CENTER);
+
+        row.setGravity(
+                Gravity.CENTER);
+
         row.setPadding(
                 dp(12),
                 dp(8),
@@ -532,9 +919,12 @@ public final class NavigationMapView extends FrameLayout {
                         result.longitude);
 
         if (destinationMarker != null) {
+
             try {
+
                 map.removeMarker(
                         destinationMarker);
+
             } catch (Exception ignored) {
             }
         }
@@ -546,12 +936,6 @@ public final class NavigationMapView extends FrameLayout {
                                 .title("Điểm đến")
                                 .snippet(result.name));
 
-        /*
-         * Khi chọn điểm đến:
-         * - đặt camera vào điểm được chọn
-         * - không gọi lại auto-follow ngay lúc này
-         * - giữ camera tại điểm đến
-         */
         map.animateCamera(
                 CameraUpdateFactory.newLatLngZoom(
                         target,
@@ -559,11 +943,13 @@ public final class NavigationMapView extends FrameLayout {
                 700);
 
         if (searchInput != null) {
+
             searchInput.setText(
                     result.name);
         }
 
         if (searchResults != null) {
+
             searchResults.setVisibility(
                     View.GONE);
         }
@@ -572,6 +958,7 @@ public final class NavigationMapView extends FrameLayout {
     }
 
     private void hideKeyboard() {
+
         if (searchInput == null) {
             return;
         }
@@ -582,6 +969,7 @@ public final class NavigationMapView extends FrameLayout {
                                 Context.INPUT_METHOD_SERVICE);
 
         if (imm != null) {
+
             imm.hideSoftInputFromWindow(
                     searchInput.getWindowToken(),
                     0);
@@ -592,6 +980,7 @@ public final class NavigationMapView extends FrameLayout {
             final String message) {
 
         post(() -> {
+
             if (destroyed) {
                 return;
             }
@@ -600,9 +989,18 @@ public final class NavigationMapView extends FrameLayout {
                 searchButton.setText("⌕");
             }
 
-            showSearchMessage(message);
+            showSearchMessage(
+                    message);
         });
     }
+
+    /*
+     * =========================================================
+     * NAVIGATION CONTROLS
+     * + / − / ◎ GIỮ NGUYÊN CHỨC NĂNG
+     * CHỈ GIẢM ĐỘ ĐẬM
+     * =========================================================
+     */
 
     private void buildNavigationControls() {
 
@@ -691,11 +1089,18 @@ public final class NavigationMapView extends FrameLayout {
         button.setElevation(
                 dp(8));
 
+        /*
+         * V3.1:
+         * trong suốt hơn nữa.
+         */
+        button.setAlpha(0.52f);
+
         GradientDrawable background =
                 new GradientDrawable();
 
         background.setColor(
-                Color.rgb(
+                Color.argb(
+                        115,
                         25,
                         35,
                         45));
@@ -704,8 +1109,9 @@ public final class NavigationMapView extends FrameLayout {
                 dp(14));
 
         background.setStroke(
-                dp(2),
-                Color.rgb(
+                dp(1),
+                Color.argb(
+                        105,
                         80,
                         170,
                         230));
@@ -731,6 +1137,12 @@ public final class NavigationMapView extends FrameLayout {
                 button,
                 params);
     }
+
+    /*
+     * =========================================================
+     * MAP
+     * =========================================================
+     */
 
     private void onMapReady(
             MapLibreMap readyMap) {
@@ -810,6 +1222,12 @@ public final class NavigationMapView extends FrameLayout {
 
         startAutoFollow();
     }
+
+    /*
+     * =========================================================
+     * AUTO-FOLLOW V2 — GIỮ NGUYÊN
+     * =========================================================
+     */
 
     private void startAutoFollow() {
 
@@ -900,16 +1318,28 @@ public final class NavigationMapView extends FrameLayout {
         }
     }
 
+    /*
+     * =========================================================
+     * LIFECYCLE
+     * =========================================================
+     */
+
     public void onHostResume() {
+
         mapView.onResume();
     }
 
     public void onHostPause() {
+
         mapView.onPause();
     }
 
     public void onHostDestroy() {
+
         destroyed = true;
+
+        stopVoiceRecognizer();
+
         mapView.onDestroy();
     }
 
