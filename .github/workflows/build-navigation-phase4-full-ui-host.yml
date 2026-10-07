@@ -10,6 +10,7 @@ jobs:
   build:
     runs-on: ubuntu-latest
     timeout-minutes: 40
+
     steps:
       - name: Checkout immutable Navigation baseline
         uses: actions/checkout@v4
@@ -128,31 +129,58 @@ jobs:
           python3 - <<'PY'
           from pathlib import Path
 
-          path = Path("v10-source/app/src/main/java/com/hieptran/aacast/doudou/V10CarActivity.java")
+          path = Path(
+              "v10-source/app/src/main/java/com/hieptran/aacast/doudou/V10CarActivity.java"
+          )
           s = path.read_text()
 
           def replace_smart(old_pattern, new_text, label):
               global s
-              lines = [line.strip() for line in s.splitlines() if line.strip()]
+
+              lines = [
+                  line.strip()
+                  for line in s.splitlines()
+                  if line.strip()
+              ]
+
               full_clean = " ".join(lines)
-              clean_old = " ".join([line.strip() for line in old_pattern.splitlines() if line.strip()])
-              
+              clean_old = " ".join(
+                  line.strip()
+                  for line in old_pattern.splitlines()
+                  if line.strip()
+              )
+
               if clean_old not in full_clean:
-                  raise SystemExit(f"ERROR: Target block for '{label}' not found in source.")
-              
+                  raise SystemExit(
+                      f"ERROR: Target block for '{label}' not found in source."
+                  )
+
               if old_pattern in s:
                   s = s.replace(old_pattern, new_text, 1)
               else:
                   import re
-                  regex = r"\s*".join(map(re.escape, old_pattern.split()))
-                  s, count = re.subn(regex, new_text, s, count=1)
+
+                  regex = r"\s*".join(
+                      map(re.escape, old_pattern.split())
+                  )
+
+                  s, count = re.subn(
+                      regex,
+                      new_text,
+                      s,
+                      count=1
+                  )
+
                   if count != 1:
-                      raise SystemExit(f"ERROR: Failed to replace '{label}' safely.")
+                      raise SystemExit(
+                          f"ERROR: Failed to replace '{label}' safely."
+                      )
 
           # 1. Field
           replace_smart(
               "private NavigationMapView navigationMap;",
-              "private NavigationMapView navigationMap;\n    private NavigationPresentationView navigationPresentation;",
+              "private NavigationMapView navigationMap;\n"
+              "    private NavigationPresentationView navigationPresentation;",
               "CarActivity field"
           )
 
@@ -163,6 +191,7 @@ jobs:
               "        navigationMap,",
               "        new FrameLayout.LayoutParams(-1,-1));"
           ])
+
           new_wrapper = "\n".join([
               "navigationMap = new NavigationMapView(this);",
               "navigationPresentation = new NavigationPresentationView(this);",
@@ -171,22 +200,34 @@ jobs:
               "        navigationPresentation,",
               "        new FrameLayout.LayoutParams(-1,-1));"
           ])
-          replace_smart(old_wrapper, new_wrapper, "CarActivity wrapper")
+
+          replace_smart(
+              old_wrapper,
+              new_wrapper,
+              "CarActivity wrapper"
+          )
 
           # 3. Lifecycle
           replace_smart(
               "if (navigationMap != null) navigationMap.onHostResume();",
-              "if (navigationPresentation != null) navigationPresentation.onHostResume();",
+              "if (navigationPresentation != null) "
+              "navigationPresentation.onHostResume();",
               "CarActivity resume"
           )
 
           replace_smart(
               "if (navigationMap != null) navigationMap.onHostPause();",
-              "if (navigationPresentation != null) navigationPresentation.onHostPause();",
+              "if (navigationPresentation != null) "
+              "navigationPresentation.onHostPause();",
               "CarActivity pause"
           )
 
-          old_destroy = "if (navigationMap != null) { navigationMap.onHostDestroy(); navigationMap = null; }"
+          old_destroy = (
+              "if (navigationMap != null) { "
+              "navigationMap.onHostDestroy(); "
+              "navigationMap = null; }"
+          )
+
           new_destroy = "\n".join([
               "if (navigationPresentation != null) {",
               "    navigationPresentation.onHostDestroy();",
@@ -194,9 +235,15 @@ jobs:
               "}",
               "navigationMap = null;"
           ])
-          replace_smart(old_destroy, new_destroy, "CarActivity destroy")
+
+          replace_smart(
+              old_destroy,
+              new_destroy,
+              "CarActivity destroy"
+          )
 
           path.write_text(s)
+
           print("PASS: V10CarActivity patched safely.")
           PY
 
@@ -208,43 +255,107 @@ jobs:
           python3 - <<'PY'
           from pathlib import Path
 
-          path = Path("v10-source/app/src/main/java/com/hieptran/aacast/doudou/V10LauncherActivity.java")
+          path = Path(
+              "v10-source/app/src/main/java/com/hieptran/aacast/doudou/V10LauncherActivity.java"
+          )
           s = path.read_text()
 
           # 1. Add FrameLayout import
           if "import android.widget.FrameLayout;" not in s:
               s = s.replace(
                   "import android.widget.LinearLayout;",
-                  "import android.widget.LinearLayout;\nimport android.widget.FrameLayout;"
+                  "import android.widget.LinearLayout;\n"
+                  "import android.widget.FrameLayout;"
               )
 
           # 2. Add fields
           s = s.replace(
               "private LinearLayout root;",
-              "private FrameLayout root;\n    private NavigationMapView navigationMap;\n    private NavigationPresentationView navigationPresentation;"
+              "private FrameLayout root;\n"
+              "    private NavigationMapView navigationMap;\n"
+              "    private NavigationPresentationView navigationPresentation;"
           )
 
-          # 3. Change root to FrameLayout & patch LayoutParams
-          s = s.replace("root = new LinearLayout(this);", "root = new FrameLayout(this);")
-          s = s.replace("root = \n new LinearLayout(this);", "root = new FrameLayout(this);")
-          
-          s = s.replace("new LinearLayout.LayoutParams(-1, -1)", "new FrameLayout.LayoutParams(-1, -1)")
-          s = s.replace("new LinearLayout.LayoutParams(\n -1,\n -1)", "new FrameLayout.LayoutParams(-1, -1)")
+          # 3. Change root to FrameLayout.
+          # IMPORTANT:
+          # Baseline source uses a multiline initialization:
+          #
+          # root =
+          #         new LinearLayout(this);
+          #
+          # Therefore this must be patched explicitly.
 
-          # 4. Attach Navigation Presentation Layer before setContentView
+          old_root_init = """root =
+                  new LinearLayout(this);"""
+
+          new_root_init = """root =
+                  new FrameLayout(this);"""
+
+          if old_root_init not in s:
+              raise SystemExit(
+                  "ERROR: V10LauncherActivity root initialization "
+                  "block not found."
+              )
+
+          s = s.replace(
+              old_root_init,
+              new_root_init,
+              1
+          )
+
+          # FrameLayout has no setOrientation().
+          old_root_orientation = """root.setOrientation(
+                  LinearLayout.VERTICAL);"""
+
+          if old_root_orientation not in s:
+              raise SystemExit(
+                  "ERROR: V10LauncherActivity root orientation "
+                  "block not found."
+              )
+
+          s = s.replace(
+              old_root_orientation,
+              "",
+              1
+          )
+
+          # 4. Patch direct-child LayoutParams.
+          s = s.replace(
+              "new LinearLayout.LayoutParams(-1, -1)",
+              "new FrameLayout.LayoutParams(-1, -1)"
+          )
+
+          s = s.replace(
+              """new LinearLayout.LayoutParams(
+                          -1,
+                          -1)""",
+              """new FrameLayout.LayoutParams(
+                          -1,
+                          -1)"""
+          )
+
+          # 5. Attach Navigation Presentation Layer before setContentView
           old_set_content = "setContentView(root);"
+
           new_set_content = "\n".join([
               "navigationMap = new NavigationMapView(this);",
               "navigationPresentation = new NavigationPresentationView(this);",
               "navigationPresentation.setNavigationMap(navigationMap);",
-              "root.addView(navigationPresentation, new FrameLayout.LayoutParams(-1, -1));",
+              "root.addView(navigationPresentation, "
+              "new FrameLayout.LayoutParams(-1, -1));",
               "setContentView(root);"
           ])
-          if old_set_content in s:
-              s = s.replace(old_set_content, new_set_content, 1)
 
-          # 5. Lifecycle Management (onResume, onPause, onDestroy)
+          if old_set_content in s:
+              s = s.replace(
+                  old_set_content,
+                  new_set_content,
+                  1
+              )
+
+          # 6. Lifecycle Management
           old_destroy = "protected void onDestroy() {"
+
           if "@Override\n    protected void onDestroy() {" in s:
               old_destroy = "@Override\n    protected void onDestroy() {"
 
@@ -274,9 +385,19 @@ jobs:
               "    navigationMap = null;"
           ])
 
-          s = s.replace(old_destroy, new_lifecycles, 1)
+          if old_destroy not in s:
+              raise SystemExit(
+                  "ERROR: V10LauncherActivity onDestroy() not found."
+              )
+
+          s = s.replace(
+              old_destroy,
+              new_lifecycles,
+              1
+          )
 
           path.write_text(s)
+
           print("PASS: V10LauncherActivity patched successfully.")
           PY
 
