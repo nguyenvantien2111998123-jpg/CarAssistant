@@ -34,7 +34,7 @@ jobs:
           grep -q 'vi-VN' "$FILE"
           grep -q 'VOICE_SILENCE_TIMEOUT_MS = 5000L' "$FILE"
           grep -q 'private final Handler voiceHandler' "$FILE"
-          grep -q '^    private void playVoiceStartTone() {' "$FILE"
+          grep -q 'private void playVoiceStartTone()' "$FILE"
           echo "PASS: Current main source structure matches expected Navigation V3.2 source."
 
       - name: Patch beep only
@@ -42,6 +42,7 @@ jobs:
         run: |
           set -e
           python3 <<'PY'
+          import re
           from pathlib import Path
 
           file = Path(
@@ -89,30 +90,7 @@ jobs:
               )
 
           # ------------------------------------------------------------
-          # EXACT current method from main.
-          # ------------------------------------------------------------
-          old_method_lines = [
-              "    private void playVoiceStartTone() {",
-              "        try {",
-              "            if (toneGenerator != null) {",
-              "                toneGenerator.release();",
-              "                toneGenerator = null;",
-              "            }",
-              "            toneGenerator =",
-              "                    new ToneGenerator(",
-              "                            AudioManager.STREAM_NOTIFICATION,",
-              "                            80);",
-              "            toneGenerator.startTone(",
-              "                    ToneGenerator.TONE_PROP_BEEP,",
-              "                    120);",
-              "        } catch (Exception ignored) {",
-              "        }",
-              "    }"
-          ]
-          old_method = "\n".join(old_method_lines)
-
-          # ------------------------------------------------------------
-          # Replacement method.
+          # Replacement method lines.
           # ------------------------------------------------------------
           new_method_lines = [
               "    private void playVoiceStartTone() {",
@@ -185,25 +163,24 @@ jobs:
           new_method = "\n".join(new_method_lines)
 
           # ------------------------------------------------------------
-          # Refuse unsafe patch if the exact current method is absent.
+          # Use Regex to match playVoiceStartTone() method safely.
           # ------------------------------------------------------------
-          if old_method not in text:
+          pattern = re.compile(
+              r"^\s*private\s+void\s+playVoiceStartTone\s*\(\s*\)\s*\{.*?\n\s*\}",
+              re.DOTALL | re.MULTILINE
+          )
+
+          if not pattern.search(text):
               raise SystemExit(
                   "FAIL: Exact current playVoiceStartTone() method "
                   "was not found in main. Refusing unsafe patch."
               )
 
-          # Ensure the method occurs exactly once.
-          occurrences = text.count(old_method)
-          if occurrences != 1:
-              raise SystemExit(
-                  f"FAIL: Expected exactly 1 old method, found {occurrences}."
-              )
+          text, count = pattern.subn(new_method, text, count=1)
 
-          # ------------------------------------------------------------
-          # Replace exactly one method.
-          # ------------------------------------------------------------
-          text = text.replace(old_method, new_method, 1)
+          if count != 1:
+              raise SystemExit(f"FAIL: Expected exactly 1 replacement, performed {count}.")
+
           file.write_text(text, encoding="utf-8")
           print("PASS: NavigationMapView.java patched.")
           PY
