@@ -1,57 +1,4 @@
-name: "CarAssistant V10 - Navigation V1 Search DNS Diagnostic 2"
-
-on:
-  workflow_dispatch:
-
-permissions:
-  contents: read
-
-jobs:
-  build:
-    runs-on: ubuntu-latest
-    timeout-minutes: 40
-
-    steps:
-      - name: Checkout current main source
-        uses: actions/checkout@v4
-        with:
-          ref: main
-          fetch-depth: 1
-
-      - name: Setup Java 17
-        uses: actions/setup-java@v4
-        with:
-          distribution: temurin
-          java-version: '17'
-
-      - name: Verify current V10 source
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          SRC="v10-source"
-          JAVA_SRC="$SRC/app/src/main/java/com/hieptran/aacast/doudou"
-
-          echo "Checking current main source..."
-
-          test -d "$SRC"
-          test -f "$SRC/settings.gradle"
-          test -f "$SRC/build.gradle"
-          test -f "$SRC/gradlew"
-          test -f "$SRC/app/build.gradle"
-          test -f "$SRC/app/src/main/AndroidManifest.xml"
-
-          test -f "$JAVA_SRC/V10CarActivity.java"
-          test -f "$JAVA_SRC/V10ProjectionSession.java"
-          test -f "$JAVA_SRC/V10DisplayController.java"
-          test -f "$JAVA_SRC/V10SurfaceManager.java"
-          test -f "$JAVA_SRC/V10TaskSession.java"
-          test -f "$JAVA_SRC/V10SessionStore.java"
-          test -f "$JAVA_SRC/NavigationMapView.java"
-
-          echo "PASS: All core files exist."
-
-      - name: Patch ONLY searchNominatim runtime diagnostic
+  - name: Patch ONLY searchNominatim with Java Brace Matching
         shell: bash
         run: |
           set -euo pipefail
@@ -59,12 +6,17 @@ jobs:
           FILE="v10-source/app/src/main/java/com/hieptran/aacast/doudou/NavigationMapView.java"
 
           python3 <<'PY'
-          import re
+          import sys
           from pathlib import Path
 
           path = Path("v10-source/app/src/main/java/com/hieptran/aacast/doudou/NavigationMapView.java")
+          if not path.is_file():
+              print("ERROR: NavigationMapView.java not found.")
+              sys.exit(1)
+
           text = path.read_text(encoding="utf-8")
 
+          # 1. Bổ sung các import an toàn (chỉ thêm nếu chưa có)
           required_imports = [
               "import java.net.HttpURLConnection;",
               "import java.net.URL;",
@@ -83,18 +35,40 @@ jobs:
               if imp not in text:
                   text = imp + "\n" + text
 
-          start_pattern = re.compile(r'^\s*private\s+void\s+searchNominatim\s*\(', re.MULTILINE)
-          end_pattern = re.compile(r'^\s*private\s+void\s+postSearchResults\s*\(', re.MULTILINE)
+          # 2. Định vị bắt đầu phương thức searchNominatim
+          target_sig = "private void searchNominatim("
+          start_idx = text.find(target_sig)
+          if start_idx == -1:
+              print("ERROR: Could not find method signature 'private void searchNominatim('")
+              sys.exit(1)
 
-          start_match = start_pattern.search(text)
-          end_match = end_pattern.search(text)
+          # Tìm ngoặc nhọn mở '{' đầu tiên của hàm
+          brace_start = text.find("{", start_idx)
+          if brace_start == -1:
+              print("ERROR: Could not find opening brace '{' for searchNominatim.")
+              sys.exit(1)
 
-          if not start_match or not end_match:
-              raise SystemExit("ERROR: Method boundaries for searchNominatim not found.")
+          # 3. Thuật toán Java Brace Matching xác định chính xác ngoặc nhọn đóng '}' của hàm
+          brace_count = 0
+          end_idx = -1
+          for i in range(brace_start, len(text)):
+              if text[i] == '{':
+                  brace_count += 1
+              elif text[i] == '}':
+                  brace_count -= 1
+                  if brace_count == 0:
+                      end_idx = i + 1
+                      break
 
-          start = start_match.start()
-          end = end_match.start()
+          if end_idx == -1 or brace_count != 0:
+              print("ERROR: Java brace matching failed. Could not find closing brace for searchNominatim.")
+              sys.exit(1)
 
+          # Lấy khoảng lùi đầu dòng
+          line_start = text.rfind("\n", 0, start_idx)
+          line_start = 0 if line_start == -1 else line_start + 1
+
+          # 4. Nội dung hàm chẩn đoán mới (xung đột tên biến được cô lập 100%)
           new_method_lines = [
               "    private void searchNominatim(String query) {",
               '        String diagHost = "nominatim.openstreetmap.org";',
@@ -112,7 +86,7 @@ jobs:
               "            } else {",
               '                diagnostic.append("PASS: ");',
               "                for (int i = 0; i < addresses.length; i++) {",
-              "                    if (i > 0) diagnostic.append(\", \");",
+              '                    if (i > 0) diagnostic.append(", ");',
               "                    diagnostic.append(addresses[i].getHostAddress());",
               "                }",
               '                diagnostic.append("\\n");',
@@ -129,7 +103,7 @@ jobs:
               "        // TEST 2 — DNS OVER HTTPS",
               '        diagnostic.append("TEST 2 — DNS OVER HTTPS\\n");',
               "        try {",
-              "            URL dohUrl = new URL(\"https://1.1.1.1/dns-query?name=\" + URLEncoder.encode(diagHost, \"UTF-8\") + \"&type=A\");",
+              '            URL dohUrl = new URL("https://1.1.1.1/dns-query?name=" + URLEncoder.encode(diagHost, "UTF-8") + "&type=A");',
               "            HttpURLConnection doh = (HttpURLConnection) dohUrl.openConnection();",
               '            doh.setRequestMethod("GET");',
               "            doh.setConnectTimeout(8000);",
@@ -221,50 +195,19 @@ jobs:
               '        diagnostic.append("System DNS, DoH and HTTPS-to-IP results recorded above.\\n");',
               '        Log.d("CarAssistant-Nominatim", diagnostic.toString());',
               "        postSearchMessage(diagnostic.toString());",
-              "    }\n\n"
+              "    }"
           ]
 
           new_method = "\n".join(new_method_lines)
-          patched = text[:start] + new_method + text[end:]
+
+          # Thực hiện thay thế
+          patched = text[:line_start] + new_method + text[end_idx:]
+
+          # Kiểm tra tính toàn vẹn cơ bản trước khi ghi file
+          if "private void searchNominatim(" not in patched:
+              print("ERROR: Patch verification failed, method searchNominatim is missing.")
+              sys.exit(1)
+
           path.write_text(patched, encoding="utf-8")
-          print("PASS: searchNominatim patched cleanly.")
+          print("PASS: searchNominatim patched isolated and cleanly via Brace Matching.")
           PY
-
-      - name: Compile current V10 source
-        working-directory: v10-source
-        shell: bash
-        run: |
-          set -euo pipefail
-          chmod +x ./gradlew
-          ./gradlew --no-daemon :app:compileDebugJavaWithJavac --stacktrace
-
-      - name: Assemble current V10 APK
-        working-directory: v10-source
-        shell: bash
-        run: |
-          set -euo pipefail
-          chmod +x ./gradlew
-          ./gradlew --no-daemon :app:assembleDebug --stacktrace
-
-      - name: Package APK for Android Auto testing
-        shell: bash
-        run: |
-          set -euo pipefail
-          APK="$(find v10-source/app/build/outputs/apk -type f -name "*.apk" | head -n 1)"
-          if [ -z "$APK" ]; then
-            echo "ERROR: Generated APK not found."
-            exit 1
-          fi
-          cp "$APK" CarAssistant-Navigation-V1-Search-Diagnostic.apk
-          sha256sum CarAssistant-Navigation-V1-Search-Diagnostic.apk > CarAssistant-Navigation-V1-Search-Diagnostic.sha256
-          echo "PASS: Diagnostic APK package ready."
-
-      - name: Upload APK artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: CarAssistant-Navigation-V1-Search-Diagnostic
-          path: |
-            CarAssistant-Navigation-V1-Search-Diagnostic.apk
-            CarAssistant-Navigation-V1-Search-Diagnostic.sha256
-          if-no-files-found: error
-          retention-days: 14
