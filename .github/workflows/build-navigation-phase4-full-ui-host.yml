@@ -153,10 +153,6 @@ jobs:
 
       # =========================================================
       # 6. VERIFY V10CarActivity BASELINE STRUCTURE
-      #
-      # Do NOT guess replacement strings.
-      # These checks validate the exact architecture that the
-      # following patch expects.
       # =========================================================
 
       - name: Validate V10CarActivity baseline structure
@@ -377,12 +373,6 @@ jobs:
 
       # =========================================================
       # 8. PATCH ONLY V10CarActivity
-      #
-      # Important:
-      # - V10LauncherActivity is NOT modified.
-      # - NavigationMapView is NOT modified.
-      # - onResume is replaced as a whole using actual method
-      #   boundaries from the verified source.
       # =========================================================
 
       - name: Patch V10CarActivity Presentation Host
@@ -442,10 +432,6 @@ jobs:
                   1
               )
 
-          # -----------------------------------------------------
-          # 1. Add Presentation field.
-          # -----------------------------------------------------
-
           field_pattern = (
               r"(^\s*private NavigationMapView navigationMap;\s*$)"
           )
@@ -462,11 +448,6 @@ jobs:
               field_replacement,
               "NavigationPresentation field"
           )
-
-          # -----------------------------------------------------
-          # 2. Replace the exact baseline NavigationMapView
-          #    root child inside buildUi().
-          # -----------------------------------------------------
 
           old_map_block = """        navigationMap=new NavigationMapView(this);
                   root.addView(
@@ -493,14 +474,6 @@ jobs:
               new_map_block,
               "NavigationPresentation root host"
           )
-
-          # -----------------------------------------------------
-          # 3. Replace the COMPLETE baseline onResume().
-          #
-          # This is intentional:
-          # navigationPresentation.onHostResume() must NOT remain
-          # inside if (root == null).
-          # -----------------------------------------------------
 
           resume_pattern = (
               r"(^\s*@Override\s+"
@@ -551,7 +524,7 @@ jobs:
               }
 
 
-              private void buildUi()"""
+              private void buildUi"""
 
           text = require_once(
               text,
@@ -559,10 +532,6 @@ jobs:
               resume_replacement,
               "V10CarActivity onResume"
           )
-
-          # -----------------------------------------------------
-          # 4. Replace pause delegation.
-          # -----------------------------------------------------
 
           pause_pattern = (
               r"if\s*\(\s*navigationMap\s*!=\s*null\s*\)"
@@ -580,10 +549,6 @@ jobs:
               pause_replacement,
               "V10CarActivity onPause"
           )
-
-          # -----------------------------------------------------
-          # 5. Replace destroy delegation.
-          # -----------------------------------------------------
 
           destroy_pattern = (
               r"if\s*\(\s*navigationMap\s*!=\s*null\s*\)\s*\{\s*"
@@ -606,10 +571,6 @@ jobs:
               "V10CarActivity onDestroy"
           )
 
-          # -----------------------------------------------------
-          # 6. Write patched source.
-          # -----------------------------------------------------
-
           path.write_text(
               text,
               encoding="utf-8"
@@ -621,7 +582,11 @@ jobs:
           PY
 
       # =========================================================
-      # 9. VERIFY PATCHED ARCHITECTURE
+      # 9. VERIFY PATCHED NAVIGATION ARCHITECTURE
+      #
+      # FIX:
+      # Do not require Java statements to be on one line.
+      # Verification is whitespace-tolerant.
       # =========================================================
 
       - name: Verify patched Navigation architecture
@@ -632,7 +597,10 @@ jobs:
           CAR="v10-source/app/src/main/java/com/hieptran/aacast/doudou/V10CarActivity.java"
           PRESENTATION="v10-source/app/src/main/java/com/hieptran/aacast/doudou/NavigationPresentationView.java"
 
-          check() {
+          test -f "$CAR"
+          test -f "$PRESENTATION"
+
+          check_fixed() {
             local label="$1"
             local pattern="$2"
             local file="$3"
@@ -649,133 +617,156 @@ jobs:
             fi
           }
 
-          echo "Checking PresentationView..."
+          check_regex() {
+            local label="$1"
+            local pattern="$2"
+            local file="$3"
 
-          check \
+            if grep -Eq "$pattern" "$file"; then
+              echo "PASS: $label"
+            else
+              echo "ERROR: $label"
+              echo "Regex not matched:"
+              echo "$pattern"
+              echo "File:"
+              echo "$file"
+              exit 1
+            fi
+          }
+
+          echo "========================================"
+          echo "Checking NavigationPresentationView"
+          echo "========================================"
+
+          check_fixed \
             "PresentationView class" \
             "public final class NavigationPresentationView" \
             "$PRESENTATION"
 
-          check \
+          check_fixed \
             "PresentationView setNavigationMap" \
             "setNavigationMap(" \
             "$PRESENTATION"
 
-          check \
+          check_fixed \
             "PresentationView resume" \
             "onHostResume()" \
             "$PRESENTATION"
 
-          check \
+          check_fixed \
             "PresentationView pause" \
             "onHostPause()" \
             "$PRESENTATION"
 
-          check \
+          check_fixed \
             "PresentationView destroy" \
             "onHostDestroy()" \
             "$PRESENTATION"
 
           echo ""
-          echo "Checking V10CarActivity..."
+          echo "========================================"
+          echo "Checking V10CarActivity"
+          echo "========================================"
 
-          check \
+          check_fixed \
             "Presentation field" \
             "private NavigationPresentationView navigationPresentation;" \
             "$CAR"
 
-          check \
+          check_regex \
             "Presentation creation" \
-            "navigationPresentation = new NavigationPresentationView(this);" \
+            'navigationPresentation[[:space:]]*=[[:space:]]*new[[:space:]]+NavigationPresentationView[[:space:]]*\([[:space:]]*this[[:space:]]*\)[[:space:]]*;' \
             "$CAR"
 
-          check \
+          check_regex \
             "NavigationMap assigned to Presentation" \
-            "navigationPresentation.setNavigationMap(" \
+            'navigationPresentation[[:space:]]*\.[[:space:]]*setNavigationMap[[:space:]]*\([[:space:]]*navigationMap[[:space:]]*\)[[:space:]]*;' \
             "$CAR"
 
-          check \
+          check_regex \
             "Presentation added to root" \
-            "navigationPresentation," \
+            'root[[:space:]]*\.[[:space:]]*addView[[:space:]]*\([[:space:]]*navigationPresentation[[:space:]]*,' \
             "$CAR"
 
-          check \
+          check_regex \
             "Resume delegation" \
-            "navigationPresentation" \
+            'navigationPresentation[[:space:]]*\.[[:space:]]*onHostResume[[:space:]]*\([[:space:]]*\)[[:space:]]*;' \
             "$CAR"
 
-          check \
+          check_regex \
             "Pause delegation" \
-            "onHostPause()" \
+            'navigationPresentation[[:space:]]*\.[[:space:]]*onHostPause[[:space:]]*\([[:space:]]*\)[[:space:]]*;' \
             "$CAR"
 
-          check \
+          check_regex \
             "Destroy delegation" \
-            "onHostDestroy()" \
+            'navigationPresentation[[:space:]]*\.[[:space:]]*onHostDestroy[[:space:]]*\([[:space:]]*\)[[:space:]]*;' \
             "$CAR"
 
           echo ""
-          echo "Checking lifecycle structure..."
+          echo "========================================"
+          echo "Checking lifecycle structure"
+          echo "========================================"
 
           python3 - <<'PY'
           from pathlib import Path
           import re
 
-          p = Path(
+          path = Path(
               "v10-source/app/src/main/java/com/hieptran/aacast/doudou/V10CarActivity.java"
           )
 
-          s = p.read_text(
+          text = path.read_text(
               encoding="utf-8"
           )
 
-          # Direct lifecycle calls from V10CarActivity must be gone.
           forbidden = [
-              "navigationMap.onHostResume();",
-              "navigationMap.onHostPause();",
-              "navigationMap.onHostDestroy();",
+              r"navigationMap\s*\.\s*onHostResume\s*\(",
+              r"navigationMap\s*\.\s*onHostPause\s*\(",
+              r"navigationMap\s*\.\s*onHostDestroy\s*\(",
           ]
 
-          for item in forbidden:
-              if item in s:
+          for pattern in forbidden:
+              if re.search(pattern, text):
                   raise SystemExit(
-                      "ERROR: Direct NavigationMapView lifecycle call remains: "
-                      + item
+                      "ERROR: Direct NavigationMapView lifecycle "
+                      "call remains: " + pattern
                   )
 
-          # Presentation lifecycle calls must exist.
           required = [
-              "navigationPresentation",
-              "onHostResume()",
-              "onHostPause()",
-              "onHostDestroy()",
+              r"navigationPresentation\s*\.\s*onHostResume\s*\(",
+              r"navigationPresentation\s*\.\s*onHostPause\s*\(",
+              r"navigationPresentation\s*\.\s*onHostDestroy\s*\(",
           ]
 
-          for item in required:
-              if item not in s:
+          for pattern in required:
+              if not re.search(pattern, text):
                   raise SystemExit(
-                      "ERROR: Missing Presentation lifecycle item: "
-                      + item
+                      "ERROR: Missing Presentation lifecycle: "
+                      + pattern
                   )
 
-          # Extract onResume only and verify the Presentation resume
-          # is outside the root == null block.
           m = re.search(
-              r"public void onResume\(\)\s*\{(.*?)"
-              r"\n\s*\}\s*\n\s*\n\s*private void buildUi\(\)",
-              s,
+              r"public\s+void\s+onResume\s*\(\s*\)\s*\{"
+              r"(.*?)"
+              r"\n\s*\}"
+              r"\s*\n\s*\n\s*"
+              r"private\s+void\s+buildUi\s*\(",
+              text,
               flags=re.S
           )
 
           if not m:
               raise SystemExit(
-                  "ERROR: Could not isolate patched onResume()."
+                  "ERROR: Could not isolate onResume()."
               )
 
           resume = m.group(1)
 
           root_match = re.search(
-              r"if\s*\(\s*root\s*==\s*null\s*\)\s*\{(.*?)\n\s*\}",
+              r"if\s*\(\s*root\s*==\s*null\s*\)\s*\{"
+              r"(.*?)"
+              r"\n\s*\}",
               resume,
               flags=re.S
           )
@@ -787,27 +778,41 @@ jobs:
 
           root_block = root_match.group(1)
 
-          if "navigationPresentation" in root_block:
+          if re.search(
+              r"navigationPresentation\s*\.\s*onHostResume\s*\(",
+              root_block
+          ):
               raise SystemExit(
-                  "ERROR: navigationPresentation lifecycle call "
+                  "ERROR: navigationPresentation.onHostResume() "
                   "is still inside root == null."
               )
 
-          if "navigationPresentation" not in resume:
+          if not re.search(
+              r"navigationPresentation\s*\.\s*onHostResume\s*\(",
+              resume
+          ):
               raise SystemExit(
-                  "ERROR: onResume does not delegate to Presentation."
+                  "ERROR: onResume does not delegate to "
+                  "NavigationPresentationView."
               )
 
           print(
               "PASS: onHostResume() is outside root == null."
           )
+
           print(
               "PASS: Direct NavigationMapView lifecycle calls removed."
           )
+
           print(
               "PASS: Presentation lifecycle architecture verified."
           )
           PY
+
+          echo ""
+          echo "========================================"
+          echo "PASS: Navigation architecture verification"
+          echo "========================================"
 
       # =========================================================
       # 10. VERIFY V10LauncherActivity WAS NOT MODIFIED
