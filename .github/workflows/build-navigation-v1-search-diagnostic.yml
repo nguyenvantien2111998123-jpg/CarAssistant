@@ -70,331 +70,335 @@ jobs:
               re.S
           )
 
-          replacement = r'''    private void searchNominatim(
-            String query) {
-
-        HttpURLConnection connection = null;
-
-        String stage = "START";
-        String host = "nominatim.openstreetmap.org";
-
-        try {
-
-            /*
-             * =====================================================
-             * DIAGNOSTIC 1 — DNS HOST
-             * =====================================================
-             */
-            stage = "DNS";
-
-            java.net.InetAddress address =
-                    java.net.InetAddress.getByName(host);
-
-            String resolvedAddress =
-                    address.getHostAddress();
-
-            Log.d(
-                    "CarAssistant-Nominatim",
-                    "DNS OK host="
-                            + host
-                            + " address="
-                            + resolvedAddress);
-
-            /*
-             * =====================================================
-             * DIAGNOSTIC 2 — CREATE URL
-             * =====================================================
-             */
-            stage = "URL";
-
-            String encoded =
-                    URLEncoder.encode(
-                            query,
-                            "UTF-8");
-
-            URL url =
-                    new URL(
-                            "https://nominatim.openstreetmap.org/search"
-                                    + "?format=jsonv2"
-                                    + "&limit=5"
-                                    + "&accept-language=vi"
-                                    + "&q="
-                                    + encoded);
-
-            Log.d(
-                    "CarAssistant-Nominatim",
-                    "URL OK "
-                            + url.toString());
-
-            /*
-             * =====================================================
-             * DIAGNOSTIC 3 — CONNECT
-             * =====================================================
-             */
-            stage = "CONNECT";
-
-            connection =
-                    (HttpURLConnection)
-                            url.openConnection();
-
-            connection.setRequestMethod(
-                    "GET");
-
-            connection.setConnectTimeout(
-                    8000);
-
-            connection.setReadTimeout(
-                    10000);
-
-            connection.setUseCaches(false);
-
-            connection.setRequestProperty(
-                    "User-Agent",
-                    "CarAssistant-NavigationV3/1.0");
-
-            connection.setRequestProperty(
-                    "Accept",
-                    "application/json");
-
-            connection.setRequestProperty(
-                    "Accept-Language",
-                    "vi-VN,vi;q=0.9");
-
-            Log.d(
-                    "CarAssistant-Nominatim",
-                    "CONNECT starting");
-
-            connection.connect();
-
-            Log.d(
-                    "CarAssistant-Nominatim",
-                    "CONNECT OK");
-
-            /*
-             * =====================================================
-             * DIAGNOSTIC 4 — HTTP RESPONSE
-             * =====================================================
-             */
-            stage = "HTTP";
-
-            int code =
-                    connection.getResponseCode();
-
-            String responseMessage =
-                    connection.getResponseMessage();
-
-            Log.d(
-                    "CarAssistant-Nominatim",
-                    "HTTP response="
-                            + code
-                            + " message="
-                            + responseMessage);
-
-            if (code !=
-                    HttpURLConnection.HTTP_OK) {
-
-                InputStream errorStream =
-                        connection.getErrorStream();
-
-                StringBuilder errorBody =
-                        new StringBuilder();
-
-                if (errorStream != null) {
-
-                    BufferedReader errorReader =
-                            new BufferedReader(
-                                    new InputStreamReader(
-                                            errorStream,
-                                            "UTF-8"));
-
-                    String errorLine;
-
-                    while ((errorLine =
-                            errorReader.readLine()) != null) {
-
-                        errorBody.append(
-                                errorLine);
-                    }
-
-                    errorReader.close();
-                }
-
-                String diagnostic =
-                        "NOMINATIM DIAGNOSTIC\n"
-                                + "DNS: OK "
-                                + resolvedAddress
-                                + "\n"
-                                + "URL: OK\n"
-                                + "CONNECT: OK\n"
-                                + "HTTP: "
-                                + code
-                                + " "
-                                + responseMessage
-                                + "\n"
-                                + "BODY: "
-                                + errorBody.toString();
-
-                Log.e(
-                        "CarAssistant-Nominatim",
-                        diagnostic);
-
-                postSearchMessage(
-                        diagnostic);
-
-                return;
-            }
-
-            /*
-             * =====================================================
-             * HTTP 200 — READ RESPONSE
-             * =====================================================
-             */
-            stage = "READ";
-
-            InputStream input =
-                    connection.getInputStream();
-
-            BufferedReader reader =
-                    new BufferedReader(
-                            new InputStreamReader(
-                                    input,
-                                    "UTF-8"));
-
-            StringBuilder body =
-                    new StringBuilder();
-
-            String line;
-
-            while ((line =
-                    reader.readLine()) != null) {
-
-                body.append(line);
-            }
-
-            reader.close();
-
-            Log.d(
-                    "CarAssistant-Nominatim",
-                    "HTTP 200 bodyLength="
-                            + body.length());
-
-            /*
-             * =====================================================
-             * EXISTING JSON PARSING
-             * GIỮ NGUYÊN LOGIC V3.2
-             * =====================================================
-             */
-            JSONArray array =
-                    new JSONArray(
-                            body.toString());
-
-            ArrayList<SearchResult> results =
-                    new ArrayList<>();
-
-            for (int i = 0;
-                 i < array.length() && i < 5;
-                 i++) {
-
-                JSONObject item =
-                        array.getJSONObject(i);
-
-                String latText =
-                        item.optString(
-                                "lat",
-                                "");
-
-                String lonText =
-                        item.optString(
-                                "lon",
-                                "");
-
-                String name =
-                        item.optString(
-                                "display_name",
-                                "Địa điểm");
-
-                if (latText.isEmpty()
-                        || lonText.isEmpty()) {
-
-                    continue;
-                }
-
-                try {
-
-                    double lat =
-                            Double.parseDouble(
-                                    latText);
-
-                    double lon =
-                            Double.parseDouble(
-                                    lonText);
-
-                    results.add(
-                            new SearchResult(
-                                    name,
-                                    lat,
-                                    lon));
-
-                } catch (
-                        NumberFormatException ignored) {
-                }
-            }
-
-            Log.d(
-                    "CarAssistant-Nominatim",
-                    "SEARCH OK results="
-                            + results.size());
-
-            postSearchResults(
-                    results);
-
-        } catch (Exception e) {
-
-            String exceptionClass =
-                    e.getClass()
-                            .getSimpleName();
-
-            String exceptionMessage =
-                    e.getMessage();
-
-            if (exceptionMessage == null
-                    || exceptionMessage.trim().isEmpty()) {
-
-                exceptionMessage =
-                        "(no message)";
-            }
-
-            String diagnostic =
-                    "NOMINATIM DIAGNOSTIC\n"
-                            + "STAGE: "
-                            + stage
-                            + "\n"
-                            + "HOST: "
-                            + host
-                            + "\n"
-                            + "EXCEPTION: "
-                            + exceptionClass
-                            + "\n"
-                            + "MESSAGE: "
-                            + exceptionMessage;
-
-            Log.e(
-                    "CarAssistant-Nominatim",
-                    diagnostic,
-                    e);
-
-            postSearchMessage(
-                    diagnostic);
-
-        } finally {
-
-            if (connection != null) {
-                connection.disconnect();
-            }
-        }
-    }
-
-    private void postSearchResults('''
+          replacement_lines = [
+              '    private void searchNominatim(',
+              '            String query) {',
+              '',
+              '        HttpURLConnection connection = null;',
+              '',
+              '        String stage = "START";',
+              '        String host = "nominatim.openstreetmap.org";',
+              '',
+              '        try {',
+              '',
+              '            /*',
+              '             * =====================================================',
+              '             * DIAGNOSTIC 1 — DNS HOST',
+              '             * =====================================================',
+              '             */',
+              '            stage = "DNS";',
+              '',
+              '            java.net.InetAddress address =',
+              '                    java.net.InetAddress.getByName(host);',
+              '',
+              '            String resolvedAddress =',
+              '                    address.getHostAddress();',
+              '',
+              '            Log.d(',
+              '                    "CarAssistant-Nominatim",',
+              '                    "DNS OK host="',
+              '                            + host',
+              '                            + " address="',
+              '                            + resolvedAddress);',
+              '',
+              '            /*',
+              '             * =====================================================',
+              '             * DIAGNOSTIC 2 — CREATE URL',
+              '             * =====================================================',
+              '             */',
+              '            stage = "URL";',
+              '',
+              '            String encoded =',
+              '                    URLEncoder.encode(',
+              '                            query,',
+              '                            "UTF-8");',
+              '',
+              '            URL url =',
+              '                    new URL(',
+              '                            "https://nominatim.openstreetmap.org/search"',
+              '                                    + "?format=jsonv2"',
+              '                                    + "&limit=5"',
+              '                                    + "&accept-language=vi"',
+              '                                    + "&q="',
+              '                                    + encoded);',
+              '',
+              '            Log.d(',
+              '                    "CarAssistant-Nominatim",',
+              '                    "URL OK "',
+              '                            + url.toString());',
+              '',
+              '            /*',
+              '             * =====================================================',
+              '             * DIAGNOSTIC 3 — CONNECT',
+              '             * =====================================================',
+              '             */',
+              '            stage = "CONNECT";',
+              '',
+              '            connection =',
+              '                    (HttpURLConnection)',
+              '                            url.openConnection();',
+              '',
+              '            connection.setRequestMethod(',
+              '                    "GET");',
+              '',
+              '            connection.setConnectTimeout(',
+              '                    8000);',
+              '',
+              '            connection.setReadTimeout(',
+              '                    10000);',
+              '',
+              '            connection.setUseCaches(false);',
+              '',
+              '            connection.setRequestProperty(',
+              '                    "User-Agent",',
+              '                    "CarAssistant-NavigationV3/1.0");',
+              '',
+              '            connection.setRequestProperty(',
+              '                    "Accept",',
+              '                    "application/json");',
+              '',
+              '            connection.setRequestProperty(',
+              '                    "Accept-Language",',
+              '                    "vi-VN,vi;q=0.9");',
+              '',
+              '            Log.d(',
+              '                    "CarAssistant-Nominatim",',
+              '                    "CONNECT starting");',
+              '',
+              '            connection.connect();',
+              '',
+              '            Log.d(',
+              '                    "CarAssistant-Nominatim",',
+              '                    "CONNECT OK");',
+              '',
+              '            /*',
+              '             * =====================================================',
+              '             * DIAGNOSTIC 4 — HTTP RESPONSE',
+              '             * =====================================================',
+              '             */',
+              '            stage = "HTTP";',
+              '',
+              '            int code =',
+              '                    connection.getResponseCode();',
+              '',
+              '            String responseMessage =',
+              '                    connection.getResponseMessage();',
+              '',
+              '            Log.d(',
+              '                    "CarAssistant-Nominatim",',
+              '                    "HTTP response="',
+              '                            + code',
+              '                            + " message="',
+              '                            + responseMessage);',
+              '',
+              '            if (code !=',
+              '                    HttpURLConnection.HTTP_OK) {',
+              '',
+              '                InputStream errorStream =',
+              '                        connection.getErrorStream();',
+              '',
+              '                StringBuilder errorBody =',
+              '                        new StringBuilder();',
+              '',
+              '                if (errorStream != null) {',
+              '',
+              '                    BufferedReader errorReader =',
+              '                            new BufferedReader(',
+              '                                    new InputStreamReader(',
+              '                                            errorStream,',
+              '                                            "UTF-8"));',
+              '',
+              '                    String errorLine;',
+              '',
+              '                    while ((errorLine =',
+              '                            errorReader.readLine()) != null) {',
+              '',
+              '                        errorBody.append(',
+              '                                errorLine);',
+              '                    }',
+              '',
+              '                    errorReader.close();',
+              '                }',
+              '',
+              '                String diagnostic =',
+              '                        "NOMINATIM DIAGNOSTIC\n"',
+              '                                + "DNS: OK "',
+              '                                + resolvedAddress',
+              '                                + "\n"',
+              '                                + "URL: OK\n"',
+              '                                + "CONNECT: OK\n"',
+              '                                + "HTTP: "',
+              '                                + code',
+              '                                + " "',
+              '                                + responseMessage',
+              '                                + "\n"',
+              '                                + "BODY: "',
+              '                                + errorBody.toString();',
+              '',
+              '                Log.e(',
+              '                        "CarAssistant-Nominatim",',
+              '                        diagnostic);',
+              '',
+              '                postSearchMessage(',
+              '                        diagnostic);',
+              '',
+              '                return;',
+              '            }',
+              '',
+              '            /*',
+              '             * =====================================================',
+              '             * HTTP 200 — READ RESPONSE',
+              '             * =====================================================',
+              '             */',
+              '            stage = "READ";',
+              '',
+              '            InputStream input =',
+              '                    connection.getInputStream();',
+              '',
+              '            BufferedReader reader =',
+              '                    new BufferedReader(',
+              '                            new InputStreamReader(',
+              '                                    input,',
+              '                                    "UTF-8"));',
+              '',
+              '            StringBuilder body =',
+              '                    new StringBuilder();',
+              '',
+              '            String line;',
+              '',
+              '            while ((line =',
+              '                    reader.readLine()) != null) {',
+              '',
+              '                body.append(line);',
+              '            }',
+              '',
+              '            reader.close();',
+              '',
+              '            Log.d(',
+              '                    "CarAssistant-Nominatim",',
+              '                    "HTTP 200 bodyLength="',
+              '                            + body.length());',
+              '',
+              '            /*',
+              '             * =====================================================',
+              '             * EXISTING JSON PARSING',
+              '             * GIỮ NGUYÊN LOGIC V3.2',
+              '             * =====================================================',
+              '             */',
+              '            JSONArray array =',
+              '                    new JSONArray(',
+              '                            body.toString());',
+              '',
+              '            ArrayList<SearchResult> results =',
+              '                    new ArrayList<>();',
+              '',
+              '            for (int i = 0;',
+              '                 i < array.length() && i < 5;',
+              '                 i++) {',
+              '',
+              '                JSONObject item =',
+              '                        array.getJSONObject(i);',
+              '',
+              '                String latText =',
+              '                        item.optString(',
+              '                                "lat",',
+              '                                "");',
+              '',
+              '                String lonText =',
+              '                        item.optString(',
+              '                                "lon",',
+              '                                "");',
+              '',
+              '                String name =',
+              '                        item.optString(',
+              '                                "display_name",',
+              '                                "Địa điểm");',
+              '',
+              '                if (latText.isEmpty()',
+              '                        || lonText.isEmpty()) {',
+              '',
+              '                    continue;',
+              '                }',
+              '',
+              '                try {',
+              '',
+              '                    double lat =',
+              '                            Double.parseDouble(',
+              '                                    latText);',
+              '',
+              '                    double lon =',
+              '                            Double.parseDouble(',
+              '                                    lonText);',
+              '',
+              '                    results.add(',
+              '                            new SearchResult(',
+              '                                    name,',
+              '                                    lat,',
+              '                                    lon));',
+              '',
+              '                } catch (',
+              '                        NumberFormatException ignored) {',
+              '                }',
+              '            }',
+              '',
+              '            Log.d(',
+              '                    "CarAssistant-Nominatim",',
+              '                    "SEARCH OK results="',
+              '                            + results.size());',
+              '',
+              '            postSearchResults(',
+              '                    results);',
+              '',
+              '        } catch (Exception e) {',
+              '',
+              '            String exceptionClass =',
+              '                    e.getClass()',
+              '                            .getSimpleName();',
+              '',
+              '            String exceptionMessage =',
+              '                    e.getMessage();',
+              '',
+              '            if (exceptionMessage == null',
+              '                    || exceptionMessage.trim().isEmpty()) {',
+              '',
+              '                exceptionMessage =',
+              '                        "(no message)";',
+              '            }',
+              '',
+              '            String diagnostic =',
+              '                    "NOMINATIM DIAGNOSTIC\n"',
+              '                            + "STAGE: "',
+              '                            + stage',
+              '                            + "\n"',
+              '                            + "HOST: "',
+              '                            + host',
+              '                            + "\n"',
+              '                            + "EXCEPTION: "',
+              '                            + exceptionClass',
+              '                            + "\n"',
+              '                            + "MESSAGE: "',
+              '                            + exceptionMessage;',
+              '',
+              '            Log.e(',
+              '                    "CarAssistant-Nominatim",',
+              '                    diagnostic,',
+              '                    e);',
+              '',
+              '            postSearchMessage(',
+              '                    diagnostic);',
+              '',
+              '        } finally {',
+              '',
+              '            if (connection != null) {',
+              '                connection.disconnect();',
+              '            }',
+              '        }',
+              '    }',
+              '',
+              '    private void postSearchResults('
+          ]
+
+          replacement = "\n".join(replacement_lines)
 
           matches = list(pattern.finditer(text))
 
