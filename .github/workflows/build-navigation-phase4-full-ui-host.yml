@@ -1,4 +1,4 @@
-name: Phase 4 Full UI Shared Host
+name: CarAssistant V10 - Navigation Phase 4 Full UI Shared Host
 
 on:
   workflow_dispatch:
@@ -126,49 +126,75 @@ jobs:
           set -euo pipefail
 
           python3 - <<'PY'
-          import re
           from pathlib import Path
 
           path = Path("v10-source/app/src/main/java/com/hieptran/aacast/doudou/V10CarActivity.java")
           s = path.read_text()
 
-          def replace_regex(pattern, new, label):
+          def replace_smart(old_pattern, new_text, label):
               global s
-              matches = len(re.findall(pattern, s))
-              if matches != 1:
-                  raise SystemExit(f"ERROR: Expected 1 occurrence for {label}, found {matches}")
-              s = re.sub(pattern, new, s, count=1)
+              # Chuẩn hóa khoảng trắng để tìm đoạn code bất chấp xuống dòng
+              lines = [line.strip() for line in s.splitlines() if line.strip()]
+              full_clean = " ".join(lines)
+              
+              clean_old = " ".join([line.strip() for line in old_pattern.splitlines() if line.strip()])
+              
+              if clean_old not in full_clean:
+                  raise SystemExit(f"ERROR: Target block for '{label}' not found in source.")
+              
+              # Nếu khớp chuỗi trực tiếp
+              if old_pattern in s:
+                  s = s.replace(old_pattern, new_text, 1)
+              else:
+                  # Fallback linh hoạt
+                  import re
+                  regex = r"\s*".join(map(re.escape, old_pattern.split()))
+                  s, count = re.subn(regex, new_text, s, count=1)
+                  if count != 1:
+                      raise SystemExit(f"ERROR: Failed to replace '{label}' safely.")
 
           # 1. Field
-          replace_regex(
-              r"private\s+NavigationMapView\s+navigationMap\s*;",
+          replace_smart(
+              "private NavigationMapView navigationMap;",
               "private NavigationMapView navigationMap;\n    private NavigationPresentationView navigationPresentation;",
               "CarActivity field"
           )
 
-          # 2. View creation & host wrapper
-          replace_regex(
-              r"navigationMap\s*=\s*new\s+NavigationMapView\s*\(\s*this\s*\)\s*;\s*root\.addView\s*\(\s*navigationMap\s*,\s*new\s+FrameLayout\.LayoutParams\s*\(\s*-1\s*,\s*-1\s*\)\s*\)\s*;",
-              "navigationMap = new NavigationMapView(this);\n        navigationPresentation = new NavigationPresentationView(this);\n        navigationPresentation.setNavigationMap(navigationMap);\n        root.addView(\n                navigationPresentation,\n                new FrameLayout.LayoutParams(-1,-1));",
-              "CarActivity presentation wrapper"
+          # 2. Host creation
+          replace_smart(
+              """navigationMap=new NavigationMapView(this);
+        root.addView(
+                navigationMap,
+                new FrameLayout.LayoutParams(-1,-1));""",
+              """navigationMap = new NavigationMapView(this);
+        navigationPresentation = new NavigationPresentationView(this);
+        navigationPresentation.setNavigationMap(navigationMap);
+        root.addView(
+                navigationPresentation,
+                new FrameLayout.LayoutParams(-1,-1));""",
+              "CarActivity wrapper"
           )
 
           # 3. Lifecycle
-          replace_regex(
-              r"if\s*\(\s*navigationMap\s*!=\s*null\s*\)\s*navigationMap\.onHostResume\s*\(\s*\)\s*;",
+          replace_smart(
+              "if (navigationMap != null) navigationMap.onHostResume();",
               "if (navigationPresentation != null) navigationPresentation.onHostResume();",
               "CarActivity resume"
           )
 
-          replace_regex(
-              r"if\s*\(\s*navigationMap\s*!=\s*null\s*\)\s*navigationMap\.onHostPause\s*\(\s*\)\s*;",
+          replace_smart(
+              "if (navigationMap != null) navigationMap.onHostPause();",
               "if (navigationPresentation != null) navigationPresentation.onHostPause();",
               "CarActivity pause"
           )
 
-          replace_regex(
-              r"if\s*\(\s*navigationMap\s*!=\s*null\s*\)\s*\{\s*navigationMap\.onHostDestroy\s*\(\s*\)\s*;\s*navigationMap\s*=\s*null\s*;\s*\}",
-              "if (navigationPresentation != null) {\n            navigationPresentation.onHostDestroy();\n            navigationPresentation = null;\n        }\n        navigationMap = null;",
+          replace_smart(
+              """if (navigationMap != null) { navigationMap.onHostDestroy(); navigationMap = null; }""",
+              """if (navigationPresentation != null) {
+            navigationPresentation.onHostDestroy();
+            navigationPresentation = null;
+        }
+        navigationMap = null;""",
               "CarActivity destroy"
           )
 
@@ -182,89 +208,75 @@ jobs:
           set -euo pipefail
 
           python3 - <<'PY'
-          import re
           from pathlib import Path
 
           path = Path("v10-source/app/src/main/java/com/hieptran/aacast/doudou/V10LauncherActivity.java")
           s = path.read_text()
 
-          def replace_regex(pattern, new, label):
-              global s
-              matches = len(re.findall(pattern, s))
-              if matches != 1:
-                  raise SystemExit(f"ERROR: Expected 1 occurrence for {label}, found {matches}")
-              s = re.sub(pattern, new, s, count=1)
+          # 1. Add FrameLayout import
+          if "import android.widget.FrameLayout;" not in s:
+              s = s.replace(
+                  "import android.widget.LinearLayout;",
+                  "import android.widget.LinearLayout;\nimport android.widget.FrameLayout;"
+              )
 
-          # 1. Imports
-          replace_regex(
-              r"import\s+android\.widget\.LinearLayout\s*;",
-              "import android.widget.LinearLayout;\nimport android.widget.FrameLayout;",
-              "Launcher import FrameLayout"
+          # 2. Add fields
+          s = s.replace(
+              "private LinearLayout root;",
+              "private FrameLayout root;\n    private NavigationMapView navigationMap;\n    private NavigationPresentationView navigationPresentation;"
           )
 
-          # 2. Fields
-          replace_regex(
-              r"private\s+LinearLayout\s+root\s*;",
-              "private FrameLayout root;\n    private NavigationMapView navigationMap;\n    private NavigationPresentationView navigationPresentation;",
-              "Launcher fields"
-          )
+          # 3. Change root to FrameLayout & patch LayoutParams
+          s = s.replace("root = new LinearLayout(this);", "root = new FrameLayout(this);")
+          s = s.replace("root = \n new LinearLayout(this);", "root = new FrameLayout(this);")
+          
+          s = s.replace("new LinearLayout.LayoutParams(-1, -1)", "new FrameLayout.LayoutParams(-1, -1)")
+          s = s.replace("new LinearLayout.LayoutParams(\n -1,\n -1)", "new FrameLayout.LayoutParams(-1, -1)")
 
-          # 3. Chuyển root sang FrameLayout (chấp nhận mọi kiểu khoảng trắng/xuống dòng)
-          replace_regex(
-              r"root\s*=\s*new\s+LinearLayout\s*\(\s*this\s*\)\s*;",
-              "root = new FrameLayout(this);",
-              "Launcher FrameLayout root"
-          )
+          # 4. Attach Navigation Presentation Layer before setContentView
+          old_set_content = "setContentView(root);"
+          new_set_content = """navigationMap = new NavigationMapView(this);
+        navigationPresentation = new NavigationPresentationView(this);
+        navigationPresentation.setNavigationMap(navigationMap);
+        root.addView(navigationPresentation, new FrameLayout.LayoutParams(-1, -1));
+        setContentView(root);"""
+          
+          if old_set_content in s:
+              s = s.replace(old_set_content, new_set_content, 1)
 
-          # 4. Patch LayoutParams của dashboard khi add vào root
-          replace_regex(
-              r"root\.addView\s*\(\s*dashboard\s*,\s*new\s+LinearLayout\.LayoutParams\s*\(\s*-1\s*,\s*-1\s*\)\s*\)\s*;",
-              "root.addView(\n                dashboard,\n                new FrameLayout.LayoutParams(\n                        -1,\n                        -1));",
-              "Patch dashboard LayoutParams to FrameLayout.LayoutParams"
-          )
+          # 5. Lifecycle Management (onResume, onPause, onDestroy)
+          old_destroy = "protected void onDestroy() {"
+          if "@Override\n    protected void onDestroy() {" in s:
+              old_destroy = "@Override\n    protected void onDestroy() {"
 
-          # 5. Patch LayoutParams của appPanel khi add vào root
-          replace_regex(
-              r"root\.addView\s*\(\s*appPanel\s*,\s*new\s+LinearLayout\.LayoutParams\s*\(\s*-1\s*,\s*-1\s*\)\s*\)\s*;",
-              "root.addView(\n                appPanel,\n                new FrameLayout.LayoutParams(\n                        -1,\n                        -1));",
-              "Patch appPanel LayoutParams to FrameLayout.LayoutParams"
-          )
+          new_lifecycles = """@Override
+    protected void onResume() {
+        super.onResume();
+        if (navigationPresentation != null) {
+            navigationPresentation.onHostResume();
+        }
+    }
 
-          # 6. Gắn NavigationPresentationView vào root sau cùng (Z-Index nằm trên cùng)
-          replace_regex(
-              r"setContentView\s*\(\s*root\s*\)\s*;",
-              "navigationMap = new NavigationMapView(this);\n        navigationPresentation = new NavigationPresentationView(this);\n        navigationPresentation.setNavigationMap(navigationMap);\n        root.addView(navigationPresentation, new FrameLayout.LayoutParams(-1, -1));\n        setContentView(root);",
-              "Launcher attach Navigation Presentation Layer"
-          )
+    @Override
+    protected void onPause() {
+        if (navigationPresentation != null) {
+            navigationPresentation.onHostPause();
+        }
+        super.onPause();
+    }
 
-          # 7. Lifecycle management cho Phone
-          new_lifecycle_and_destroy = (
-              "@Override\n"
-              "    protected void onResume() {\n"
-              "        super.onResume();\n"
-              "        if (navigationPresentation != null) {\n"
-              "            navigationPresentation.onHostResume();\n"
-              "        }\n"
-              "    }\n\n"
-              "    @Override\n"
-              "    protected void onPause() {\n"
-              "        if (navigationPresentation != null) {\n"
-              "            navigationPresentation.onHostPause();\n"
-              "        }\n"
-              "        super.onPause();\n"
-              "    }\n\n"
-              "    @Override\n"
-              "    protected void onDestroy() {"
-          )
+    @Override
+    protected void onDestroy() {
+        if (navigationPresentation != null) {
+            navigationPresentation.onHostDestroy();
+            navigationPresentation = null;
+        }
+        navigationMap = null;"""
 
-          replace_regex(
-              r"(@Override\s+)?protected\s+void\s+onDestroy\s*\(\s*\)\s*\{",
-              new_lifecycle_and_destroy,
-              "Launcher complete lifecycle insertion"
-          )
+          s = s.replace(old_destroy, new_lifecycles, 1)
 
           path.write_text(s)
-          print("PASS: V10LauncherActivity LayoutParams & Layering patched successfully.")
+          print("PASS: V10LauncherActivity patched successfully.")
           PY
 
       - name: Compile Java source
