@@ -33,46 +33,45 @@ jobs:
           distribution: temurin
           java-version: '17'
 
-      # -----------------------------------------------------
-# 3. Replace the CURRENT onResume() lifecycle delegation.
-#
-# IMPORTANT:
-# Match the Java structure, not indentation.
-# Formatting/indentation may change on main, so this patch
-# intentionally tolerates whitespace changes.
-# -----------------------------------------------------
+      # =========================================================
+      # 3. LOCATE CURRENT MAIN SOURCE
+      # =========================================================
 
-       resume_pattern = (
-       r"(if\s*\(\s*root\s*==\s*null\s*\)\s*\{"
-       r"\s*buildUi\s*\(\s*\)\s*;"
-       r"\s*attachProjection\s*\(\s*\)\s*;)"
-       r"\s*if\s*\(\s*navigationMap\s*!=\s*null\s*\)"
-       r"\s*navigationMap\s*\.\s*onHostResume\s*\(\s*\)\s*;"
-       r"\s*\}"
-       )
+      - name: Verify current main source
+        shell: bash
+        run: |
+          set -euo pipefail
 
-       resume_replacement = """if (root == null) {
-       buildUi();
-       attachProjection();
-       }
+          SRC="v10-source/app/src/main/java/com/hieptran/aacast/doudou"
 
-       if (navigationPresentation != null) {
-       navigationPresentation
-            .onHostResume();
-       }"""
+          CAR="$SRC/V10CarActivity.java"
+          LAUNCHER="$SRC/V10LauncherActivity.java"
+          NAV="$SRC/NavigationMapView.java"
+          MANIFEST="v10-source/app/src/main/AndroidManifest.xml"
 
-       text = replace_once(
-       text,
-       resume_pattern,
-       resume_replacement,
-       "Current onResume() navigation lifecycle delegation"
-       )
+          test -f "$CAR"
+          test -f "$LAUNCHER"
+          test -f "$NAV"
+          test -f "$MANIFEST"
+
+          echo "========================================"
+          echo "CURRENT MAIN"
+          echo "========================================"
+
+          git rev-parse HEAD
+
+          echo ""
+          echo "Required files:"
+          echo "$CAR"
+          echo "$LAUNCHER"
+          echo "$NAV"
+          echo "$MANIFEST"
+
+          echo ""
+          echo "PASS: Current main source located."
+
       # =========================================================
       # 4. VERIFY CURRENT SOURCE STRUCTURE
-      #
-      # IMPORTANT:
-      # This step describes the source that exists on main.
-      # It does NOT assume the old presentation architecture.
       # =========================================================
 
       - name: Inspect current V10 navigation architecture
@@ -160,9 +159,6 @@ jobs:
 
       # =========================================================
       # 6. CREATE PRESENTATION HOST
-      #
-      # Created from the current main source.
-      # NavigationMapView itself is not edited.
       # =========================================================
 
       - name: Create NavigationPresentationView
@@ -277,7 +273,9 @@ jobs:
       # =========================================================
       # 7. PATCH V10CarActivity FROM CURRENT MAIN STRUCTURE
       #
-      # No old commit structure is assumed.
+      # ONLY CHANGE FROM PREVIOUS VERSION:
+      # onResume() is now matched structurally and does not depend
+      # on indentation.
       # =========================================================
 
       - name: Patch V10CarActivity from current main
@@ -335,12 +333,8 @@ jobs:
           # -----------------------------------------------------
           # 2. Replace the CURRENT main buildUi() Navigation block.
           #
-          # Current main source:
-          #
-          # navigationMap=new NavigationMapView(this);
-          # root.addView(
-          #         navigationMap,
-          #         new FrameLayout.LayoutParams(-1,-1));
+          # This section is unchanged from the previously passing
+          # version.
           # -----------------------------------------------------
 
           old_block = """navigationMap=new NavigationMapView(this);
@@ -375,37 +369,34 @@ jobs:
           )
 
           # -----------------------------------------------------
-          # 3. Move onHostResume() OUTSIDE the root == null block.
+          # 3. Replace CURRENT onResume() lifecycle delegation.
           #
-          # Current main has:
+          # IMPORTANT:
+          # Match Java structure, NOT indentation.
           #
-          # if (root == null) {
-          #     buildUi();
-          #     attachProjection();
-          #
-          #     if (navigationMap != null)
-          #         navigationMap.onHostResume();
-          # }
-          #
-          # New architecture:
+          # Current main contains:
           #
           # if (root == null) {
           #     buildUi();
           #     attachProjection();
+          #
+          # if (navigationMap != null) navigationMap.onHostResume();
           # }
           #
-          # if (navigationPresentation != null)
-          #     navigationPresentation.onHostResume();
+          # The regex below intentionally accepts arbitrary
+          # whitespace/newlines between the Java statements.
           # -----------------------------------------------------
 
-          old_resume = """        if (root == null) {
-            buildUi();
-            attachProjection();
+          resume_pattern = (
+              r"(if\s*\(\s*root\s*==\s*null\s*\)\s*\{"
+              r"\s*buildUi\s*\(\s*\)\s*;"
+              r"\s*attachProjection\s*\(\s*\);)"
+              r"\s*if\s*\(\s*navigationMap\s*!=\s*null\s*\)"
+              r"\s*navigationMap\s*\.\s*onHostResume\s*\(\s*\)\s*;"
+              r"\s*\}"
+          )
 
-          if (navigationMap != null) navigationMap.onHostResume();
-          }"""
-
-          new_resume = """        if (root == null) {
+          resume_replacement = """if (root == null) {
             buildUi();
             attachProjection();
           }
@@ -415,19 +406,17 @@ jobs:
                     .onHostResume();
           }"""
 
-          if text.count(old_resume) != 1:
-              raise RuntimeError(
-                  "Current main onResume() block was not found exactly once."
-              )
-
-          text = text.replace(
-              old_resume,
-              new_resume,
-              1
+          text = replace_once(
+              text,
+              resume_pattern,
+              resume_replacement,
+              "Current onResume() navigation lifecycle delegation"
           )
 
           # -----------------------------------------------------
           # 4. Replace direct pause delegation.
+          #
+          # Unchanged from previous workflow.
           # -----------------------------------------------------
 
           pause_old = (
@@ -455,8 +444,7 @@ jobs:
           # -----------------------------------------------------
           # 5. Replace direct destroy delegation.
           #
-          # Do not assume formatting from an old commit.
-          # Find the actual statement in current main.
+          # Unchanged from previous workflow.
           # -----------------------------------------------------
 
           destroy_pattern = (
@@ -493,9 +481,7 @@ jobs:
           PY
 
       # =========================================================
-      # 8. VERIFY PATCHED ARCHITECTURE
-      #
-      # Verification reads the source AFTER patch.
+      # 8. VERIFY PATCHED NAVIGATION ARCHITECTURE
       # =========================================================
 
       - name: Verify patched Navigation architecture
@@ -689,10 +675,6 @@ jobs:
 
       # =========================================================
       # 10. VERIFY NAVIGATIONMAPVIEW UNCHANGED
-      #
-      # IMPORTANT:
-      # No hard-coded old commit SHA.
-      # We capture the SHA from main BEFORE patching.
       # =========================================================
 
       - name: Verify NavigationMapView unchanged
