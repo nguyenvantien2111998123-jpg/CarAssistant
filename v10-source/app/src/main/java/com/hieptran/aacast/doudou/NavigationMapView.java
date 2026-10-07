@@ -1045,19 +1045,6 @@ public final class NavigationMapView extends FrameLayout {
         }
     }
 
-            toneGenerator =
-                    new ToneGenerator(
-                            AudioManager.STREAM_NOTIFICATION,
-                            80);
-
-            toneGenerator.startTone(
-                    ToneGenerator.TONE_PROP_BEEP,
-                    120);
-
-        } catch (Exception ignored) {
-        }
-    }
-
     /*
      * =========================================================
      * SEARCH
