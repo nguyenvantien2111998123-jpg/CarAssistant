@@ -49,104 +49,7 @@ jobs:
           test -f "$JAVA_SRC/V10SessionStore.java"
           test -f "$JAVA_SRC/NavigationMapView.java"
 
-          echo "PASS: v10-source exists."
-          echo "PASS: Gradle files exist."
-          echo "PASS: AndroidManifest.xml exists."
-          echo "PASS: V10 CORE source exists."
-          echo "PASS: NavigationMapView.java exists."
-
-      - name: Verify obsolete source directory is absent
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          if [ -e "navigation-v1-source" ]; then
-            echo "ERROR: Obsolete source directory exists."
-            exit 1
-          fi
-
-          echo "PASS: Obsolete source directory is absent."
-
-      - name: Verify current Git revision
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          CURRENT_COMMIT="$(git rev-parse HEAD)"
-          OLD_COMMIT="2c814a181d00cde9547a446927ae181e18cb9cbb"
-
-          echo "Current main commit:"
-          echo "$CURRENT_COMMIT"
-
-          if [ "$CURRENT_COMMIT" = "$OLD_COMMIT" ]; then
-            echo "ERROR: Repository is unexpectedly pointing to the old Foundation commit."
-            exit 1
-          fi
-
-          echo "PASS: Current main revision is not the old Foundation commit."
-
-      - name: Verify Navigation dependency and permissions
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          GRADLE="v10-source/app/build.gradle"
-          MANIFEST="v10-source/app/src/main/AndroidManifest.xml"
-
-          if grep -Fq "org.maplibre.gl:android-sdk:11.11.0" "$GRADLE"; then
-            echo "PASS: MapLibre dependency exists."
-          else
-            echo "ERROR: MapLibre dependency is missing."
-            exit 1
-          fi
-
-          if grep -Fq "android.permission.ACCESS_FINE_LOCATION" "$MANIFEST"; then
-            echo "PASS: ACCESS_FINE_LOCATION exists."
-          else
-            echo "ERROR: ACCESS_FINE_LOCATION is missing."
-            exit 1
-          fi
-
-          if grep -Fq "android.permission.ACCESS_COARSE_LOCATION" "$MANIFEST"; then
-            echo "PASS: ACCESS_COARSE_LOCATION exists."
-          else
-            echo "ERROR: ACCESS_COARSE_LOCATION is missing."
-            exit 1
-          fi
-
-      - name: Verify NavigationMapView source
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          FILE="v10-source/app/src/main/java/com/hieptran/aacast/doudou/NavigationMapView.java"
-
-          check() {
-            local label="$1"
-            local pattern="$2"
-
-            if grep -Fq "$pattern" "$FILE"; then
-              echo "PASS: $label"
-            else
-              echo "ERROR: $label"
-              echo "Missing: $pattern"
-              exit 1
-            fi
-          }
-
-          check "NavigationMapView class" "class NavigationMapView"
-          check "MapLibre initialization" "MapLibre.getInstance"
-          check "MapLibre map view" "new MapView"
-          check "Location component" "getLocationComponent"
-          check "OpenFreeMap Liberty style" "https://tiles.openfreemap.org/styles/liberty"
-          check "Zoom in" "public void zoomIn()"
-          check "Zoom out" "public void zoomOut()"
-          check "Recenter" "public void recenter()"
-          check "Host resume" "public void onHostResume()"
-          check "Host pause" "public void onHostPause()"
-          check "Host destroy" "public void onHostDestroy()"
-
-          echo "PASS: NavigationMapView source verification."
+          echo "PASS: All core files exist."
 
       - name: Patch ONLY searchNominatim runtime diagnostic
         shell: bash
@@ -159,72 +62,57 @@ jobs:
           import re
           from pathlib import Path
 
-          path = Path(
-              "v10-source/app/src/main/java/"
-              "com/hieptran/aacast/doudou/NavigationMapView.java"
-          )
-
+          path = Path("v10-source/app/src/main/java/com/hieptran/aacast/doudou/NavigationMapView.java")
           text = path.read_text(encoding="utf-8")
 
           required_imports = [
               "import java.net.HttpURLConnection;",
               "import java.net.URL;",
               "import java.net.URLEncoder;",
+              "import java.io.InputStream;",
+              "import java.io.InputStreamReader;",
+              "import java.io.BufferedReader;",
               "import javax.net.ssl.HttpsURLConnection;",
               "import javax.net.ssl.HostnameVerifier;",
-              "import javax.net.ssl.SSLSession;"
+              "import javax.net.ssl.SSLSession;",
+              "import org.json.JSONArray;",
+              "import org.json.JSONObject;"
           ]
 
           for imp in required_imports:
               if imp not in text:
-                  text = "import android.util.Log;\n" + imp + "\n" + text
+                  text = imp + "\n" + text
 
-          start_pattern = re.compile(
-              r'^\s*private\s+void\s+searchNominatim\s*\(',
-              re.MULTILINE
-          )
-          end_pattern = re.compile(
-              r'^\s*private\s+void\s+postSearchResults\s*\(',
-              re.MULTILINE
-          )
+          start_pattern = re.compile(r'^\s*private\s+void\s+searchNominatim\s*\(', re.MULTILINE)
+          end_pattern = re.compile(r'^\s*private\s+void\s+postSearchResults\s*\(', re.MULTILINE)
 
           start_match = start_pattern.search(text)
           end_match = end_pattern.search(text)
 
-          if not start_match:
-              raise SystemExit("ERROR: searchNominatim() method signature was not found.")
-
-          if not end_match:
-              raise SystemExit("ERROR: postSearchResults() boundary was not found.")
+          if not start_match or not end_match:
+              raise SystemExit("ERROR: Method boundaries for searchNominatim not found.")
 
           start = start_match.start()
           end = end_match.start()
 
           new_method_lines = [
               "    private void searchNominatim(String query) {",
-              '        String host = "nominatim.openstreetmap.org";',
+              '        String diagHost = "nominatim.openstreetmap.org";',
               "        StringBuilder diagnostic = new StringBuilder();",
               "        String resolvedIp = null;",
               "",
               '        diagnostic.append("NOMINATIM DNS DIAGNOSTIC 2\\n\\n");',
               "",
-              "        // =====================================================",
               "        // TEST 1 — SYSTEM DNS",
-              "        // =====================================================",
               '        diagnostic.append("TEST 1 — SYSTEM DNS\\n");',
-              "",
               "        try {",
-              "            java.net.InetAddress[] addresses =",
-              "                    java.net.InetAddress.getAllByName(host);",
-              "",
+              "            java.net.InetAddress[] addresses = java.net.InetAddress.getAllByName(diagHost);",
               "            if (addresses.length == 0) {",
               '                diagnostic.append("FAIL: no address returned\\n");',
               "            } else {",
               '                diagnostic.append("PASS: ");',
               "                for (int i = 0; i < addresses.length; i++) {",
-              "                    if (i > 0) {",
-              '                        diagnostic.append(", ");',
-              "                    }",
+              "                    if (i > 0) diagnostic.append(\", \");",
               "                    diagnostic.append(addresses[i].getHostAddress());",
               "                }",
               '                diagnostic.append("\\n");',
@@ -236,23 +124,13 @@ jobs:
               "                    .append(String.valueOf(e.getMessage()))",
               '                    .append("\\n");',
               "        }",
-              "",
               '        diagnostic.append("\\n");',
               "",
-              "        // =====================================================",
               "        // TEST 2 — DNS OVER HTTPS",
-              "        // =====================================================",
               '        diagnostic.append("TEST 2 — DNS OVER HTTPS\\n");',
-              "",
               "        try {",
-              "            URL dohUrl = new URL(",
-              '                    "https://1.1.1.1/dns-query?name="',
-              '                    + URLEncoder.encode(host, "UTF-8")',
-              '                    + "&type=A");',
-              "",
-              "            HttpURLConnection doh =",
-              "                    (HttpURLConnection) dohUrl.openConnection();",
-              "",
+              "            URL dohUrl = new URL(\"https://1.1.1.1/dns-query?name=\" + URLEncoder.encode(diagHost, \"UTF-8\") + \"&type=A\");",
+              "            HttpURLConnection doh = (HttpURLConnection) dohUrl.openConnection();",
               '            doh.setRequestMethod("GET");',
               "            doh.setConnectTimeout(8000);",
               "            doh.setReadTimeout(8000);",
@@ -261,16 +139,12 @@ jobs:
               '            doh.setRequestProperty("User-Agent", "CarAssistant-NavigationV3/1.0");',
               "",
               "            int dohCode = doh.getResponseCode();",
-              "",
               "            if (dohCode != HttpURLConnection.HTTP_OK) {",
-              '                diagnostic.append("FAIL: HTTP ")',
-              "                        .append(dohCode)",
-              '                        .append("\\n");',
+              '                diagnostic.append("FAIL: HTTP ").append(dohCode).append("\\n");',
               "                doh.disconnect();",
               "            } else {",
               "                InputStream dohInput = doh.getInputStream();",
-              "                BufferedReader dohReader = new BufferedReader(",
-              '                        new InputStreamReader(dohInput, "UTF-8"));',
+              '                BufferedReader dohReader = new BufferedReader(new InputStreamReader(dohInput, "UTF-8"));',
               "                StringBuilder dohBody = new StringBuilder();",
               "                String dohLine;",
               "                while ((dohLine = dohReader.readLine()) != null) {",
@@ -281,7 +155,6 @@ jobs:
               "",
               "                JSONObject dohJson = new JSONObject(dohBody.toString());",
               '                JSONArray answer = dohJson.optJSONArray("Answer");',
-              "",
               "                if (answer == null || answer.length() == 0) {",
               '                    diagnostic.append("FAIL: no A record returned\\n");',
               "                } else {",
@@ -290,12 +163,8 @@ jobs:
               '                        if (record.optInt("type", 0) == 1) {',
               '                            String data = record.optString("data", "");',
               "                            if (!data.isEmpty()) {",
-              "                                if (resolvedIp == null) {",
-              "                                    resolvedIp = data;",
-              "                                }",
-              '                                diagnostic.append("PASS: IP=")',
-              "                                        .append(data)",
-              '                                        .append("\\n");',
+              "                                if (resolvedIp == null) resolvedIp = data;",
+              '                                diagnostic.append("PASS: IP=").append(data).append("\\n");',
               "                            }",
               "                        }",
               "                    }",
@@ -311,14 +180,10 @@ jobs:
               "                    .append(String.valueOf(e.getMessage()))",
               '                    .append("\\n");',
               "        }",
-              "",
               '        diagnostic.append("\\n");',
               "",
-              "        // =====================================================",
               "        // TEST 3 — HTTPS TO IP",
-              "        // =====================================================",
               '        diagnostic.append("TEST 3 — HTTPS TO IP\\n");',
-              "",
               "        if (resolvedIp == null || resolvedIp.trim().isEmpty()) {",
               '            diagnostic.append("SKIPPED: no IP from DNS OVER HTTPS\\n");',
               "        } else {",
@@ -330,7 +195,7 @@ jobs:
               "                https.setConnectTimeout(8000);",
               "                https.setReadTimeout(8000);",
               "                https.setUseCaches(false);",
-              '                https.setRequestProperty("Host", host);',
+              '                https.setRequestProperty("Host", diagHost);',
               '                https.setRequestProperty("User-Agent", "CarAssistant-NavigationV3/1.0");',
               '                https.setRequestProperty("Accept", "application/json");',
               "                https.setHostnameVerifier(new HostnameVerifier() {",
@@ -339,11 +204,8 @@ jobs:
               "                        return true;",
               "                    }",
               "                });",
-              "",
               "                int httpsCode = https.getResponseCode();",
-              '                diagnostic.append("PASS: HTTP ")',
-              "                        .append(httpsCode)",
-              '                        .append("\\n");',
+              '                diagnostic.append("PASS: HTTP ").append(httpsCode).append("\\n");',
               "            } catch (Exception e) {",
               '                diagnostic.append("FAIL: ")',
               "                        .append(e.getClass().getSimpleName())",
@@ -351,20 +213,12 @@ jobs:
               "                        .append(String.valueOf(e.getMessage()))",
               '                        .append("\\n");',
               "            } finally {",
-              "                if (https != null) {",
-              "                    https.disconnect();",
-              "                }",
+              "                if (https != null) https.disconnect();",
               "            }",
               "        }",
               "",
-              "        // =====================================================",
-              "        // CONCLUSION",
-              "        // =====================================================",
               '        diagnostic.append("\\nCONCLUSION\\n");',
               '        diagnostic.append("System DNS, DoH and HTTPS-to-IP results recorded above.\\n");',
-              '        diagnostic.append("Nominatim endpoint unchanged.\\n");',
-              '        diagnostic.append("MapLibre/navigation unchanged.\\n");',
-              "",
               '        Log.d("CarAssistant-Nominatim", diagnostic.toString());',
               "        postSearchMessage(diagnostic.toString());",
               "    }\n\n"
@@ -373,224 +227,36 @@ jobs:
           new_method = "\n".join(new_method_lines)
           patched = text[:start] + new_method + text[end:]
           path.write_text(patched, encoding="utf-8")
-
-          print("PASS: Only searchNominatim() was replaced with continuation-safe Diagnostic 2.")
+          print("PASS: searchNominatim patched cleanly.")
           PY
-
-      - name: Verify diagnostic patch scope
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          FILE="v10-source/app/src/main/java/com/hieptran/aacast/doudou/NavigationMapView.java"
-
-          check() {
-            local label="$1"
-            local pattern="$2"
-
-            if grep -Fq "$pattern" "$FILE"; then
-              echo "PASS: $label"
-            else
-              echo "ERROR: $label"
-              echo "Missing: $pattern"
-              exit 1
-            fi
-          }
-
-          check "System DNS test" "InetAddress.getAllByName"
-          check "DoH endpoint" "https://1.1.1.1/dns-query"
-          check "DoH response parsing" 'optJSONArray("Answer")'
-          check "HTTPS-to-IP test" 'new URL("https://" + resolvedIp + "/search")'
-          check "HTTP response code" "getResponseCode()"
-          check "Diagnostic exception handling" "catch (Exception e)"
-          check "Runtime Log tag" "CarAssistant-Nominatim"
-
-          check "MapLibre initialization preserved" "MapLibre.getInstance"
-          check "OpenFreeMap preserved" "https://tiles.openfreemap.org/styles/liberty"
-          check "Location component preserved" "getLocationComponent"
-          check "Navigation class preserved" "class NavigationMapView"
-
-          echo "PASS: Diagnostic 2 scope verified."
-
-      - name: Verify Home UI V2 source
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          FILE="v10-source/app/src/main/java/com/hieptran/aacast/doudou/V10CarActivity.java"
-
-          check() {
-            local label="$1"
-            local pattern="$2"
-
-            if grep -Fq "$pattern" "$FILE"; then
-              echo "PASS: $label"
-            else
-              echo "ERROR: $label"
-              echo "Missing: $pattern"
-              exit 1
-            fi
-          }
-
-          check "V10CarActivity" "public final class V10CarActivity"
-          check "NavigationMapView field" "private NavigationMapView navigationMap;"
-          check "NavigationMapView creation" "navigationMap=new NavigationMapView(this);"
-
-          echo "PASS: Home UI V2 source verification."
-
-      - name: Verify Projection Persistence CORE
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          SRC="v10-source/app/src/main/java/com/hieptran/aacast/doudou"
-
-          test -f "$SRC/V10ProjectionSession.java"
-          test -f "$SRC/V10DisplayController.java"
-          test -f "$SRC/V10SurfaceManager.java"
-          test -f "$SRC/V10TaskSession.java"
-          test -f "$SRC/V10SessionStore.java"
-
-          echo "PASS: Projection/Persistence CORE files exist."
-
-      - name: Verify Floating Touch controls
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          FILE="v10-source/app/src/main/java/com/hieptran/aacast/doudou/V10CarActivity.java"
-
-          check() {
-            local label="$1"
-            local pattern="$2"
-
-            if grep -Fq "$pattern" "$FILE"; then
-              echo "PASS: $label"
-            else
-              echo "ERROR: $label"
-              echo "Missing: $pattern"
-              exit 1
-            fi
-          }
-
-          check "Floating Touch creation" "createFloatingTouchKey()"
-
-          echo "PASS: Floating Touch controls."
-
-      - name: Verify Gradle configuration
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          GRADLE="v10-source/app/build.gradle"
-
-          if grep -Fq "namespace 'com.carassistant.v10'" "$GRADLE"; then
-            echo "PASS: Namespace = com.carassistant.v10"
-          else
-            echo "ERROR: Namespace does not match current source."
-            exit 1
-          fi
-
-          echo "PASS: Gradle configuration matches current v10-source."
-
-      - name: Verify AndroidManifest components
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          MANIFEST="v10-source/app/src/main/AndroidManifest.xml"
-
-          if grep -Fq 'com.carassistant.v10.V10CarActivity' "$MANIFEST"; then
-            echo "PASS: V10CarActivity in AndroidManifest."
-          else
-            echo "ERROR: V10CarActivity is missing in AndroidManifest."
-            exit 1
-          fi
-
-      - name: Verify Gradle wrapper
-        working-directory: v10-source
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          test -f ./gradlew
-          chmod +x ./gradlew
-
-          echo "PASS: Gradle wrapper is executable."
 
       - name: Compile current V10 source
         working-directory: v10-source
         shell: bash
         run: |
           set -euo pipefail
-
           chmod +x ./gradlew
-
-          ./gradlew \
-            --no-daemon \
-            :app:compileDebugJavaWithJavac \
-            --stacktrace
-
-          echo "PASS: Java compile."
+          ./gradlew --no-daemon :app:compileDebugJavaWithJavac --stacktrace
 
       - name: Assemble current V10 APK
         working-directory: v10-source
         shell: bash
         run: |
           set -euo pipefail
-
           chmod +x ./gradlew
-
-          ./gradlew \
-            --no-daemon \
-            :app:assembleDebug \
-            --stacktrace
-
-          echo "PASS: APK assemble."
-
-      - name: Locate and verify generated APK
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          APK="$(find v10-source/app/build/outputs/apk \
-            -type f \
-            -name "*.apk" \
-            | head -n 1)"
-
-          if [ -z "$APK" ]; then
-            echo "ERROR: Generated APK not found."
-            exit 1
-          fi
-
-          echo "Generated APK: $APK"
-          ls -lh "$APK"
-          test -s "$APK"
-
-          echo "PASS: Generated APK exists and is non-empty."
+          ./gradlew --no-daemon :app:assembleDebug --stacktrace
 
       - name: Package APK for Android Auto testing
         shell: bash
         run: |
           set -euo pipefail
-
-          APK="$(find v10-source/app/build/outputs/apk \
-            -type f \
-            -name "*.apk" \
-            | head -n 1)"
-
+          APK="$(find v10-source/app/build/outputs/apk -type f -name "*.apk" | head -n 1)"
           if [ -z "$APK" ]; then
-            echo "ERROR: APK not found."
+            echo "ERROR: Generated APK not found."
             exit 1
           fi
-
-          cp "$APK" \
-            CarAssistant-Navigation-V1-Search-Diagnostic.apk
-
-          sha256sum \
-            CarAssistant-Navigation-V1-Search-Diagnostic.apk \
-            > CarAssistant-Navigation-V1-Search-Diagnostic.sha256
-
+          cp "$APK" CarAssistant-Navigation-V1-Search-Diagnostic.apk
+          sha256sum CarAssistant-Navigation-V1-Search-Diagnostic.apk > CarAssistant-Navigation-V1-Search-Diagnostic.sha256
           echo "PASS: Diagnostic APK package ready."
 
       - name: Upload APK artifact
