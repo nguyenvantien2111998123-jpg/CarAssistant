@@ -116,7 +116,7 @@ public final class NavigationMapView extends FrameLayout {
                 this::onMapReady);
 
         buildNavigationControls();
-        buildDestinationSearch();
+// buildDestinationSearch(); // Ẩn thanh tìm kiếm, giữ nguyên code phía dưới
     }
 
     private void buildDestinationSearch() {
