@@ -1,0 +1,392 @@
+name: CarAssistant V3.2 - Commit Beep Fix to Main
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  commit-beep-fix:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout main
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Locate NavigationMapView
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          FILE="v10-source/app/src/main/java/com/hieptran/aacast/doudou/NavigationMapView.java"
+
+          if [ ! -f "$FILE" ]; then
+            echo "ERROR: NavigationMapView.java not found:"
+            echo "$FILE"
+            exit 1
+          fi
+
+          echo "TARGET_FILE=$FILE"
+
+      - name: Patch only the validated V3.2 beep
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          FILE="v10-source/app/src/main/java/com/hieptran/aacast/doudou/NavigationMapView.java"
+
+          python3 - "$FILE" <<'PY'
+          import sys
+          from pathlib import Path
+
+          path = Path(sys.argv[1])
+          text = path.read_text(encoding="utf-8")
+
+          # Add Log import only if it is missing.
+          if "import android.util.Log;" not in text:
+              marker = "import android.view.Gravity;\n"
+
+              if marker not in text:
+                  raise SystemExit(
+                      "ERROR: Cannot find import insertion point."
+                  )
+
+              text = text.replace(
+                  marker,
+                  marker + "import android.util.Log;\n",
+                  1
+              )
+
+          old = """    private void playVoiceStartTone() {
+
+          try {
+
+              if (toneGenerator != null) {
+
+                  toneGenerator.release();
+
+                  toneGenerator = null;
+              }
+
+              toneGenerator =
+                      new ToneGenerator(
+                              AudioManager.STREAM_NOTIFICATION,
+                              80);
+
+              toneGenerator.startTone(
+                      ToneGenerator.TONE_PROP_BEEP,
+                      120);
+
+          } catch (Exception ignored) {
+          }
+      }
+
+      /*
+       * =========================================================
+       * SEARCH
+       * =========================================================
+       */
+      """
+
+          new = """    private static final String VOICE_TONE_TAG = "CarAssistantVoice";
+
+      private void playVoiceStartTone() {
+          try {
+              if (toneGenerator != null) {
+                  try { toneGenerator.release(); } catch (Exception ignored) {}
+                  toneGenerator = null;
+              }
+
+              AudioManager audioManager =
+                      (AudioManager) getContext()
+                              .getSystemService(Context.AUDIO_SERVICE);
+
+              int musicVolume = -1;
+              int notificationVolume = -1;
+
+              if (audioManager != null) {
+                  try {
+                      musicVolume = audioManager.getStreamVolume(
+                              AudioManager.STREAM_MUSIC);
+                  } catch (Exception e) {
+                      Log.w(VOICE_TONE_TAG, "Không đọc được MUSIC volume", e);
+                  }
+
+                  try {
+                      notificationVolume = audioManager.getStreamVolume(
+                              AudioManager.STREAM_NOTIFICATION);
+                  } catch (Exception e) {
+                      Log.w(VOICE_TONE_TAG,
+                              "Không đọc được NOTIFICATION volume", e);
+                  }
+              }
+
+              Log.i(VOICE_TONE_TAG,
+                      "Voice beep: MUSIC volume=" + musicVolume
+                              + ", NOTIFICATION volume=" + notificationVolume);
+
+              toneGenerator = new ToneGenerator(
+                      AudioManager.STREAM_MUSIC, 100);
+
+              boolean started = toneGenerator.startTone(
+                      ToneGenerator.TONE_PROP_BEEP, 180);
+
+              Log.i(VOICE_TONE_TAG,
+                      "Voice beep MUSIC startTone=" + started);
+
+              if (!started) {
+                  try { toneGenerator.release(); } catch (Exception ignored) {}
+                  toneGenerator = null;
+
+                  toneGenerator = new ToneGenerator(
+                          AudioManager.STREAM_NOTIFICATION, 100);
+
+                  boolean fallbackStarted = toneGenerator.startTone(
+                          ToneGenerator.TONE_PROP_BEEP, 180);
+
+                  Log.i(VOICE_TONE_TAG,
+                          "Voice beep NOTIFICATION fallback startTone="
+                                  + fallbackStarted);
+              }
+
+              voiceHandler.postDelayed(() -> {
+                  if (toneGenerator == null) return;
+                  try { toneGenerator.release(); } catch (Exception ignored) {}
+                  toneGenerator = null;
+              }, 350L);
+
+          } catch (Exception e) {
+              Log.e(VOICE_TONE_TAG, "Voice beep FAILED", e);
+
+              if (toneGenerator != null) {
+                  try { toneGenerator.release(); } catch (Exception ignored) {}
+                  toneGenerator = null;
+              }
+          }
+      }
+
+      /*
+       * =========================================================
+       * SEARCH
+       * =========================================================
+       */
+      """
+
+          if old not in text:
+              if "VOICE_TONE_TAG" in text:
+                  raise SystemExit(
+                      "ERROR: Validated beep patch appears to already exist. "
+                      "Nothing was changed."
+                  )
+
+              raise SystemExit(
+                  "ERROR: Expected original playVoiceStartTone() block "
+                  "was not found. Source may have changed."
+              )
+
+          text = text.replace(old, new, 1)
+
+          path.write_text(text, encoding="utf-8")
+          print("Validated V3.2 beep patch applied.")
+
+          # Safety checks.
+          required = [
+              "VOICE_TONE_TAG",
+              "AudioManager.STREAM_MUSIC",
+              "AudioManager.STREAM_NOTIFICATION",
+              "ToneGenerator.TONE_PROP_BEEP, 180",
+              "voiceHandler.postDelayed",
+              "\"vi-VN\"",
+              "5000L",
+              "SpeechRecognizer"
+          ]
+
+          for item in required:
+              if item not in text:
+                  raise SystemExit(
+                      f"ERROR: Required source element missing after patch: {item}"
+                  )
+
+          print("Required Navigation V1 / Voice V3.2 elements preserved.")
+          PY
+
+      - name: Verify only NavigationMapView changed
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          FILE="v10-source/app/src/main/java/com/hieptran/aacast/doudou/NavigationMapView.java"
+
+          echo "Changed files:"
+          git status --short
+
+          CHANGED_COUNT="$(git status --short | wc -l | tr -d ' ')"
+
+          if [ "$CHANGED_COUNT" != "1" ]; then
+            echo "ERROR: More than one file changed."
+            git status --short
+            exit 1
+          fi
+
+          CHANGED_FILE="$(git status --short | awk '{print $2}')"
+
+          if [ "$CHANGED_FILE" != "$FILE" ]; then
+            echo "ERROR: Unexpected changed file:"
+            echo "$CHANGED_FILE"
+            exit 1
+          fi
+
+          echo "PASS: Only NavigationMapView.java changed."
+
+      - name: Verify diff is beep-only
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          FILE="v10-source/app/src/main/java/com/hieptran/aacast/doudou/NavigationMapView.java"
+
+          git diff --check
+
+          echo "========== DIFF =========="
+          git diff -- "$FILE"
+          echo "========== END DIFF =========="
+
+          # The old beep implementation must be gone.
+          if grep -Fq 'AudioManager.STREAM_NOTIFICATION,' "$FILE" \
+             && grep -Fq '80);' "$FILE"; then
+            echo "WARNING: Found old-style notification ToneGenerator pattern."
+          fi
+
+          # New validated implementation must exist.
+          grep -Fq 'private static final String VOICE_TONE_TAG = "CarAssistantVoice";' "$FILE"
+          grep -Fq 'AudioManager.STREAM_MUSIC, 100' "$FILE"
+          grep -Fq 'ToneGenerator.TONE_PROP_BEEP, 180' "$FILE"
+          grep -Fq 'voiceHandler.postDelayed' "$FILE"
+          grep -Fq '350L' "$FILE"
+
+          echo "PASS: Validated beep implementation is present."
+
+      - name: Validate Navigation V1 and Voice V3.2 were not removed
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          FILE="v10-source/app/src/main/java/com/hieptran/aacast/doudou/NavigationMapView.java"
+
+          grep -Fq 'VOICE_SILENCE_TIMEOUT_MS = 5000L' "$FILE"
+          grep -Fq 'RecognizerIntent.EXTRA_LANGUAGE' "$FILE"
+          grep -Fq '"vi-VN"' "$FILE"
+          grep -Fq 'RecognizerIntent.EXTRA_PARTIAL_RESULTS' "$FILE"
+          grep -Fq 'SpeechRecognizer' "$FILE"
+          grep -Fq 'startVoiceSearch()' "$FILE"
+          grep -Fq 'performSearch()' "$FILE"
+          grep -Fq 'searchNominatim(query)' "$FILE"
+          grep -Fq 'startAutoFollow()' "$FILE"
+          grep -Fq 'CameraMode.TRACKING' "$FILE"
+
+          echo "PASS: Navigation V1 and Voice V3.2 core elements remain."
+
+      - name: Prepare Android SDK
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          yes | sdkmanager --licenses >/dev/null 2>&1 || true
+
+          sdkmanager \
+            "platform-tools" \
+            "platforms;android-35" \
+            "build-tools;35.0.0"
+
+      - name: Build APK before commit
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          cd v10-source
+
+          chmod +x ./gradlew
+
+          ./gradlew :app:assembleDebug \
+            --no-daemon \
+            --stacktrace
+
+      - name: Verify build succeeded and source is still the only change
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          FILE="v10-source/app/src/main/java/com/hieptran/aacast/doudou/NavigationMapView.java"
+          APK="v10-source/app/build/outputs/apk/debug/app-debug.apk"
+
+          if [ ! -f "$APK" ]; then
+            echo "ERROR: APK not found:"
+            echo "$APK"
+            exit 1
+          fi
+
+          git diff --check
+
+          CHANGED_COUNT="$(git status --short | wc -l | tr -d ' ')"
+
+          if [ "$CHANGED_COUNT" != "1" ]; then
+            echo "ERROR: Build generated or modified unexpected tracked files."
+            git status --short
+            exit 1
+          fi
+
+          CHANGED_FILE="$(git status --short | awk '{print $2}')"
+
+          if [ "$CHANGED_FILE" != "$FILE" ]; then
+            echo "ERROR: Unexpected tracked change:"
+            echo "$CHANGED_FILE"
+            exit 1
+          fi
+
+          echo "PASS: APK built successfully."
+          echo "PASS: Only NavigationMapView.java is modified."
+
+      - name: Commit beep fix to main
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          FILE="v10-source/app/src/main/java/com/hieptran/aacast/doudou/NavigationMapView.java"
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          git add "$FILE"
+
+          if git diff --cached --quiet; then
+            echo "No staged changes. Nothing to commit."
+            exit 0
+          fi
+
+          git commit \
+            -m "fix: persist V3.2 voice start beep"
+
+      - name: Push commit to main
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          git push origin HEAD:main
+
+          echo "=================================================="
+          echo "SUCCESS"
+          echo "V3.2 beep patch has been committed to main."
+          echo "Only NavigationMapView.java was changed."
+          echo "=================================================="
+
+      - name: Show final commit
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          git log -1 \
+            --pretty=format:'Commit: %H%nMessage: %s%n'
