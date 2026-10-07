@@ -1,0 +1,317 @@
+name: CarAssistant V3.2 - Beep Fix Diagnostic
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout main
+        uses: actions/checkout@v4
+        with:
+          ref: main
+
+      - name: Locate NavigationMapView
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          FILE="v10-source/app/src/main/java/com/hieptran/aacast/doudou/NavigationMapView.java"
+
+          test -f "$FILE"
+
+          echo "FILE=$FILE" >> "$GITHUB_ENV"
+
+      - name: Patch beep only
+        shell: python
+        run: |
+          from pathlib import Path
+
+          path = Path(
+              "v10-source/app/src/main/java/com/hieptran/aacast/doudou/NavigationMapView.java"
+          )
+
+          text = path.read_text(encoding="utf-8")
+
+          # Add Log import if it does not already exist.
+          if "import android.util.Log;" not in text:
+              marker = "import android.view."
+
+              idx = text.find(marker)
+
+              if idx < 0:
+                  raise SystemExit(
+                      "Cannot find a stable Android import location."
+                  )
+
+              text = (
+                  text[:idx]
+                  + "import android.util.Log;\n"
+                  + text[idx:]
+              )
+
+          start = text.find(
+              "    private void playVoiceStartTone()"
+          )
+
+          if start < 0:
+              raise SystemExit(
+                  "playVoiceStartTone() was not found."
+              )
+
+          brace = text.find("{", start)
+
+          if brace < 0:
+              raise SystemExit(
+                  "playVoiceStartTone() opening brace was not found."
+              )
+
+          depth = 0
+          end = None
+
+          for i in range(brace, len(text)):
+              if text[i] == "{":
+                  depth += 1
+
+              elif text[i] == "}":
+                  depth -= 1
+
+                  if depth == 0:
+                      end = i + 1
+                      break
+
+          if end is None:
+              raise SystemExit(
+                  "Could not locate playVoiceStartTone() closing brace."
+              )
+
+          replacement = r'''    private static final String VOICE_TONE_TAG = "CarAssistantVoice";
+        
+          private void playVoiceStartTone() {
+
+          /*
+          * V3.2 BEEP FIX ONLY.
+          *
+          * Không thay đổi:
+          * - SpeechRecognizer
+          * - vi-VN
+          * - partial text
+          * - timeout 5 giây
+          * - auto search
+          *
+          * Ưu tiên STREAM_MUSIC vì Android Auto thường
+          * route âm thanh người dùng nghe được qua media stream.
+          *
+          * Nếu MUSIC không phát được thì thử
+          * STREAM_NOTIFICATION.
+          */
+
+          try {
+ 
+            if (toneGenerator != null) {
+
+                try {
+                    toneGenerator.release();
+                } catch (Exception ignored) {
+                }
+
+                toneGenerator = null;
+            }
+
+            AudioManager audioManager =
+                    (AudioManager) getContext()
+                            .getSystemService(Context.AUDIO_SERVICE);
+
+            int musicVolume = -1;
+            int notificationVolume = -1;
+
+            if (audioManager != null) {
+
+                try {
+                    musicVolume =
+                            audioManager.getStreamVolume(
+                                    AudioManager.STREAM_MUSIC);
+
+                } catch (Exception e) {
+
+                    Log.w(
+                            VOICE_TONE_TAG,
+                            "Không đọc được MUSIC volume",
+                            e);
+                }
+
+                try {
+                    notificationVolume =
+                            audioManager.getStreamVolume(
+                                    AudioManager.STREAM_NOTIFICATION);
+
+                } catch (Exception e) {
+
+                    Log.w(
+                            VOICE_TONE_TAG,
+                            "Không đọc được NOTIFICATION volume",
+                            e);
+                }
+            }
+
+            Log.i(
+                    VOICE_TONE_TAG,
+                    "Voice beep: MUSIC volume="
+                            + musicVolume
+                            + ", NOTIFICATION volume="
+                            + notificationVolume);
+
+            /*
+             * Ưu tiên MUSIC.
+             */
+            toneGenerator =
+                    new ToneGenerator(
+                            AudioManager.STREAM_MUSIC,
+                            100);
+
+            boolean started =
+                    toneGenerator.startTone(
+                            ToneGenerator.TONE_PROP_BEEP,
+                            180);
+
+            Log.i(
+                    VOICE_TONE_TAG,
+                    "Voice beep MUSIC startTone="
+                            + started);
+
+            /*
+             * Nếu MUSIC không phát được,
+             * thử NOTIFICATION.
+             */
+            if (!started) {
+
+                try {
+                    toneGenerator.release();
+                } catch (Exception ignored) {
+                }
+
+                toneGenerator = null;
+
+                toneGenerator =
+                        new ToneGenerator(
+                            AudioManager.STREAM_NOTIFICATION,
+                            100);
+
+                boolean fallbackStarted =
+                        toneGenerator.startTone(
+                            ToneGenerator.TONE_PROP_BEEP,
+                            180);
+
+                Log.i(
+                        VOICE_TONE_TAG,
+                        "Voice beep NOTIFICATION fallback startTone="
+                                + fallbackStarted);
+            }
+
+            /*
+             * Giữ ToneGenerator đủ lâu để beep hoàn tất.
+             */
+            voiceHandler.postDelayed(
+                    () -> {
+
+                        if (toneGenerator == null) {
+                            return;
+                        }
+
+                        try {
+                            toneGenerator.release();
+                        } catch (Exception ignored) {
+                        }
+
+                        toneGenerator = null;
+
+                    },
+                    350L);
+
+          } catch (Exception e) {
+
+            /*
+             * Không nuốt lỗi nữa.
+             * Voice V3.2 vẫn tiếp tục hoạt động
+             * nếu thiết bị không phát được beep.
+             */
+            Log.e(
+                    VOICE_TONE_TAG,
+                    "Voice beep FAILED",
+                    e);
+
+            if (toneGenerator != null) {
+
+                try {
+                    toneGenerator.release();
+                } catch (Exception ignored) {
+                }
+
+                toneGenerator = null;
+            }
+          }
+          }'''
+
+          text = text[:start] + replacement + text[end:]
+
+          path.write_text(
+              text,
+              encoding="utf-8"
+          )
+
+      - name: Verify V3.2 voice logic was not changed
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          grep -q 'SpeechRecognizer' "$FILE"
+
+          grep -q 'vi-VN\|Locale("vi", "VN")' "$FILE"
+
+          grep -q '5000L' "$FILE"
+
+          grep -q 'playVoiceStartTone' "$FILE"
+
+          test "$(git status --short | wc -l)" -eq 1
+
+          git diff --check
+
+          git diff -- "$FILE"
+
+      - name: Build Debug APK
+        shell: bash
+        working-directory: v10-source
+        run: |
+          set -euo pipefail
+
+          chmod +x gradlew
+
+          ./gradlew :app:assembleDebug \
+            --no-daemon \
+            --stacktrace
+
+      - name: Package APK
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          mkdir -p release
+
+          cp \
+            v10-source/app/build/outputs/apk/debug/app-debug.apk \
+            release/CarAssistant-Navigation-V1-Voice-V3.2-Beep-Fix.apk
+
+          sha256sum \
+            release/CarAssistant-Navigation-V1-Voice-V3.2-Beep-Fix.apk
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: CarAssistant-Navigation-V1-Voice-V3.2-Beep-Fix
+          path: release/CarAssistant-Navigation-V1-Voice-V3.2-Beep-Fix.apk
+          if-no-files-found: error
