@@ -761,14 +761,277 @@ jobs:
                   "ERROR: Could not isolate onResume()."
               )
 
-          resume = m.group(1)
+      # =========================================================
+      # 9. VERIFY PATCHED NAVIGATION ARCHITECTURE
+      #
+      # IMPORTANT:
+      # Use Python for Java structural checks.
+      # Do NOT use grep for multi-line Java statements.
+      # =========================================================
+
+      - name: Verify patched Navigation architecture
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          CAR="v10-source/app/src/main/java/com/hieptran/aacast/doudou/V10CarActivity.java"
+          PRESENTATION="v10-source/app/src/main/java/com/hieptran/aacast/doudou/NavigationPresentationView.java"
+
+          test -f "$CAR"
+          test -f "$PRESENTATION"
+
+          echo "========================================"
+          echo "Checking NavigationPresentationView"
+          echo "========================================"
+
+          grep -Fq \
+            "public final class NavigationPresentationView" \
+            "$PRESENTATION"
+
+          echo "PASS: PresentationView class"
+
+          grep -Fq \
+            "setNavigationMap(" \
+            "$PRESENTATION"
+
+          echo "PASS: PresentationView setNavigationMap"
+
+          grep -Fq \
+            "onHostResume()" \
+            "$PRESENTATION"
+
+          echo "PASS: PresentationView resume"
+
+          grep -Fq \
+            "onHostPause()" \
+            "$PRESENTATION"
+
+          echo "PASS: PresentationView pause"
+
+          grep -Fq \
+            "onHostDestroy()" \
+            "$PRESENTATION"
+
+          echo "PASS: PresentationView destroy"
+
+          echo ""
+          echo "========================================"
+          echo "Checking V10CarActivity"
+          echo "========================================"
+
+          python3 - <<'PY'
+          from pathlib import Path
+          import re
+
+          path = Path(
+              "v10-source/app/src/main/java/com/hieptran/aacast/doudou/V10CarActivity.java"
+          )
+
+          text = path.read_text(
+              encoding="utf-8"
+          )
+
+          def check(label, pattern):
+              if not re.search(
+                  pattern,
+                  text,
+                  flags=re.MULTILINE | re.DOTALL
+              ):
+                  print("")
+                  print("ERROR: " + label)
+                  print("Regex not matched:")
+                  print(pattern)
+                  print("")
+                  print("Relevant source context:")
+
+                  pos = text.find(
+                      "navigationPresentation"
+                  )
+
+                  if pos >= 0:
+                      start = max(
+                          0,
+                          pos - 500
+                      )
+                      end = min(
+                          len(text),
+                          pos + 1500
+                      )
+                      print(
+                          text[start:end]
+                      )
+                  else:
+                      print(
+                          "navigationPresentation not found."
+                      )
+
+                  raise SystemExit(1)
+
+              print(
+                  "PASS: " + label
+              )
+
+          # -----------------------------------------------------
+          # Presentation field
+          # -----------------------------------------------------
+
+          check(
+              "Presentation field",
+              r"private\s+NavigationPresentationView"
+              r"\s+navigationPresentation\s*;"
+          )
+
+          # -----------------------------------------------------
+          # Presentation creation
+          #
+          # This explicitly supports:
+          #
+          # navigationPresentation =
+          #         new NavigationPresentationView(this);
+          #
+          # and:
+          #
+          # navigationPresentation = new NavigationPresentationView(this);
+          # -----------------------------------------------------
+
+          check(
+              "Presentation creation",
+              r"navigationPresentation"
+              r"\s*=\s*"
+              r"new\s+NavigationPresentationView"
+              r"\s*\(\s*this\s*\)\s*;"
+          )
+
+          # -----------------------------------------------------
+          # NavigationMapView -> Presentation
+          # -----------------------------------------------------
+
+          check(
+              "NavigationMap assigned to Presentation",
+              r"navigationPresentation"
+              r"\s*\.\s*setNavigationMap"
+              r"\s*\(\s*navigationMap\s*\)\s*;"
+          )
+
+          # -----------------------------------------------------
+          # Presentation -> root
+          # -----------------------------------------------------
+
+          check(
+              "Presentation added to root",
+              r"root"
+              r"\s*\.\s*addView"
+              r"\s*\(\s*"
+              r"navigationPresentation"
+              r"\s*,"
+          )
+
+          # -----------------------------------------------------
+          # Resume delegation
+          # -----------------------------------------------------
+
+          check(
+              "Resume delegation",
+              r"navigationPresentation"
+              r"\s*\.\s*onHostResume"
+              r"\s*\(\s*\)\s*;"
+          )
+
+          # -----------------------------------------------------
+          # Pause delegation
+          # -----------------------------------------------------
+
+          check(
+              "Pause delegation",
+              r"navigationPresentation"
+              r"\s*\.\s*onHostPause"
+              r"\s*\(\s*\)\s*;"
+          )
+
+          # -----------------------------------------------------
+          # Destroy delegation
+          # -----------------------------------------------------
+
+          check(
+              "Destroy delegation",
+              r"navigationPresentation"
+              r"\s*\.\s*onHostDestroy"
+              r"\s*\(\s*\)\s*;"
+          )
+
+          print("")
+          print("========================================")
+          print("Checking lifecycle structure")
+          print("========================================")
+
+          # -----------------------------------------------------
+          # Direct NavigationMapView lifecycle calls must NOT
+          # remain in V10CarActivity.
+          # -----------------------------------------------------
+
+          forbidden = [
+              r"navigationMap"
+              r"\s*\.\s*onHostResume"
+              r"\s*\(",
+
+              r"navigationMap"
+              r"\s*\.\s*onHostPause"
+              r"\s*\(",
+
+              r"navigationMap"
+              r"\s*\.\s*onHostDestroy"
+              r"\s*\(",
+          ]
+
+          for pattern in forbidden:
+              if re.search(
+                  pattern,
+                  text,
+                  flags=re.MULTILINE | re.DOTALL
+              ):
+                  raise SystemExit(
+                      "ERROR: Direct NavigationMapView "
+                      "lifecycle call remains:\n"
+                      + pattern
+                  )
+
+          print(
+              "PASS: Direct NavigationMapView lifecycle calls removed."
+          )
+
+          # -----------------------------------------------------
+          # Isolate onResume()
+          # -----------------------------------------------------
+
+          resume_match = re.search(
+              r"public\s+void\s+onResume"
+              r"\s*\(\s*\)\s*\{"
+              r"(.*?)"
+              r"\n\s*\}\s*"
+              r"\n\s*\n\s*"
+              r"private\s+void\s+buildUi"
+              r"\s*\(",
+              text,
+              flags=re.MULTILINE | re.DOTALL
+          )
+
+          if not resume_match:
+              raise SystemExit(
+                  "ERROR: Could not isolate onResume()."
+              )
+
+          resume = resume_match.group(1)
+
+          # -----------------------------------------------------
+          # Find root == null block inside onResume().
+          # -----------------------------------------------------
 
           root_match = re.search(
               r"if\s*\(\s*root\s*==\s*null\s*\)\s*\{"
               r"(.*?)"
               r"\n\s*\}",
               resume,
-              flags=re.S
+              flags=re.MULTILINE | re.DOTALL
           )
 
           if not root_match:
@@ -778,21 +1041,29 @@ jobs:
 
           root_block = root_match.group(1)
 
+          # Presentation resume MUST NOT be inside root == null.
           if re.search(
-              r"navigationPresentation\s*\.\s*onHostResume\s*\(",
-              root_block
+              r"navigationPresentation"
+              r"\s*\.\s*onHostResume"
+              r"\s*\(",
+              root_block,
+              flags=re.MULTILINE | re.DOTALL
           ):
               raise SystemExit(
                   "ERROR: navigationPresentation.onHostResume() "
                   "is still inside root == null."
               )
 
+          # Presentation resume MUST exist in onResume().
           if not re.search(
-              r"navigationPresentation\s*\.\s*onHostResume\s*\(",
-              resume
+              r"navigationPresentation"
+              r"\s*\.\s*onHostResume"
+              r"\s*\(\s*\)\s*;",
+              resume,
+              flags=re.MULTILINE | re.DOTALL
           ):
               raise SystemExit(
-                  "ERROR: onResume does not delegate to "
+                  "ERROR: onResume() does not delegate to "
                   "NavigationPresentationView."
               )
 
@@ -800,19 +1071,96 @@ jobs:
               "PASS: onHostResume() is outside root == null."
           )
 
-          print(
-              "PASS: Direct NavigationMapView lifecycle calls removed."
+          # -----------------------------------------------------
+          # Isolate onPause().
+          # -----------------------------------------------------
+
+          pause_match = re.search(
+              r"public\s+void\s+onPause"
+              r"\s*\(\s*\)\s*\{"
+              r"(.*?)"
+              r"\n\s*\}\s*"
+              r"\n\s*\n\s*"
+              r"public\s+void\s+onStop",
+              text,
+              flags=re.MULTILINE | re.DOTALL
           )
 
+          if not pause_match:
+              raise SystemExit(
+                  "ERROR: Could not isolate onPause()."
+              )
+
+          pause = pause_match.group(1)
+
+          if not re.search(
+              r"navigationPresentation"
+              r"\s*\.\s*onHostPause"
+              r"\s*\(\s*\)\s*;",
+              pause,
+              flags=re.MULTILINE | re.DOTALL
+          ):
+              raise SystemExit(
+                  "ERROR: onPause() does not delegate to "
+                  "NavigationPresentationView."
+              )
+
           print(
-              "PASS: Presentation lifecycle architecture verified."
+              "PASS: onPause() delegates to Presentation."
           )
+
+          # -----------------------------------------------------
+          # Isolate onDestroy().
+          # -----------------------------------------------------
+
+          destroy_match = re.search(
+              r"public\s+void\s+onDestroy"
+              r"\s*\(\s*\)\s*\{"
+              r"(.*?)"
+              r"\n\s*\}\s*",
+              text,
+              flags=re.MULTILINE | re.DOTALL
+          )
+
+          if not destroy_match:
+              raise SystemExit(
+                  "ERROR: Could not isolate onDestroy()."
+              )
+
+          destroy = destroy_match.group(1)
+
+          if not re.search(
+              r"navigationPresentation"
+              r"\s*\.\s*onHostDestroy"
+              r"\s*\(\s*\)\s*;",
+              destroy,
+              flags=re.MULTILINE | re.DOTALL
+          ):
+              raise SystemExit(
+                  "ERROR: onDestroy() does not delegate to "
+                  "NavigationPresentationView."
+              )
+
+          if not re.search(
+              r"navigationPresentation"
+              r"\s*=\s*null\s*;",
+              destroy,
+              flags=re.MULTILINE | re.DOTALL
+          ):
+              raise SystemExit(
+                  "ERROR: navigationPresentation is not cleared "
+                  "in onDestroy()."
+              )
+
+          print(
+              "PASS: onDestroy() delegates to Presentation."
+          )
+
+          print("")
+          print("========================================")
+          print("PASS: Navigation architecture verified")
+          print("========================================")
           PY
-
-          echo ""
-          echo "========================================"
-          echo "PASS: Navigation architecture verification"
-          echo "========================================"
 
       # =========================================================
       # 10. VERIFY V10LauncherActivity WAS NOT MODIFIED
