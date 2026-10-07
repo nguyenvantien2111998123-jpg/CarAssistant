@@ -119,7 +119,6 @@ jobs:
           grep -Fq "public final class V10CarActivity" "$FILE"
           grep -Fq "extends CarActivity" "$FILE"
           grep -Fq "private NavigationMapView navigationMap;" "$FILE"
-          grep -Fq "navigationMap=new NavigationMapView(this);" "$FILE"
           grep -Fq "navigationMap.onHostResume()" "$FILE"
           grep -Fq "navigationMap.onHostPause()" "$FILE"
           grep -Fq "navigationMap.onHostDestroy()" "$FILE"
@@ -556,6 +555,7 @@ jobs:
 
           python3 - <<'PY'
           from pathlib import Path
+          import re
 
           path = Path(
               "v10-source/app/src/main/java/com/hieptran/aacast/doudou/V10CarActivity.java"
@@ -563,65 +563,35 @@ jobs:
 
           s = path.read_text(encoding="utf-8")
 
-          old_field = """    private NavigationMapView navigationMap;
-          """
+          # 1. Add field
+          if "private NavigationPresentationView navigationPresentation;" not in s:
+              field_pattern = re.compile(r"(\s*private\s+NavigationMapView\s+navigationMap\s*;)")
+              match = field_pattern.search(s)
+              if not match:
+                  raise SystemExit("ERROR: NavigationMapView field anchor not found.")
+              s = s[:match.end()] + "\n    private NavigationPresentationView navigationPresentation;" + s[match.end():]
 
-          new_field = """    private NavigationMapView navigationMap;
-              private NavigationPresentationView navigationPresentation;
-          """
+          # 2. Add presentation view into main FrameLayout
+          if "NavigationPresentationView.Mode.ANDROID_AUTO" not in s:
+              main_pattern = re.compile(
+                  r"(FrameLayout\s+main\s*=\s*new\s+FrameLayout\s*\(\s*this\s*\)\s*;\s*\n\s*dashboard\.addView\s*\(\s*main\s*,\s*new\s+LinearLayout\.LayoutParams\s*\(\s*0\s*,\s*-1\s*,\s*1f\s*\)\s*\)\s*;)",
+                  re.DOTALL
+              )
+              match = main_pattern.search(s)
+              if not match:
+                  raise SystemExit("ERROR: Dashboard main anchor not found.")
 
-          if old_field not in s:
-              raise SystemExit(
-                  "ERROR: NavigationMapView field anchor not found."
+              replacement = (
+                  match.group(1) + "\n\n"
+                  "        navigationPresentation = new NavigationPresentationView(\n"
+                  "                this, NavigationPresentationView.Mode.ANDROID_AUTO);\n"
+                  "        navigationPresentation.setNavigationMap(navigationMap);\n"
+                  "        main.addView(navigationPresentation, new FrameLayout.LayoutParams(-1, -1));"
               )
 
-          s = s.replace(
-              old_field,
-              new_field,
-              1
-          )
+              s = s[:match.start()] + replacement + s[match.end():]
 
-          old_main = """        FrameLayout main=new FrameLayout(this);
-          dashboard.addView(main,new LinearLayout.LayoutParams(0,-1,1f));
-
-          LinearLayout bottom=new LinearLayout(this);
-          """
-
-          new_main = """        FrameLayout main=new FrameLayout(this);
-          dashboard.addView(main,new LinearLayout.LayoutParams(0,-1,1f));
-
-          navigationPresentation =
-                  new NavigationPresentationView(
-                          this,
-                          NavigationPresentationView.Mode.ANDROID_AUTO);
-
-          navigationPresentation.setNavigationMap(
-                  navigationMap);
-
-          main.addView(
-                  navigationPresentation,
-                  new FrameLayout.LayoutParams(
-                          -1,
-                          -1));
-
-          LinearLayout bottom=new LinearLayout(this);
-          """
-
-          if old_main not in s:
-              raise SystemExit(
-                  "ERROR: Dashboard main anchor not found."
-              )
-
-          s = s.replace(
-              old_main,
-              new_main,
-              1
-          )
-
-          path.write_text(
-              s,
-              encoding="utf-8"
-          )
+          path.write_text(s, encoding="utf-8")
           PY
 
           grep -Fq \
