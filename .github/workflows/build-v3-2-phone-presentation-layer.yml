@@ -1,0 +1,719 @@
+name: CarAssistant V3.2 - Phone Presentation Layer
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build-phone-presentation:
+    runs-on: ubuntu-latest
+
+    steps:
+      # ============================================================
+      # 1. GIỮ NGUYÊN BASELINE CHECKOUT
+      # ============================================================
+      - name: Checkout main
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      # ============================================================
+      # 2. VERIFY SOURCE BASELINE
+      #    Không thay đổi source trước khi patch
+      # ============================================================
+      - name: Verify NavigationMapView baseline
+        shell: bash
+        run: |
+          set -e
+
+          FILE="v10-source/app/src/main/java/com/carassistant/v10/NavigationMapView.java"
+
+          test -f "$FILE"
+
+          echo "=== NavigationMapView baseline ==="
+          grep -q 'package com.carassistant.v10;' "$FILE"
+          grep -q 'org.maplibre.android' "$FILE"
+          grep -q 'https://tiles.openfreemap.org/styles/liberty' "$FILE"
+          grep -q 'nominatim.openstreetmap.org' "$FILE"
+          grep -q 'vi-VN' "$FILE"
+          grep -q 'VOICE_SILENCE_TIMEOUT_MS = 5000L' "$FILE"
+          grep -q 'playVoiceStartTone' "$FILE"
+          grep -q 'selectDestination' "$FILE"
+          grep -q 'zoomIn' "$FILE"
+          grep -q 'zoomOut' "$FILE"
+          grep -q 'recenter' "$FILE"
+
+          echo "BASELINE SOURCE CHECK: PASS"
+
+      # ============================================================
+      # 3. PATCH PRESENTATION LAYER
+      #
+      #    CHỈ thêm phone presentation.
+      #    Không thay đổi:
+      #      - MapLibre
+      #      - OpenFreeMap Liberty
+      #      - GPS
+      #      - auto-follow
+      #      - Nominatim
+      #      - Voice vi-VN
+      #      - beep
+      #      - partial text
+      #      - 5s timeout
+      #      - search result
+      #      - marker
+      #      - zoom
+      #      - recenter
+      #
+      #    Patch bằng Python brace matching để tránh lỗi
+      #    "class, interface, enum, or record expected".
+      # ============================================================
+      - name: Patch Presentation Layer
+        shell: bash
+        run: |
+          set -e
+
+          FILE="v10-source/app/src/main/java/com/carassistant/v10/NavigationMapView.java"
+
+          python3 <<'PY'
+          from pathlib import Path
+
+          path = Path("v10-source/app/src/main/java/com/carassistant/v10/NavigationMapView.java")
+          text = path.read_text()
+
+          # ----------------------------------------------------------
+          # Helpers
+          # ----------------------------------------------------------
+          def find_method_start(src, signature):
+              pos = src.find(signature)
+              if pos < 0:
+                  raise RuntimeError("Cannot find method: " + signature)
+              brace = src.find("{", pos)
+              if brace < 0:
+                  raise RuntimeError("Cannot find opening brace: " + signature)
+              return pos, brace
+
+          def find_matching_brace(src, brace):
+              depth = 0
+              in_string = False
+              in_char = False
+              in_line_comment = False
+              in_block_comment = False
+              escape = False
+              i = brace
+
+              while i < len(src):
+                  c = src[i]
+                  n = src[i + 1] if i + 1 < len(src) else ""
+
+                  if in_line_comment:
+                      if c == "\n":
+                          in_line_comment = False
+                      i += 1
+                      continue
+
+                  if in_block_comment:
+                      if c == "*" and n == "/":
+                          in_block_comment = False
+                          i += 2
+                          continue
+                      i += 1
+                      continue
+
+                  if in_string:
+                      if escape:
+                          escape = False
+                      elif c == "\\":
+                          escape = True
+                      elif c == '"':
+                          in_string = False
+                      i += 1
+                      continue
+
+                  if in_char:
+                      if escape:
+                          escape = False
+                      elif c == "\\":
+                          escape = True
+                      elif c == "'":
+                          in_char = False
+                      i += 1
+                      continue
+
+                  if c == "/" and n == "/":
+                      in_line_comment = True
+                      i += 2
+                      continue
+
+                  if c == "/" and n == "*":
+                      in_block_comment = True
+                      i += 2
+                      continue
+
+                  if c == '"':
+                      in_string = True
+                      i += 1
+                      continue
+
+                  if c == "'":
+                      in_char = True
+                      i += 1
+                      continue
+
+                  if c == "{":
+                      depth += 1
+                  elif c == "}":
+                      depth -= 1
+                      if depth == 0:
+                          return i
+
+                  i += 1
+
+              raise RuntimeError("Unbalanced braces")
+
+          # ----------------------------------------------------------
+          # 1. Add phone presentation fields
+          # ----------------------------------------------------------
+          field_anchor = "private volatile boolean destroyed;"
+
+          fields = r'''
+          private boolean phonePresentationMode;
+          private LinearLayout phoneSidebar;
+          private LinearLayout phoneBottomDock;
+          '''
+
+          if "private boolean phonePresentationMode;" not in text:
+              if field_anchor not in text:
+                  raise RuntimeError("Field anchor not found")
+              text = text.replace(
+                  field_anchor,
+                  field_anchor + fields,
+                  1
+              )
+
+          # ----------------------------------------------------------
+          # 2. Add phone presentation call in constructor
+          # ----------------------------------------------------------
+          constructor_sig = "public NavigationMapView(Context context)"
+          _, brace = find_method_start(text, constructor_sig)
+          end = find_matching_brace(text, brace)
+
+          constructor = text[_.__class__ and 0:0]  # no-op, keeps script simple
+          constructor = text[_.__class__ and 0:0]
+
+          # Recalculate after any field insertion.
+          start, brace = find_method_start(text, constructor_sig)
+          end = find_matching_brace(text, brace)
+          constructor = text[start:end + 1]
+
+          call = "        setupPhonePresentationLayer();"
+
+          if "setupPhonePresentationLayer();" not in constructor:
+              insert_before = "\n    }"
+              if insert_before not in constructor:
+                  raise RuntimeError("Constructor closing point not found")
+
+              constructor = constructor.replace(
+                  insert_before,
+                  "\n" + call + "\n    }",
+                  1
+              )
+
+              text = text[:start] + constructor + text[end + 1:]
+
+          # ----------------------------------------------------------
+          # 3. Add presentation methods before buildNavigationControls
+          # ----------------------------------------------------------
+          marker = "    private void buildNavigationControls()"
+
+          if marker not in text:
+              raise RuntimeError("buildNavigationControls anchor not found")
+
+          presentation = r'''
+              /*
+               * PHONE PRESENTATION LAYER
+               *
+               * This layer is visual only.
+               * It does not modify map/search/GPS/voice/navigation logic.
+               *
+               * Android Auto / large-screen presentation remains unchanged.
+               */
+              private void setupPhonePresentationLayer() {
+                  phonePresentationMode = isPhonePresentation();
+
+                  if (!phonePresentationMode) {
+                      return;
+                  }
+
+                  buildPhoneSidebar();
+                  buildPhoneBottomDock();
+
+                  if (searchInput != null) {
+                      searchInput.setHint("Tìm địa điểm...");
+                  }
+              }
+
+              private boolean isPhonePresentation() {
+                  android.util.DisplayMetrics dm = getResources().getDisplayMetrics();
+
+                  float widthDp = dm.widthPixels / dm.density;
+                  float heightDp = dm.heightPixels / dm.density;
+
+                  /*
+                   * Phone presentation is only enabled on a normal
+                   * phone-sized display.
+                   *
+                   * Large Android Auto / tablet-like displays keep
+                   * the existing presentation unchanged.
+                   */
+                  return Math.min(widthDp, heightDp) < 700.0f;
+              }
+
+              private void buildPhoneSidebar() {
+                  if (phoneSidebar != null) {
+                      return;
+                  }
+
+                  phoneSidebar = new LinearLayout(getContext());
+                  phoneSidebar.setOrientation(LinearLayout.VERTICAL);
+                  phoneSidebar.setGravity(Gravity.CENTER);
+                  phoneSidebar.setPadding(dp(5), dp(8), dp(5), dp(8));
+
+                  GradientDrawable bg = new GradientDrawable();
+                  bg.setColor(Color.argb(150, 15, 21, 27));
+                  bg.setCornerRadius(dp(18));
+                  bg.setStroke(dp(1), Color.argb(90, 80, 170, 230));
+                  phoneSidebar.setBackground(bg);
+                  phoneSidebar.setElevation(dp(10));
+                  phoneSidebar.setAlpha(0.94f);
+
+                  FrameLayout.LayoutParams params =
+                      new FrameLayout.LayoutParams(
+                          dp(58),
+                          dp(270),
+                          Gravity.START | Gravity.CENTER_VERTICAL
+                      );
+
+                  params.setMargins(dp(10), 0, 0, 0);
+
+                  addPhoneSideButton(
+                      phoneSidebar,
+                      "⌂",
+                      "Màn hình chính",
+                      v -> {
+                          if (searchResults != null) {
+                              searchResults.setVisibility(View.GONE);
+                          }
+                          if (searchInput != null) {
+                              searchInput.clearFocus();
+                          }
+                      }
+                  );
+
+                  addPhoneSideButton(
+                      phoneSidebar,
+                      "◎",
+                      "Vị trí hiện tại",
+                      v -> recenter()
+                  );
+
+                  addPhoneSideButton(
+                      phoneSidebar,
+                      "🎙",
+                      "Tìm kiếm bằng giọng nói",
+                      v -> startVoiceSearch()
+                  );
+
+                  addPhoneSideButton(
+                      phoneSidebar,
+                      "⌕",
+                      "Tìm địa điểm",
+                      v -> performSearch()
+                  );
+
+                  addView(phoneSidebar, params);
+                  phoneSidebar.bringToFront();
+
+                  if (searchInput != null) {
+                      searchInput.bringToFront();
+                  }
+
+                  if (voiceButton != null) {
+                      voiceButton.bringToFront();
+                  }
+
+                  if (searchButton != null) {
+                      searchButton.bringToFront();
+                  }
+              }
+
+              private void addPhoneSideButton(
+                      LinearLayout parent,
+                      String label,
+                      String description,
+                      OnClickListener listener
+              ) {
+                  TextView button = new TextView(getContext());
+
+                  button.setText(label);
+                  button.setTextColor(Color.WHITE);
+                  button.setTextSize(21);
+                  button.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
+                  button.setGravity(Gravity.CENTER);
+                  button.setContentDescription(description);
+                  button.setClickable(true);
+                  button.setFocusable(true);
+                  button.setAlpha(0.92f);
+                  button.setElevation(dp(5));
+                  button.setOnClickListener(listener);
+
+                  GradientDrawable bg = new GradientDrawable();
+                  bg.setColor(Color.argb(105, 25, 35, 45));
+                  bg.setCornerRadius(dp(12));
+                  bg.setStroke(dp(1), Color.argb(80, 80, 170, 230));
+                  button.setBackground(bg);
+
+                  LinearLayout.LayoutParams lp =
+                      new LinearLayout.LayoutParams(
+                          dp(46),
+                          dp(52)
+                      );
+
+                  lp.setMargins(0, dp(3), 0, dp(3));
+                  parent.addView(button, lp);
+              }
+
+              private void buildPhoneBottomDock() {
+                  if (phoneBottomDock != null) {
+                      return;
+                  }
+
+                  phoneBottomDock = new LinearLayout(getContext());
+                  phoneBottomDock.setOrientation(LinearLayout.HORIZONTAL);
+                  phoneBottomDock.setGravity(Gravity.CENTER);
+
+                  GradientDrawable bg = new GradientDrawable();
+                  bg.setColor(Color.argb(155, 15, 21, 27));
+                  bg.setCornerRadius(dp(18));
+                  bg.setStroke(dp(1), Color.argb(90, 80, 170, 230));
+                  phoneBottomDock.setBackground(bg);
+                  phoneBottomDock.setElevation(dp(9));
+                  phoneBottomDock.setAlpha(0.94f);
+
+                  FrameLayout.LayoutParams params =
+                      new FrameLayout.LayoutParams(
+                          MATCH_PARENT,
+                          dp(52),
+                          Gravity.BOTTOM
+                      );
+
+                  params.setMargins(dp(82), 0, dp(82), dp(10));
+
+                  addPhoneDockLabel(phoneBottomDock, "NAVIGATION");
+                  addPhoneDockLabel(phoneBottomDock, "MEDIA");
+                  addPhoneDockLabel(phoneBottomDock, "PHONE");
+
+                  addView(phoneBottomDock, params);
+                  phoneBottomDock.bringToFront();
+
+                  if (searchInput != null) {
+                      searchInput.bringToFront();
+                  }
+
+                  if (voiceButton != null) {
+                      voiceButton.bringToFront();
+                  }
+
+                  if (searchButton != null) {
+                      searchButton.bringToFront();
+                  }
+              }
+
+              private void addPhoneDockLabel(
+                      LinearLayout parent,
+                      String label
+              ) {
+                  TextView item = new TextView(getContext());
+
+                  item.setText(label);
+                  item.setTextColor(Color.WHITE);
+                  item.setTextSize(11);
+                  item.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
+                  item.setGravity(Gravity.CENTER);
+                  item.setAlpha(0.86f);
+
+                  LinearLayout.LayoutParams lp =
+                      new LinearLayout.LayoutParams(
+                          0,
+                          MATCH_PARENT,
+                          1.0f
+                      );
+
+                  parent.addView(item, lp);
+              }
+
+          '''
+
+          if "private void setupPhonePresentationLayer()" not in text:
+              text = text.replace(marker, presentation + marker, 1)
+
+          # ----------------------------------------------------------
+          # 4. Phone-only search presentation.
+          #
+          #    Existing Android Auto margins stay unchanged.
+          #    On phone, only the position is adjusted.
+          # ----------------------------------------------------------
+          search_marker = (
+              "        FrameLayout.LayoutParams searchParams = "
+          )
+
+          if search_marker not in text:
+              raise RuntimeError("Search params anchor not found")
+
+          # Find the existing search params block using the known
+          # top-left search layout and replace only its margins.
+          old_search_margin = (
+              "        searchParams.setMargins("
+              "dp(112), dp(18), dp(94), 0);"
+          )
+
+          new_search_margin = r'''        if (phonePresentationMode) {
+                      searchParams.setMargins(
+                          dp(78), dp(12), dp(78), 0
+                      );
+                  } else {
+                      searchParams.setMargins(
+                          dp(112), dp(18), dp(94), 0
+                      );
+                  }'''
+
+          if old_search_margin in text:
+              text = text.replace(
+                  old_search_margin,
+                  new_search_margin,
+                  1
+              )
+          elif "if (phonePresentationMode)" not in text:
+              raise RuntimeError(
+                  "Expected original search margins were not found"
+              )
+
+          # ----------------------------------------------------------
+          # 5. Phone-only search result position.
+          # ----------------------------------------------------------
+          old_result_margin = (
+              "        resultParams.setMargins("
+              "dp(112), dp(82), dp(94), 0);"
+          )
+
+          new_result_margin = r'''        if (phonePresentationMode) {
+                      resultParams.setMargins(
+                          dp(78), dp(76), dp(78), 0
+                      );
+                  } else {
+                      resultParams.setMargins(
+                          dp(112), dp(82), dp(94), 0
+                      );
+                  }'''
+
+          if old_result_margin in text:
+              text = text.replace(
+                  old_result_margin,
+                  new_result_margin,
+                  1
+              )
+          elif "resultParams.setMargins" not in text:
+              raise RuntimeError("Search result params anchor not found")
+
+          # ----------------------------------------------------------
+          # 6. Final structural verification before writing file.
+          # ----------------------------------------------------------
+          required = [
+              "private boolean phonePresentationMode;",
+              "private LinearLayout phoneSidebar;",
+              "private LinearLayout phoneBottomDock;",
+              "private void setupPhonePresentationLayer()",
+              "private boolean isPhonePresentation()",
+              "private void buildPhoneSidebar()",
+              "private void buildPhoneBottomDock()",
+              "setupPhonePresentationLayer();",
+          ]
+
+          for item in required:
+              if item not in text:
+                  raise RuntimeError(
+                      "PATCH VERIFICATION FAILED: " + item
+                  )
+
+          # Existing functionality must remain.
+          preserved = [
+              "nominatim.openstreetmap.org",
+              "VOICE_SILENCE_TIMEOUT_MS = 5000L",
+              "playVoiceStartTone",
+              "SpeechRecognizer",
+              "RecognizerIntent.LANGUAGE_MODEL_FREE_FORM",
+              "vi-VN",
+              "selectDestination",
+              "destinationMarker",
+              "zoomIn()",
+              "zoomOut()",
+              "recenter()",
+              "https://tiles.openfreemap.org/styles/liberty",
+          ]
+
+          for item in preserved:
+              if item not in text:
+                  raise RuntimeError(
+                      "PRESERVATION CHECK FAILED: " + item
+                  )
+
+          # Basic class/brace validation.
+          if text.count("{") != text.count("}"):
+              raise RuntimeError(
+                  "Brace count mismatch after Presentation Layer patch"
+              )
+
+          path.write_text(text)
+
+          print("PRESENTATION LAYER PATCH: PASS")
+          print("NavigationMapView.java braces: PASS")
+          print("Existing navigation functionality preserved: PASS")
+          PY
+
+      # ============================================================
+      # 4. VERIFY PATCHED SOURCE
+      # ============================================================
+      - name: Verify patched source
+        shell: bash
+        run: |
+          set -e
+
+          FILE="v10-source/app/src/main/java/com/carassistant/v10/NavigationMapView.java"
+
+          test -f "$FILE"
+
+          grep -q 'private void setupPhonePresentationLayer()' "$FILE"
+          grep -q 'private boolean isPhonePresentation()' "$FILE"
+          grep -q 'private void buildPhoneSidebar()' "$FILE"
+          grep -q 'private void buildPhoneBottomDock()' "$FILE"
+
+          grep -q 'nominatim.openstreetmap.org' "$FILE"
+          grep -q 'https://tiles.openfreemap.org/styles/liberty' "$FILE"
+          grep -q 'VOICE_SILENCE_TIMEOUT_MS = 5000L' "$FILE"
+          grep -q 'playVoiceStartTone' "$FILE"
+          grep -q 'vi-VN' "$FILE"
+          grep -q 'selectDestination' "$FILE"
+
+          python3 <<'PY'
+          from pathlib import Path
+
+          p = Path(
+              "v10-source/app/src/main/java/com/carassistant/v10/NavigationMapView.java"
+          )
+
+          s = p.read_text()
+
+          if s.count("{") != s.count("}"):
+              raise SystemExit(
+                  "FAIL: NavigationMapView braces are unbalanced"
+              )
+
+          if s.count("public class NavigationMapView") != 1:
+              raise SystemExit(
+                  "FAIL: NavigationMapView class structure changed"
+              )
+
+          print("JAVA STRUCTURE CHECK: PASS")
+          print("PRESENTATION PATCH CHECK: PASS")
+          PY
+
+      # ============================================================
+      # 5. GIỮ NGUYÊN MAPLIBRE CHECK
+      # ============================================================
+      - name: Verify MapLibre 11.11.0
+        shell: bash
+        run: |
+          set -e
+
+          grep -R -n \
+            'org.maplibre.gl:android-sdk:11.11.0' \
+            v10-source \
+            || true
+
+          grep -R -n \
+            'android-sdk:11.11.0' \
+            v10-source
+
+          echo "MapLibre 11.11.0 CHECK: PASS"
+
+      # ============================================================
+      # 6. JAVA COMPILE
+      #    Giữ nguyên bước compile của baseline.
+      # ============================================================
+      - name: Compile
+        working-directory: v10-source
+        shell: bash
+        run: |
+          set -e
+          chmod +x gradlew
+          ./gradlew :app:compileDebugJavaWithJavac --stacktrace
+
+      # ============================================================
+      # 7. ASSEMBLE APK
+      #    Chỉ chạy sau khi COMPILE PASS.
+      # ============================================================
+      - name: Assemble APK
+        working-directory: v10-source
+        shell: bash
+        run: |
+          set -e
+          ./gradlew :app:assembleDebug --stacktrace
+
+      # ============================================================
+      # 8. VERIFY APK
+      # ============================================================
+      - name: Verify APK
+        shell: bash
+        run: |
+          set -e
+
+          APK="v10-source/app/build/outputs/apk/debug/app-debug.apk"
+
+          test -f "$APK"
+
+          echo "APK: $APK"
+          ls -lh "$APK"
+
+          sha256sum "$APK"
+
+          echo "APK VERIFY: PASS"
+
+      # ============================================================
+      # 9. PACKAGE APK
+      # ============================================================
+      - name: Package APK
+        shell: bash
+        run: |
+          set -e
+
+          APK="v10-source/app/build/outputs/apk/debug/app-debug.apk"
+          OUT="CarAssistant-Navigation-V1-Phone-Presentation-Layer.apk"
+
+          cp "$APK" "$OUT"
+
+          test -f "$OUT"
+
+          echo "Packaged APK:"
+          ls -lh "$OUT"
+
+      # ============================================================
+      # 10. UPLOAD APK
+      # ============================================================
+      - name: Upload APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: CarAssistant-Navigation-V1-Phone-Presentation-Layer
+          path: CarAssistant-Navigation-V1-Phone-Presentation-Layer.apk
+          if-no-files-found: error
