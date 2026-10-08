@@ -1,247 +1,804 @@
- - name: Generate fixed workflow
-  run: |
-    set -euo pipefail
+name: Self Fix Navigation Follow Workflow Fixed
 
-    python3 <<'PY'
-    import textwrap
-    from pathlib import Path
+on:
+  workflow_dispatch:
 
-    src = Path(
-        ".github/workflows/build-v10-carassistant-keyboard-follow-pass.yml"
-    )
+permissions:
+  contents: write
 
-    dst = Path(
-        ".github/workflows/build-v10-carassistant-keyboard-follow-pass-fixed.yml"
-    )
+jobs:
+  self-fix-navigation-follow:
+    runs-on: ubuntu-latest
 
-    text = src.read_text(encoding="utf-8")
+    steps:
+      - name: Check PAT_TOKEN
+        env:
+          PAT_TOKEN: ${{ secrets.PAT_TOKEN }}
+        run: |
+          set -euo pipefail
 
-    START = "# 9. NAVIGATION-ONLY PATCH"
-    END = "# 10. VERIFY NAVIGATION PATCH"
+          if [ -z "${PAT_TOKEN:-}" ]; then
+            echo "FAIL: PAT_TOKEN is missing."
+            exit 1
+          fi
 
-    lines = text.splitlines(keepends=True)
+          echo "PASS: PAT_TOKEN is available."
 
-    start_candidates = [
-        i for i, line in enumerate(lines)
-        if START in line
-    ]
+      - name: Checkout main with PAT
+        uses: actions/checkout@v4
+        with:
+          repository: nguyenvantien2111998123-jpg/CarAssistant
+          ref: main
+          token: ${{ secrets.PAT_TOKEN }}
+          fetch-depth: 0
 
-    end_candidates = [
-        i for i, line in enumerate(lines)
-        if END in line
-    ]
+      - name: Verify baseline source
+        run: |
+          set -euo pipefail
 
-    if len(start_candidates) != 1:
-        found = [l.strip() for l in lines if "# 9" in l]
-        raise SystemExit(
-            f"FAIL: Section 9 actual marker line count = {len(start_candidates)}; expected 1.\n"
-            f"Lines matching '# 9': {found}"
-        )
+          echo "========================================"
+          echo "VERIFY BASELINE SOURCE"
+          echo "========================================"
 
-    if len(end_candidates) != 1:
-        found = [l.strip() for l in lines if "# 10" in l]
-        raise SystemExit(
-            f"FAIL: Section 10 actual marker line count = {len(end_candidates)}; expected 1.\n"
-            f"Lines matching '# 10': {found}"
-        )
+          SOURCE="v10-source/app/src/main/java/com/carassistant/v10/NavigationMapView.java"
+          BASELINE=".github/workflows/build-v10-carassistant-keyboard-follow-pass.yml"
 
-    start_line = start_candidates[0]
-    end_line = end_candidates[0]
+          test -f "$SOURCE"
+          test -f "$BASELINE"
 
-    if end_line <= start_line:
-        raise SystemExit("FAIL: Invalid Section 9 boundaries.")
+          echo "PASS: NavigationMapView.java exists."
+          echo "PASS: Baseline workflow exists."
 
-    prefix = "".join(lines[:start_line])
-    suffix = "".join(lines[end_line:])
+          echo "NavigationMapView.java size:"
+          wc -c "$SOURCE"
 
-    INDENT = " " * 10
+          echo "Relevant source structures:"
 
-    raw_section9 = textwrap.dedent(r'''
-        # 9. NAVIGATION-ONLY PATCH
-        echo "========================================"
-        echo "NAVIGATION FOLLOW + GPS ARROW PATCH"
-        echo "========================================"
+          grep -n -F 'Recenter and resume auto follow' "$SOURCE"
+          grep -n -F 'public void recenter()' "$SOURCE"
+          grep -n -F 'getLastKnownLocation()' "$SOURCE"
+          grep -n -F 'setLocationComponentEnabled(true)' "$SOURCE"
+          grep -n -F 'startAutoFollow();' "$SOURCE"
 
-        SOURCE="v10-source/app/src/main/java/com/carassistant/v10/NavigationMapView.java"
+          if grep -q -F 'forceLocationUpdate(' "$SOURCE"; then
+            echo "FAIL: forceLocationUpdate already exists in baseline source."
+            exit 1
+          fi
 
-        test -f "$SOURCE"
+          echo "PASS: forceLocationUpdate() is absent from baseline."
+          echo "========================================"
 
-        echo "NavigationMapView baseline size:"
-        wc -c "$SOURCE"
+      - name: Generate fixed workflow
+        env:
+          SOURCE_WORKFLOW: .github/workflows/build-v10-carassistant-keyboard-follow-pass.yml
+          OUTPUT_WORKFLOW: .github/workflows/build-v10-carassistant-keyboard-follow-pass-fixed.yml
+        run: |
+          set -euo pipefail
 
-        python3 - <<'PY2'
-        from pathlib import Path
+          python3 <<'PY'
+          from pathlib import Path
+          import textwrap
 
-        path = Path("v10-source/app/src/main/java/com/carassistant/v10/NavigationMapView.java")
-        text = path.read_text(encoding="utf-8")
+          source_workflow = Path(
+              ".github/workflows/build-v10-carassistant-keyboard-follow-pass.yml"
+          )
 
-        render_import = "import org.maplibre.android.location.modes.RenderMode;"
-        camera_import = "import org.maplibre.android.location.modes.CameraMode;"
+          output_workflow = Path(
+              ".github/workflows/build-v10-carassistant-keyboard-follow-pass-fixed.yml"
+          )
 
-        if text.count(render_import) != 0:
-            raise SystemExit(
-                "FAIL: RenderMode import already exists in baseline source."
-            )
+          text = source_workflow.read_text(encoding="utf-8")
 
-        if text.count(camera_import) != 1:
-            raise SystemExit(
-                "FAIL: Expected exactly one CameraMode import."
-            )
+          # ==============================================================
+          # IMPORTANT:
+          #
+          # Do NOT search for "# 9. NAVIGATION-ONLY PATCH" and
+          # "# 10. VERIFY NAVIGATION PATCH" globally.
+          #
+          # Those strings also exist INSIDE the Python triple-quoted
+          # Section 9 string. Global marker searches were the cause of
+          # the previous corruption where the generated YAML started
+          # with:
+          #
+          #   - name: Generate fixed workflow
+          #
+          # instead of:
+          #
+          #   name: ...
+          #
+          # Locate the actual embedded section9 string only.
+          # ==============================================================
 
-        text = text.replace(
-            camera_import,
-            camera_import + "\n" + render_import,
-            1
-        )
+          start_marker = "          section9 = r'''"
+          end_marker = "\n          '''"
 
-        print("PASS: RenderMode import added.")
+          start = text.find(start_marker)
 
-        old_button = (
-            "        addControlButton(\n"
-            "                controls,\n"
-            "                \"◎\",\n"
-            "                \"Recenter and resume auto follow\",\n"
-            "                v -> recenter());"
-        )
+          if start < 0:
+              raise SystemExit(
+                  "FAIL: Embedded Section 9 start marker not found."
+              )
 
-        new_button = (
-            "        addControlButton(\n"
-            "                controls,\n"
-            "                \"➤\",\n"
-            "                \"Follow current location and direction\",\n"
-            "                v -> followCurrentLocation());"
-        )
+          end = text.find(
+              end_marker,
+              start + len(start_marker)
+          )
 
-        count = text.count(old_button)
+          if end < 0:
+              raise SystemExit(
+                  "FAIL: Embedded Section 9 end marker not found."
+              )
 
-        if count != 1:
-            raise SystemExit(
-                f"FAIL: Existing recenter button count = {count}; expected 1."
-            )
+          second_start = text.find(
+              start_marker,
+              end + len(end_marker)
+          )
 
-        text = text.replace(old_button, new_button, 1)
+          if second_start >= 0:
+              raise SystemExit(
+                  "FAIL: Embedded Section 9 start marker is not unique."
+              )
 
-        print("PASS: Existing recenter button replaced exactly once.")
+          print("PASS: Correct embedded Section 9 boundaries found.")
 
-        old_enable = (
-            "        map.getLocationComponent()\n"
-            "                .setLocationComponentEnabled(true);"
-        )
+          corrected_section9 = textwrap.dedent(r'''
+          # 9. NAVIGATION-ONLY PATCH
+          echo "========================================"
+          echo "NAVIGATION FOLLOW + GPS ARROW PATCH"
+          echo "========================================"
 
-        new_enable = (
-            "        map.getLocationComponent()\n"
-            "                .setLocationComponentEnabled(true);\n\n"
-            "        map.getLocationComponent()\n"
-            "                .setRenderMode(RenderMode.GPS);"
-        )
+          SOURCE="v10-source/app/src/main/java/com/carassistant/v10/NavigationMapView.java"
 
-        count = text.count(old_enable)
+          test -f "$SOURCE"
 
-        if count != 1:
-            raise SystemExit(
-                f"FAIL: Location enable block count = {count}; expected 1."
-            )
+          echo "NavigationMapView baseline size:"
+          wc -c "$SOURCE"
 
-        text = text.replace(old_enable, new_enable, 1)
+          python3 - <<'PY2'
+          from pathlib import Path
 
-        print("PASS: RenderMode.GPS added.")
+          path = Path(
+              "v10-source/app/src/main/java/com/carassistant/v10/NavigationMapView.java"
+          )
 
-        old_recenter = (
-            "    public void recenter() {\n\n"
-            "        if (map == null) {\n"
-            "            return;\n"
-            "        }\n\n"
-            "        try {\n\n"
-            "            Location location =\n"
-            "                    map.getLocationComponent()\n"
-            "                            .getLastKnownLocation();\n\n"
-            "            if (location == null) {\n\n"
-            "                startAutoFollow();\n\n"
-            "                return;\n"
-            "            }\n\n"
-            "            map.getLocationComponent()\n"
-            "                    .setCameraMode(\n"
-            "                            CameraMode.TRACKING,\n"
-            "                            500L,\n"
-            "                            AUTO_FOLLOW_ZOOM,\n"
-            "                            null,\n"
-            "                            0.0,\n"
-            "                            null);\n\n"
-            "        } catch (Exception ignored) {\n"
-            "        }\n"
-            "    }"
-        )
+          text = path.read_text(encoding="utf-8")
 
-        new_recenter = (
-            "    private void followCurrentLocation() {\n\n"
-            "        if (map == null) {\n"
-            "            return;\n"
-            "        }\n\n"
-            "        try {\n\n"
-            "            Location location =\n"
-            "                    map.getLocationComponent()\n"
-            "                            .getLastKnownLocation();\n\n"
-            "            if (location == null) {\n\n"
-            "                startAutoFollow();\n\n"
-            "                return;\n"
-            "            }\n\n"
-            "            map.getLocationComponent()\n"
-            "                    .setRenderMode(RenderMode.GPS);\n\n"
-            "            map.animateCamera(\n"
-            "                    CameraUpdateFactory.newLatLngZoom(\n"
-            "                            new LatLng(\n"
-            "                                    location.getLatitude(),\n"
-            "                                    location.getLongitude()),\n"
-            "                            AUTO_FOLLOW_ZOOM),\n"
-            "                    300);\n\n"
-            "            map.getLocationComponent()\n"
-            "                    .setCameraMode(\n"
-            "                            CameraMode.TRACKING,\n"
-            "                            500L,\n"
-            "                            AUTO_FOLLOW_ZOOM,\n"
-            "                            null,\n"
-            "                            0.0,\n"
-            "                            null);\n\n"
-            "        } catch (Exception ignored) {\n"
-            "        }\n"
-            "    }\n\n"
-            "    public void recenter() {\n\n"
-            "        followCurrentLocation();\n"
-            "    }"
-        )
+          # --------------------------------------------------
+          # 1. Add RenderMode import.
+          # --------------------------------------------------
 
-        count = text.count(old_recenter)
+          render_import = (
+              "import org.maplibre.android.location.modes.RenderMode;"
+          )
 
-        if count != 1:
-            raise SystemExit(
-                f"FAIL: Existing recenter() count = {count}; expected 1."
-            )
+          camera_import = (
+              "import org.maplibre.android.location.modes.CameraMode;"
+          )
 
-        text = text.replace(old_recenter, new_recenter, 1)
+          if text.count(render_import) != 0:
+              raise SystemExit(
+                  "FAIL: RenderMode import already exists in baseline source."
+              )
 
-        print("PASS: Existing recenter() replaced exactly once.")
-        print("PASS: followCurrentLocation() added.")
+          if text.count(camera_import) != 1:
+              raise SystemExit(
+                  "FAIL: Expected exactly one CameraMode import."
+              )
 
-        if "forceLocationUpdate(" in text:
-            raise SystemExit(
-                "FAIL: forceLocationUpdate() must not be introduced."
-            )
+          text = text.replace(
+              camera_import,
+              camera_import + "\n" + render_import,
+              1
+          )
 
-        path.write_text(text, encoding="utf-8")
+          print("PASS: RenderMode import added.")
 
-        print("PASS: Navigation Section 9 source patch completed.")
-        PY2
+          # --------------------------------------------------
+          # 2. Replace the EXISTING recenter button.
+          # --------------------------------------------------
 
-        echo "PASS: Section 9 patch completed."
-    ''').strip("\n")
+          old_button = (
+              "        addControlButton(\n"
+              "                controls,\n"
+              "                \"◎\",\n"
+              "                \"Recenter and resume auto follow\",\n"
+              "                v -> recenter());"
+          )
 
-    indented_section9 = "\n".join(
-        INDENT + line if line else ""
-        for line in raw_section9.splitlines()
-    ) + "\n"
+          new_button = (
+              "        addControlButton(\n"
+              "                controls,\n"
+              "                \"➤\",\n"
+              "                \"Follow current location and direction\",\n"
+              "                v -> followCurrentLocation());"
+          )
 
-    generated = prefix + indented_section9 + suffix
+          count = text.count(old_button)
 
-    dst.write_text(generated, encoding="utf-8")
-    print("PASS: Fixed workflow written.")
-    PY
+          if count != 1:
+              raise SystemExit(
+                  f"FAIL: Existing recenter button block count = {count}; "
+                  "expected exactly 1."
+              )
+
+          text = text.replace(
+              old_button,
+              new_button,
+              1
+          )
+
+          print(
+              "PASS: Existing recenter button replaced exactly once."
+          )
+
+          # --------------------------------------------------
+          # 3. Add GPS render mode immediately after
+          #    setLocationComponentEnabled(true).
+          # --------------------------------------------------
+
+          old_enable = (
+              "        map.getLocationComponent()\n"
+              "                .setLocationComponentEnabled(true);"
+          )
+
+          new_enable = (
+              "        map.getLocationComponent()\n"
+              "                .setLocationComponentEnabled(true);\n\n"
+              "        map.getLocationComponent()\n"
+              "                .setRenderMode(RenderMode.GPS);"
+          )
+
+          count = text.count(old_enable)
+
+          if count != 1:
+              raise SystemExit(
+                  f"FAIL: Location enable block count = {count}; "
+                  "expected exactly 1."
+              )
+
+          text = text.replace(
+              old_enable,
+              new_enable,
+              1
+          )
+
+          print("PASS: RenderMode.GPS added.")
+
+          # --------------------------------------------------
+          # 4. Replace the EXISTING recenter() method.
+          # --------------------------------------------------
+
+          old_recenter = (
+              "    public void recenter() {\n\n"
+              "        if (map == null) {\n"
+              "            return;\n"
+              "        }\n\n"
+              "        try {\n\n"
+              "            Location location =\n"
+              "                    map.getLocationComponent()\n"
+              "                            .getLastKnownLocation();\n\n"
+              "            if (location == null) {\n\n"
+              "                startAutoFollow();\n\n"
+              "                return;\n"
+              "            }\n\n"
+              "            map.getLocationComponent()\n"
+              "                    .setCameraMode(\n"
+              "                            CameraMode.TRACKING,\n"
+              "                            500L,\n"
+              "                            AUTO_FOLLOW_ZOOM,\n"
+              "                            null,\n"
+              "                            0.0,\n"
+              "                            null);\n\n"
+              "        } catch (Exception ignored) {\n"
+              "        }\n"
+              "    }"
+          )
+
+          new_recenter = (
+              "    private void followCurrentLocation() {\n\n"
+              "        if (map == null) {\n"
+              "            return;\n"
+              "        }\n\n"
+              "        try {\n\n"
+              "            Location location =\n"
+              "                    map.getLocationComponent()\n"
+              "                            .getLastKnownLocation();\n\n"
+              "            if (location == null) {\n\n"
+              "                startAutoFollow();\n\n"
+              "                return;\n"
+              "            }\n\n"
+              "            map.getLocationComponent()\n"
+              "                    .setRenderMode(RenderMode.GPS);\n\n"
+              "            map.animateCamera(\n"
+              "                    CameraUpdateFactory.newLatLngZoom(\n"
+              "                            new LatLng(\n"
+              "                                    location.getLatitude(),\n"
+              "                                    location.getLongitude()),\n"
+              "                            AUTO_FOLLOW_ZOOM),\n"
+              "                    300);\n\n"
+              "            map.getLocationComponent()\n"
+              "                    .setCameraMode(\n"
+              "                            CameraMode.TRACKING,\n"
+              "                            500L,\n"
+              "                            AUTO_FOLLOW_ZOOM,\n"
+              "                            null,\n"
+              "                            0.0,\n"
+              "                            null);\n\n"
+              "        } catch (Exception ignored) {\n"
+              "        }\n"
+              "    }\n\n"
+              "    public void recenter() {\n\n"
+              "        followCurrentLocation();\n"
+              "    }"
+          )
+
+          count = text.count(old_recenter)
+
+          if count != 1:
+              raise SystemExit(
+                  f"FAIL: Existing recenter() method count = {count}; "
+                  "expected exactly 1."
+              )
+
+          text = text.replace(
+              old_recenter,
+              new_recenter,
+              1
+          )
+
+          print(
+              "PASS: Existing recenter() replaced exactly once."
+          )
+
+          print(
+              "PASS: followCurrentLocation() added."
+          )
+
+          # --------------------------------------------------
+          # 5. Explicitly reject forceLocationUpdate().
+          # --------------------------------------------------
+
+          if "forceLocationUpdate(" in text:
+              raise SystemExit(
+                  "FAIL: forceLocationUpdate() must not be introduced."
+              )
+
+          print(
+              "PASS: No forceLocationUpdate() introduced."
+          )
+
+          path.write_text(
+              text,
+              encoding="utf-8"
+          )
+
+          print(
+              "PASS: Navigation Section 9 source patch completed."
+          )
+
+          PY2
+
+          echo "========================================"
+          echo "SECTION 9 PATCH COMPLETE"
+          echo "========================================"
+          ''').strip("\n")
+
+          # --------------------------------------------------------------
+          # Re-indent the replacement so it remains inside the Python
+          # triple-quoted string in the YAML workflow.
+          # --------------------------------------------------------------
+
+          indented_section9 = "\n".join(
+              "          " + line if line else ""
+              for line in corrected_section9.splitlines()
+          )
+
+          generated = (
+              text[:start]
+              + start_marker
+              + "\n"
+              + indented_section9
+              + end_marker
+              + text[end + len(end_marker):]
+          )
+
+          # --------------------------------------------------------------
+          # HARD SAFETY CHECKS.
+          #
+          # These prevent another corrupted output from ever being
+          # committed/pushed.
+          # --------------------------------------------------------------
+
+          if not generated.startswith("name: "):
+              raise SystemExit(
+                  "FAIL: Generated file is not a complete workflow."
+              )
+
+          if not generated.startswith(
+              "name: Self Fix Navigation Follow Workflow"
+          ):
+              raise SystemExit(
+                  "FAIL: Workflow header was not preserved."
+              )
+
+          if generated.lstrip().startswith("- name:"):
+              raise SystemExit(
+                  "FAIL: Generated output starts with a step fragment."
+              )
+
+          required_prefixes = [
+              "name:",
+              "on:",
+              "permissions:",
+              "jobs:",
+              "  self-fix-navigation-follow:",
+          ]
+
+          for required in required_prefixes:
+              if required not in generated:
+                  raise SystemExit(
+                      f"FAIL: Required workflow structure missing: {required}"
+                  )
+
+          # The generated workflow must still contain the original
+          # verification and push stages.
+          required_strings = [
+              "Verify baseline source",
+              "Strict Section 9 verification",
+              "Verify only Section 9 changed",
+              "Verify generated workflow YAML",
+              "Commit and push fixed workflow",
+              "PAT_TOKEN",
+              "actions/checkout@v4",
+              "git push origin main",
+          ]
+
+          for required in required_strings:
+              if required not in generated:
+                  raise SystemExit(
+                      f"FAIL: Baseline workflow content missing: {required}"
+                  )
+
+          output_workflow.write_text(
+              generated,
+              encoding="utf-8"
+          )
+
+          print("PASS: Full fixed workflow written.")
+          print(
+              f"PASS: Output bytes = {output_workflow.stat().st_size}"
+          )
+          print(
+              "PASS: Workflow header preserved."
+          )
+          print(
+              "PASS: Workflow structure preserved."
+          )
+          print(
+              "PASS: PAT handling preserved."
+          )
+          print(
+              "PASS: Verification steps preserved."
+          )
+          print(
+              "PASS: Commit/push stage preserved."
+          )
+          PY
+
+      - name: Strict Section 9 verification
+        run: |
+          set -euo pipefail
+
+          echo "========================================"
+          echo "STRICT NAVIGATION PATCH VERIFICATION"
+          echo "========================================"
+
+          SOURCE="v10-source/app/src/main/java/com/carassistant/v10/NavigationMapView.java"
+
+          test -f "$SOURCE"
+
+          echo "Checking RenderMode import..."
+
+          COUNT=$(grep -F -c 'import org.maplibre.android.location.modes.RenderMode;' "$SOURCE" || true)
+
+          if [ "$COUNT" -ne 1 ]; then
+            echo "FAIL: RenderMode import count = $COUNT"
+            exit 1
+          fi
+
+          echo "PASS: RenderMode import count = 1."
+
+          echo "Checking RenderMode.GPS..."
+
+          COUNT=$(grep -F -c 'setRenderMode(RenderMode.GPS);' "$SOURCE" || true)
+
+          if [ "$COUNT" -ne 2 ]; then
+            echo "FAIL: Expected exactly 2 RenderMode.GPS calls."
+            echo "Actual count: $COUNT"
+            exit 1
+          fi
+
+          echo "PASS: RenderMode.GPS count = 2."
+
+          echo "Checking new follow callback..."
+
+          COUNT=$(grep -F -c 'v -> followCurrentLocation());' "$SOURCE" || true
+
+          if [ "$COUNT" -ne 1 ]; then
+            echo "FAIL: Follow callback count = $COUNT"
+            exit 1
+          fi
+
+          echo "PASS: Follow callback count = 1."
+
+          echo "Checking followCurrentLocation method..."
+
+          COUNT=$(grep -F -c 'private void followCurrentLocation()' "$SOURCE" || true)
+
+          if [ "$COUNT" -ne 1 ]; then
+            echo "FAIL: followCurrentLocation() count = $COUNT"
+            exit 1
+          fi
+
+          echo "PASS: followCurrentLocation() count = 1."
+
+          echo "Checking CameraUpdateFactory..."
+
+          if ! grep -F -q 'CameraUpdateFactory.newLatLngZoom(' "$SOURCE"; then
+            echo "FAIL: CameraUpdateFactory.newLatLngZoom() missing."
+            exit 1
+          fi
+
+          echo "PASS: CameraUpdateFactory.newLatLngZoom() exists."
+
+          echo "Checking latitude/longitude..."
+
+          if ! grep -F -q 'location.getLatitude()' "$SOURCE"; then
+            echo "FAIL: location.getLatitude() missing."
+            exit 1
+          fi
+
+          if ! grep -F -q 'location.getLongitude()' "$SOURCE"; then
+            echo "FAIL: location.getLongitude() missing."
+            exit 1
+          fi
+
+          echo "PASS: Latitude/longitude access exists."
+
+          echo "Checking CameraMode.TRACKING..."
+
+          COUNT=$(grep -F -c 'CameraMode.TRACKING' "$SOURCE" || true)
+
+          if [ "$COUNT" -lt 2 ]; then
+            echo "FAIL: Expected existing tracking logic to remain."
+            exit 1
+          fi
+
+          echo "PASS: CameraMode.TRACKING preserved."
+
+          echo "Checking recenter()..."
+
+          COUNT=$(grep -F -c 'public void recenter()' "$SOURCE" || true)
+
+          if [ "$COUNT" -ne 1 ]; then
+            echo "FAIL: recenter() count = $COUNT"
+            exit 1
+          fi
+
+          echo "PASS: recenter() count = 1."
+
+          echo "Checking old callback..."
+
+          if grep -F -q 'v -> recenter());' "$SOURCE"; then
+            echo "FAIL: Old recenter callback still exists."
+            exit 1
+          fi
+
+          echo "PASS: Old recenter callback removed."
+
+          echo "Checking forceLocationUpdate..."
+
+          if grep -F -q 'forceLocationUpdate(' "$SOURCE"; then
+            echo "FAIL: forceLocationUpdate() exists."
+            exit 1
+          fi
+
+          echo "PASS: forceLocationUpdate() absent."
+
+          echo "Checking location enable block..."
+
+          COUNT=$(grep -F -c 'setLocationComponentEnabled(true);' "$SOURCE" || true)
+
+          if [ "$COUNT" -ne 1 ]; then
+            echo "FAIL: setLocationComponentEnabled(true) count = $COUNT"
+            exit 1
+          fi
+
+          echo "PASS: Location enable count = 1."
+
+          echo "========================================"
+          echo "PASS: Navigation patch verification"
+          echo "========================================"
+
+      - name: Verify only Section 9 changed
+        run: |
+          set -euo pipefail
+
+          echo "========================================"
+          echo "VERIFY ONLY SECTION 9 CHANGED"
+          echo "========================================"
+
+          python3 <<'PY'
+          from pathlib import Path
+
+          original = Path(
+              ".github/workflows/build-v10-carassistant-keyboard-follow-pass.yml"
+          ).read_text(encoding="utf-8")
+
+          fixed = Path(
+              ".github/workflows/build-v10-carassistant-keyboard-follow-pass-fixed.yml"
+          )
+
+          if not fixed.exists():
+              raise SystemExit(
+                  "FAIL: Fixed workflow does not exist."
+              )
+
+          fixed_text = fixed.read_text(encoding="utf-8")
+
+          # --------------------------------------------------------------
+          # The fixed workflow must remain a COMPLETE YAML workflow.
+          # --------------------------------------------------------------
+
+          if not fixed_text.startswith("name: "):
+              raise SystemExit(
+                  "FAIL: Fixed workflow does not start with name:."
+              )
+
+          if fixed_text.lstrip().startswith("- name:"):
+              raise SystemExit(
+                  "FAIL: Fixed workflow is a step fragment."
+              )
+
+          # --------------------------------------------------------------
+          # Confirm original Section 9 boundaries exist in the baseline.
+          # --------------------------------------------------------------
+
+          start_marker = "# 9. NAVIGATION-ONLY PATCH"
+          end_marker = "# 10. VERIFY NAVIGATION PATCH"
+
+          start_original = original.find(start_marker)
+          end_original = original.find(end_marker)
+
+          if start_original < 0:
+              raise SystemExit(
+                  "FAIL: Original Section 9 start marker not found."
+              )
+
+          if end_original < 0:
+              raise SystemExit(
+                  "FAIL: Original Section 10 marker not found."
+              )
+
+          if end_original <= start_original:
+              raise SystemExit(
+                  "FAIL: Invalid original Section 9 boundaries."
+              )
+
+          # --------------------------------------------------------------
+          # Verify only approved navigation source elements exist.
+          # --------------------------------------------------------------
+
+          source = Path(
+              "v10-source/app/src/main/java/com/carassistant/v10/NavigationMapView.java"
+          ).read_text(encoding="utf-8")
+
+          if (
+              "import org.maplibre.android.location.modes.RenderMode;"
+              not in source
+          ):
+              raise SystemExit(
+                  "FAIL: RenderMode import missing from patched source."
+              )
+
+          if "private void followCurrentLocation()" not in source:
+              raise SystemExit(
+                  "FAIL: followCurrentLocation() missing."
+              )
+
+          if "v -> followCurrentLocation());" not in source:
+              raise SystemExit(
+                  "FAIL: Follow button callback missing."
+              )
+
+          if "setRenderMode(RenderMode.GPS);" not in source:
+              raise SystemExit(
+                  "FAIL: GPS render mode missing."
+              )
+
+          if "forceLocationUpdate(" in source:
+              raise SystemExit(
+                  "FAIL: Unauthorized forceLocationUpdate() detected."
+              )
+
+          print(
+              "PASS: Navigation source contains only approved patch elements."
+          )
+
+          print(
+              "PASS: Baseline-preserving verification completed."
+          )
+          PY
+
+      - name: Verify generated workflow YAML
+        run: |
+          set -euo pipefail
+
+          echo "========================================"
+          echo "VERIFY YAML"
+          echo "========================================"
+
+          python3 - <<'PY'
+          import yaml
+
+          path = (
+              ".github/workflows/"
+              "build-v10-carassistant-keyboard-follow-pass-fixed.yml"
+          )
+
+          with open(path, "r", encoding="utf-8") as f:
+              data = yaml.safe_load(f)
+
+          if not isinstance(data, dict):
+              raise SystemExit(
+                  "FAIL: Parsed YAML root is not a mapping."
+              )
+
+          if "name" not in data:
+              raise SystemExit(
+                  "FAIL: YAML root has no name."
+              )
+
+          if "jobs" not in data:
+              raise SystemExit(
+                  "FAIL: YAML root has no jobs."
+              )
+
+          print("PASS: YAML syntax is valid.")
+          print("PASS: YAML root is a workflow mapping.")
+          print("PASS: Workflow name exists.")
+          print("PASS: Workflow jobs exist.")
+          PY
+
+      - name: Commit and push fixed workflow
+        env:
+          PAT_TOKEN: ${{ secrets.PAT_TOKEN }}
+        run: |
+          set -euo pipefail
+
+          echo "========================================"
+          echo "COMMIT + PUSH"
+          echo "========================================"
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          git status --short
+
+          git add .github/workflows/build-v10-carassistant-keyboard-follow-pass-fixed.yml
+
+          if git diff --cached --quiet; then
+            echo "FAIL: No workflow changes staged."
+            exit 1
+          fi
+
+          git commit -m "fix workflow: preserve full YAML when generating fixed workflow"
+
+          git remote set-url origin \
+            "https://x-access-token:${PAT_TOKEN}@github.com/nguyenvantien2111998123-jpg/CarAssistant.git"
+
+          git push origin main
+
+          echo "========================================"
+          echo "PASS: Fixed workflow pushed to main."
+          echo "========================================"
