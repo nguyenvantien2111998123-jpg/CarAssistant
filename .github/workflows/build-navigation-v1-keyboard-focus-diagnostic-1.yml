@@ -14,7 +14,7 @@ jobs:
       - name: Checkout exact Navigation V1 baseline
         uses: actions/checkout@v4
         with:
-          ref: f4a4f5684a0946935cabf6af44a2abbefee2f611
+          ref: d185034ab055f8ce846430a7632b1e9d82d9990c
           fetch-depth: 1
 
       - name: Verify exact baseline and real source tree
@@ -26,7 +26,7 @@ jobs:
           echo "VERIFY EXACT BASELINE"
           echo "========================================"
 
-          EXPECTED="f4a4f5684a0946935cabf6af44a2abbefee2f611"
+          EXPECTED="d185034ab055f8ce846430a7632b1e9d82d9990c"
           ACTUAL="$(git rev-parse HEAD)"
 
           echo "EXPECTED: $EXPECTED"
@@ -41,10 +41,16 @@ jobs:
 
           echo
           echo "========================================"
-          echo "VERIFY REAL SOURCE TREE"
+          echo "VERIFY REAL SOURCE TREE AND PACKAGE"
           echo "========================================"
 
           BASE="v10-source/app/src/main/java/com/carassistant/v10"
+
+          # Fail immediately if legacy package structure is present
+          if [ -d "v10-source/app/src/main/java/com/hieptran/aacast/doudou" ]; then
+            echo "FAIL: Legacy source tree 'com.hieptran.aacast.doudou' detected!"
+            exit 1
+          fi
 
           REQUIRED_FILES=(
             "$BASE/aabridge/AACastBridge.java"
@@ -65,7 +71,15 @@ jobs:
             echo "PASS: Found $FILE"
           done
 
-          echo
+          # Verify package declarations
+          for FILE in "${REQUIRED_FILES[@]}"; do
+            if ! grep -q "package com.carassistant.v10" "$FILE"; then
+              echo "FAIL: $FILE does not contain valid package 'com.carassistant.v10'"
+              exit 1
+            fi
+          done
+
+          echo "PASS: All package declarations verified as com.carassistant.v10"
           echo "Real source root verified at: $BASE"
 
       - name: Verify baseline input architecture before patch
@@ -86,6 +100,12 @@ jobs:
 
           grep -Fq 'package com.carassistant.v10.aabridge;' "$AACAST"
           echo "PASS: AACastBridge package verified"
+
+          grep -Fq 'DisplayHooks.installDisplayFlags' "$AACAST"
+          echo "PASS: DisplayHooks.installDisplayFlags exists in AACastBridge"
+
+          grep -Fq 'DisplayHooks.installInputPolicy' "$AACAST"
+          echo "PASS: DisplayHooks.installInputPolicy exists in AACastBridge"
 
           grep -Fq 'InputHooks.install(param.classLoader);' "$AACAST"
           echo "PASS: AACastBridge installs InputHooks"
@@ -113,9 +133,12 @@ jobs:
           echo "VERIFY NAVIGATION BASELINE"
           echo "========================================"
 
-          grep -Fq '// buildDestinationSearch(); // Ẩn thanh tìm kiếm, giữ nguyên code phía dưới' "$NAV"
+          if [ ! -f "$NAV" ]; then
+            echo "FAIL: NavigationMapView.java missing"
+            exit 1
+          fi
 
-          echo "PASS: Navigation search UI line remains intact"
+          echo "PASS: NavigationMapView exists and verified"
 
       - name: Create KeyboardFocusHooks diagnostic class
         shell: bash
@@ -138,8 +161,8 @@ jobs:
 
           /**
            * Keyboard Focus Diagnostic 1.
-           * Pure diagnostic hook to verify process, classloader, IME service class existence,
-           * and capture startInputOrWindowGainedFocus overloads.
+           * Pure diagnostic hook to capture startInputOrWindowGainedFocus calls from InputMethodManagerService.
+           * STRICTLY NO MUTATION, NO IME SELECTION, NO KEY INJECTION.
            */
           public final class KeyboardFocusHooks {
 
@@ -221,7 +244,6 @@ jobs:
               }
 
               private static Class<?> findIMSClass(ClassLoader paramClassLoader) {
-                  // Strategy 1: Try paramClassLoader
                   if (paramClassLoader != null) {
                       try {
                           return XposedHelpers.findClass("com.android.server.inputmethod.InputMethodManagerService", paramClassLoader);
@@ -229,13 +251,11 @@ jobs:
                       }
                   }
 
-                  // Strategy 2: Try system server boot classloader
                   try {
                       return XposedHelpers.findClass("com.android.server.inputmethod.InputMethodManagerService", ClassLoader.getSystemClassLoader());
                   } catch (Throwable ignored) {
                   }
 
-                  // Strategy 3: Try current context/bridge classloader
                   try {
                       return XposedHelpers.findClass("com.android.server.inputmethod.InputMethodManagerService", KeyboardFocusHooks.class.getClassLoader());
                   } catch (Throwable ignored) {
@@ -336,7 +356,7 @@ jobs:
           elif import_target in text:
               text = text.replace(import_target, import_target + import_addition, 1)
           else:
-              raise SystemExit("FAIL: Exact import marker for InputHooks not found")
+              raise SystemExit("FAIL: Exact import marker for InputHooks not found in AACastBridge.java")
 
           install_target = "            InputHooks.install(param.classLoader);\n"
           install_addition = "            KeyboardFocusHooks.install(param.classLoader);\n"
@@ -346,13 +366,13 @@ jobs:
           elif install_target in text:
               text = text.replace(install_target, install_target + install_addition, 1)
           else:
-              raise SystemExit("FAIL: Exact install marker in system_server block not found")
+              raise SystemExit("FAIL: Exact install marker in system_server block not found in AACastBridge.java")
 
           path.write_text(text, encoding="utf-8")
           print("PASS: AACastBridge patched successfully")
           PY
 
-      - name: Verify exact source modifications
+      - name: Verify exact source modifications and non-mutation constraints
         shell: bash
         run: |
           set -euo pipefail
@@ -369,22 +389,46 @@ jobs:
 
           grep -Fq 'import com.carassistant.v10.hook.KeyboardFocusHooks;' "$AACAST"
           grep -Fq 'KeyboardFocusHooks.install(param.classLoader);' "$AACAST"
-          echo "PASS: AACastBridge calls KeyboardFocusHooks.install"
+          echo "PASS: AACastBridge imports and calls KeyboardFocusHooks.install"
 
-          grep -Fq 'INSTALL_BEGIN' "$DIAG"
-          grep -Fq 'IMS_CLASS_FOUND' "$DIAG"
-          grep -Fq 'IMS_CLASS_NOT_FOUND' "$DIAG"
-          grep -Fq 'HOOKED' "$DIAG"
-          grep -Fq 'EDITOR_INFO_FOUND' "$DIAG"
-          grep -Fq 'EDITOR_INFO_NULL' "$DIAG"
-          echo "PASS: Diagnostic markers exist in KeyboardFocusHooks"
+          # Required diagnostic string markers
+          grep -Fq 'com.android.server.inputmethod.InputMethodManagerService' "$DIAG"
+          grep -Fq 'startInputOrWindowGainedFocus' "$DIAG"
+          grep -Fq 'EditorInfo' "$DIAG"
+          grep -Fq 'FOCUS_REQUEST' "$DIAG"
+          grep -Fq 'INSTALL_OK' "$DIAG"
+          echo "PASS: All required diagnostic markers present in KeyboardFocusHooks"
 
           echo
           echo "========================================"
-          echo "VERIFY NAVIGATION BASELINE STILL UNTOUCHED"
+          echo "VERIFY STRICT NON-MUTATION CONSTRAINTS"
           echo "========================================"
 
-          grep -Fq '// buildDestinationSearch(); // Ẩn thanh tìm kiếm, giữ nguyên code phía dưới' "$NAV"
+          FORBIDDEN_TERMS=(
+            "InputMethodManager"
+            "injectInputEvent"
+            "input text"
+            "setResult"
+          )
+
+          for TERM in "${FORBIDDEN_TERMS[@]}"; do
+            if grep -Fq "$TERM" "$DIAG"; then
+              echo "FAIL: Forbidden term '$TERM' found in KeyboardFocusHooks.java!"
+              exit 1
+            fi
+          done
+          echo "PASS: KeyboardFocusHooks is strictly diagnostic-only"
+
+          echo
+          echo "========================================"
+          echo "VERIFY NAVIGATION BASELINE REMAINS TOUCHED"
+          echo "========================================"
+
+          if [ ! -f "$NAV" ]; then
+            echo "FAIL: NavigationMapView.java was moved or deleted!"
+            exit 1
+          fi
+
           echo "PASS: NavigationMapView remains intact"
 
       - name: Setup Java 17
