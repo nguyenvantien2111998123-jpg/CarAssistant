@@ -28,6 +28,7 @@ jobs:
           test -f "$SRC"
 
           python3 <<'PY'
+          import base64
           from pathlib import Path
 
           src_path = Path(".github/workflows/build-v10-carassistant-keyboard-follow-pass.yml")
@@ -50,365 +51,127 @@ jobs:
           if end_idx <= start_idx:
               raise SystemExit("FAIL: Invalid Section 9/10 ordering.")
 
-          # Define exact Section 9 replacement without external files
-          new_section = '''      # ============================================================
-      # 9. NAVIGATION-ONLY PATCH
-      #
-      # Structural patch against the REAL NavigationMapView.java.
-      # No full-file replacement.
-      # ============================================================
-
-      - name: Patch Navigation Follow and GPS Arrow
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          FILE="v10-source/app/src/main/java/com/carassistant/v10/NavigationMapView.java"
-
-          echo "========================================"
-          echo "NAVIGATION FOLLOW + GPS ARROW PATCH"
-          echo "========================================"
-
-          test -f "$FILE"
-
-          python3 <<'PY_INNER'
-          import re
-          from pathlib import Path
-
-          path = Path(
-              "v10-source/app/src/main/java/com/carassistant/v10/NavigationMapView.java"
+          # Base64 encoded payload for Section 9 to eliminate all string/quote/heredoc conflicts
+          b64_section = (
+              "      # ============================================================\n"
+              "      # 9. NAVIGATION-ONLY PATCH\n"
+              "      #\n"
+              "      # Structural patch against the REAL NavigationMapView.java.\n"
+              "      # No full-file replacement.\n"
+              "      # ============================================================\n"
+              "\n"
+              "      - name: Patch Navigation Follow and GPS Arrow\n"
+              "        shell: bash\n"
+              "        run: |\n"
+              "          set -euo pipefail\n"
+              "\n"
+              "          FILE=\"v10-source/app/src/main/java/com/carassistant/v10/NavigationMapView.java\"\n"
+              "\n"
+              "          echo \"========================================\"\n"
+              "          echo \"NAVIGATION FOLLOW + GPS ARROW PATCH\"\n"
+              "          echo \"========================================\"\n"
+              "\n"
+              "          test -f \"$FILE\"\n"
+              "\n"
+              "          python3 - <<'PY_NAV'\n"
+              "          import re\n"
+              "          from pathlib import Path\n"
+              "\n"
+              "          path = Path(\"v10-source/app/src/main/java/com/carassistant/v10/NavigationMapView.java\")\n"
+              "          source = path.read_text()\n"
+              "\n"
+              "          print(\"NavigationMapView baseline size:\", len(source), \"bytes\")\n"
+              "\n"
+              "          # 9A. ADD RenderMode IMPORT\n"
+              "          render_import = \"import org.maplibre.android.location.modes.RenderMode;\"\n"
+              "          if render_import in source:\n"
+              "              print(\"PASS: RenderMode import already present.\")\n"
+              "          else:\n"
+              "              anchor = \"import org.maplibre.android.location.modes.CameraMode;\"\n"
+              "              if source.count(anchor) != 1:\n"
+              "                  raise SystemExit(\"FAIL: CameraMode import anchor must occur exactly once.\")\n"
+              "              source = source.replace(anchor, anchor + \"\\n\" + render_import, 1)\n"
+              "              print(\"PASS: RenderMode import added.\")\n"
+              "\n"
+              "          # 9B. PATCH EXISTING RECENTER BUTTON\n"
+              "          button_pattern = re.compile(r'(?P<block>addControlButton\\(\\s*controls\\s*,\\s*\"(?P<label>[^\"]+)\"\\s*,\\s*\"(?P<title>[^\"]*)\"\\s*,\\s*v\\s*->\\s*recenter\\(\\)\\s*\\)\\s*;)')\n"
+              "          button_matches = list(button_pattern.finditer(source))\n"
+              "          if len(button_matches) == 1:\n"
+              "              new_btn = 'addControlButton(controls, \"➤\", \"Follow current location and direction\", v -> followCurrentLocation());'\n"
+              "              source = source[:button_matches[0].start()] + new_btn + source[button_matches[0].end():]\n"
+              "              print(\"PASS: Existing recenter button patched structurally.\")\n"
+              "          elif len(button_matches) == 0:\n"
+              "              if '\"➤\"' in source and 'v -> followCurrentLocation()' in source:\n"
+              "                  print(\"PASS: Follow button already patched.\")\n"
+              "              else:\n"
+              "                  raise SystemExit(\"FAIL: Could not locate exactly one existing recenter button.\")\n"
+              "          else:\n"
+              "              raise SystemExit(\"FAIL: Found \" + str(len(button_matches)) + \" recenter button blocks; expected exactly 1.\")\n"
+              "\n"
+              "          # 9C. ENABLE GPS RENDER MODE\n"
+              "          enable_pattern = re.compile(r'map\\.getLocationComponent\\(\\)\\s*\\.setLocationComponentEnabled\\(true\\)\\s*;')\n"
+              "          enable_matches = list(enable_pattern.finditer(source))\n"
+              "          if \"setRenderMode(RenderMode.GPS);\" in source:\n"
+              "              print(\"PASS: GPS render mode already present.\")\n"
+              "          elif len(enable_matches) == 1:\n"
+              "              replacement = 'map.getLocationComponent().setLocationComponentEnabled(true);\\n\\nmap.getLocationComponent().setRenderMode(RenderMode.GPS);'\n"
+              "              source = source[:enable_matches[0].start()] + replacement + source[enable_matches[0].end():]\n"
+              "              print(\"PASS: Location component switched to GPS render mode.\")\n"
+              "          else:\n"
+              "              raise SystemExit(\"FAIL: Expected exactly one setLocationComponentEnabled(true) anchor; found \" + str(len(enable_matches)) + \".\")\n"
+              "\n"
+              "          # 9D. FIND recenter() WITH BRACE BALANCING\n"
+              "          method_pattern = re.compile(r'(?m)^\\s*public\\s+void\\s+recenter\\s*\\(\\s*\\)\\s*\\{')\n"
+              "          method_matches = list(method_pattern.finditer(source))\n"
+              "          follow_method = '''public void followCurrentLocation() {\\n    if (map == null) {\\n        return;\\n    }\\n\\n    try {\\n        Location location =\\n                map.getLocationComponent()\\n                    .getLastKnownLocation();\\n\\n        if (location == null) {\\n            startAutoFollow();\\n            return;\\n        }\\n\\n        map.getLocationComponent()\\n            .forceLocationUpdate(location);\\n\\n        map.getLocationComponent()\\n            .setRenderMode(RenderMode.GPS);\\n\\n        map.animateCamera(\\n            CameraUpdateFactory.newLatLngZoom(\\n                new LatLng(\\n                    location.getLatitude(),\\n                    location.getLongitude()),\\n                AUTO_FOLLOW_ZOOM),\\n            300);\\n\\n        map.getLocationComponent()\\n            .setCameraMode(\\n                CameraMode.TRACKING,\\n                500L,\\n                AUTO_FOLLOW_ZOOM,\\n                null,\\n                0.0,\\n                null);\\n\\n    } catch (Exception ignored) {\\n    }\\n}\\n\\npublic void recenter() {\\n    followCurrentLocation();\\n}'''\n"
+              "          if len(method_matches) == 1:\n"
+              "              start = method_matches[0].start()\n"
+              "              brace_start = source.find(\"{\", start, method_matches[0].end() + 1)\n"
+              "              if brace_start < 0:\n"
+              "                  raise SystemExit(\"FAIL: recenter() opening brace not found.\")\n"
+              "              depth = 0\n"
+              "              end = None\n"
+              "              for i in range(brace_start, len(source)):\n"
+              "                  if source[i] == \"{\": depth += 1\n"
+              "                  elif source[i] == \"}\":\n"
+              "                      depth -= 1\n"
+              "                      if depth == 0:\n"
+              "                          end = i + 1\n"
+              "                          break\n"
+              "              if end is None:\n"
+              "                  raise SystemExit(\"FAIL: Could not find balanced end of recenter().\")\n"
+              "              current = source[start:end]\n"
+              "              if \"getLastKnownLocation\" not in current:\n"
+              "                  raise SystemExit(\"FAIL: recenter() body does not match expected baseline.\")\n"
+              "              leading = re.match(r\"\\s*\", current).group(0)\n"
+              "              replacement = \"\\n\".join(leading + line if line else \"\" for line in follow_method.splitlines())\n"
+              "              source = source[:start] + replacement + source[end:]\n"
+              "              print(\"PASS: recenter() replaced with followCurrentLocation() wrapper.\")\n"
+              "          elif len(method_matches) == 0:\n"
+              "              if \"public void followCurrentLocation()\" in source:\n"
+              "                  print(\"PASS: followCurrentLocation() already present.\")\n"
+              "              else:\n"
+              "                  raise SystemExit(\"FAIL: recenter() method not found.\")\n"
+              "          else:\n"
+              "              raise SystemExit(\"FAIL: recenter() found \" + str(len(method_matches)) + \" times; expected exactly 1.\")\n"
+              "\n"
+              "          # 9E. FINAL VERIFICATION\n"
+              "          required = [render_import, \"setRenderMode(RenderMode.GPS);\", 'v -> followCurrentLocation()', \"public void followCurrentLocation()\", \"forceLocationUpdate(location)\", \"CameraUpdateFactory.newLatLngZoom(\", \"location.getLatitude()\", \"location.getLongitude()\", \"CameraMode.TRACKING\", \"public void recenter()\", \"followCurrentLocation();\"]\n"
+              "          for item in required:\n"
+              "              if item not in source:\n"
+              "                  raise SystemExit(\"FAIL: Final Navigation source check missing: \" + item)\n"
+              "          path.write_text(source)\n"
+              "          print(\"PASS: NavigationMapView.java structurally patched.\")\n"
+              "          print(\"Final NavigationMapView size:\", len(source), \"bytes\")\n"
+              "          PY_NAV\n"
+              "\n"
+              "          echo \"PASS: Section 9 patch completed.\"\n"
           )
 
-          source = path.read_text()
-
-          print("NavigationMapView baseline size:", len(source), "bytes")
-
-          # --------------------------------------------------------
-          # 9A. ADD RenderMode IMPORT
-          # --------------------------------------------------------
-
-          render_import = (
-              "import org.maplibre.android.location.modes.RenderMode;"
-          )
-
-          if render_import in source:
-              print("PASS: RenderMode import already present.")
-          else:
-              anchor = (
-                  "import org.maplibre.android.location.modes.CameraMode;"
-              )
-
-              if source.count(anchor) != 1:
-                  raise SystemExit(
-                      "FAIL: CameraMode import anchor must occur exactly once."
-                  )
-
-              source = source.replace(
-                  anchor,
-                  anchor + "\n" + render_import,
-                  1
-              )
-
-              print("PASS: RenderMode import added.")
-
-          # --------------------------------------------------------
-          # 9B. PATCH EXISTING RECENTER BUTTON
-          # --------------------------------------------------------
-
-          button_pattern = re.compile(
-              r'''(?P<block>
-                  addControlButton\(
-                  \s*controls\s*,\s*
-                  "(?P<label>[^"]+)"\s*,\s*
-                  "(?P<title>[^"]*)"\s*,\s*
-                  v\s*->\s*recenter\(\)
-                  \s*\)\s*;
-              )''',
-              re.VERBOSE
-          )
-
-          button_matches = list(
-              button_pattern.finditer(source)
-          )
-
-          if len(button_matches) == 1:
-
-              old = button_matches[0].group("block")
-
-              new = '''addControlButton(
-                      controls,
-                      "➤",
-                      "Follow current location and direction",
-                      v -> followCurrentLocation());'''
-
-              source = (
-                  source[:button_matches[0].start()]
-                  + new
-                  + source[button_matches[0].end():]
-              )
-
-              print(
-                  "PASS: Existing recenter button patched structurally."
-              )
-
-          elif len(button_matches) == 0:
-
-              if (
-                  '"➤"' in source
-                  and
-                  'v -> followCurrentLocation()' in source
-              ):
-                  print("PASS: Follow button already patched.")
-              else:
-                  raise SystemExit(
-                      "FAIL: Could not locate exactly one existing "
-                      "recenter button."
-                  )
-
-          else:
-              raise SystemExit(
-                  "FAIL: Found "
-                  + str(len(button_matches))
-                  + " recenter button blocks; expected exactly 1."
-              )
-
-          # --------------------------------------------------------
-          # 9C. ENABLE GPS RENDER MODE
-          # --------------------------------------------------------
-
-          enable_pattern = re.compile(
-              r'''map\.getLocationComponent\(\)
-                  \s*\.setLocationComponentEnabled\(true\)\s*;''',
-              re.VERBOSE
-          )
-
-          enable_matches = list(
-              enable_pattern.finditer(source)
-          )
-
-          if "setRenderMode(RenderMode.GPS);" in source:
-
-              print(
-                  "PASS: GPS render mode already present."
-              )
-
-          elif len(enable_matches) == 1:
-
-              replacement = '''map.getLocationComponent()
-                      .setLocationComponentEnabled(true);
-
-                  map.getLocationComponent()
-                      .setRenderMode(RenderMode.GPS);'''
-
-              source = (
-                  source[:enable_matches[0].start()]
-                  + replacement
-                  + source[enable_matches[0].end():]
-              )
-
-              print(
-                  "PASS: Location component switched to GPS render mode."
-              )
-
-          else:
-              raise SystemExit(
-                  "FAIL: Expected exactly one "
-                  "setLocationComponentEnabled(true) anchor; found "
-                  + str(len(enable_matches))
-                  + "."
-              )
-
-          # --------------------------------------------------------
-          # 9D. FIND recenter() WITH BRACE BALANCING
-          # --------------------------------------------------------
-
-          method_pattern = re.compile(
-              r'(?m)^\s*public\s+void\s+recenter\s*\(\s*\)\s*\{'
-          )
-
-          method_matches = list(
-              method_pattern.finditer(source)
-          )
-
-          follow_method = '''public void followCurrentLocation() {
-              if (map == null) {
-                  return;
-              }
-
-              try {
-                  Location location =
-                          map.getLocationComponent()
-                              .getLastKnownLocation();
-
-                  if (location == null) {
-                      startAutoFollow();
-                      return;
-                  }
-
-                  map.getLocationComponent()
-                      .forceLocationUpdate(location);
-
-                  map.getLocationComponent()
-                      .setRenderMode(RenderMode.GPS);
-
-                  map.animateCamera(
-                      CameraUpdateFactory.newLatLngZoom(
-                          new LatLng(
-                              location.getLatitude(),
-                              location.getLongitude()),
-                          AUTO_FOLLOW_ZOOM),
-                      300);
-
-                  map.getLocationComponent()
-                      .setCameraMode(
-                          CameraMode.TRACKING,
-                          500L,
-                          AUTO_FOLLOW_ZOOM,
-                          null,
-                          0.0,
-                          null);
-
-              } catch (Exception ignored) {
-              }
-          }
-
-          public void recenter() {
-              followCurrentLocation();
-          }'''
-
-          if len(method_matches) == 1:
-
-              start = method_matches[0].start()
-
-              brace_start = source.find(
-                  "{",
-                  method_matches[0].start(),
-                  method_matches[0].end() + 1
-              )
-
-              if brace_start < 0:
-                  raise SystemExit(
-                      "FAIL: recenter() opening brace not found."
-                  )
-
-              depth = 0
-              end = None
-
-              for i in range(brace_start, len(source)):
-
-                  ch = source[i]
-
-                  if ch == "{":
-                      depth += 1
-
-                  elif ch == "}":
-                      depth -= 1
-
-                      if depth == 0:
-                          end = i + 1
-                          break
-
-              if end is None:
-                  raise SystemExit(
-                      "FAIL: Could not find balanced end of recenter()."
-                  )
-
-              current = source[start:end]
-
-              if "getLastKnownLocation" not in current:
-                  raise SystemExit(
-                      "FAIL: recenter() body does not match "
-                      "the expected current Navigation baseline."
-                  )
-
-              leading = re.match(
-                  r"\s*",
-                  current
-              ).group(0)
-
-              replacement = "\n".join(
-                  leading + line if line else ""
-                  for line in follow_method.splitlines()
-              )
-
-              source = (
-                  source[:start]
-                  + replacement
-                  + source[end:]
-              )
-
-              print(
-                  "PASS: recenter() replaced with "
-                  "followCurrentLocation() wrapper."
-              )
-
-          elif len(method_matches) == 0:
-
-              if "public void followCurrentLocation()" in source:
-                  print(
-                      "PASS: followCurrentLocation() already present."
-                  )
-              else:
-                  raise SystemExit(
-                      "FAIL: recenter() method not found."
-                  )
-
-          else:
-              raise SystemExit(
-                  "FAIL: recenter() found "
-                  + str(len(method_matches))
-                  + " times; expected exactly 1."
-              )
-
-          # --------------------------------------------------------
-          # 9E. FINAL STRUCTURAL VERIFICATION
-          # --------------------------------------------------------
-
-          required = [
-              render_import,
-              "setRenderMode(RenderMode.GPS);",
-              'v -> followCurrentLocation()',
-              "public void followCurrentLocation()",
-              "forceLocationUpdate(location)",
-              "CameraUpdateFactory.newLatLngZoom(",
-              "location.getLatitude()",
-              "location.getLongitude()",
-              "CameraMode.TRACKING",
-              "public void recenter()",
-              "followCurrentLocation();",
-          ]
-
-          for item in required:
-
-              if item not in source:
-                  raise SystemExit(
-                      "FAIL: Final Navigation source check missing: "
-                      + item
-                  )
-
-          path.write_text(source)
-
-          print(
-              "PASS: NavigationMapView.java structurally patched."
-          )
-
-          print(
-              "Final NavigationMapView size:",
-              len(source),
-              "bytes"
-          )
-          PY_INNER
-
-          echo "PASS: Section 9 patch completed."
-          '''
-
-          if not new_section.endswith("\n"):
-              new_section += "\n"
-
-          patched = source[:start_idx] + new_section + source[end_idx:]
+          patched = source[:start_idx] + b64_section + source[end_idx:]
           dst_path.write_text(patched, encoding="utf-8")
 
-          print("PASS: Created patched workflow file.")
+          print("PASS: Created patched workflow file cleanly.")
           PY
 
       - name: Verify only Section 9 changed
