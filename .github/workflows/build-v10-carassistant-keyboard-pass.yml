@@ -617,7 +617,47 @@ jobs:
           echo "PASS: V2C controller created."
 
       # ============================================================
-      # 5. PATCH V10CarActivity
+      # 5a. INSPECT ACTUAL V10CARACTIVITY SOURCE
+      # ============================================================
+
+      - name: Inspect actual V10CarActivity source
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          echo "Current git commit:"
+          git rev-parse HEAD
+
+          BASE="v10-source/app/src/main/java/com/carassistant/v10"
+          FILE="$BASE/V10CarActivity.java"
+
+          test -f "$FILE"
+
+          python3 - <<'PY'
+          import re
+          from pathlib import Path
+
+          file_path = Path("v10-source/app/src/main/java/com/carassistant/v10/V10CarActivity.java")
+          content = file_path.read_text()
+
+          def print_snippet(name, pattern):
+              print(f"=== INSPECT METHOD/ANCHOR: {name} ===")
+              match = re.search(pattern, content, re.DOTALL)
+              if match:
+                  print(match.group(0))
+              else:
+                  print(f"NOT FOUND with pattern: {pattern}")
+              print("=" * 50)
+
+          print_snippet("launchProjection", r'(private|protected|public)?\s*void\s+launchProjection\s*\([^)]*\)\s*\{[^}]*\}')
+          print_snippet("returnToLauncher", r'(private|protected|public)?\s*void\s+returnToLauncher\s*\([^)]*\)\s*\{[^}]*\}')
+          print_snippet("showApps", r'(private|protected|public)?\s*void\s+showApps\s*\([^)]*\)\s*\{[^}]*\}')
+          print_snippet("onPause", r'@Override\s+protected\s+void\s+onPause\s*\([^)]*\)\s*\{[^}]*\}')
+          print_snippet("onDestroy", r'@Override\s+protected\s+void\s+onDestroy\s*\([^)]*\)\s*\{[^}]*\}')
+          PY
+
+      # ============================================================
+      # 5b. PATCH V10CarActivity (ROBUST REGEX WITH COUNT == 1)
       # ============================================================
 
       - name: Patch V10CarActivity
@@ -626,6 +666,7 @@ jobs:
           set -euo pipefail
 
           python3 <<'PY'
+          import re
           from pathlib import Path
 
           path = Path(
@@ -634,131 +675,83 @@ jobs:
 
           source = path.read_text()
 
-          def replace_once(old, new, name):
-              count = source.count(old)
-
-              if count != 1:
+          def replace_regex_once(pattern, replacement, name):
+              global source
+              matches = list(re.finditer(pattern, source, re.MULTILINE))
+              if len(matches) != 1:
                   raise SystemExit(
-                      f"{name}: expected exactly 1 match, got {count}"
+                      f"{name}: expected exactly 1 match, got {len(matches)}"
                   )
+              source = re.sub(pattern, replacement, source, count=1, flags=re.MULTILINE)
 
-              return source.replace(old, new, 1)
-
-          # Field
-          source = replace_once(
-              "    private V10ProjectionSession session;\n",
-              "    private V10ProjectionSession session;\n"
-              "    private CarAssistantKeyboardController keyboardController;\n",
+          # 1. Keyboard Field
+          replace_regex_once(
+              r'(\s*private\s+V10ProjectionSession\s+session;)',
+              r'\1\n    private CarAssistantKeyboardController keyboardController;',
               "keyboard field"
           )
 
-          # Keyboard initialization
-          source = replace_once(
-              "        session.attachTextureView(\n"
-              "                textureView);\n\n"
-              "        createFloatingTouchKey();",
-              "        session.attachTextureView(\n"
-              "                textureView);\n\n"
-              "        createFloatingTouchKey();\n\n"
-              "        keyboardController =\n"
-              "                new CarAssistantKeyboardController(\n"
-              "                        projectionLayer,\n"
-              "                        session);\n"
-              "        keyboardController.start();",
+          # 2. Keyboard Initialization
+          replace_regex_once(
+              r'(session\.attachTextureView\(\s*textureView\);[\s\n]*createFloatingTouchKey\(\);)',
+              r'\1\n\n        keyboardController =\n'
+              r'                new CarAssistantKeyboardController(\n'
+              r'                        projectionLayer,\n'
+              r'                        session);\n'
+              r'        keyboardController.start();',
               "keyboard initialization"
           )
 
-          # Hide keyboard when changing projection target
-          source = replace_once(
-              "    private void launchProjection(\n"
-              "        ComponentName component) {\n\n"
-              "    if (component == null\n"
-              "            || session == null) {\n\n"
-              "        return;\n"
-              "    }",
-              "    private void launchProjection(\n"
-              "        ComponentName component) {\n\n"
-              "    if (component == null\n"
-              "            || session == null) {\n\n"
-              "        return;\n"
-              "    }\n\n"
-              "    if (keyboardController != null) {\n"
-              "        keyboardController.hide();\n"
-              "    }",
+          # 3. Hide keyboard on launchProjection
+          replace_regex_once(
+              r'((private|protected|public)?\s*void\s+launchProjection\s*\([^)]*\)\s*\{)',
+              r'\1\n        if (keyboardController != null) {\n'
+              r'            keyboardController.hide();\n'
+              r'        }\n',
               "keyboard hide on projection launch"
           )
 
-          # Hide keyboard on launcher
-          source = replace_once(
-              "    private void returnToLauncher() {\n\n"
-              "        if (session != null\n"
-              "                && session.isActive()) {",
-              "    private void returnToLauncher() {\n\n"
-              "        if (keyboardController != null) {\n"
-              "            keyboardController.hide();\n"
-              "        }\n\n"
-              "        if (session != null\n"
-              "                && session.isActive()) {",
+          # 4. Hide keyboard on returnToLauncher
+          replace_regex_once(
+              r'((private|protected|public)?\s*void\s+returnToLauncher\s*\([^)]*\)\s*\{)',
+              r'\1\n        if (keyboardController != null) {\n'
+              r'            keyboardController.hide();\n'
+              r'        }\n',
               "keyboard hide on launcher"
           )
 
-          # Hide keyboard when application selector opens
-          source = replace_once(
-              "    private void showApps() {\n\n",
-              "    private void showApps() {\n\n"
-              "        if (keyboardController != null) {\n"
-              "            keyboardController.hide();\n"
-              "        }\n\n",
+          # 5. Hide keyboard on showApps
+          replace_regex_once(
+              r'((private|protected|public)?\s*void\s+showApps\s*\([^)]*\)\s*\{)',
+              r'\1\n        if (keyboardController != null) {\n'
+              r'            keyboardController.hide();\n'
+              r'        }\n',
               "keyboard hide on app selector"
           )
 
-          # Hide on Activity pause
-          old_pause = (
-              "    @Override\n"
-              "    protected void onPause() {\n"
+          # 6. Hide on Activity pause
+          replace_regex_once(
+              r'(@Override\s+protected\s+void\s+onPause\s*\([^)]*\)\s*\{)',
+              r'\1\n        if (keyboardController != null) {\n'
+              r'            keyboardController.hide();\n'
+              r'        }\n',
+              "keyboard hide on pause"
           )
 
-          if source.count(old_pause) != 1:
-              raise SystemExit(
-                  "onPause anchor: expected exactly 1 match, got "
-                  + str(source.count(old_pause))
-              )
-
-          source = source.replace(
-              old_pause,
-              old_pause +
-              "        if (keyboardController != null) {\n"
-              "            keyboardController.hide();\n"
-              "        }\n\n",
-              1
-          )
-
-          # Stop on Activity destroy
-          old_destroy = (
-              "    @Override\n"
-              "    protected void onDestroy() {\n"
-          )
-
-          if source.count(old_destroy) != 1:
-              raise SystemExit(
-                  "onDestroy anchor: expected exactly 1 match, got "
-                  + str(source.count(old_destroy))
-              )
-
-          source = source.replace(
-              old_destroy,
-              old_destroy +
-              "        if (keyboardController != null) {\n"
-              "            keyboardController.stop();\n"
-              "            keyboardController = null;\n"
-              "        }\n\n",
-              1
+          # 7. Stop on Activity destroy
+          replace_regex_once(
+              r'(@Override\s+protected\s+void\s+onDestroy\s*\([^)]*\)\s*\{)',
+              r'\1\n        if (keyboardController != null) {\n'
+              r'            keyboardController.stop();\n'
+              r'            keyboardController = null;\n'
+              r'        }\n',
+              "keyboard stop on destroy"
           )
 
           path.write_text(source)
 
           print(
-              "PASS: V10CarActivity patched using exact anchors."
+              "PASS: V10CarActivity patched using robust regex exact anchors."
           )
           PY
 
@@ -802,6 +795,13 @@ jobs:
           grep -Fq 'new CarAssistantKeyboardController(' "$BASE/V10CarActivity.java"
           grep -Fq 'keyboardController.start();' "$BASE/V10CarActivity.java"
           grep -Fq 'keyboardController.stop();' "$BASE/V10CarActivity.java"
+
+          # Verify hide calls in patched V10CarActivity
+          HIDE_COUNT=$(grep -o 'keyboardController\.hide()' "$BASE/V10CarActivity.java" | wc -l)
+          if [ "$HIDE_COUNT" -lt 4 ]; then
+            echo "ERROR: Expected at least 4 keyboardController.hide() calls in V10CarActivity, found $HIDE_COUNT"
+            exit 1
+          fi
 
           # Forbidden architecture checks
           if grep -Fq 'InputMethodService' "$BASE/CarAssistantKeyboard.java"; then
