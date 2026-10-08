@@ -11,12 +11,27 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
+      - name: Check PAT_TOKEN availability
+        shell: bash
+        env:
+          PAT_TOKEN: ${{ secrets.PAT_TOKEN }}
+        run: |
+          set -euo pipefail
+
+          if [ -z "${PAT_TOKEN:-}" ]; then
+            echo "FAIL: PAT_TOKEN secret is not configured."
+            echo "This workflow must use a PAT with permission to modify GitHub Actions workflow files."
+            exit 1
+          fi
+
+          echo "PASS: PAT_TOKEN is available."
+
       - name: Checkout main
         uses: actions/checkout@v4
         with:
           ref: main
           fetch-depth: 1
-          token: ${{ secrets.PAT_TOKEN || secrets.GITHUB_TOKEN }}
+          token: ${{ secrets.PAT_TOKEN }}
 
       - name: Patch Section 9 and generate fixed workflow
         shell: bash
@@ -51,24 +66,23 @@ jobs:
 
           src_lines = src_text.splitlines(keepends=True)
 
-          # Find index of line containing MARKER_9 and MARKER_10
           idx_9 = next(i for i, line in enumerate(src_lines) if MARKER_9 in line)
           idx_10 = next(i for i, line in enumerate(src_lines) if MARKER_10 in line)
 
-          # Section 9 start boundary is the header comment block immediately preceding MARKER_9
           start_line = idx_9
           if start_line > 0 and "# =====" in src_lines[start_line - 1]:
               start_line -= 1
 
-          # Section 10 start boundary is the header comment block immediately preceding MARKER_10
           end_line = idx_10
           if end_line > 0 and "# =====" in src_lines[end_line - 1]:
               end_line -= 1
 
           if end_line <= start_line:
-              raise SystemExit(f"FAIL: Invalid section ordering: start_line={start_line}, end_line={end_line}.")
+              raise SystemExit(
+                  f"FAIL: Invalid section ordering: "
+                  f"start_line={start_line}, end_line={end_line}."
+              )
 
-          # Section 9 exact target content encoded in Base64 payload
           b64_payload = (
               "      # ============================================================\n"
               "      # 9. NAVIGATION-ONLY PATCH\n"
@@ -99,9 +113,6 @@ jobs:
               "\n"
               "          print(\"NavigationMapView baseline size:\", len(source), \"bytes\")\n"
               "\n"
-              "          # --------------------------------------------------------\n"
-              "          # 9A. ADD RenderMode IMPORT\n"
-              "          # --------------------------------------------------------\n"
               "          render_import = \"import org.maplibre.android.location.modes.RenderMode;\"\n"
               "          if render_import in source:\n"
               "              print(\"PASS: RenderMode import already present.\")\n"
@@ -112,9 +123,6 @@ jobs:
               "              source = source.replace(anchor, anchor + \"\\n\" + render_import, 1)\n"
               "              print(\"PASS: RenderMode import added.\")\n"
               "\n"
-              "          # --------------------------------------------------------\n"
-              "          # 9B. PATCH EXISTING RECENTER BUTTON\n"
-              "          # --------------------------------------------------------\n"
               "          button_pattern = re.compile(\n"
               "              r'''(?P<block>\n"
               "                  addControlButton\\\n"
@@ -144,9 +152,6 @@ jobs:
               "          else:\n"
               "              raise SystemExit(\"FAIL: Found \" + str(len(button_matches)) + \" recenter button blocks; expected exactly 1.\")\n"
               "\n"
-              "          # --------------------------------------------------------\n"
-              "          # 9C. ENABLE GPS RENDER MODE\n"
-              "          # --------------------------------------------------------\n"
               "          enable_pattern = re.compile(\n"
               "              r'''map\\.getLocationComponent\\\n"
               "                  \\s*\\.setLocationComponentEnabled\\(true\\)\\s*;''',\n"
@@ -166,9 +171,6 @@ jobs:
               "          else:\n"
               "              raise SystemExit(\"FAIL: Expected exactly one setLocationComponentEnabled(true) anchor; found \" + str(len(enable_matches)) + \".\")\n"
               "\n"
-              "          # --------------------------------------------------------\n"
-              "          # 9D. FIND recenter() WITH BRACE BALANCING\n"
-              "          # --------------------------------------------------------\n"
               "          method_pattern = re.compile(r'(?m)^\\s*public\\s+void\\s+recenter\\s*\\(\\s*\\)\\s*\\{')\n"
               "          method_matches = list(method_pattern.finditer(source))\n"
               "          follow_method = '''public void followCurrentLocation() {\n"
@@ -249,9 +251,6 @@ jobs:
               "          else:\n"
               "              raise SystemExit(\"FAIL: recenter() found \" + str(len(method_matches)) + \" times; expected exactly 1.\")\n"
               "\n"
-              "          # --------------------------------------------------------\n"
-              "          # 9E. FINAL STRUCTURAL VERIFICATION\n"
-              "          # --------------------------------------------------------\n"
               "          required = [\n"
               "              render_import,\n"
               "              \"setRenderMode(RenderMode.GPS);\",\n"
@@ -277,8 +276,6 @@ jobs:
           )
 
           new_section_lines = b64_payload.splitlines(keepends=True)
-
-          # Reconstruct workflow using exact line slicing
           dst_lines = src_lines[:start_line] + new_section_lines + src_lines[end_line:]
           dst_path.write_text("".join(dst_lines), encoding="utf-8")
 
@@ -359,37 +356,12 @@ jobs:
           print(f"Suffix SHA256 (SRC): {suffix_src_sha} ({len(suffix_src)} bytes)")
           print(f"Suffix SHA256 (DST): {suffix_dst_sha} ({len(suffix_dst)} bytes)")
 
-          # Strict Byte-for-Byte Verification
           if prefix_src != prefix_dst:
-              print("\n--- DIFFERENCE IN PREFIX DETECTED ---")
-              p_src_lines = src_lines[:start_src]
-              p_dst_lines = dst_lines[:start_dst]
-              max_l = max(len(p_src_lines), len(p_dst_lines))
-              for idx in range(max_l):
-                  l_src = p_src_lines[idx] if idx < len(p_src_lines) else "<EOF>\n"
-                  l_dst = p_dst_lines[idx] if idx < len(p_dst_lines) else "<EOF>\n"
-                  if l_src != l_dst:
-                      print(f"First differing line index in Prefix: {idx + 1}")
-                      print(f"SRC Line: {repr(l_src)}")
-                      print(f"DST Line: {repr(l_dst)}")
-                      break
               raise SystemExit("FAIL: Prefix content before Section 9 changed!")
 
           print("PASS: Prefix identical.")
 
           if suffix_src != suffix_dst:
-              print("\n--- DIFFERENCE IN SUFFIX DETECTED ---")
-              s_src_lines = src_lines[end_src:]
-              s_dst_lines = dst_lines[end_dst:]
-              max_l = max(len(s_src_lines), len(s_dst_lines))
-              for idx in range(max_l):
-                  l_src = s_src_lines[idx] if idx < len(s_src_lines) else "<EOF>\n"
-                  l_dst = s_dst_lines[idx] if idx < len(s_dst_lines) else "<EOF>\n"
-                  if l_src != l_dst:
-                      print(f"First differing line index in Suffix: {end_src + idx + 1}")
-                      print(f"SRC Line: {repr(l_src)}")
-                      print(f"DST Line: {repr(l_dst)}")
-                      break
               raise SystemExit("FAIL: Suffix content after Section 9 changed!")
 
           print("PASS: Suffix identical.")
@@ -408,10 +380,7 @@ jobs:
           python3 - <<'PY'
           import yaml
 
-          path = (
-              ".github/workflows/"
-              "build-v10-carassistant-keyboard-follow-pass-fixed.yml"
-          )
+          path = ".github/workflows/build-v10-carassistant-keyboard-follow-pass-fixed.yml"
 
           with open(path, "r", encoding="utf-8") as f:
               yaml.safe_load(f)
@@ -421,8 +390,15 @@ jobs:
 
       - name: Commit fixed workflow
         shell: bash
+        env:
+          PAT_TOKEN: ${{ secrets.PAT_TOKEN }}
         run: |
           set -euo pipefail
+
+          if [ -z "${PAT_TOKEN:-}" ]; then
+            echo "FAIL: PAT_TOKEN is required."
+            exit 1
+          fi
 
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
@@ -434,6 +410,9 @@ jobs:
 
           git commit \
             -m "fix workflow: structurally patch Navigation Section 9"
+
+          git remote set-url origin \
+            "https://x-access-token:${PAT_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
 
           git push origin main
 
