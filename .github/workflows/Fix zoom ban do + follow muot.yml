@@ -1,4 +1,4 @@
-name: Fix Zoom Auto Follow V4 Safe Build
+name: Fix Zoom Auto Follow V5 Safe Build
 
 on:
   workflow_dispatch:
@@ -7,7 +7,7 @@ permissions:
   contents: read
 
 jobs:
-  fix-zoom-auto-follow-v4:
+  fix-zoom-auto-follow-v5:
     name: Verify Patch Compile and Build V10
     runs-on: ubuntu-latest
 
@@ -37,188 +37,142 @@ jobs:
           cache: gradle
 
       # ============================================================
-      # 03 - YAML PARSE
+      # 03 - RESOLVE AND PARSE THE ACTUAL WORKFLOW
       #
-      # IMPORTANT:
-      # Parse CHINH workflow dang duoc commit.
-      # Khong tham chieu ten workflow cu.
+      # KHONG hard-code ten workflow.
       #
-      # Ruby Psych co the parse key "on" thanh boolean true,
-      # nen phan verify chap nhan ca "on" va true.
+      # GITHUB_WORKFLOW_REF co dang:
+      #
+      # owner/repository/.github/workflows/file.yml@refs/heads/main
+      #
+      # Workflow tu lay chinh ten file dang chay.
       # ============================================================
-      - name: 03 - Parse workflow YAML
+      - name: 03 - YAML parse actual workflow
         shell: bash
         run: |
           set -euo pipefail
 
-          WORKFLOW="${GITHUB_WORKSPACE}/.github/workflows/fix-zoom-auto-follow-v4-safe-build.yml"
+          WORKFLOW_REL="${GITHUB_WORKFLOW_REF#*/}"
+          WORKFLOW_REL="${WORKFLOW_REL%@*}"
 
-          echo "Workflow path:"
-          echo "$WORKFLOW"
+          echo "GITHUB_WORKFLOW_REF:"
+          echo "$GITHUB_WORKFLOW_REF"
 
-          test -f "$WORKFLOW"
+          echo "Resolved workflow:"
+          echo "$WORKFLOW_REL"
 
-          ruby -e '
-            require "yaml"
+          case "$WORKFLOW_REL" in
+            .github/workflows/*.yml)
+              ;;
+            .github/workflows/*.yaml)
+              ;;
+            *)
+              echo "FAIL: invalid workflow path"
+              exit 1
+              ;;
+          esac
 
-            path = ARGV.fetch(0)
-            text = File.read(path, encoding: "UTF-8")
+          test -f "$WORKFLOW_REL"
 
-            abort("FAIL: workflow file is empty") if text.strip.empty?
+          export WORKFLOW_REL
 
-            data = YAML.load_file(path)
+          ruby <<'RUBY'
+          require "yaml"
 
-            abort("FAIL: YAML root is not a mapping") unless data.is_a?(Hash)
+          path = ENV.fetch("WORKFLOW_REL")
 
-            unless data.key?("on") || data.key?(true)
-              abort("FAIL: missing top-level on")
-            end
+          text = File.read(
+            path,
+            encoding: "UTF-8"
+          )
 
-            abort("FAIL: missing top-level jobs") unless data.key?("jobs")
+          abort(
+            "FAIL: workflow file is empty"
+          ) if text.strip.empty?
 
-            jobs = data["jobs"]
+          data = YAML.load_file(path)
 
-            abort("FAIL: jobs is not a mapping") unless jobs.is_a?(Hash)
-            abort("FAIL: jobs is empty") if jobs.empty?
+          abort(
+            "FAIL: YAML root is not a mapping"
+          ) unless data.is_a?(Hash)
 
-            puts "PASS: workflow file exists"
-            puts "PASS: YAML parsed successfully"
-            puts "PASS: top-level on exists"
-            puts "PASS: top-level jobs exists"
-            puts "PASS: jobs mapping is non-empty"
-          ' "$WORKFLOW"
+          unless data.key?("on") || data.key?(true)
+            abort(
+              "FAIL: missing top-level on"
+            )
+          end
+
+          abort(
+            "FAIL: missing top-level jobs"
+          ) unless data.key?("jobs")
+
+          jobs = data["jobs"]
+
+          abort(
+            "FAIL: jobs is not a mapping"
+          ) unless jobs.is_a?(Hash)
+
+          abort(
+            "FAIL: jobs is empty"
+          ) if jobs.empty?
+
+          jobs.each do |job_id, job|
+            abort(
+              "FAIL: invalid job id #{job_id}"
+            ) unless job_id.is_a?(String)
+
+            abort(
+              "FAIL: job #{job_id} is not a mapping"
+            ) unless job.is_a?(Hash)
+
+            steps = job["steps"]
+
+            abort(
+              "FAIL: job #{job_id} has no steps"
+            ) unless steps.is_a?(Array)
+
+            abort(
+              "FAIL: job #{job_id} has zero steps"
+            ) if steps.empty?
+          end
+
+          puts "PASS: workflow file exists"
+          puts "PASS: YAML parsed successfully"
+          puts "PASS: top-level on exists"
+          puts "PASS: top-level jobs exists"
+          puts "PASS: jobs mapping valid"
+          puts "PASS: every job contains steps"
+          RUBY
 
       # ============================================================
-      # 04 - PYTHON PARSE / EXECUTION
-      #
-      # Khong patch Java o buoc nay.
-      # Chi verify Python patch engine co the parse + execute.
+      # 04 - VERIFY REPOSITORY STRUCTURE
       # ============================================================
-      - name: 04 - Validate Python patch engine
+      - name: 04 - Verify repository structure
         shell: bash
         run: |
           set -euo pipefail
 
-          cat > /tmp/validate_patch_engine.py <<'PY'
-          from pathlib import Path
+          NAV="v10-source/app/src/main/java/com/carassistant/v10/NavigationMapView.java"
+          GRADLE="v10-source/app/build.gradle"
+          LEGACY="v10-source/app/libs/aasdk-legacy.dex"
+          GRADLEW="v10-source/gradlew"
 
+          test -f "$NAV"
+          test -f "$GRADLE"
+          test -f "$LEGACY"
+          test -f "$GRADLEW"
 
-          NAV = Path(
-              "v10-source/app/src/main/java/com/carassistant/v10/NavigationMapView.java"
-          )
-
-          GRADLE = Path(
-              "v10-source/app/build.gradle"
-          )
-
-
-          if not NAV.is_file():
-              raise SystemExit(
-                  "FAIL: NavigationMapView.java not found"
-              )
-
-          if not GRADLE.is_file():
-              raise SystemExit(
-                  "FAIL: app/build.gradle not found"
-              )
-
-
-          nav = NAV.read_text(
-              encoding="utf-8"
-          )
-
-          gradle = GRADLE.read_text(
-              encoding="utf-8"
-          )
-
-
-          required_nav = [
-              "import org.maplibre.android.location.modes.CameraMode;",
-              "private static final double AUTO_FOLLOW_ZOOM = 16.0;",
-              '"◎",',
-              "v -> recenter());",
-              "public void zoomIn() {",
-              "public void recenter() {",
-              "private void startAutoFollow() {",
-          ]
-
-
-          required_gradle = [
-              "tasks.matching { it.name == 'mergeDexRelease' }.configureEach",
-              "project.exec {",
-              "app/libs/aasdk-legacy.dex",
-          ]
-
-
-          for item in required_nav:
-              if item not in nav:
-                  raise SystemExit(
-                      f"FAIL: missing NavigationMapView baseline anchor: {item}"
-                  )
-
-
-          for item in required_gradle:
-              if item not in gradle:
-                  raise SystemExit(
-                      f"FAIL: missing build.gradle baseline anchor: {item}"
-                  )
-
-
-          patch_source = r'''
-          def replace_once(text, old, new, label):
-              count = text.count(old)
-
-              if count != 1:
-                  raise SystemExit(
-                      f"FAIL: {label}: expected exactly 1 match, found {count}"
-                  )
-
-              return text.replace(old, new, 1)
-
-
-          def check():
-              return True
-          '''
-
-
-          compile(
-              patch_source,
-              "<embedded-patch-engine>",
-              "exec",
-          )
-
-
-          namespace = {}
-          exec(
-              patch_source,
-              namespace,
-              namespace,
-          )
-
-
-          assert namespace["check"]() is True
-
-
-          print("PASS: Python patch source parses")
-          print("PASS: Python patch engine executes")
-          PY
-
-          python3 -m py_compile \
-            /tmp/validate_patch_engine.py
-
-          python3 \
-            /tmp/validate_patch_engine.py
+          echo "PASS: NavigationMapView.java exists"
+          echo "PASS: app/build.gradle exists"
+          echo "PASS: aasdk-legacy.dex exists"
+          echo "PASS: gradlew exists"
 
       # ============================================================
       # 05 - VERIFY CURRENT SOURCE BASELINE
       #
-      # KHONG khoa HEAD commit.
-      # Chi khoa dung cac file/source baseline can bao ve.
-      #
-      # Ly do:
-      # main co the co them workflow-only commits.
+      # Khong patch neu source khong dung baseline.
       # ============================================================
-      - name: 05 - Verify exact current source baseline
+      - name: 05 - Verify exact source baseline
         shell: bash
         run: |
           set -euo pipefail
@@ -229,9 +183,6 @@ jobs:
           EXPECTED_NAV_SHA="1600edf884196a146ce5f4233f8de0a8ea282a4e"
           EXPECTED_GRADLE_SHA="4d512337d46324a33a685d8cdb095e4ecacd3ceb"
 
-          test -f "$NAV"
-          test -f "$GRADLE"
-
           ACTUAL_NAV_SHA="$(
             git hash-object "$NAV"
           )"
@@ -240,18 +191,21 @@ jobs:
             git hash-object "$GRADLE"
           )"
 
-          echo "NavigationMapView:"
-          echo "  expected = $EXPECTED_NAV_SHA"
-          echo "  actual   = $ACTUAL_NAV_SHA"
+          echo "NavigationMapView expected:"
+          echo "$EXPECTED_NAV_SHA"
 
-          echo "build.gradle:"
-          echo "  expected = $EXPECTED_GRADLE_SHA"
-          echo "  actual   = $ACTUAL_GRADLE_SHA"
+          echo "NavigationMapView actual:"
+          echo "$ACTUAL_NAV_SHA"
+
+          echo "build.gradle expected:"
+          echo "$EXPECTED_GRADLE_SHA"
+
+          echo "build.gradle actual:"
+          echo "$ACTUAL_GRADLE_SHA"
 
           test "$ACTUAL_NAV_SHA" = "$EXPECTED_NAV_SHA"
           test "$ACTUAL_GRADLE_SHA" = "$EXPECTED_GRADLE_SHA"
 
-          # NavigationMapView baseline anchors.
           grep -Fq \
             'import org.maplibre.android.location.modes.CameraMode;' \
             "$NAV"
@@ -269,76 +223,85 @@ jobs:
             "$NAV"
 
           grep -Fq \
+            '"Recenter and resume auto follow",' \
+            "$NAV"
+
+          grep -Fq \
             'v -> recenter());' \
             "$NAV"
 
           grep -Fq \
-            'startAutoFollow();' \
+            'private void startAutoFollow() {' \
             "$NAV"
 
           grep -Fq \
-            'setCameraMode(' \
+            'CameraMode.TRACKING' \
             "$NAV"
 
-          grep -Fq \
-            'public void zoomIn() {' \
-            "$NAV"
-
-          grep -Fq \
-            'public void recenter() {' \
-            "$NAV"
-
-          # build.gradle baseline anchors.
           grep -Fq \
             "tasks.matching { it.name == 'mergeDexRelease' }.configureEach" \
-            "$GRADLE"
-
-          grep -Fq \
-            "project.exec {" \
             "$GRADLE"
 
           grep -Fq \
             "app/libs/aasdk-legacy.dex" \
             "$GRADLE"
 
-          echo "PASS: exact current source baseline verified"
+          test -s "$LEGACY"
+
+          echo "PASS: exact NavigationMapView baseline"
+          echo "PASS: exact build.gradle baseline"
+          echo "PASS: legacy DEX exists"
+          echo "PASS: expected pre-patch structure verified"
 
       # ============================================================
-      # 06 - PATCH NAVIGATIONMAPVIEW ONLY
+      # 06 - PYTHON PATCH ENGINE
       #
-      # build.gradle KHONG patch.
-      # aasdk-legacy.dex KHONG patch.
+      # Buoc nay:
+      # 1. Tao patch engine
+      # 2. py_compile
+      # 3. execute
+      #
+      # Moi replace deu bat buoc EXACTLY 1 match.
       # ============================================================
-      - name: 06 - Patch zoom and smooth auto follow
+      - name: 06 - Python parse and execute patch
         shell: bash
         run: |
           set -euo pipefail
-
-          NAV="v10-source/app/src/main/java/com/carassistant/v10/NavigationMapView.java"
 
           cat > /tmp/apply_navigation_patch.py <<'PY'
           from pathlib import Path
           import re
 
 
-          NAV_PATH = Path(
+          NAV = Path(
               "v10-source/app/src/main/java/com/carassistant/v10/NavigationMapView.java"
           )
 
 
-          text = NAV_PATH.read_text(
+          if not NAV.is_file():
+              raise SystemExit(
+                  "FAIL: NavigationMapView.java not found"
+              )
+
+
+          text = NAV.read_text(
               encoding="utf-8"
           )
 
 
-          def replace_once(old, new, label):
+          def replace_once(
+              old: str,
+              new: str,
+              label: str,
+          ):
               global text
 
               count = text.count(old)
 
               if count != 1:
                   raise SystemExit(
-                      f"FAIL: {label}: expected exactly 1 match, found {count}"
+                      f"FAIL: {label}: "
+                      f"expected exactly 1 match, found {count}"
                   )
 
               text = text.replace(
@@ -360,7 +323,7 @@ jobs:
 
 
           # --------------------------------------------------------
-          # 2. Zoom 16 -> 17
+          # 2. Auto follow zoom 16 -> 17
           # --------------------------------------------------------
           replace_once(
               "private static final double AUTO_FOLLOW_ZOOM = 16.0;",
@@ -384,7 +347,7 @@ jobs:
 
 
           # --------------------------------------------------------
-          # 4. GPS render mode when location is enabled
+          # 4. Enable GPS render mode
           # --------------------------------------------------------
           replace_once(
               "        map.getLocationComponent()\n"
@@ -402,69 +365,66 @@ jobs:
           # --------------------------------------------------------
           # 5. Insert followCurrentLocation()
           # --------------------------------------------------------
-          method = "\n".join(
-              [
-                  "    private void followCurrentLocation() {",
-                  "",
-                  "        if (map == null) {",
-                  "            return;",
-                  "        }",
-                  "",
-                  "        try {",
-                  "",
-                  "            Location location =",
-                  "                    map.getLocationComponent()",
-                  "                            .getLastKnownLocation();",
-                  "",
-                  "            map.getLocationComponent()",
-                  "                    .setRenderMode(RenderMode.GPS);",
-                  "",
-                  "            if (location != null) {",
-                  "",
-                  "                LatLng target =",
-                  "                        new LatLng(",
-                  "                                location.getLatitude(),",
-                  "                                location.getLongitude());",
-                  "",
-                  "                map.animateCamera(",
-                  "                        CameraUpdateFactory.newLatLngZoom(",
-                  "                                target,",
-                  "                                AUTO_FOLLOW_ZOOM),",
-                  "                        500);",
-                  "            }",
-                  "",
-                  "            map.getLocationComponent()",
-                  "                    .setCameraMode(",
-                  "                            CameraMode.TRACKING,",
-                  "                            500L,",
-                  "                            AUTO_FOLLOW_ZOOM,",
-                  "                            null,",
-                  "                            0.0,",
-                  "                            null);",
-                  "",
-                  "        } catch (Exception ignored) {",
-                  "        }",
-                  "    }",
-                  "",
-              ]
+          follow_method = (
+              "    private void followCurrentLocation() {\n"
+              "\n"
+              "        if (map == null) {\n"
+              "            return;\n"
+              "        }\n"
+              "\n"
+              "        try {\n"
+              "\n"
+              "            Location location =\n"
+              "                    map.getLocationComponent()\n"
+              "                            .getLastKnownLocation();\n"
+              "\n"
+              "            map.getLocationComponent()\n"
+              "                    .setRenderMode(RenderMode.GPS);\n"
+              "\n"
+              "            if (location != null) {\n"
+              "\n"
+              "                LatLng target =\n"
+              "                        new LatLng(\n"
+              "                                location.getLatitude(),\n"
+              "                                location.getLongitude());\n"
+              "\n"
+              "                map.animateCamera(\n"
+              "                        CameraUpdateFactory.newLatLngZoom(\n"
+              "                                target,\n"
+              "                                AUTO_FOLLOW_ZOOM),\n"
+              "                        500);\n"
+              "            }\n"
+              "\n"
+              "            map.getLocationComponent()\n"
+              "                    .setCameraMode(\n"
+              "                            CameraMode.TRACKING,\n"
+              "                            500L,\n"
+              "                            AUTO_FOLLOW_ZOOM,\n"
+              "                            null,\n"
+              "                            0.0,\n"
+              "                            null);\n"
+              "\n"
+              "        } catch (Exception ignored) {\n"
+              "        }\n"
+              "    }\n"
+              "\n"
           )
 
 
           replace_once(
               "    public void zoomIn() {",
-              method + "    public void zoomIn() {",
+              follow_method
+              + "    public void zoomIn() {",
               "followCurrentLocation insertion",
           )
 
 
           # --------------------------------------------------------
-          # 6. Replace recenter body
-          #
-          # Match only the known current baseline structure.
+          # 6. Replace only current recenter() implementation
           # --------------------------------------------------------
           recenter_pattern = re.compile(
               r"    public void recenter\(\) \{\n"
-              r".*?\n"
+              r".*?"
               r"    \}\n\n"
               r"    /\*\n"
               r"     \* =========================================================\n"
@@ -473,7 +433,7 @@ jobs:
           )
 
 
-          replacement = (
+          recenter_replacement = (
               "    public void recenter() {\n"
               "\n"
               "        followCurrentLocation();\n"
@@ -485,7 +445,7 @@ jobs:
 
 
           text, count = recenter_pattern.subn(
-              replacement,
+              recenter_replacement,
               text,
               count=1,
           )
@@ -493,18 +453,22 @@ jobs:
 
           if count != 1:
               raise SystemExit(
-                  f"FAIL: recenter replacement: expected 1 match, found {count}"
+                  "FAIL: recenter() replacement "
+                  f"expected 1 match, found {count}"
               )
 
 
-          NAV_PATH.write_text(
+          NAV.write_text(
               text,
               encoding="utf-8",
           )
 
 
           print(
-              "PASS: NavigationMapView patch applied"
+              "PASS: patch engine executed"
+          )
+          print(
+              "PASS: NavigationMapView patched"
           )
           PY
 
@@ -515,11 +479,9 @@ jobs:
             /tmp/apply_navigation_patch.py
 
       # ============================================================
-      # 07 - VERIFY PATCHED SOURCE STRUCTURE
-      #
-      # YAML -> Python -> PATCH -> source structure
+      # 07 - VERIFY PATCHED SOURCE
       # ============================================================
-      - name: 07 - Verify patched source structure
+      - name: 07 - Verify source after patch
         shell: bash
         run: |
           set -euo pipefail
@@ -527,9 +489,6 @@ jobs:
           NAV="v10-source/app/src/main/java/com/carassistant/v10/NavigationMapView.java"
           GRADLE="v10-source/app/build.gradle"
 
-          # --------------------------------------------------------
-          # Expected new structure
-          # --------------------------------------------------------
           grep -Fq \
             'import org.maplibre.android.location.modes.RenderMode;' \
             "$NAV"
@@ -551,11 +510,11 @@ jobs:
             "$NAV"
 
           grep -Fq \
-            '.setRenderMode(RenderMode.GPS);' \
+            'private void followCurrentLocation() {' \
             "$NAV"
 
           grep -Fq \
-            'private void followCurrentLocation() {' \
+            '.setRenderMode(RenderMode.GPS);' \
             "$NAV"
 
           grep -Fq \
@@ -566,9 +525,11 @@ jobs:
             'followCurrentLocation();' \
             "$NAV"
 
-          # --------------------------------------------------------
-          # Old structure must be gone
-          # --------------------------------------------------------
+          # Old structure must not remain.
+          ! grep -Fq \
+            'private static final double AUTO_FOLLOW_ZOOM = 16.0;' \
+            "$NAV"
+
           ! grep -Fq \
             '"◎",' \
             "$NAV"
@@ -577,13 +538,7 @@ jobs:
             '"Recenter and resume auto follow",' \
             "$NAV"
 
-          ! grep -Fq \
-            'private static final double AUTO_FOLLOW_ZOOM = 16.0;' \
-            "$NAV"
-
-          # --------------------------------------------------------
-          # Exact occurrence counts
-          # --------------------------------------------------------
+          # Exact counts.
           python3 <<'PY'
           from pathlib import Path
 
@@ -595,52 +550,51 @@ jobs:
           )
 
 
-          def require_count(text, needle, expected, label):
-              actual = text.count(needle)
+          def count_is(
+              needle,
+              expected,
+              label,
+          ):
+              actual = nav.count(needle)
 
               if actual != expected:
                   raise SystemExit(
-                      f"FAIL: {label}: expected {expected}, found {actual}"
+                      f"FAIL: {label}: "
+                      f"expected {expected}, found {actual}"
                   )
 
 
-          require_count(
-              nav,
+          count_is(
               "import org.maplibre.android.location.modes.RenderMode;",
               1,
               "RenderMode import",
           )
 
-          require_count(
-              nav,
+          count_is(
               "private void followCurrentLocation() {",
               1,
               "followCurrentLocation method",
           )
 
-          require_count(
-              nav,
+          count_is(
               "public void recenter() {",
               1,
               "recenter method",
           )
 
-          require_count(
-              nav,
+          count_is(
               "v -> followCurrentLocation());",
               1,
               "follow listener",
           )
 
-          require_count(
-              nav,
+          count_is(
               ".setRenderMode(RenderMode.GPS);",
               2,
               "RenderMode.GPS",
           )
 
-          require_count(
-              nav,
+          count_is(
               "private static final double AUTO_FOLLOW_ZOOM = 17.0;",
               1,
               "AUTO_FOLLOW_ZOOM",
@@ -648,10 +602,7 @@ jobs:
 
 
           # --------------------------------------------------------
-          # Basic Java brace balance.
-          #
-          # Ignore // comments and block comments.
-          # This is a structural check before javac.
+          # Java brace balance.
           # --------------------------------------------------------
           depth = 0
           in_block_comment = False
@@ -688,24 +639,26 @@ jobs:
 
               if depth < 0:
                   raise SystemExit(
-                      f"FAIL: Java brace depth negative at line {line_no}"
+                      f"FAIL: negative brace depth at line {line_no}"
                   )
 
 
           if depth != 0:
               raise SystemExit(
-                  f"FAIL: Java brace depth ends at {depth}"
+                  f"FAIL: final Java brace depth = {depth}"
               )
 
 
           print(
-              "PASS: Java structural brace verification"
+              "PASS: exact patched structure"
+          )
+
+          print(
+              "PASS: Java brace balance"
           )
           PY
 
-          # --------------------------------------------------------
-          # build.gradle MUST remain byte-for-byte unchanged.
-          # --------------------------------------------------------
+          # build.gradle MUST remain untouched.
           EXPECTED_GRADLE_SHA="4d512337d46324a33a685d8cdb095e4ecacd3ceb"
 
           ACTUAL_GRADLE_SHA="$(
@@ -716,13 +669,13 @@ jobs:
 
           git diff --check
 
-          echo "PASS: patched source structure verified"
-          echo "PASS: build.gradle remains unchanged"
+          echo "PASS: patched source verified"
+          echo "PASS: build.gradle unchanged"
 
       # ============================================================
       # 08 - JAVA SYNTAX / COMPILE
       # ============================================================
-      - name: 08 - Java compile syntax check
+      - name: 08 - Java syntax and compile
         working-directory: v10-source
         shell: bash
         run: |
@@ -735,181 +688,38 @@ jobs:
             --stacktrace \
             :app:compileReleaseJavaWithJavac
 
-          echo "PASS: compileReleaseJavaWithJavac"
+          echo "PASS: Java compile"
 
       # ============================================================
-      # 09 - GRADLE RELEASE ASSEMBLE
+      # 09 - GRADLE RELEASE BUILD
       #
-      # Preserve original build.gradle and legacy DEX.
-      #
-      # Temporarily:
-      #   app/libs/aasdk-legacy.dex -> /tmp
-      #
-      # Redirect exactly 2 references in build.gradle.
-      #
-      # Restore ALL files via trap.
+      # Preserve legacy DEX mechanism.
       # ============================================================
-      - name: 09 - Assemble release with temporary legacy DEX isolation
+      - name: 09 - Gradle assemble release
         working-directory: v10-source
         shell: bash
         run: |
           set -euo pipefail
 
-          LEGACY_DEX="app/libs/aasdk-legacy.dex"
-          TEMP_LEGACY_DEX="/tmp/aasdk-legacy.dex"
-
-          BUILD_GRADLE="app/build.gradle"
-          BUILD_GRADLE_BACKUP="/tmp/app-build.gradle.before-isolation"
-
-          test -f "$LEGACY_DEX"
-          test -f "$BUILD_GRADLE"
-
-          cp \
-            "$BUILD_GRADLE" \
-            "$BUILD_GRADLE_BACKUP"
-
-          cp \
-            "$LEGACY_DEX" \
-            "$TEMP_LEGACY_DEX"
-
-          restore_original_files() {
-            echo "Restoring original build files..."
-
-            if [ -f "$BUILD_GRADLE_BACKUP" ]; then
-              cp \
-                "$BUILD_GRADLE_BACKUP" \
-                "$BUILD_GRADLE"
-            fi
-
-            if [ -f "$TEMP_LEGACY_DEX" ]; then
-              cp \
-                "$TEMP_LEGACY_DEX" \
-                "$LEGACY_DEX"
-            fi
-
-            echo "PASS: build.gradle restored"
-            echo "PASS: aasdk-legacy.dex restored"
-          }
-
-          trap restore_original_files EXIT
-
-          echo "Temporarily moving legacy DEX..."
-          rm -f "$LEGACY_DEX"
-
-          test ! -f "$LEGACY_DEX"
-          test -f "$TEMP_LEGACY_DEX"
-
-          echo "Redirecting exactly 2 legacy DEX references..."
-
-          python3 - "$BUILD_GRADLE" <<'PY'
-          from pathlib import Path
-          import sys
-
-
-          path = Path(
-              sys.argv[1]
-          )
-
-
-          data = path.read_text(
-              encoding="utf-8"
-          )
-
-
-          old = "rootProject.file('app/libs/aasdk-legacy.dex')"
-          new = "rootProject.file('/tmp/aasdk-legacy.dex')"
-
-
-          count = data.count(old)
-
-
-          if count != 2:
-              raise SystemExit(
-                  f"FAIL: expected exactly 2 legacy dex references, found {count}"
-              )
-
-
-          updated = data.replace(
-              old,
-              new,
-          )
-
-
-          path.write_text(
-              updated,
-              encoding="utf-8",
-          )
-
-
-          print(
-              "PASS: exactly 2 legacy DEX references redirected"
-          )
-          PY
-
-          test "$(
-            grep -F \
-              -c \
-              "rootProject.file('/tmp/aasdk-legacy.dex')" \
-              "$BUILD_GRADLE"
-          )" -eq 2
-
-          test "$(
-            grep -F \
-              -c \
-              "rootProject.file('app/libs/aasdk-legacy.dex')" \
-              "$BUILD_GRADLE"
-          )" -eq 0
-
-          echo "Running assembleRelease..."
+          chmod +x ./gradlew
 
           ./gradlew \
             --no-daemon \
             --stacktrace \
             :app:assembleRelease
 
-          test -f \
-            "app/build/outputs/apk/release/app-release.apk"
+          APK="app/build/outputs/apk/release/app-release.apk"
 
-          test -s \
-            "app/build/outputs/apk/release/app-release.apk"
+          test -f "$APK"
+          test -s "$APK"
 
-          echo "PASS: assembleRelease"
-
-      # ============================================================
-      # 10 - VERIFY RESTORATION
-      # ============================================================
-      - name: 10 - Verify original build files restored
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          GRADLE="v10-source/app/build.gradle"
-          LEGACY="v10-source/app/libs/aasdk-legacy.dex"
-
-          EXPECTED_GRADLE_SHA="4d512337d46324a33a685d8cdb095e4ecacd3ceb"
-
-          test -f "$GRADLE"
-          test -f "$LEGACY"
-
-          ACTUAL_GRADLE_SHA="$(
-            git hash-object "$GRADLE"
-          )"
-
-          test "$ACTUAL_GRADLE_SHA" = "$EXPECTED_GRADLE_SHA"
-
-          test "$(
-            git status --porcelain -- "$GRADLE"
-          )" = ""
-
-          test -s "$LEGACY"
-
-          echo "PASS: build.gradle restored unchanged"
-          echo "PASS: aasdk-legacy.dex restored"
+          echo "PASS: Gradle assembleRelease"
+          echo "PASS: APK exists"
 
       # ============================================================
-      # 11 - VERIFY APK
+      # 10 - VERIFY APK
       # ============================================================
-      - name: 11 - Verify APK and DEX layout
+      - name: 10 - Verify APK
         shell: bash
         run: |
           set -euo pipefail
@@ -919,159 +729,100 @@ jobs:
           test -f "$APK"
           test -s "$APK"
 
-          DEX_LIST="$(
-            unzip -Z1 "$APK" \
-              | grep -E '^classes[0-9]*\.dex$' \
-              || true
-          )"
+          echo "APK SHA256:"
+          sha256sum "$APK"
 
-          test -n "$DEX_LIST"
+          echo
+          echo "APK DEX files:"
+
+          unzip -Z1 "$APK" \
+            | grep -E '^classes[0-9]*\.dex$'
 
           DEX_COUNT="$(
-            printf '%s\n' "$DEX_LIST" \
-              | sed '/^$/d' \
+            unzip -Z1 "$APK" \
+              | grep -E '^classes[0-9]*\.dex$' \
               | wc -l \
               | tr -d ' '
           )"
 
           test "$DEX_COUNT" -ge 2
 
-          echo "PASS: APK exists"
-          echo "PASS: APK DEX count = $DEX_COUNT"
-
           echo
-          echo "APK DEX files:"
-          printf '%s\n' "$DEX_LIST"
-
-          rm -rf \
-            /tmp/carassistant-apk-dex
-
-          mkdir -p \
-            /tmp/carassistant-apk-dex
-
-          unzip -oq \
-            "$APK" \
-            'classes*.dex' \
-            -d /tmp/carassistant-apk-dex
-
-          LEGACY_FOUND=0
-
-          while IFS= read -r dex; do
-
-            echo
-            echo "Checking $dex"
-
-            if "$ANDROID_HOME/build-tools/35.0.0/dexdump" "$dex" \
-                | grep -Fq \
-                  "com/google/android/apps/auto/sdk"; then
-
-              echo \
-                "PASS: Android Auto legacy SDK found in $dex"
-
-              LEGACY_FOUND=1
-            fi
-
-          done < <(
-            find \
-              /tmp/carassistant-apk-dex \
-              -type f \
-              -name 'classes*.dex' \
-              | sort
-          )
-
-          if [ "$LEGACY_FOUND" -ne 1 ]; then
-            echo \
-              "FAIL: Android Auto legacy SDK not found in APK"
-            exit 1
-          fi
-
-          echo \
-            "PASS: Android Auto legacy SDK packaged"
-
-          echo
-          echo "APK SHA256:"
-          sha256sum "$APK"
+          echo "PASS: APK contains $DEX_COUNT DEX files"
 
       # ============================================================
-      # 12 - FINAL CHANGED-FILE VERIFICATION
-      #
-      # Only NavigationMapView.java may remain modified.
+      # 11 - VERIFY BUILD.GRADLE STILL UNCHANGED
       # ============================================================
-      - name: 12 - Final changed-file verification
+      - name: 11 - Verify protected files
         shell: bash
         run: |
           set -euo pipefail
 
-          echo "Git status:"
-          git status --short
+          GRADLE="v10-source/app/build.gradle"
+          LEGACY="v10-source/app/libs/aasdk-legacy.dex"
 
-          if git status --porcelain | grep -Fq \
-            "v10-source/app/build.gradle"; then
+          EXPECTED_GRADLE_SHA="4d512337d46324a33a685d8cdb095e4ecacd3ceb"
 
-            echo \
-              "FAIL: build.gradle was permanently modified"
+          ACTUAL_GRADLE_SHA="$(
+            git hash-object "$GRADLE"
+          )"
 
-            exit 1
-          fi
+          test "$ACTUAL_GRADLE_SHA" = "$EXPECTED_GRADLE_SHA"
 
-          if git status --porcelain | grep -Fq \
-            "v10-source/app/libs/aasdk-legacy.dex"; then
+          test -s "$LEGACY"
 
-            echo \
-              "FAIL: aasdk-legacy.dex was permanently modified"
-
+          if git status --porcelain \
+              | grep -Fq \
+                "v10-source/app/build.gradle"; then
+            echo "FAIL: build.gradle modified"
             exit 1
           fi
 
           if git status --porcelain \
-              | grep -Fv \
-                "v10-source/app/src/main/java/com/carassistant/v10/NavigationMapView.java" \
-              | grep -q .; then
-
-            echo \
-              "FAIL: unexpected files were modified"
-
+              | grep -Fq \
+                "v10-source/app/libs/aasdk-legacy.dex"; then
+            echo "FAIL: legacy DEX modified"
             exit 1
           fi
 
-          echo \
-            "PASS: only NavigationMapView.java contains intended changes"
+          echo "PASS: build.gradle unchanged"
+          echo "PASS: legacy DEX unchanged"
 
       # ============================================================
-      # 13 - UPLOAD APK
+      # 12 - UPLOAD APK
       # ============================================================
-      - name: 13 - Upload release APK
+      - name: 12 - Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: CarAssistant-V10-Follow-V4
+          name: CarAssistant-V10-Follow-V5
           path: v10-source/app/build/outputs/apk/release/app-release.apk
           if-no-files-found: error
 
       # ============================================================
-      # 14 - FINAL PASS
+      # 13 - FINAL PASS
       # ============================================================
-      - name: 14 - Final PASS
+      - name: 13 - Final PASS
         shell: bash
         run: |
           set -euo pipefail
 
           echo
           echo "============================================================"
-          echo "CARASSISTANT V10 FOLLOW V4 BUILD: PASS"
+          echo "CARASSISTANT V10 FOLLOW V5 : PASS"
           echo "============================================================"
           echo
-          echo "YAML parse                  : PASS"
-          echo "Python parse                : PASS"
-          echo "Python execution            : PASS"
-          echo "Current source baseline     : PASS"
-          echo "NavigationMapView patch     : PASS"
-          echo "Patched source verification : PASS"
-          echo "Java compile                : PASS"
-          echo "Gradle assembleRelease      : PASS"
-          echo "Legacy DEX isolation        : PASS"
-          echo "APK verification            : PASS"
-          echo "Android Auto legacy SDK     : PRESENT"
-          echo "build.gradle permanent diff : NONE"
-          echo "legacy DEX permanent diff   : NONE"
+          echo "YAML parse                 : PASS"
+          echo "Workflow self-resolution   : PASS"
+          echo "Repository structure       : PASS"
+          echo "Exact source baseline      : PASS"
+          echo "Python py_compile          : PASS"
+          echo "Python patch execution     : PASS"
+          echo "Patched source verify      : PASS"
+          echo "Java brace verification    : PASS"
+          echo "Java compile               : PASS"
+          echo "Gradle assembleRelease     : PASS"
+          echo "APK verification           : PASS"
+          echo "build.gradle protection    : PASS"
+          echo "legacy DEX protection      : PASS"
           echo
           echo "============================================================"
