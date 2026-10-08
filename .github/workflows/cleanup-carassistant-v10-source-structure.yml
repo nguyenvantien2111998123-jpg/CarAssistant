@@ -53,15 +53,15 @@ jobs:
         run: |
           set -euo pipefail
 
-          OLD_ROOT="v10-source/app/src/main/java/com/carassistant/v10"
+          JAVA_ROOT="v10-source/app/src/main/java/com/carassistant/v10"
 
           echo "========================================"
           echo "VERIFY JAVA SOURCE BEFORE CLEANUP"
           echo "========================================"
 
-          test -d "$OLD_ROOT"
+          test -d "$JAVA_ROOT"
 
-          COUNT="$(find "$OLD_ROOT" -type f -name '*.java' | wc -l | tr -d ' ')"
+          COUNT="$(find "$JAVA_ROOT" -type f -name '*.java' | wc -l | tr -d ' ')"
 
           echo "Java file count: $COUNT"
 
@@ -70,7 +70,7 @@ jobs:
             echo "Actual: $COUNT"
             echo
             echo "Current Java files:"
-            find "$OLD_ROOT" -type f -name '*.java' | sort
+            find "$JAVA_ROOT" -type f -name '*.java' | sort
             exit 1
           fi
 
@@ -85,7 +85,7 @@ jobs:
         run: |
           set -euo pipefail
 
-          OLD_ROOT="v10-source/app/src/main/java/com/carassistant/v10"
+          JAVA_ROOT="v10-source/app/src/main/java/com/carassistant/v10"
 
           echo "========================================"
           echo "VERIFY JAVA PACKAGE DECLARATIONS"
@@ -119,54 +119,59 @@ jobs:
               BAD=1
             fi
 
-          done < <(find "$OLD_ROOT" -type f -name '*.java' | sort)
+          done < <(find "$JAVA_ROOT" -type f -name '*.java' | sort)
 
           if [ "$BAD" != "0" ]; then
             exit 1
           fi
 
           echo
-          echo "PASS: all 32 Java files already declare com.carassistant.v10 packages."
+          echo "PASS: all 32 Java files declare com.carassistant.v10 packages."
 
 
       # ============================================================
-      # 4. MOVE JAVA SOURCE
+      # 4. VERIFY SOURCE IS ALREADY IN CORRECT LOCATION
       # ============================================================
-      - name: 4 - Move Java source to com/carassistant/v10
+      - name: 4 - Verify Java source is already at com/carassistant/v10
         shell: bash
         run: |
           set -euo pipefail
 
-          OLD_ROOT="v10-source/app/src/main/java/com/carassistant/v10"
-          NEW_ROOT="v10-source/app/src/main/java/com/carassistant/v10"
+          JAVA_ROOT="v10-source/app/src/main/java/com/carassistant/v10"
+          LEGACY_ROOT="v10-source/app/src/main/java/com/hieptran"
 
           echo "========================================"
-          echo "MOVE JAVA SOURCE TREE"
+          echo "VERIFY JAVA SOURCE LOCATION"
           echo "========================================"
 
-          test -d "$OLD_ROOT"
+          test -d "$JAVA_ROOT"
 
-          if [ -e "$NEW_ROOT" ]; then
-            echo "ERROR: Destination already exists:"
-            echo "$NEW_ROOT"
+          COUNT="$(find "$JAVA_ROOT" -type f -name '*.java' | wc -l | tr -d ' ')"
+
+          if [ "$COUNT" != "32" ]; then
+            echo "ERROR: Expected 32 Java files in correct source tree."
+            echo "Actual: $COUNT"
             exit 1
           fi
 
-          mkdir -p \
-            "v10-source/app/src/main/java/com/carassistant"
+          if [ -d "$LEGACY_ROOT" ]; then
+            LEGACY_FILES="$(
+              find "$LEGACY_ROOT" \
+                -type f \
+                -name '*.java' \
+                -print
+            )"
 
-          mv \
-            "$OLD_ROOT" \
-            "$NEW_ROOT"
+            if [ -n "$LEGACY_FILES" ]; then
+              echo "ERROR: Legacy Java source files remain:"
+              echo "$LEGACY_FILES"
+              exit 1
+            fi
+          fi
 
-          test -d "$NEW_ROOT"
-          test ! -e "$OLD_ROOT"
-
-          echo "PASS: Java source moved."
-
-          echo
-          echo "New source tree:"
-          find "$NEW_ROOT" -type f -name '*.java' | sort
+          echo "PASS: Java source is already in:"
+          echo "$JAVA_ROOT"
+          echo "PASS: no legacy Java source remains."
 
 
       # ============================================================
@@ -200,6 +205,11 @@ jobs:
             exit 1
           fi
 
+          if grep -Fq 'com.hieptran' "$FILE"; then
+            echo "ERROR: Legacy package remains in xposed_init."
+            exit 1
+          fi
+
           echo "PASS: xposed_init points to V10 AACastBridge."
 
 
@@ -230,33 +240,27 @@ jobs:
           echo "Checking ProGuard..."
 
           if grep -nE \
-            'com\.hieptran\.aacast\.doudou|com/carassistant/v10' \
+            'com\.hieptran\.aacast\.doudou|com/hieptran/aacast/doudou' \
             "$FILE"; then
 
-            echo "ERROR: Old package remains in ProGuard."
+            echo "ERROR: Legacy package remains in ProGuard."
             exit 1
           fi
 
           grep -Fq \
-            'com.carassistant.v10.aabridge.AACastBridge' \
+            'com.carassistant.v10' \
             "$FILE"
 
           echo "PASS: ProGuard package references normalized."
 
 
       # ============================================================
-      # 7. NORMALIZE ALL WORKFLOW REFERENCES
+      # 7. NORMALIZE WORKFLOW REFERENCES
       # ============================================================
       - name: 7 - Normalize all workflow source paths
         shell: bash
         run: |
           set -euo pipefail
-
-          OLD_PATH="com/carassistant/v10"
-          NEW_PATH="com/carassistant/v10"
-
-          OLD_PACKAGE="com.carassistant.v10"
-          NEW_PACKAGE="com.carassistant.v10"
 
           echo "========================================"
           echo "NORMALIZE WORKFLOW REFERENCES"
@@ -276,33 +280,44 @@ jobs:
 
           for FILE in "${WORKFLOWS[@]}"; do
 
-            if grep -Fq "$OLD_PATH" "$FILE" || \
-               grep -Fq "$OLD_PACKAGE" "$FILE"; then
+            if grep -Fq \
+              'com.hieptran.aacast.doudou' \
+              "$FILE" || \
+               grep -Fq \
+              'com/hieptran/aacast/doudou' \
+              "$FILE"; then
 
               echo "Updating:"
               echo "  $FILE"
 
               sed -i \
-                "s|$OLD_PATH|$NEW_PATH|g" \
+                's|com\.hieptran\.aacast\.doudou|com.carassistant.v10|g' \
                 "$FILE"
 
               sed -i \
-                "s|$OLD_PACKAGE|$NEW_PACKAGE|g" \
+                's|com/hieptran/aacast/doudou|com/carassistant/v10|g' \
                 "$FILE"
             fi
 
           done
 
           echo
-          echo "Checking for remaining old workflow references..."
+          echo "Checking for remaining legacy workflow references..."
 
-          if grep -RInE \
-            'com/carassistant/v10|com\.hieptran\.aacast\.doudou' \
-            .github/workflows \
-            --include='*.yml' \
-            --include='*.yaml'; then
+          LEGACY_MATCHES="$(
+            grep -RInE \
+              'com\.hieptran\.aacast\.doudou|com/hieptran/aacast/doudou' \
+              .github/workflows \
+              --include='*.yml' \
+              --include='*.yaml' \
+              --exclude='cleanup-carassistant-v10-source-structure.yml' \
+              --exclude='verify-v10-clean-baseline.yml' \
+              || true
+          )"
 
-            echo "ERROR: Old package/path remains in workflow files."
+          if [ -n "$LEGACY_MATCHES" ]; then
+            echo "$LEGACY_MATCHES"
+            echo "ERROR: Legacy package/path remains in workflow files."
             exit 1
           fi
 
@@ -354,7 +369,7 @@ jobs:
 
 
       # ============================================================
-      # 9. VERIFY NO OLD PACKAGE / OLD JAVA SOURCE
+      # 9. VERIFY NO LEGACY PACKAGE
       # ============================================================
       - name: 9 - Verify no old package remains in V10 source
         shell: bash
@@ -362,17 +377,22 @@ jobs:
           set -euo pipefail
 
           echo "========================================"
-          echo "VERIFY NO OLD V10 PACKAGE REFERENCES"
+          echo "VERIFY NO LEGACY PACKAGE REFERENCES"
           echo "========================================"
 
-          if grep -RInE \
-            'com\.hieptran\.aacast\.doudou|com/carassistant/v10' \
-            v10-source \
-            --exclude-dir=.gradle \
-            --exclude-dir=build; then
+          MATCHES="$(
+            grep -RInE \
+              'com\.hieptran\.aacast\.doudou|com/hieptran/aacast/doudou' \
+              v10-source \
+              --exclude-dir=.gradle \
+              --exclude-dir=build \
+              || true
+          )"
 
+          if [ -n "$MATCHES" ]; then
+            echo "$MATCHES"
             echo
-            echo "ERROR: Old com.hieptran package/path still exists in v10-source."
+            echo "ERROR: Legacy package/path still exists in v10-source."
             exit 1
           fi
 
@@ -393,28 +413,19 @@ jobs:
               exit 1
             fi
 
-            echo "Old com/hieptran directory contains no Java source."
+            echo "Legacy Java directory contains no Java source."
 
-            rmdir \
-              "$OLD_JAVA_ROOT/aacast" \
-              2>/dev/null || true
-
-            rmdir \
-              "$OLD_JAVA_ROOT" \
-              2>/dev/null || true
+            find "$OLD_JAVA_ROOT" \
+              -type d \
+              -empty \
+              -delete 2>/dev/null || true
           fi
 
-          if [ -e "$OLD_JAVA_ROOT" ]; then
-            echo "INFO: Legacy parent directory remains but contains no Java source."
-          else
-            echo "PASS: Old Java parent directory removed."
-          fi
-
-          echo "PASS: no old Java source/package references remain."
+          echo "PASS: no legacy Java source/package references remain."
 
 
       # ============================================================
-      # 10. VERIFY NO V9 XPOSED_INIT
+      # 10. VERIFY XPOSED
       # ============================================================
       - name: 10 - Verify no V9 xposed_init reference
         shell: bash
@@ -440,19 +451,13 @@ jobs:
 
           test "$ACTUAL" = "$EXPECTED"
 
-          if grep -Fq \
-            'com.carassistant.v9' \
-            "$FILE"; then
-
+          if grep -Fq 'com.carassistant.v9' "$FILE"; then
             echo "ERROR: V9 Xposed reference remains."
             exit 1
           fi
 
-          if grep -Fq \
-            'com.hieptran' \
-            "$FILE"; then
-
-            echo "ERROR: Old package remains in xposed_init."
+          if grep -Fq 'com.hieptran' "$FILE"; then
+            echo "ERROR: Legacy package remains in xposed_init."
             exit 1
           fi
 
@@ -460,30 +465,30 @@ jobs:
 
 
       # ============================================================
-      # 11. VERIFY EXACTLY 32 JAVA FILES AFTER MOVE
+      # 11. VERIFY EXACTLY 32 JAVA FILES
       # ============================================================
       - name: 11 - Verify exactly 32 Java files after cleanup
         shell: bash
         run: |
           set -euo pipefail
 
-          NEW_ROOT="v10-source/app/src/main/java/com/carassistant/v10"
+          JAVA_ROOT="v10-source/app/src/main/java/com/carassistant/v10"
 
           echo "========================================"
-          echo "VERIFY JAVA FILE COUNT AFTER CLEANUP"
+          echo "VERIFY JAVA FILE COUNT"
           echo "========================================"
 
-          test -d "$NEW_ROOT"
+          test -d "$JAVA_ROOT"
 
           COUNT="$(
-            find "$NEW_ROOT" \
+            find "$JAVA_ROOT" \
               -type f \
               -name '*.java' \
               | wc -l \
               | tr -d ' '
           )"
 
-          echo "Java file count after cleanup: $COUNT"
+          echo "Java file count: $COUNT"
 
           if [ "$COUNT" != "32" ]; then
             echo "ERROR: Java file count changed."
@@ -493,9 +498,6 @@ jobs:
           fi
 
           echo "PASS: exactly 32 Java files remain."
-
-          echo
-          echo "Checking old Java source tree..."
 
           OLD_JAVA_FILES="$(
             find "v10-source/app/src/main/java/com/hieptran" \
@@ -671,15 +673,22 @@ jobs:
             exit 1
           fi
 
-          if grep -RInE \
-            'com\.hieptran\.aacast\.doudou|com/carassistant/v10' \
-            v10-source \
-            .github/workflows \
-            --exclude-dir=.gradle \
-            --exclude-dir=build; then
+          LEGACY_MATCHES="$(
+            grep -RInE \
+              'com\.hieptran\.aacast\.doudou|com/hieptran/aacast/doudou' \
+              v10-source \
+              .github/workflows \
+              --exclude-dir=.gradle \
+              --exclude-dir=build \
+              --exclude='cleanup-carassistant-v10-source-structure.yml' \
+              --exclude='verify-v10-clean-baseline.yml' \
+              || true
+          )"
 
+          if [ -n "$LEGACY_MATCHES" ]; then
+            echo "$LEGACY_MATCHES"
             echo
-            echo "ERROR: Old package/path remains after cleanup."
+            echo "ERROR: Legacy package/path remains after cleanup."
             exit 1
           fi
 
@@ -701,7 +710,7 @@ jobs:
           test "$FINAL_COUNT" = "32"
 
           echo "PASS: no old Java package."
-          echo "PASS: no old workflow path."
+          echo "PASS: no legacy workflow package."
           echo "PASS: no V9 xposed_init."
           echo "PASS: exactly 32 Java files."
           echo "PASS: cleanup safety check."
