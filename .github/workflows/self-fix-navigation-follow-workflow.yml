@@ -1,0 +1,514 @@
+name: Self Fix Navigation Follow Workflow
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  patch-workflow:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout main
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 1
+
+      - name: Patch only Section 9
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          SRC=".github/workflows/build-v10-carassistant-keyboard-follow-pass.yml"
+          DST=".github/workflows/build-v10-carassistant-keyboard-follow-pass-fixed.yml"
+
+          test -f "$SRC"
+
+          python3 <<'PY'
+          from pathlib import Path
+
+          src_path = Path(
+              ".github/workflows/build-v10-carassistant-keyboard-follow-pass.yml"
+          )
+
+          dst_path = Path(
+              ".github/workflows/build-v10-carassistant-keyboard-follow-pass-fixed.yml"
+          )
+
+          source = src_path.read_text()
+
+          START = "      # 9. NAVIGATION-ONLY PATCH"
+          END = "      # 10. VERIFY NAVIGATION PATCH"
+
+          start = source.find(START)
+          end = source.find(END)
+
+          if start < 0:
+              raise SystemExit(
+                  "FAIL: Section 9 start marker not found."
+              )
+
+          if end < 0:
+              raise SystemExit(
+                  "FAIL: Section 10 marker not found."
+              )
+
+          if end <= start:
+              raise SystemExit(
+                  "FAIL: Invalid Section 9/10 ordering."
+              )
+
+          new_section = r'''      # ============================================================
+      # 9. NAVIGATION-ONLY PATCH
+      #
+      # Structural patch against the REAL NavigationMapView.java.
+      # No full-file replacement.
+      # ============================================================
+
+      - name: Patch Navigation Follow and GPS Arrow
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          FILE="v10-source/app/src/main/java/com/carassistant/v10/NavigationMapView.java"
+
+          echo "========================================"
+          echo "NAVIGATION FOLLOW + GPS ARROW PATCH"
+          echo "========================================"
+
+          test -f "$FILE"
+
+          python3 <<'PY'
+          import re
+          from pathlib import Path
+
+          path = Path(
+              "v10-source/app/src/main/java/com/carassistant/v10/NavigationMapView.java"
+          )
+
+          source = path.read_text()
+
+          print("NavigationMapView baseline size:", len(source), "bytes")
+
+          # --------------------------------------------------------
+          # 9A. ADD RenderMode IMPORT
+          # --------------------------------------------------------
+
+          render_import = (
+              "import org.maplibre.android.location.modes.RenderMode;"
+          )
+
+          if render_import in source:
+              print("PASS: RenderMode import already present.")
+          else:
+              anchor = (
+                  "import org.maplibre.android.location.modes.CameraMode;"
+              )
+
+              if source.count(anchor) != 1:
+                  raise SystemExit(
+                      "FAIL: CameraMode import anchor must occur exactly once."
+                  )
+
+              source = source.replace(
+                  anchor,
+                  anchor + "\n" + render_import,
+                  1
+              )
+
+              print("PASS: RenderMode import added.")
+
+          # --------------------------------------------------------
+          # 9B. PATCH EXISTING RECENTER BUTTON
+          # --------------------------------------------------------
+
+          button_pattern = re.compile(
+              r'''(?P<block>
+                  addControlButton\(
+                  \s*controls\s*,\s*
+                  "(?P<label>[^"]+)"\s*,\s*
+                  "(?P<title>[^"]*)"\s*,\s*
+                  v\s*->\s*recenter\(\)
+                  \s*\)\s*;
+              )''',
+              re.VERBOSE
+          )
+
+          button_matches = list(
+              button_pattern.finditer(source)
+          )
+
+          if len(button_matches) == 1:
+
+              old = button_matches[0].group("block")
+
+              new = '''addControlButton(
+                      controls,
+                      "➤",
+                      "Follow current location and direction",
+                      v -> followCurrentLocation());'''
+
+              source = (
+                  source[:button_matches[0].start()]
+                  + new
+                  + source[button_matches[0].end():]
+              )
+
+              print(
+                  "PASS: Existing recenter button patched structurally."
+              )
+
+          elif len(button_matches) == 0:
+
+              if (
+                  '"➤"' in source
+                  and
+                  'v -> followCurrentLocation()' in source
+              ):
+                  print("PASS: Follow button already patched.")
+              else:
+                  raise SystemExit(
+                      "FAIL: Could not locate exactly one existing "
+                      "recenter button."
+                  )
+
+          else:
+              raise SystemExit(
+                  "FAIL: Found "
+                  + str(len(button_matches))
+                  + " recenter button blocks; expected exactly 1."
+              )
+
+          # --------------------------------------------------------
+          # 9C. ENABLE GPS RENDER MODE
+          # --------------------------------------------------------
+
+          enable_pattern = re.compile(
+              r'''map\.getLocationComponent\(\)
+                  \s*\.setLocationComponentEnabled\(true\)\s*;''',
+              re.VERBOSE
+          )
+
+          enable_matches = list(
+              enable_pattern.finditer(source)
+          )
+
+          if "setRenderMode(RenderMode.GPS);" in source:
+
+              print(
+                  "PASS: GPS render mode already present."
+              )
+
+          elif len(enable_matches) == 1:
+
+              replacement = '''map.getLocationComponent()
+                      .setLocationComponentEnabled(true);
+
+                  map.getLocationComponent()
+                      .setRenderMode(RenderMode.GPS);'''
+
+              source = (
+                  source[:enable_matches[0].start()]
+                  + replacement
+                  + source[enable_matches[0].end():]
+              )
+
+              print(
+                  "PASS: Location component switched to GPS render mode."
+              )
+
+          else:
+              raise SystemExit(
+                  "FAIL: Expected exactly one "
+                  "setLocationComponentEnabled(true) anchor; found "
+                  + str(len(enable_matches))
+                  + "."
+              )
+
+          # --------------------------------------------------------
+          # 9D. FIND recenter() WITH BRACE BALANCING
+          # --------------------------------------------------------
+
+          method_pattern = re.compile(
+              r'(?m)^\s*public\s+void\s+recenter\s*\(\s*\)\s*\{'
+          )
+
+          method_matches = list(
+              method_pattern.finditer(source)
+          )
+
+          follow_method = '''public void followCurrentLocation() {
+              if (map == null) {
+                  return;
+              }
+
+              try {
+                  Location location =
+                          map.getLocationComponent()
+                              .getLastKnownLocation();
+
+                  if (location == null) {
+                      startAutoFollow();
+                      return;
+                  }
+
+                  map.getLocationComponent()
+                      .forceLocationUpdate(location);
+
+                  map.getLocationComponent()
+                      .setRenderMode(RenderMode.GPS);
+
+                  map.animateCamera(
+                      CameraUpdateFactory.newLatLngZoom(
+                          new LatLng(
+                              location.getLatitude(),
+                              location.getLongitude()),
+                          AUTO_FOLLOW_ZOOM),
+                      300);
+
+                  map.getLocationComponent()
+                      .setCameraMode(
+                          CameraMode.TRACKING,
+                          500L,
+                          AUTO_FOLLOW_ZOOM,
+                          null,
+                          0.0,
+                          null);
+
+              } catch (Exception ignored) {
+              }
+          }
+
+          public void recenter() {
+              followCurrentLocation();
+          }'''
+
+          if len(method_matches) == 1:
+
+              start = method_matches[0].start()
+
+              brace_start = source.find(
+                  "{",
+                  method_matches[0].start(),
+                  method_matches[0].end() + 1
+              )
+
+              if brace_start < 0:
+                  raise SystemExit(
+                      "FAIL: recenter() opening brace not found."
+                  )
+
+              depth = 0
+              end = None
+
+              for i in range(brace_start, len(source)):
+
+                  ch = source[i]
+
+                  if ch == "{":
+                      depth += 1
+
+                  elif ch == "}":
+                      depth -= 1
+
+                      if depth == 0:
+                          end = i + 1
+                          break
+
+              if end is None:
+                  raise SystemExit(
+                      "FAIL: Could not find balanced end of recenter()."
+                  )
+
+              current = source[start:end]
+
+              if "getLastKnownLocation" not in current:
+                  raise SystemExit(
+                      "FAIL: recenter() body does not match "
+                      "the expected current Navigation baseline."
+                  )
+
+              leading = re.match(
+                  r"\s*",
+                  current
+              ).group(0)
+
+              replacement = "\n".join(
+                  leading + line if line else ""
+                  for line in follow_method.splitlines()
+              )
+
+              source = (
+                  source[:start]
+                  + replacement
+                  + source[end:]
+              )
+
+              print(
+                  "PASS: recenter() replaced with "
+                  "followCurrentLocation() wrapper."
+              )
+
+          elif len(method_matches) == 0:
+
+              if "public void followCurrentLocation()" in source:
+                  print(
+                      "PASS: followCurrentLocation() already present."
+                  )
+              else:
+                  raise SystemExit(
+                      "FAIL: recenter() method not found."
+                  )
+
+          else:
+              raise SystemExit(
+                  "FAIL: recenter() found "
+                  + str(len(method_matches))
+                  + " times; expected exactly 1."
+              )
+
+          # --------------------------------------------------------
+          # 9E. FINAL STRUCTURAL VERIFICATION
+          # --------------------------------------------------------
+
+          required = [
+              render_import,
+              "setRenderMode(RenderMode.GPS);",
+              'v -> followCurrentLocation()',
+              "public void followCurrentLocation()",
+              "forceLocationUpdate(location)",
+              "CameraUpdateFactory.newLatLngZoom(",
+              "location.getLatitude()",
+              "location.getLongitude()",
+              "CameraMode.TRACKING",
+              "public void recenter()",
+              "followCurrentLocation();",
+          ]
+
+          for item in required:
+
+              if item not in source:
+                  raise SystemExit(
+                      "FAIL: Final Navigation source check missing: "
+                      + item
+                  )
+
+          path.write_text(source)
+
+          print(
+              "PASS: NavigationMapView.java structurally patched."
+          )
+
+          print(
+              "Final NavigationMapView size:",
+              len(source),
+              "bytes"
+          )
+          PY
+
+          echo "PASS: Section 9 patch completed."
+
+      # ============================================================
+       '''
+
+          patched = (
+              source[:start]
+              + new_section
+              + source[end:]
+          )
+
+          dst_path.write_text(patched)
+
+          print("PASS: Created:")
+          print(dst_path)
+
+          print("PASS: Section 10 and all other workflow sections preserved.")
+          PY
+
+      - name: Verify only Section 9 changed
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          SRC=".github/workflows/build-v10-carassistant-keyboard-follow-pass.yml"
+          DST=".github/workflows/build-v10-carassistant-keyboard-follow-pass-fixed.yml"
+
+          test -f "$SRC"
+          test -f "$DST"
+
+          python3 <<'PY'
+          from pathlib import Path
+
+          src = Path(
+              ".github/workflows/build-v10-carassistant-keyboard-follow-pass.yml"
+          ).read_text()
+
+          dst = Path(
+              ".github/workflows/build-v10-carassistant-keyboard-follow-pass-fixed.yml"
+          ).read_text()
+
+          START = "      # 9. NAVIGATION-ONLY PATCH"
+          END = "      # 10. VERIFY NAVIGATION PATCH"
+
+          def outside_section(text):
+              a = text.find(START)
+              b = text.find(END)
+
+              if a < 0 or b < 0 or b <= a:
+                  raise SystemExit(
+                      "FAIL: Section boundaries invalid."
+                  )
+
+              return text[:a] + text[b:]
+
+          if outside_section(src) != outside_section(dst):
+              raise SystemExit(
+                  "FAIL: Content outside Section 9 changed."
+              )
+
+          print(
+              "PASS: Only Section 9 differs."
+          )
+          PY
+
+      - name: YAML syntax check
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          python3 - <<'PY'
+          import yaml
+
+          path = (
+              ".github/workflows/"
+              "build-v10-carassistant-keyboard-follow-pass-fixed.yml"
+          )
+
+          with open(path, "r", encoding="utf-8") as f:
+              yaml.safe_load(f)
+
+          print("PASS: Fixed workflow YAML syntax.")
+          PY
+
+      - name: Commit fixed workflow
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          git add \
+            .github/workflows/build-v10-carassistant-keyboard-follow-pass-fixed.yml
+
+          git diff --cached --check
+
+          git commit \
+            -m "fix: patch navigation follow workflow structurally"
+
+          git push origin main
+
+          echo "PASS: Fixed workflow committed to main."
