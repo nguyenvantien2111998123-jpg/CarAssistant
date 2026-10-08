@@ -16,8 +16,9 @@ jobs:
         with:
           ref: main
           fetch-depth: 0
+          persist-credentials: false
 
-      - name: Verify current main and cleanup commit
+      - name: Verify main and cleanup commit
         shell: bash
         run: |
           set -euo pipefail
@@ -25,46 +26,64 @@ jobs:
           CLEANUP_COMMIT="a5eaf450ab0d8b65dd4e16bfb25ccbfece620efd"
 
           echo "========================================"
-          echo "V10 CLEANUP COMMIT PUSH"
+          echo "V10 CLEANUP COMMIT VERIFICATION"
           echo "========================================"
 
-          echo "Current branch:"
-          git branch --show-current
+          MAIN_COMMIT="$(git rev-parse HEAD)"
 
-          echo
           echo "Current main:"
-          git rev-parse HEAD
+          echo "$MAIN_COMMIT"
 
           echo
           echo "Fetching cleanup commit..."
           git fetch origin "$CLEANUP_COMMIT"
 
+          CLEANUP_PARENT="$(
+            git show -s --format='%P' "$CLEANUP_COMMIT"
+          )"
+
+          CLEANUP_MESSAGE="$(
+            git show -s --format='%s' "$CLEANUP_COMMIT"
+          )"
+
           echo
           echo "Cleanup commit:"
-          git show --no-patch \
-            --format='commit=%H%nparent=%P%nmessage=%s' \
-            "$CLEANUP_COMMIT"
+          echo "$CLEANUP_COMMIT"
 
-          echo
-          echo "Checking cleanup commit..."
-          git show --no-patch \
-            --format='%s' \
-            "$CLEANUP_COMMIT" | \
-            grep -Fx "Normalize CarAssistant V10 source structure"
+          echo "Cleanup parent:"
+          echo "$CLEANUP_PARENT"
 
-          echo
-          echo "Checking working tree..."
-          git status --short
+          echo "Cleanup message:"
+          echo "$CLEANUP_MESSAGE"
 
-          if [ -n "$(git status --porcelain)" ]; then
-            echo "ERROR: Working tree is not clean."
+          if [ "$CLEANUP_MESSAGE" != "Normalize CarAssistant V10 source structure" ]; then
+            echo "ERROR: Cleanup commit message does not match."
             exit 1
           fi
 
           echo
-          echo "Verification PASS."
+          echo "Checking parent relationship..."
 
-      - name: Apply cleanup commit without changing V10 architecture
+          if [ "$CLEANUP_PARENT" != "$MAIN_COMMIT" ]; then
+            echo "ERROR: Cleanup commit parent is NOT current main."
+            echo
+            echo "Current main:"
+            echo "$MAIN_COMMIT"
+            echo
+            echo "Cleanup parent:"
+            echo "$CLEANUP_PARENT"
+            echo
+            echo "STOPPING SAFELY."
+            echo "No cherry-pick."
+            echo "No force-push."
+            echo "No architecture changes."
+            exit 1
+          fi
+
+          echo
+          echo "Parent relationship PASS."
+
+      - name: Verify cleanup diff
         shell: bash
         run: |
           set -euo pipefail
@@ -72,16 +91,44 @@ jobs:
           CLEANUP_COMMIT="a5eaf450ab0d8b65dd4e16bfb25ccbfece620efd"
 
           echo "========================================"
-          echo "APPLY CLEANUP COMMIT"
+          echo "VERIFY CLEANUP DIFF"
           echo "========================================"
 
-          if git merge-base --is-ancestor "$CLEANUP_COMMIT" HEAD; then
-            echo "Cleanup commit is already contained in main."
-            echo "Nothing to push."
-            exit 0
-          fi
+          echo "Changed files in cleanup commit:"
+          git diff-tree --no-commit-id \
+            --name-status \
+            -r \
+            "$CLEANUP_COMMIT"
 
-          echo "Applying the exact cleanup diff with cherry-pick..."
+          echo
+          echo "Checking Java rename count..."
+
+          JAVA_RENAMES="$(
+            git diff-tree --no-commit-id \
+              --name-status \
+              -r \
+              "$CLEANUP_COMMIT" |
+              grep -c \
+                'v10-source/app/src/main/java/com/hieptran/aacast/doudou/'
+              || true
+          )"
+
+          echo "Old Java path entries:"
+          echo "$JAVA_RENAMES"
+
+          echo
+          echo "Cleanup diff verification PASS."
+
+      - name: Apply exact cleanup commit
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          CLEANUP_COMMIT="a5eaf450ab0d8b65dd4e16bfb25ccbfece620efd"
+
+          echo "========================================"
+          echo "APPLY EXACT CLEANUP COMMIT"
+          echo "========================================"
 
           git -c user.name="github-actions[bot]" \
               -c user.email="41898282+github-actions[bot]@users.noreply.github.com" \
@@ -95,18 +142,13 @@ jobs:
           git log -1 --oneline
 
           echo
-          echo "Changed files:"
-          git diff --name-status HEAD^ HEAD
-
-          echo
           echo "Diff check:"
           git diff --check HEAD^ HEAD
 
       - name: Push main using CARASSISTANT_PAT
-        if: success()
+        shell: bash
         env:
           CARASSISTANT_PAT: ${{ secrets.CARASSISTANT_PAT }}
-        shell: bash
         run: |
           set -euo pipefail
 
@@ -116,13 +158,16 @@ jobs:
           fi
 
           echo "========================================"
-          echo "PUSH TO MAIN"
+          echo "PUSH TO MAIN USING PAT"
           echo "========================================"
 
-          git push \
+          git -c http.extraheader="" \
+            push \
             "https://x-access-token:${CARASSISTANT_PAT}@github.com/nguyenvantien2111998123-jpg/CarAssistant.git" \
             HEAD:main
 
           echo
-          echo "PUSH PASS."
-          echo "V10 cleanup commit is now on main."
+          echo "========================================"
+          echo "PUSH PASS"
+          echo "========================================"
+          echo "Cleanup commit is now on main."
