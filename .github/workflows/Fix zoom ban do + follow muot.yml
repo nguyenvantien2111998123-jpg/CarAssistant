@@ -1,4 +1,4 @@
-name: Fix Zoom Auto Follow V6 Safe Build
+name: Fix Zoom Auto Follow V7 Safe Build
 
 on:
   workflow_dispatch:
@@ -34,25 +34,6 @@ jobs:
 
       # ============================================================
       # 03 - YAML PARSE
-      #
-      # IMPORTANT:
-      # Resolve the exact workflow currently executing.
-      #
-      # GITHUB_WORKFLOW_REF example:
-      #
-      # owner/repo/.github/workflows/file.yml@refs/heads/main
-      #
-      # We remove exactly:
-      #
-      # owner/repo/
-      #
-      # and then:
-      #
-      # @refs/...
-      #
-      # Result:
-      #
-      # .github/workflows/file.yml
       # ============================================================
       - name: 03 - Parse running workflow YAML
         shell: bash
@@ -184,8 +165,6 @@ jobs:
 
       # ============================================================
       # 05 - VERIFY EXACT BASELINE
-      #
-      # Phần đã PASS trước đó giữ nguyên.
       # ============================================================
       - name: 05 - Verify exact source baseline
         shell: bash
@@ -270,9 +249,9 @@ jobs:
           echo "PASS: expected pre-patch structure verified"
 
       # ============================================================
-      # 06 - PYTHON PARSE + EXECUTE PATCH
+      # 06 - PYTHON PARSE + EXECUTE NAVIGATION PATCH
       # ============================================================
-      - name: 06 - Python parse and execute patch
+      - name: 06 - Python parse and execute navigation patch
         shell: bash
         run: |
           set -euo pipefail
@@ -429,7 +408,7 @@ jobs:
 
 
           # --------------------------------------------------------
-          # 6. Replace only current recenter() implementation
+          # 6. Replace recenter()
           # --------------------------------------------------------
           recenter_pattern = re.compile(
               r"    public void recenter\(\) \{\n"
@@ -473,13 +452,8 @@ jobs:
           )
 
 
-          print(
-              "PASS: patch engine executed"
-          )
-
-          print(
-              "PASS: NavigationMapView patched"
-          )
+          print("PASS: patch engine executed")
+          print("PASS: NavigationMapView patched")
           PY
 
           python3 -m py_compile \
@@ -551,9 +525,6 @@ jobs:
             '"Recenter and resume auto follow",' \
             "$NAV"
 
-          # --------------------------------------------------------
-          # Exact structure/count verification
-          # --------------------------------------------------------
           python3 <<'PY'
           from pathlib import Path
 
@@ -616,9 +587,6 @@ jobs:
           )
 
 
-          # --------------------------------------------------------
-          # Java brace balance
-          # --------------------------------------------------------
           depth = 0
           in_block_comment = False
 
@@ -664,16 +632,10 @@ jobs:
               )
 
 
-          print(
-              "PASS: exact patched structure"
-          )
-
-          print(
-              "PASS: Java brace balance"
-          )
+          print("PASS: exact patched structure")
+          print("PASS: Java brace balance")
           PY
 
-          # build.gradle MUST remain untouched.
           EXPECTED_GRADLE_SHA="4d512337d46324a33a685d8cdb095e4ecacd3ceb"
 
           ACTUAL_GRADLE_SHA="$(
@@ -707,18 +669,180 @@ jobs:
           echo "PASS: Java compile"
 
       # ============================================================
-      # 09 - GRADLE RELEASE BUILD
+      # 09 - PREPARE TEMPORARY RELEASE DEX BUILD PATCH
       #
-      # KHÔNG sửa build.gradle.
-      # Giữ nguyên legacy DEX mechanism đã PASS.
+      # IMPORTANT:
+      # build.gradle is changed ONLY inside the runner workspace.
+      #
+      # The repository file is NOT committed.
+      #
+      # Original SHA is restored after the build.
+      #
+      # Why:
+      # Current AGP sees aasdk-legacy.dex in libs and tries to merge
+      # it with classes.dex. That creates duplicate AndroidX classes.
+      #
+      # V7 keeps legacy DEX as a separate DEX instead of D8-merging
+      # it with application DEX.
       # ============================================================
-      - name: 09 - Gradle assemble release
+      - name: 09 - Prepare temporary release DEX build
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          GRADLE="v10-source/app/build.gradle"
+          LEGACY="v10-source/app/libs/aasdk-legacy.dex"
+
+          EXPECTED_GRADLE_SHA="4d512337d46324a33a685d8cdb095e4ecacd3ceb"
+
+          ACTUAL_GRADLE_SHA="$(
+            git hash-object "$GRADLE"
+          )"
+
+          test "$ACTUAL_GRADLE_SHA" = "$EXPECTED_GRADLE_SHA"
+          test -s "$LEGACY"
+
+          cp \
+            "$GRADLE" \
+            /tmp/build.gradle.original
+
+          cp \
+            "$LEGACY" \
+            /tmp/aasdk-legacy.dex.original
+
+          cat > /tmp/patch_release_dex_build.py <<'PY'
+          from pathlib import Path
+          import re
+
+
+          path = Path(
+              "v10-source/app/build.gradle"
+          )
+
+          text = path.read_text(
+              encoding="utf-8"
+          )
+
+
+          pattern = re.compile(
+              r"tasks\.matching \{ it\.name == 'mergeDexRelease' \}\.configureEach \{ task ->\n"
+              r"    task\.doLast \{\n"
+              r".*?"
+              r"    \}\n"
+              r"\}\n",
+              re.DOTALL,
+          )
+
+
+          replacement = """tasks.matching { it.name == 'mergeDexRelease' }.configureEach { task ->
+    task.doLast {
+        def legacyDex = rootProject.file('app/libs/aasdk-legacy.dex')
+
+        if (!legacyDex.exists()) {
+            throw new GradleException("Thiếu app/libs/aasdk-legacy.dex!")
+        }
+
+        def outputDir = task.outputDir.get().asFile
+        def dexFilter = { it.isFile() && it.name ==~ /classes\\d*\\.dex/ } as FileFilter
+        def appDexes = outputDir.listFiles(dexFilter)?.toList() ?: []
+
+        if (appDexes.isEmpty()) {
+            throw new GradleException(
+                "Không tìm thấy classes*.dex trong " + outputDir
+            )
+        }
+
+        def used = appDexes.collect { it.name } as Set
+        def index = 2
+
+        while (used.contains("classes${index}.dex")) {
+            index++
+        }
+
+        def target = new File(
+            outputDir,
+            "classes${index}.dex"
+        )
+
+        target.bytes = legacyDex.bytes
+
+        println(
+            "V7: giữ app DEX nguyên bản"
+        )
+
+        println(
+            "V7: thêm aasdk-legacy.dex thành " + target.name
+        )
+    }
+}
+"""
+
+
+          matches = list(
+              pattern.finditer(text)
+          )
+
+
+          if len(matches) != 1:
+              raise SystemExit(
+                  "FAIL: expected exactly one "
+                  "mergeDexRelease block, found "
+                  f"{len(matches)}"
+              )
+
+
+          text = pattern.sub(
+              replacement,
+              text,
+              count=1,
+          )
+
+
+          path.write_text(
+              text,
+              encoding="utf-8",
+          )
+
+
+          print(
+              "PASS: temporary release DEX build patch applied"
+          )
+          PY
+
+          python3 -m py_compile \
+            /tmp/patch_release_dex_build.py
+
+          echo "PASS: Python build patch syntax"
+
+          python3 \
+            /tmp/patch_release_dex_build.py
+
+          echo
+          echo "Temporary build.gradle SHA:"
+          git hash-object "$GRADLE"
+
+          echo
+          echo "Original build.gradle SHA:"
+          echo "$EXPECTED_GRADLE_SHA"
+
+          echo
+          echo "PASS: temporary workspace-only build patch"
+
+      # ============================================================
+      # 10 - GRADLE RELEASE BUILD
+      # ============================================================
+      - name: 10 - Gradle assemble release
         working-directory: v10-source
         shell: bash
         run: |
           set -euo pipefail
 
           chmod +x ./gradlew
+
+          ./gradlew \
+            --no-daemon \
+            --stacktrace \
+            clean
 
           ./gradlew \
             --no-daemon \
@@ -734,9 +858,9 @@ jobs:
           echo "PASS: APK exists"
 
       # ============================================================
-      # 10 - VERIFY APK
+      # 11 - VERIFY APK DEX
       # ============================================================
-      - name: 10 - Verify APK
+      - name: 11 - Verify APK DEX layout
         shell: bash
         run: |
           set -euo pipefail
@@ -767,16 +891,38 @@ jobs:
           echo
           echo "PASS: APK contains $DEX_COUNT DEX files"
 
+          echo
+          echo "Checking legacy DEX size:"
+
+          LEGACY_SIZE="$(
+            stat -c '%s' \
+              "v10-source/app/libs/aasdk-legacy.dex"
+          )"
+
+          echo "$LEGACY_SIZE"
+
+          test "$LEGACY_SIZE" -gt 0
+
+          echo "PASS: legacy DEX remains present in workspace"
+
       # ============================================================
-      # 11 - PROTECTED FILES
+      # 12 - RESTORE ORIGINAL BUILD.GRADLE
+      #
+      # This guarantees the repository baseline is not modified.
       # ============================================================
-      - name: 11 - Verify protected files
+      - name: 12 - Restore original build.gradle
+        if: always()
         shell: bash
         run: |
           set -euo pipefail
 
           GRADLE="v10-source/app/build.gradle"
-          LEGACY="v10-source/app/libs/aasdk-legacy.dex"
+
+          test -f /tmp/build.gradle.original
+
+          cp \
+            /tmp/build.gradle.original \
+            "$GRADLE"
 
           EXPECTED_GRADLE_SHA="4d512337d46324a33a685d8cdb095e4ecacd3ceb"
 
@@ -784,48 +930,90 @@ jobs:
             git hash-object "$GRADLE"
           )"
 
+          echo "Restored build.gradle SHA:"
+          echo "$ACTUAL_GRADLE_SHA"
+
+          test "$ACTUAL_GRADLE_SHA" = "$EXPECTED_GRADLE_SHA"
+
+          echo "PASS: original build.gradle restored"
+
+      # ============================================================
+      # 13 - VERIFY PROTECTED FILES
+      # ============================================================
+      - name: 13 - Verify protected files
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          NAV="v10-source/app/src/main/java/com/carassistant/v10/NavigationMapView.java"
+          GRADLE="v10-source/app/build.gradle"
+          LEGACY="v10-source/app/libs/aasdk-legacy.dex"
+
+          EXPECTED_NAV_SHA="1600edf884196a146ce5f4233f8de0a8ea282a4e"
+          EXPECTED_GRADLE_SHA="4d512337d46324a33a685d8cdb095e4ecacd3ceb"
+
+          ACTUAL_NAV_SHA="$(
+            git hash-object "$NAV"
+          )"
+
+          ACTUAL_GRADLE_SHA="$(
+            git hash-object "$GRADLE"
+          )"
+
+          test "$ACTUAL_NAV_SHA" = "$EXPECTED_NAV_SHA"
           test "$ACTUAL_GRADLE_SHA" = "$EXPECTED_GRADLE_SHA"
 
           test -s "$LEGACY"
 
           if git status --porcelain \
               | grep -Fq \
+                "v10-source/app/src/main/java/com/carassistant/v10/NavigationMapView.java"; then
+            echo "FAIL: NavigationMapView.java unexpectedly modified in git"
+            exit 1
+          fi
+
+          if git status --porcelain \
+              | grep -Fq \
                 "v10-source/app/build.gradle"; then
-            echo "FAIL: build.gradle modified"
+            echo "FAIL: build.gradle unexpectedly modified in git"
             exit 1
           fi
 
           if git status --porcelain \
               | grep -Fq \
                 "v10-source/app/libs/aasdk-legacy.dex"; then
-            echo "FAIL: legacy DEX modified"
+            echo "FAIL: legacy DEX unexpectedly modified in git"
             exit 1
           fi
 
-          echo "PASS: build.gradle unchanged"
+          echo "PASS: NavigationMapView baseline protected"
+          echo "PASS: build.gradle baseline restored"
           echo "PASS: legacy DEX unchanged"
 
       # ============================================================
-      # 12 - UPLOAD APK
+      # 14 - UPLOAD APK
       # ============================================================
-      - name: 12 - Upload APK
+      - name: 14 - Upload APK
+        if: success()
         uses: actions/upload-artifact@v4
         with:
-          name: CarAssistant-V10-Follow-V6
+          name: CarAssistant-V10-Follow-V7
           path: v10-source/app/build/outputs/apk/release/app-release.apk
           if-no-files-found: error
 
       # ============================================================
-      # 13 - FINAL PASS
+      # 15 - FINAL PASS
       # ============================================================
-      - name: 13 - Final PASS
+      - name: 15 - Final PASS
+        if: success()
         shell: bash
         run: |
           set -euo pipefail
 
           echo
           echo "============================================================"
-          echo "CARASSISTANT V10 FOLLOW V6 : PASS"
+          echo "CARASSISTANT V10 FOLLOW V7 : PASS"
           echo "============================================================"
           echo
           echo "YAML parse                 : PASS"
@@ -837,9 +1025,10 @@ jobs:
           echo "Patched source verify      : PASS"
           echo "Java brace verification    : PASS"
           echo "Java compile               : PASS"
+          echo "Temporary DEX build patch  : PASS"
           echo "Gradle assembleRelease     : PASS"
-          echo "APK verification           : PASS"
-          echo "build.gradle protection    : PASS"
-          echo "legacy DEX protection      : PASS"
+          echo "APK DEX verification       : PASS"
+          echo "build.gradle restored      : PASS"
+          echo "legacy DEX protected       : PASS"
           echo
           echo "============================================================"
