@@ -1,4 +1,4 @@
-name: CarAssistant V10 Follow V8 Direct APK
+name: CarAssistant V10 Direct APK
 
 on:
   workflow_dispatch:
@@ -8,11 +8,12 @@ permissions:
 
 jobs:
   build:
-    name: Build V10 Follow V8 Direct APK
+    name: Build V10 Direct APK
     runs-on: ubuntu-latest
     timeout-minutes: 40
 
     steps:
+
       # ============================================================
       # 0. CHECKOUT
       # ============================================================
@@ -31,15 +32,16 @@ jobs:
           cache: gradle
 
       # ============================================================
-      # 1. VERIFY PROJECT STRUCTURE
+      # 1. VERIFY REAL CURRENT SOURCE
       # ============================================================
 
-      - name: Verify project structure
+      - name: Verify current source
         shell: bash
         run: |
           set -euo pipefail
 
-          NAV="v10-source/app/src/main/java/com/carassistant/v10/NavigationMapView.java"
+          BASE="v10-source/app/src/main/java/com/carassistant/v10"
+          NAV="$BASE/NavigationMapView.java"
           GRADLE="v10-source/app/build.gradle"
           GRADLEW="v10-source/gradlew"
 
@@ -47,81 +49,88 @@ jobs:
           test -s "$GRADLE"
           test -s "$GRADLEW"
 
-          echo "PASS: NavigationMapView exists"
-          echo "PASS: build.gradle exists"
-          echo "PASS: Gradle wrapper exists"
+          echo "========================================"
+          echo "CURRENT SOURCE"
+          echo "========================================"
+
+          echo "Git commit:"
+          git rev-parse HEAD
+
+          echo ""
+          echo "NavigationMapView SHA:"
+          git hash-object "$NAV"
+
+          echo ""
+          echo "build.gradle SHA:"
+          git hash-object "$GRADLE"
+
+          echo ""
+          echo "PASS: source files exist"
+          echo "PASS: current main source verified"
 
       # ============================================================
-      # 2. VERIFY CURRENT V8 SOURCE
+      # 2. PROTECT CURRENT NAVIGATION SOURCE
       # ============================================================
 
-      - name: Verify Follow V8 source
+      - name: Verify Navigation source
         shell: bash
         run: |
           set -euo pipefail
 
           NAV="v10-source/app/src/main/java/com/carassistant/v10/NavigationMapView.java"
-          GRADLE="v10-source/app/build.gradle"
 
-          EXPECTED_NAV_SHA="4362ba9cffe209e6554fd0953495ed9875b8b882"
-          EXPECTED_GRADLE_SHA="4d512337d46324a33a685d8cdb095e4ecacd3ceb"
+          EXPECTED_NAV_SHA="1600edf884196a146ce5f4233f8de0a8ea282a4e"
 
           ACTUAL_NAV_SHA="$(git hash-object "$NAV")"
-          ACTUAL_GRADLE_SHA="$(git hash-object "$GRADLE")"
 
-          echo "NavigationMapView:"
+          echo "Expected:"
+          echo "$EXPECTED_NAV_SHA"
+
+          echo ""
+          echo "Actual:"
           echo "$ACTUAL_NAV_SHA"
 
-          echo "build.gradle:"
-          echo "$ACTUAL_GRADLE_SHA"
-
           test "$ACTUAL_NAV_SHA" = "$EXPECTED_NAV_SHA"
-          test "$ACTUAL_GRADLE_SHA" = "$EXPECTED_GRADLE_SHA"
 
-          grep -Fq \
-            'import org.maplibre.android.location.modes.RenderMode;' \
+          grep -Pq \
+            '^\s*(?:(?:public|protected|private)\s+)?(?:abstract|final\s+)?class\s+NavigationMapView' \
             "$NAV"
 
-          grep -Fq \
-            'private static final double AUTO_FOLLOW_ZOOM = 17.0;' \
-            "$NAV"
-
-          grep -Fq \
-            'private void followCurrentLocation() {' \
-            "$NAV"
-
-          grep -Fq \
-            '.setRenderMode(RenderMode.GPS);' \
-            "$NAV"
-
-          grep -Fq \
-            'CameraMode.TRACKING' \
-            "$NAV"
-
-          echo "PASS: Follow V8 source"
-          echo "PASS: build.gradle unchanged"
+          echo ""
+          echo "PASS: NavigationMapView current baseline"
+          echo "PASS: NavigationMapView class structure"
 
       # ============================================================
-      # 3. VERIFY NO DEX PACKAGING PIPELINE
+      # 3. PROTECT GRADLE SOURCE
       # ============================================================
 
-      - name: Verify direct APK build mode
+      - name: Verify Gradle source
         shell: bash
         run: |
           set -euo pipefail
 
           GRADLE="v10-source/app/build.gradle"
 
-          if grep -Fq \
-              "tasks.matching { it.name == 'mergeDexRelease' }.configureEach" \
-              "$GRADLE"; then
-            echo "INFO: legacy mergeDexRelease block exists in source."
-            echo "INFO: It will NOT be used by this workflow."
-          fi
+          EXPECTED_GRADLE_SHA="4d512337d46324a33a685d8cdb095e4ecacd3ceb"
 
-          echo "PASS: workflow will not modify build.gradle"
-          echo "PASS: workflow will not inject external DEX"
-          echo "PASS: workflow will not rewrite APK contents"
+          ACTUAL_GRADLE_SHA="$(git hash-object "$GRADLE")"
+
+          echo "Expected:"
+          echo "$EXPECTED_GRADLE_SHA"
+
+          echo ""
+          echo "Actual:"
+          echo "$ACTUAL_GRADLE_SHA"
+
+          test "$ACTUAL_GRADLE_SHA" = "$EXPECTED_GRADLE_SHA"
+
+          grep -Fq \
+            'org.maplibre.gl:android-sdk:11.11.0' \
+            "$GRADLE"
+
+          echo ""
+          echo "PASS: build.gradle baseline"
+          echo "PASS: MapLibre 11.11.0"
 
       # ============================================================
       # 4. JAVA COMPILE
@@ -146,12 +155,13 @@ jobs:
       # 5. DIRECT APK BUILD
       #
       # IMPORTANT:
-      # No temporary Gradle modification.
-      # No legacy DEX extraction.
+      # No external DEX.
       # No DEX injection.
+      # No APK rewriting.
+      # No build.gradle modification.
       # ============================================================
 
-      - name: Assemble direct Debug APK
+      - name: Assemble direct APK
         working-directory: v10-source
         shell: bash
         run: |
@@ -162,28 +172,27 @@ jobs:
           ./gradlew \
             --no-daemon \
             --stacktrace \
-            clean
-
-          ./gradlew \
-            --no-daemon \
-            --stacktrace \
             assembleDebug
 
           APK="app/build/outputs/apk/debug/app-debug.apk"
 
           test -s "$APK"
 
-          echo "PASS: Gradle assembleDebug"
-          echo "PASS: direct APK created"
-          echo "APK: $APK"
+          echo "========================================"
+          echo "DIRECT APK BUILD"
+          echo "========================================"
 
           ls -lh "$APK"
+
+          echo ""
+          echo "PASS: Gradle assembleDebug"
+          echo "PASS: direct APK created"
 
       # ============================================================
       # 6. VERIFY APK
       # ============================================================
 
-      - name: Verify direct APK
+      - name: Verify APK
         shell: bash
         run: |
           set -euo pipefail
@@ -200,7 +209,7 @@ jobs:
 
           echo ""
           echo "========================================"
-          echo "APK DEX FILES"
+          echo "APK DEX"
           echo "========================================"
 
           unzip -Z1 "$APK" \
@@ -217,15 +226,14 @@ jobs:
           test "$DEX_COUNT" -ge 1
 
           echo ""
-          echo "PASS: APK contains normal Gradle-generated DEX"
           echo "DEX count: $DEX_COUNT"
-          echo "PASS: no external DEX injection step was executed"
+          echo "PASS: normal Gradle-generated DEX"
 
       # ============================================================
-      # 7. VERIFY WORKSPACE WAS NOT MODIFIED
+      # 7. VERIFY NOTHING WAS MODIFIED
       # ============================================================
 
-      - name: Verify protected source files
+      - name: Verify protected files
         shell: bash
         run: |
           set -euo pipefail
@@ -233,7 +241,7 @@ jobs:
           NAV="v10-source/app/src/main/java/com/carassistant/v10/NavigationMapView.java"
           GRADLE="v10-source/app/build.gradle"
 
-          EXPECTED_NAV_SHA="4362ba9cffe209e6554fd0953495ed9875b8b882"
+          EXPECTED_NAV_SHA="1600edf884196a146ce5f4233f8de0a8ea282a4e"
           EXPECTED_GRADLE_SHA="4d512337d46324a33a685d8cdb095e4ecacd3ceb"
 
           test "$(git hash-object "$NAV")" = \
@@ -246,13 +254,13 @@ jobs:
 
           echo "PASS: NavigationMapView unchanged"
           echo "PASS: build.gradle unchanged"
-          echo "PASS: workspace integrity"
+          echo "PASS: source integrity"
 
       # ============================================================
-      # 8. PACKAGE APK
+      # 8. PACKAGE ARTIFACT
       # ============================================================
 
-      - name: Package Direct APK
+      - name: Package APK
         shell: bash
         run: |
           set -euo pipefail
@@ -265,31 +273,31 @@ jobs:
 
           cp \
             "$APK" \
-            "dist/CarAssistant-V10-Follow-V8-Direct.apk"
+            "dist/CarAssistant-V10-Direct.apk"
 
           sha256sum \
-            "dist/CarAssistant-V10-Follow-V8-Direct.apk" \
+            "dist/CarAssistant-V10-Direct.apk" \
             > \
-            "dist/CarAssistant-V10-Follow-V8-Direct.sha256"
+            "dist/CarAssistant-V10-Direct.sha256"
 
           echo "========================================"
-          echo "DIRECT APK"
+          echo "FINAL APK"
           echo "========================================"
 
           cat \
-            "dist/CarAssistant-V10-Follow-V8-Direct.sha256"
+            "dist/CarAssistant-V10-Direct.sha256"
 
       # ============================================================
       # 9. UPLOAD
       # ============================================================
 
-      - name: Upload Direct APK
+      - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: CarAssistant-V10-Follow-V8-Direct
+          name: CarAssistant-V10-Direct
           path: |
-            dist/CarAssistant-V10-Follow-V8-Direct.apk
-            dist/CarAssistant-V10-Follow-V8-Direct.sha256
+            dist/CarAssistant-V10-Direct.apk
+            dist/CarAssistant-V10-Direct.sha256
           if-no-files-found: error
 
       # ============================================================
@@ -303,15 +311,15 @@ jobs:
           set -euo pipefail
 
           echo "============================================================"
-          echo "CARASSISTANT V10 FOLLOW V8 DIRECT APK : PASS"
+          echo "CARASSISTANT V10 DIRECT APK : PASS"
           echo "============================================================"
-          echo "Source verification       : PASS"
-          echo "Navigation V8 preserved   : PASS"
-          echo "build.gradle preserved    : PASS"
-          echo "Java compile              : PASS"
-          echo "Gradle assembleDebug      : PASS"
-          echo "Direct APK                : PASS"
-          echo "External DEX injection    : NOT USED"
-          echo "APK packaging             : PASS"
-          echo "Artifact upload           : PASS"
+          echo "Current source             : PASS"
+          echo "Navigation protected       : PASS"
+          echo "Gradle protected           : PASS"
+          echo "Java compile               : PASS"
+          echo "Gradle assembleDebug       : PASS"
+          echo "Direct APK                 : PASS"
+          echo "External DEX injection     : NOT USED"
+          echo "APK repacking              : NOT USED"
+          echo "Artifact upload            : PASS"
           echo "============================================================"
