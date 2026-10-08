@@ -13,6 +13,10 @@ jobs:
 
     steps:
 
+      # ============================================================
+      # 0. CHECKOUT
+      # ============================================================
+
       - name: Checkout main
         uses: actions/checkout@v4
         with:
@@ -26,47 +30,384 @@ jobs:
           java-version: '17'
 
       # ============================================================
-      # 1. VERIFY MAIN SOURCE
+      # 1. DIAGNOSTIC VERIFY REAL MAIN SOURCE
+      #
+      # IMPORTANT:
+      # Do NOT fail immediately on first grep.
+      # Print every PASS/FAIL and show actual source around failures.
       # ============================================================
 
-      - name: Verify main source anchors
+      - name: Diagnostic verify main source anchors
         shell: bash
         run: |
-          set -euo pipefail
+          set -uo pipefail
 
           BASE="v10-source/app/src/main/java/com/carassistant/v10"
 
-          test -f "$BASE/V10CarActivity.java"
-          test -f "$BASE/V10ProjectionSession.java"
-          test -f "$BASE/RootShellSession.java"
-          test -f "$BASE/NavigationMapView.java"
+          echo "========================================"
+          echo "CarAssistant Keyboard PASS"
+          echo "DIAGNOSTIC SOURCE VERIFICATION"
+          echo "========================================"
 
-          grep -Pq '^\s*(?:(?:public|protected|private)\s+)?V10ProjectionSession\s+session;' "$BASE/V10CarActivity.java"
-          grep -Pq 'session\.attachTextureView\(' "$BASE/V10CarActivity.java"
-          grep -Pq 'createFloatingTouchKey\(\);' "$BASE/V10CarActivity.java"
+          echo ""
+          echo "Git commit:"
+          git rev-parse HEAD
 
-          grep -Pq '^\s*(?:(?:public|protected|private)\s+)?void\s+launchProjection\(' "$BASE/V10CarActivity.java"
+          echo ""
+          echo "Git branch:"
+          git branch --show-current
 
-          grep -Pq '^\s*(?:(?:public|protected|private)\s+)?void\s+returnToLauncher\(\)' "$BASE/V10CarActivity.java"
+          echo ""
+          echo "========================================"
+          echo "FILE EXISTENCE"
+          echo "========================================"
 
-          grep -Pq '^\s*@Override\s+(?:(?:public|protected|private)\s+)?void\s+onPause\(\)' "$BASE/V10CarActivity.java"
+          FAILURES=0
 
-          grep -Pq '^\s*@Override\s+(?:(?:public|protected|private)\s+)?void\s+onStop\(\)' "$BASE/V10CarActivity.java"
+          check_file() {
+            local file="$1"
 
-          grep -Pq '^\s*@Override\s+(?:(?:public|protected|private)\s+)?void\s+onDestroy\(\)' "$BASE/V10CarActivity.java"
+            if [ -f "$file" ]; then
+              echo "PASS: file exists: $file"
+            else
+              echo "FAIL: missing file: $file"
+              FAILURES=$((FAILURES + 1))
+            fi
+          }
 
-          grep -Pq '^\s*(?:(?:public|protected|private)\s+)?(?:final\s+)?int\s+getDisplayId\(\)' "$BASE/V10ProjectionSession.java"
+          check_file "$BASE/V10CarActivity.java"
+          check_file "$BASE/V10ProjectionSession.java"
+          check_file "$BASE/RootShellSession.java"
+          check_file "$BASE/NavigationMapView.java"
 
-          grep -Pq '^\s*(?:(?:public|protected|private)\s+)?(?:final\s+)?boolean\s+isActive\(\)' "$BASE/V10ProjectionSession.java"
+          if [ "$FAILURES" -ne 0 ]; then
+            echo ""
+            echo "========================================"
+            echo "FILE CHECK FAILED"
+            echo "FAILURES: $FAILURES"
+            echo "========================================"
+            exit 1
+          fi
 
-          grep -Pq '^\s*(?:(?:public|protected|private)\s+)?(?:abstract|final\s+)?class\s+RootShellSession' "$BASE/RootShellSession.java"
+          echo ""
+          echo "========================================"
+          echo "V10CarActivity.java DIAGNOSTIC"
+          echo "========================================"
 
-          grep -Pq '^\s*(?:(?:public|protected|private)\s+)?(?:abstract|final\s+)?class\s+NavigationMapView' "$BASE/NavigationMapView.java"
+          python3 <<'PY'
+          import re
+          import sys
+          from pathlib import Path
 
-          echo "PASS: Main source anchors verified."
+          path = Path(
+              "v10-source/app/src/main/java/com/carassistant/v10/V10CarActivity.java"
+          )
+
+          source = path.read_text()
+
+          checks = [
+              (
+                  "session field",
+                  r'^\s*(?:(?:public|protected|private)\s+)?V10ProjectionSession\s+session;',
+                  "session"
+              ),
+              (
+                  "session.attachTextureView",
+                  r'session\.attachTextureView\s*\(',
+                  "attachTextureView"
+              ),
+              (
+                  "createFloatingTouchKey",
+                  r'createFloatingTouchKey\s*\(\s*\)\s*;',
+                  "createFloatingTouchKey"
+              ),
+              (
+                  "launchProjection method",
+                  r'^\s*(?:(?:public|protected|private)\s+)?void\s+launchProjection\s*\([^)]*\)\s*\{',
+                  "launchProjection"
+              ),
+              (
+                  "returnToLauncher method",
+                  r'^\s*(?:(?:public|protected|private)\s+)?void\s+returnToLauncher\s*\([^)]*\)\s*\{',
+                  "returnToLauncher"
+              ),
+              (
+                  "showApps method",
+                  r'^\s*(?:(?:public|protected|private)\s+)?void\s+showApps\s*\([^)]*\)\s*\{',
+                  "showApps"
+              ),
+              (
+                  "onPause method",
+                  r'^\s*@Override\s+(?:(?:public|protected|private)\s+)?void\s+onPause\s*\([^)]*\)\s*\{',
+                  "onPause"
+              ),
+              (
+                  "onStop method",
+                  r'^\s*@Override\s+(?:(?:public|protected|private)\s+)?void\s+onStop\s*\([^)]*\)\s*\{',
+                  "onStop"
+              ),
+              (
+                  "onDestroy method",
+                  r'^\s*@Override\s+(?:(?:public|protected|private)\s+)?void\s+onDestroy\s*\([^)]*\)\s*\{',
+                  "onDestroy"
+              ),
+          ]
+
+          failures = 0
+
+          lines = source.splitlines()
+
+          def show_context(label):
+              print("")
+              print("----- ACTUAL SOURCE CONTEXT:", label, "-----")
+
+              pattern_map = {
+                  "session": r'V10ProjectionSession\s+session',
+                  "attachTextureView": r'attachTextureView',
+                  "createFloatingTouchKey": r'createFloatingTouchKey',
+                  "launchProjection": r'\blaunchProjection\s*\(',
+                  "returnToLauncher": r'\breturnToLauncher\s*\(',
+                  "showApps": r'\bshowApps\s*\(',
+                  "onPause": r'\bonPause\s*\(',
+                  "onStop": r'\bonStop\s*\(',
+                  "onDestroy": r'\bonDestroy\s*\(',
+              }
+
+              p = pattern_map.get(label, label)
+
+              found = False
+
+              for i, line in enumerate(lines):
+                  if re.search(p, line):
+                      found = True
+
+                      start = max(0, i - 3)
+                      end = min(len(lines), i + 8)
+
+                      for n in range(start, end):
+                          print(
+                              f"{n + 1:4}: {lines[n]}"
+                          )
+
+                      break
+
+              if not found:
+                  print("No obvious source line found for:", label)
+
+              print("---------------------------------------------")
+
+          for name, pattern, label in checks:
+
+              matches = list(
+                  re.finditer(
+                      pattern,
+                      source,
+                      re.MULTILINE
+                  )
+              )
+
+              if len(matches) == 1:
+
+                  print(
+                      f"PASS: {name} "
+                      f"(exactly 1 match)"
+                  )
+
+              elif len(matches) == 0:
+
+                  print(
+                      f"FAIL: {name} "
+                      f"(0 matches)"
+                  )
+
+                  show_context(label)
+
+                  failures += 1
+
+              else:
+
+                  print(
+                      f"FAIL: {name} "
+                      f"({len(matches)} matches; expected exactly 1)"
+                  )
+
+                  show_context(label)
+
+                  failures += 1
+
+          print("")
+          print("========================================")
+          print("V10CarActivity.java RESULT")
+          print("========================================")
+
+          if failures == 0:
+              print("PASS: All V10CarActivity anchors verified.")
+          else:
+              print(
+                  f"FAIL: {failures} V10CarActivity anchor(s) failed."
+              )
+
+          sys.exit(failures)
+          PY
 
       # ============================================================
-      # 2. V2A - KEYBOARD UI
+      # 2. V10ProjectionSession + OTHER SOURCE DIAGNOSTIC
+      # ============================================================
+
+      - name: Diagnostic verify projection and navigation source
+        shell: bash
+        run: |
+          set -uo pipefail
+
+          BASE="v10-source/app/src/main/java/com/carassistant/v10"
+
+          python3 <<'PY'
+          import re
+          import sys
+          from pathlib import Path
+
+          checks = [
+              (
+                  Path(
+                      "v10-source/app/src/main/java/com/carassistant/v10/V10ProjectionSession.java"
+                  ),
+                  "getDisplayId method",
+                  r'^\s*(?:(?:public|protected|private)\s+)?(?:final\s+)?int\s+getDisplayId\s*\(\s*\)',
+              ),
+              (
+                  Path(
+                      "v10-source/app/src/main/java/com/carassistant/v10/V10ProjectionSession.java"
+                  ),
+                  "isActive method",
+                  r'^\s*(?:(?:public|protected|private)\s+)?(?:final\s+)?boolean\s+isActive\s*\(\s*\)',
+              ),
+              (
+                  Path(
+                      "v10-source/app/src/main/java/com/carassistant/v10/RootShellSession.java"
+                  ),
+                  "RootShellSession class",
+                  r'^\s*(?:(?:public|protected|private)\s+)?(?:abstract|final\s+)?class\s+RootShellSession\b',
+              ),
+              (
+                  Path(
+                      "v10-source/app/src/main/java/com/carassistant/v10/NavigationMapView.java"
+                  ),
+                  "NavigationMapView class",
+                  r'^\s*(?:(?:public|protected|private)\s+)?(?:abstract|final\s+)?class\s+NavigationMapView\b',
+              ),
+          ]
+
+          failures = 0
+
+          def context(path, pattern):
+
+              print("")
+              print(
+                  "----- ACTUAL SOURCE CONTEXT:",
+                  path.name,
+                  "-----"
+              )
+
+              try:
+                  lines = path.read_text().splitlines()
+              except Exception as e:
+                  print("Cannot read file:", e)
+                  return
+
+              for i, line in enumerate(lines):
+
+                  if re.search(
+                          pattern,
+                          line,
+                          re.MULTILINE):
+
+                      start = max(0, i - 3)
+                      end = min(
+                          len(lines),
+                          i + 8
+                      )
+
+                      for n in range(start, end):
+                          print(
+                              f"{n + 1:4}: {lines[n]}"
+                          )
+
+                      return
+
+              print(
+                  "No matching source line found."
+              )
+
+          for path, name, pattern in checks:
+
+              if not path.exists():
+
+                  print(
+                      f"FAIL: {name} "
+                      f"(file missing: {path})"
+                  )
+
+                  failures += 1
+                  continue
+
+              source = path.read_text()
+
+              matches = list(
+                  re.finditer(
+                      pattern,
+                      source,
+                      re.MULTILINE
+                  )
+              )
+
+              if len(matches) == 1:
+
+                  print(
+                      f"PASS: {name} "
+                      f"(exactly 1 match)"
+                  )
+
+              elif len(matches) == 0:
+
+                  print(
+                      f"FAIL: {name} "
+                      f"(0 matches)"
+                  )
+
+                  context(path, pattern)
+
+                  failures += 1
+
+              else:
+
+                  print(
+                      f"FAIL: {name} "
+                      f"({len(matches)} matches)"
+                  )
+
+                  context(path, pattern)
+
+                  failures += 1
+
+          print("")
+          print("========================================")
+          print("PROJECTION / NAVIGATION RESULT")
+          print("========================================")
+
+          if failures == 0:
+              print(
+                  "PASS: Projection and Navigation source anchors verified."
+              )
+          else:
+              print(
+                  f"FAIL: {failures} source anchor(s) failed."
+              )
+
+          sys.exit(failures)
+          PY
+
+      # ============================================================
+      # 3. V2A - KEYBOARD UI
       # ============================================================
 
       - name: Create Keyboard V2A
@@ -325,7 +666,7 @@ jobs:
           echo "PASS: V2A keyboard UI created."
 
       # ============================================================
-      # 3. V2B - INPUT BRIDGE
+      # 4. V2B - INPUT BRIDGE
       # ============================================================
 
       - name: Create Keyboard V2B Input Bridge
@@ -424,7 +765,7 @@ jobs:
           echo "PASS: V2B input bridge created."
 
       # ============================================================
-      # 4. V2C - CONTROLLER / LIFECYCLE
+      # 5. V2C - CONTROLLER / LIFECYCLE
       # ============================================================
 
       - name: Create Keyboard V2C Controller
@@ -634,7 +975,7 @@ jobs:
           echo "PASS: V2C controller created."
 
       # ============================================================
-      # 5. INSPECT ACTUAL SOURCE
+      # 6. INSPECT ACTUAL V10CarActivity
       # ============================================================
 
       - name: Inspect actual V10CarActivity source
@@ -642,12 +983,11 @@ jobs:
         run: |
           set -euo pipefail
 
-          echo "Current git commit:"
-          git rev-parse HEAD
-
           FILE="v10-source/app/src/main/java/com/carassistant/v10/V10CarActivity.java"
 
-          test -f "$FILE"
+          echo "========================================"
+          echo "ACTUAL V10CarActivity SOURCE"
+          echo "========================================"
 
           python3 - <<'PY'
           import re
@@ -657,7 +997,7 @@ jobs:
               "v10-source/app/src/main/java/com/carassistant/v10/V10CarActivity.java"
           )
 
-          content = path.read_text()
+          source = path.read_text()
 
           patterns = {
               "launchProjection":
@@ -667,7 +1007,7 @@ jobs:
                   r'(?:(?:public|protected|private)\s+)?void\s+returnToLauncher\s*\([^)]*\)\s*\{[^}]*\}',
 
               "showApps":
-                  r'(?:(?:public|protected|private)\s+)?void\s+showApps\s*\([^)]*\)\s*\{[^}]*\}',
+                  r'(?:(?:public|protected|private)\s+)?void\s+showApps\s*\([^)]*\)\s*\{[^}]*',
 
               "onPause":
                   r'@Override\s+(?:(?:public|protected|private)\s+)?void\s+onPause\s*\([^)]*\)\s*\{[^}]*',
@@ -678,11 +1018,12 @@ jobs:
 
           for name, pattern in patterns.items():
 
-              print(f"=== INSPECT: {name} ===")
+              print("")
+              print("=== ", name, " ===")
 
               match = re.search(
                   pattern,
-                  content,
+                  source,
                   re.DOTALL
               )
 
@@ -690,12 +1031,10 @@ jobs:
                   print(match.group(0))
               else:
                   print("NOT FOUND")
-
-              print("=" * 50)
           PY
 
       # ============================================================
-      # 6. PATCH V10CarActivity
+      # 7. PATCH V10CarActivity
       # ============================================================
 
       - name: Patch V10CarActivity
@@ -743,10 +1082,6 @@ jobs:
                   flags=re.MULTILINE
               )
 
-          # --------------------------------------------------------
-          # Keyboard field
-          # --------------------------------------------------------
-
           replace_regex_once(
               r'(\s*(?:(?:public|protected|private)\s+)?V10ProjectionSession\s+session;)',
 
@@ -755,10 +1090,6 @@ jobs:
 
               "keyboard field"
           )
-
-          # --------------------------------------------------------
-          # Keyboard initialization
-          # --------------------------------------------------------
 
           replace_regex_once(
               r'(session\.attachTextureView\(\s*textureView\);[\s\n]*createFloatingTouchKey\(\);)',
@@ -773,10 +1104,6 @@ jobs:
               "keyboard initialization"
           )
 
-          # --------------------------------------------------------
-          # Hide on launchProjection
-          # --------------------------------------------------------
-
           replace_regex_once(
               r'((?:(?:public|protected|private)\s+)?void\s+launchProjection\s*\([^)]*\)\s*\{)',
 
@@ -787,10 +1114,6 @@ jobs:
 
               "keyboard hide on projection launch"
           )
-
-          # --------------------------------------------------------
-          # Hide on returnToLauncher
-          # --------------------------------------------------------
 
           replace_regex_once(
               r'((?:(?:public|protected|private)\s+)?void\s+returnToLauncher\s*\([^)]*\)\s*\{)',
@@ -803,10 +1126,6 @@ jobs:
               "keyboard hide on launcher"
           )
 
-          # --------------------------------------------------------
-          # Hide on showApps
-          # --------------------------------------------------------
-
           replace_regex_once(
               r'((?:(?:public|protected|private)\s+)?void\s+showApps\s*\([^)]*\)\s*\{)',
 
@@ -818,15 +1137,6 @@ jobs:
               "keyboard hide on app selector"
           )
 
-          # --------------------------------------------------------
-          # FIX:
-          # actual source uses:
-          #
-          # @Override
-          # public void onPause()
-          #
-          # --------------------------------------------------------
-
           replace_regex_once(
               r'(@Override\s+(?:(?:public|protected|private)\s+)?void\s+onPause\s*\([^)]*\)\s*\{)',
 
@@ -837,15 +1147,6 @@ jobs:
 
               "keyboard hide on pause"
           )
-
-          # --------------------------------------------------------
-          # FIX:
-          # actual source uses:
-          #
-          # @Override
-          # public void onDestroy()
-          #
-          # --------------------------------------------------------
 
           replace_regex_once(
               r'(@Override\s+(?:(?:public|protected|private)\s+)?void\s+onDestroy\s*\([^)]*\)\s*\{)',
@@ -862,12 +1163,12 @@ jobs:
           path.write_text(source)
 
           print(
-              "PASS: V10CarActivity patched."
+              "PASS: V10CarActivity patched using robust structural regex."
           )
           PY
 
       # ============================================================
-      # 7. VERIFY KEYBOARD PASS
+      # 8. VERIFY KEYBOARD PASS
       # ============================================================
 
       - name: Verify Keyboard PASS
@@ -880,8 +1181,6 @@ jobs:
           test -f "$BASE/CarAssistantKeyboard.java"
           test -f "$BASE/CarAssistantInputBridge.java"
           test -f "$BASE/CarAssistantKeyboardController.java"
-
-          # V2A
 
           grep -Fq \
             'addRow(root, "1234567890");' \
@@ -911,8 +1210,6 @@ jobs:
             'KeyEvent.KEYCODE_ENTER' \
             "$BASE/CarAssistantKeyboard.java"
 
-          # V2B
-
           grep -Fq \
             '/system/bin/input -d ' \
             "$BASE/CarAssistantInputBridge.java"
@@ -924,8 +1221,6 @@ jobs:
           grep -Fq \
             'RootShellSession.EXEC.execute' \
             "$BASE/CarAssistantInputBridge.java"
-
-          # V2C
 
           grep -Fq \
             'mInputShown' \
@@ -942,8 +1237,6 @@ jobs:
           grep -Fq \
             'keyboard.hide()' \
             "$BASE/CarAssistantKeyboardController.java"
-
-          # Integration
 
           grep -Fq \
             'private CarAssistantKeyboardController keyboardController;' \
@@ -975,8 +1268,6 @@ jobs:
 
             exit 1
           fi
-
-          # Forbidden architecture checks
 
           if grep -Fq \
               'InputMethodService' \
@@ -1024,7 +1315,7 @@ jobs:
           echo "PASS: Keyboard integration"
 
       # ============================================================
-      # 8. NAVIGATION PROTECTION
+      # 9. NAVIGATION PROTECTION
       # ============================================================
 
       - name: Verify Navigation remains untouched
@@ -1075,7 +1366,7 @@ jobs:
           echo "PASS: Navigation boundary."
 
       # ============================================================
-      # 9. BUILD
+      # 10. BUILD
       # ============================================================
 
       - name: Assemble Keyboard PASS
@@ -1093,7 +1384,7 @@ jobs:
             assembleDebug
 
       # ============================================================
-      # 10. PACKAGE APK
+      # 11. PACKAGE APK
       # ============================================================
 
       - name: Package Keyboard PASS APK
@@ -1124,7 +1415,7 @@ jobs:
             "dist/CarAssistant-V10-Keyboard-PASS.sha256"
 
       # ============================================================
-      # 11. UPLOAD
+      # 12. UPLOAD
       # ============================================================
 
       - name: Upload Keyboard PASS
