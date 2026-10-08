@@ -1,0 +1,445 @@
+name: Build Navigation V1 Keyboard Focus Diagnostic 1
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout exact baseline
+        uses: actions/checkout@v4
+        with:
+          ref: f4a4f5684a0946935cabf6af44a2abbefee2f611
+          fetch-depth: 1
+
+      - name: Verify exact baseline
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          echo "========================================"
+          echo "VERIFY BASELINE"
+          echo "========================================"
+
+          ACTUAL="$(git rev-parse HEAD)"
+          EXPECTED="f4a4f5684a0946935cabf6af44a2abbefee2f611"
+
+          echo "EXPECTED: $EXPECTED"
+          echo "ACTUAL:   $ACTUAL"
+
+          test "$ACTUAL" = "$EXPECTED"
+
+          test -f v10-source/app/src/main/java/com/carassistant/v10/aabridge/AACastBridge.java
+          test -f v10-source/app/src/main/java/com/carassistant/v10/hook/InputHooks.java
+          test -f v10-source/app/src/main/java/com/carassistant/v10/hook/DisplayHooks.java
+          test -f v10-source/app/src/main/java/com/carassistant/v10/V10CarActivity.java
+          test -f v10-source/app/src/main/java/com/carassistant/v10/V10ProjectionSession.java
+
+          echo "PASS: exact baseline"
+          echo "PASS: required source files exist"
+
+      - name: Verify current input architecture before patch
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          echo "========================================"
+          echo "VERIFY INPUT ARCHITECTURE"
+          echo "========================================"
+
+          AACAST="v10-source/app/src/main/java/com/carassistant/v10/aabridge/AACastBridge.java"
+          INPUT="v10-source/app/src/main/java/com/carassistant/v10/hook/InputHooks.java"
+          ACTIVITY="v10-source/app/src/main/java/com/carassistant/v10/V10CarActivity.java"
+
+          grep -Fq 'InputHooks.install(param.classLoader);' "$AACAST"
+          echo "PASS: AACastBridge installs InputHooks"
+
+          grep -Fq 'injectInputEventToTarget' "$INPUT"
+          echo "PASS: InputHooks contains injectInputEventToTarget"
+
+          grep -Fq 'MotionEvent' "$INPUT"
+          echo "PASS: InputHooks handles MotionEvent"
+
+          grep -Fq 'new V10InputController(session)' "$ACTIVITY"
+          echo "PASS: V10CarActivity uses V10InputController"
+
+          echo
+          echo "Current architecture is touch/input injection only."
+          echo "No keyboard implementation will be added in Diagnostic 1."
+
+      - name: Create keyboard focus diagnostic hook
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          BASE="v10-source/app/src/main/java/com/carassistant/v10"
+
+          mkdir -p "$BASE/hook"
+
+          cat > "$BASE/hook/KeyboardFocusHooks.java" <<'JAVA'
+          package com.carassistant.v10.hook;
+
+          import android.view.inputmethod.EditorInfo;
+
+          import java.lang.reflect.Method;
+
+          import de.robv.android.xposed.XC_MethodHook;
+          import de.robv.android.xposed.XposedBridge;
+          import de.robv.android.xposed.XposedHelpers;
+
+          /**
+           * Diagnostic only.
+           *
+           * Purpose:
+           * Detect when Android's InputMethodManagerService receives
+           * an input-start / window-focus request containing EditorInfo.
+           *
+           * This class DOES NOT:
+           * - create a keyboard
+           * - inject text
+           * - modify EditorInfo
+           * - change focus
+           * - change IME selection
+           *
+           * It only logs the observed input connection information.
+           */
+          public final class KeyboardFocusHooks {
+
+              private static final String TAG = "[CarAssistant][KeyboardDiag1]";
+
+              private KeyboardFocusHooks() {
+              }
+
+              public static void install(ClassLoader classLoader) {
+                  try {
+                      Class<?> imsClass = XposedHelpers.findClass(
+                              "com.android.server.inputmethod.InputMethodManagerService",
+                              classLoader);
+
+                      boolean installed = false;
+
+                      for (Method method : imsClass.getDeclaredMethods()) {
+                          String name = method.getName();
+
+                          if (!"startInputOrWindowGainedFocus".equals(name)) {
+                              continue;
+                          }
+
+                          if (method.getParameterTypes().length == 0) {
+                              continue;
+                          }
+
+                          XposedBridge.hookMethod(
+                                  method,
+                                  new XC_MethodHook() {
+                                      @Override
+                                      protected void beforeHookedMethod(MethodHookParam param) {
+                                          logStartInput(param);
+                                      }
+                                  });
+
+                          installed = true;
+
+                          XposedBridge.log(
+                                  TAG + " HOOKED "
+                                          + imsClass.getName()
+                                          + "."
+                                          + method.getName()
+                                          + " params="
+                                          + method.getParameterTypes().length);
+                      }
+
+                      if (!installed) {
+                          XposedBridge.log(
+                                  TAG
+                                          + " ERROR: startInputOrWindowGainedFocus method not found");
+                      }
+
+                  } catch (Throwable t) {
+                      XposedBridge.log(
+                              TAG
+                                      + " INSTALL_ERROR "
+                                      + t.getClass().getName()
+                                      + ": "
+                                      + String.valueOf(t.getMessage()));
+                  }
+              }
+
+              private static void logStartInput(XC_MethodHook.MethodHookParam param) {
+                  try {
+                      EditorInfo editorInfo = findEditorInfo(param.args);
+
+                      if (editorInfo == null) {
+                          XposedBridge.log(
+                                  TAG
+                                          + " INPUT_FOCUS: no EditorInfo in args="
+                                          + param.args.length);
+                          return;
+                      }
+
+                      String packageName = editorInfo.packageName;
+                      int inputType = editorInfo.inputType;
+                      int imeOptions = editorInfo.imeOptions;
+
+                      XposedBridge.log(
+                              TAG
+                                      + " INPUT_FOCUS"
+                                      + " package="
+                                      + String.valueOf(packageName)
+                                      + " inputType="
+                                      + inputType
+                                      + " imeOptions="
+                                      + imeOptions
+                                      + " fieldId="
+                                      + editorInfo.fieldId
+                                      + " fieldName="
+                                      + String.valueOf(editorInfo.fieldName)
+                                      + " hint="
+                                      + String.valueOf(editorInfo.hintText));
+
+                      logArgumentTypes(param.args);
+
+                  } catch (Throwable t) {
+                      XposedBridge.log(
+                              TAG
+                                      + " LOG_ERROR "
+                                      + t.getClass().getName()
+                                      + ": "
+                                      + String.valueOf(t.getMessage()));
+                  }
+              }
+
+              private static EditorInfo findEditorInfo(Object[] args) {
+                  if (args == null) {
+                      return null;
+                  }
+
+                  for (Object arg : args) {
+                      if (arg instanceof EditorInfo) {
+                          return (EditorInfo) arg;
+                      }
+                  }
+
+                  return null;
+              }
+
+              private static void logArgumentTypes(Object[] args) {
+                  if (args == null) {
+                      return;
+                  }
+
+                  StringBuilder builder =
+                          new StringBuilder(TAG).append(" ARGS");
+
+                  for (int i = 0; i < args.length; i++) {
+                      Object arg = args[i];
+
+                      builder.append(" [")
+                              .append(i)
+                              .append("]=");
+
+                      if (arg == null) {
+                          builder.append("null");
+                      } else {
+                          builder.append(arg.getClass().getName());
+
+                          String value = String.valueOf(arg);
+
+                          if (value.length() > 300) {
+                              value = value.substring(0, 300);
+                          }
+
+                          builder.append("{")
+                                  .append(value)
+                                  .append("}");
+                      }
+                  }
+
+                  XposedBridge.log(builder.toString());
+              }
+          }
+          JAVA
+
+          echo "Created:"
+          echo "$BASE/hook/KeyboardFocusHooks.java"
+
+      - name: Patch AACastBridge diagnostic-only hook
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          FILE="v10-source/app/src/main/java/com/carassistant/v10/aabridge/AACastBridge.java"
+
+          python3 - "$FILE" <<'PY'
+          import pathlib
+          import sys
+
+          path = pathlib.Path(sys.argv[1])
+          text = path.read_text()
+
+          expected = (
+              'import com.carassistant.v10.hook.InputHooks;\n'
+          )
+
+          if expected not in text:
+              raise SystemExit(
+                  "ERROR: exact InputHooks import marker not found"
+              )
+
+          if 'import com.carassistant.v10.hook.KeyboardFocusHooks;' in text:
+              raise SystemExit(
+                  "ERROR: KeyboardFocusHooks import already exists"
+              )
+
+          text = text.replace(
+              expected,
+              expected +
+              'import com.carassistant.v10.hook.KeyboardFocusHooks;\n',
+              1
+          )
+
+          expected_install = (
+              '            InputHooks.install(param.classLoader);\n'
+              '            return;\n'
+          )
+
+          if expected_install not in text:
+              raise SystemExit(
+                  "ERROR: exact system_server install block not found"
+              )
+
+          replacement = (
+              '            InputHooks.install(param.classLoader);\n'
+              '            KeyboardFocusHooks.install(param.classLoader);\n'
+              '            return;\n'
+          )
+
+          text = text.replace(
+              expected_install,
+              replacement,
+              1
+          )
+
+          path.write_text(text)
+          PY
+
+          echo "PASS: AACastBridge patched"
+
+      - name: Verify diagnostic patch and Navigation baseline
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          BASE="v10-source/app/src/main/java/com/carassistant/v10"
+
+          AACAST="$BASE/aabridge/AACastBridge.java"
+          NAV="$BASE/NavigationMapView.java"
+          DIAG="$BASE/hook/KeyboardFocusHooks.java"
+
+          grep -Fq 'import com.carassistant.v10.hook.KeyboardFocusHooks;' "$AACAST"
+          grep -Fq 'KeyboardFocusHooks.install(param.classLoader);' "$AACAST"
+
+          echo "PASS: diagnostic hook installed in system_server path"
+
+          grep -Fq 'startInputOrWindowGainedFocus' "$DIAG"
+          grep -Fq 'EditorInfo' "$DIAG"
+          grep -Fq 'INPUT_FOCUS' "$DIAG"
+
+          echo "PASS: diagnostic hook source"
+
+          grep -Fq '// buildDestinationSearch(); // Ẩn thanh tìm kiếm, giữ nguyên code phía dưới' "$NAV"
+          echo "PASS: Navigation baseline search UI remains unchanged"
+
+          if grep -Fq 'buildDestinationSearch();' "$NAV"; then
+              echo "WARNING: active buildDestinationSearch() occurrence detected"
+          fi
+
+          echo
+          echo "========================================"
+          echo "DIAGNOSTIC-ONLY CHECK"
+          echo "========================================"
+
+          if grep -Fq 'input text' "$DIAG"; then
+              echo "FAIL: text injection found"
+              exit 1
+          fi
+
+          if grep -Fq 'injectInputEvent' "$DIAG"; then
+              echo "FAIL: input injection found"
+              exit 1
+          fi
+
+          if grep -Fq 'InputMethodManager' "$DIAG"; then
+              echo "FAIL: client-side IME manipulation found"
+              exit 1
+          fi
+
+          echo "PASS: no text injection"
+          echo "PASS: no IME manipulation"
+          echo "PASS: diagnostic only"
+
+      - name: Show final diagnostic source
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          echo "========================================"
+          echo "AACastBridge"
+          echo "========================================"
+          sed -n '1,220p' \
+            v10-source/app/src/main/java/com/carassistant/v10/aabridge/AACastBridge.java
+
+          echo
+          echo "========================================"
+          echo "KeyboardFocusHooks"
+          echo "========================================"
+          sed -n '1,320p' \
+            v10-source/app/src/main/java/com/carassistant/v10/hook/KeyboardFocusHooks.java
+
+      - name: Setup Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Build debug APK
+        working-directory: v10-source
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          chmod +x gradlew
+
+          ./gradlew \
+            :app:compileDebugJavaWithJavac \
+            :app:assembleDebug \
+            --stacktrace
+
+      - name: Verify APK
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          APK="v10-source/app/build/outputs/apk/debug/app-debug.apk"
+
+          test -f "$APK"
+
+          echo "========================================"
+          echo "APK"
+          echo "========================================"
+
+          ls -lh "$APK"
+          sha256sum "$APK"
+
+      - name: Upload Diagnostic 1 APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: navigation-v1-keyboard-focus-diagnostic-1
+          path: v10-source/app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error
+          retention-days: 14
