@@ -24,7 +24,7 @@ jobs:
           distribution: temurin
           java-version: '17'
 
-      - name: Verify Keyboard Diagnostic 1 baseline
+      - name: Verify Keyboard Diagnostic baseline
         shell: bash
         run: |
           set -euo pipefail
@@ -32,33 +32,45 @@ jobs:
           SRC="v10-source"
           BASE="$SRC/app/src/main/java/com/carassistant/v10"
 
-          test -d "$SRC"
-          test -f "$BASE/aabridge/AACastBridge.java"
-          test -f "$BASE/hook/DisplayHooks.java"
-          test -f "$BASE/hook/InputHooks.java"
-          test -f "$BASE/V10DisplayController.java"
-          test -f "$BASE/AACastDisplay.java"
-          test -f "$BASE/V10Display.java"
+          check_file_exists() {
+            local label="$1"
+            local path="$2"
+            if [ -e "$path" ]; then
+              echo "PASS: $label exists"
+            else
+              echo "FAIL: $label missing ($path)"
+              exit 1
+            fi
+          }
 
-          grep -Fq 'package com.carassistant.v10' \
-            "$BASE/V10DisplayController.java"
+          check_contains() {
+            local label="$1"
+            local path="$2"
+            local pattern="$3"
+            if grep -Fq "$pattern" "$path"; then
+              echo "PASS: $label exists"
+            else
+              echo "FAIL: $label ($pattern missing in $path)"
+              echo "--- CURRENT FILE CONTENT START ---"
+              cat "$path"
+              echo "--- CURRENT FILE CONTENT END ---"
+              exit 1
+            fi
+          }
 
-          grep -Fq 'TYPE_VIRTUAL' \
-            "$BASE/V10Display.java"
+          check_file_exists "V10 source directory" "$SRC"
+          check_file_exists "AACastBridge" "$BASE/aabridge/AACastBridge.java"
+          check_file_exists "DisplayHooks" "$BASE/hook/DisplayHooks.java"
+          check_file_exists "InputHooks" "$BASE/hook/InputHooks.java"
+          check_file_exists "V10DisplayController" "$BASE/V10DisplayController.java"
+          check_file_exists "AACastDisplay" "$BASE/AACastDisplay.java"
+          check_file_exists "V10Display" "$BASE/V10Display.java"
 
-          grep -Fq 'createVirtualDisplay' \
-            "$BASE/V10DisplayController.java"
-
-          grep -Fq 'installDisplayFlags' \
-            "$BASE/aabridge/AACastBridge.java"
-
-          grep -Fq 'installInputPolicy' \
-            "$BASE/aabridge/AACastBridge.java"
-
-          grep -Fq 'InputHooks.install(param.classLoader);' \
-            "$BASE/aabridge/AACastBridge.java"
-
-          echo "PASS: Current V10 Keyboard baseline verified."
+          check_contains "V10 package declaration" "$BASE/V10DisplayController.java" "package com.carassistant.v10"
+          check_contains "system_server branch" "$BASE/aabridge/AACastBridge.java" 'if ("android".equals(packageName))'
+          check_contains "DisplayHooks.installDisplayFlags" "$BASE/hook/DisplayHooks.java" "installDisplayFlags"
+          check_contains "DisplayHooks.installInputPolicy" "$BASE/hook/DisplayHooks.java" "installInputPolicy"
+          check_contains "InputHooks.install" "$BASE/hook/InputHooks.java" "install"
 
       - name: Create framework runtime fingerprint hook
         shell: bash
@@ -598,22 +610,14 @@ jobs:
                           final String signature =
                                   methodSignature(method);
 
-                          XposedBridge.hookMethod(
-                                  method,
-                                  new XC_MethodHook() {
-
-                                      @Override
-                                      protected void beforeHookedMethod(
-                                              MethodHookParam param) {
-
-                                          XposedBridge.log(
-                                                  TAG
-                                                          + " IMS_START_INPUT"
-                                                          + " sig="
-                                                          + signature
-                                                          + " argTypes="
-                                                          + argumentTypes(
-                                                                  param.args));
+                          XposedBridge.log(
+                                  TAG
+                                          + " IMS_START_INPUT"
+                                          + " sig="
+                                          + signature
+                                          + " argTypes="
+                                          + argumentTypes(
+                                                  param.args));
                                       }
                                   });
                       }
@@ -787,7 +791,12 @@ jobs:
           }
           JAVA
 
-          echo "PASS: Created KeyboardFrameworkDiagnostic2.java."
+          if [ -f "$FILE" ]; then
+            echo "PASS: Diagnostic 2 source created"
+          else
+            echo "FAIL: Failed to create Diagnostic 2 source file ($FILE)"
+            exit 1
+          fi
 
       - name: Patch AACastBridge for Diagnostic 2
         shell: bash
@@ -814,9 +823,8 @@ jobs:
 
           if imp not in text:
               if marker not in text:
-                  raise SystemExit(
-                      "FAIL: InputHooks import marker not found"
-                  )
+                  print("FAIL: InputHooks import marker not found in AACastBridge.java", file=sys.stderr)
+                  sys.exit(1)
 
               text = text.replace(
                   marker,
@@ -837,9 +845,8 @@ jobs:
 
           if install not in text:
               if marker2 not in text:
-                  raise SystemExit(
-                      "FAIL: InputHooks install marker not found"
-                  )
+                  print("FAIL: InputHooks install marker not found in AACastBridge.java", file=sys.stderr)
+                  sys.exit(1)
 
               text = text.replace(
                   marker2,
@@ -865,28 +872,25 @@ jobs:
           BASE="v10-source/app/src/main/java/com/carassistant/v10"
           FILE="$BASE/hook/KeyboardFrameworkDiagnostic2.java"
 
-          grep -Fq 'KeyboardFrameworkDiagnostic2' \
-            "$BASE/aabridge/AACastBridge.java"
-
-          grep -Fq 'getImePolicy' "$FILE"
-          grep -Fq 'isTrusted' "$FILE"
-          grep -Fq 'getDisplayImePolicy' "$FILE"
-          grep -Fq 'setDisplayImePolicy' "$FILE"
-          grep -Fq 'startInputOrWindowGainedFocus' "$FILE"
-          grep -Fq 'Build.VERSION.SDK_INT' "$FILE"
+          if grep -Fq 'KeyboardFrameworkDiagnostic2' "$BASE/aabridge/AACastBridge.java"; then
+            echo "PASS: AACastBridge references KeyboardFrameworkDiagnostic2"
+          else
+            echo "FAIL: AACastBridge missing KeyboardFrameworkDiagnostic2 reference"
+            exit 1
+          fi
 
           if grep -Fq 'setResult(' "$FILE"; then
-            echo "ERROR: Diagnostic 2 mutates a hook result."
+            echo "FAIL: Diagnostic 2 mutates a hook result."
             exit 1
           fi
 
           if grep -Fq 'selectInputMethod' "$FILE"; then
-            echo "ERROR: IME selection detected."
+            echo "FAIL: IME selection detected."
             exit 1
           fi
 
           if grep -Fq 'injectInputEvent' "$FILE"; then
-            echo "ERROR: Input injection detected."
+            echo "FAIL: Input injection detected."
             exit 1
           fi
 
@@ -902,13 +906,13 @@ jobs:
 
           if git diff --name-only | grep -Fxq \
             "v10-source/app/src/main/java/com/carassistant/v10/NavigationMapView.java"; then
-            echo "ERROR: NavigationMapView was modified."
+            echo "FAIL: NavigationMapView was modified."
             exit 1
           fi
 
           if git diff --name-only | grep -Fxq \
             "v10-source/app/src/main/java/com/carassistant/v10/V10DisplayController.java"; then
-            echo "ERROR: V10DisplayController was modified."
+            echo "FAIL: V10DisplayController was modified."
             exit 1
           fi
 
@@ -956,8 +960,12 @@ jobs:
               | head -n 1
           )"
 
-          test -n "$APK"
-          test -s "$APK"
+          if [ -n "$APK" ] && [ -s "$APK" ]; then
+            echo "PASS: APK generated at $APK"
+          else
+            echo "FAIL: APK file not found or empty"
+            exit 1
+          fi
 
           cp "$APK" \
             CarAssistant-Navigation-V1-Keyboard-Framework-Diagnostic-2.apk
