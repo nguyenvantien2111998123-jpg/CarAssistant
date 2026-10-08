@@ -92,8 +92,8 @@ jobs:
           echo "PASS: Main source anchors verified."
 
       # ============================================================
-      # 2. CREATE V2A
-      #    UI + IME STATE
+      # 2. V2A
+      # KEYBOARD UI + IME STATE TARGET
       # ============================================================
 
       - name: Create Keyboard V2A
@@ -314,6 +314,7 @@ jobs:
                   bg.setCornerRadius(dp(11));
 
                   key.setBackground(bg);
+
                   key.setOnClickListener(
                           v -> click.run());
 
@@ -346,10 +347,10 @@ jobs:
 
       # ============================================================
       # 3. V2B
-      #    INPUT BRIDGE
+      # INPUT BRIDGE
       # ============================================================
 
-      - name: Create Keyboard V2B input bridge
+      - name: Create Keyboard V2B Input Bridge
         shell: bash
         run: |
           set -euo pipefail
@@ -367,6 +368,7 @@ jobs:
                       "CarAssistantInputBridge";
 
               private final V10ProjectionSession session;
+
               private final RootShellSession rootShell =
                       new RootShellSession();
 
@@ -386,10 +388,10 @@ jobs:
 
                   String safe =
                           value
-                              .replace("\\", "\\\\")
-                              .replace("'", "'\\''")
-                              .replace("\n", "")
-                              .replace("\r", "");
+                                  .replace("\\", "\\\\")
+                                  .replace("'", "'\\''")
+                                  .replace("\n", "")
+                                  .replace("\r", "");
 
                   String command =
                           "/system/bin/input -d "
@@ -432,7 +434,7 @@ jobs:
               }
 
               public void destroy() {
-                  // The controller owns the shell lifecycle.
+                  // Lifecycle is controlled by V2C.
               }
           }
           EOF
@@ -441,10 +443,10 @@ jobs:
 
       # ============================================================
       # 4. V2C
-      #    CONTROLLER + LIFECYCLE
+      # CONTROLLER + LIFECYCLE
       # ============================================================
 
-      - name: Create Keyboard V2C controller
+      - name: Create Keyboard V2C Controller
         shell: bash
         run: |
           set -euo pipefail
@@ -475,7 +477,9 @@ jobs:
                               "mInputShown\\s*=\\s*(true|false)");
 
               private final V10ProjectionSession session;
+
               private final CarAssistantKeyboard keyboard;
+
               private final CarAssistantInputBridge bridge;
 
               private final Handler handler =
@@ -528,8 +532,8 @@ jobs:
 
                               if (m.find()) {
                                   shown =
-                                      "true".equalsIgnoreCase(
-                                              m.group(1));
+                                          "true".equalsIgnoreCase(
+                                                  m.group(1));
                               }
 
                           } catch (Throwable t) {
@@ -552,7 +556,9 @@ jobs:
 
                                   if (!started
                                           || !session.isActive()) {
+
                                       keyboard.hide();
+
                                       return;
                                   }
 
@@ -632,6 +638,7 @@ jobs:
               public void hide() {
 
                   lastShown = false;
+
                   keyboard.hide();
               }
           }
@@ -641,7 +648,6 @@ jobs:
 
       # ============================================================
       # 5. PATCH V10CarActivity
-      #    EXACT MAIN ANCHORS ONLY
       # ============================================================
 
       - name: Patch V10CarActivity
@@ -668,10 +674,7 @@ jobs:
 
               return source.replace(old, new, 1)
 
-          # --------------------------------------------------------
           # Field
-          # --------------------------------------------------------
-
           source = replace_once(
               "    private V10ProjectionSession session;\n",
               "    private V10ProjectionSession session;\n"
@@ -679,10 +682,7 @@ jobs:
               "keyboard field"
           )
 
-          # --------------------------------------------------------
-          # attachProjection()
-          # --------------------------------------------------------
-
+          # Keyboard initialization
           source = replace_once(
               "        session.attachTextureView(\n"
               "                textureView);\n\n"
@@ -698,10 +698,7 @@ jobs:
               "keyboard initialization"
           )
 
-          # --------------------------------------------------------
-          # launchProjection()
-          # --------------------------------------------------------
-
+          # Hide keyboard when changing projection target
           source = replace_once(
               "    private void launchProjection(\n"
               "        ComponentName component) {\n\n"
@@ -721,10 +718,7 @@ jobs:
               "keyboard hide on projection launch"
           )
 
-          # --------------------------------------------------------
-          # returnToLauncher()
-          # --------------------------------------------------------
-
+          # Hide keyboard on launcher
           source = replace_once(
               "    private void returnToLauncher() {\n\n"
               "        if (session != null\n"
@@ -738,10 +732,17 @@ jobs:
               "keyboard hide on launcher"
           )
 
-          # --------------------------------------------------------
-          # onPause
-          # --------------------------------------------------------
+          # Hide keyboard when application selector opens
+          source = replace_once(
+              "    private void showApps() {\n\n",
+              "    private void showApps() {\n\n"
+              "        if (keyboardController != null) {\n"
+              "            keyboardController.hide();\n"
+              "        }\n\n",
+              "keyboard hide on app selector"
+          )
 
+          # Hide on Activity pause
           old_pause = (
               "    @Override\n"
               "    protected void onPause() {\n"
@@ -762,10 +763,7 @@ jobs:
               1
           )
 
-          # --------------------------------------------------------
-          # onDestroy
-          # --------------------------------------------------------
-
+          # Stop on Activity destroy
           old_destroy = (
               "    @Override\n"
               "    protected void onDestroy() {\n"
@@ -790,15 +788,15 @@ jobs:
           path.write_text(source)
 
           print(
-              "PASS: V10CarActivity patched using exact main anchors."
+              "PASS: V10CarActivity patched using exact anchors."
           )
           PY
 
       # ============================================================
-      # 6. VERIFY ALL KEYBOARD LAYERS
+      # 6. VERIFY KEYBOARD PASS
       # ============================================================
 
-      - name: Verify Keyboard PASS source
+      - name: Verify Keyboard PASS
         shell: bash
         run: |
           set -euo pipefail
@@ -809,13 +807,21 @@ jobs:
           test -f "$BASE/CarAssistantInputBridge.java"
           test -f "$BASE/CarAssistantKeyboardController.java"
 
-          # V2A
+          # V2A UI
           grep -Fq \
             'addRow(root, "1234567890");' \
             "$BASE/CarAssistantKeyboard.java"
 
           grep -Fq \
             'addRow(root, "QWERTYUIOP");' \
+            "$BASE/CarAssistantKeyboard.java"
+
+          grep -Fq \
+            'addRow(root, "ASDFGHJKL");' \
+            "$BASE/CarAssistantKeyboard.java"
+
+          grep -Fq \
+            'addRow(root, "ZXCVBNM");' \
             "$BASE/CarAssistantKeyboard.java"
 
           grep -Fq \
@@ -830,7 +836,7 @@ jobs:
             'KeyEvent.KEYCODE_ENTER' \
             "$BASE/CarAssistantKeyboard.java"
 
-          # V2B
+          # V2B input
           grep -Fq \
             '/system/bin/input -d ' \
             "$BASE/CarAssistantInputBridge.java"
@@ -840,11 +846,10 @@ jobs:
             "$BASE/CarAssistantInputBridge.java"
 
           grep -Fq \
-            'replace("\'", "'\\''")' \
-            "$BASE/CarAssistantInputBridge.java" \
-            || true
+            'RootShellSession.EXEC.execute' \
+            "$BASE/CarAssistantInputBridge.java"
 
-          # V2C
+          # V2C lifecycle
           grep -Fq \
             'mInputShown' \
             "$BASE/CarAssistantKeyboardController.java"
@@ -882,14 +887,14 @@ jobs:
           if grep -Fq \
               'InputMethodService' \
               "$BASE/CarAssistantKeyboard.java"; then
-            echo "ERROR: Keyboard must not become a system IME."
+            echo "ERROR: Keyboard must not be a system IME."
             exit 1
           fi
 
           if grep -Fq \
               'InputMethodService' \
               "$BASE/CarAssistantKeyboardController.java"; then
-            echo "ERROR: Controller must not become a system IME."
+            echo "ERROR: Controller must not be a system IME."
             exit 1
           fi
 
@@ -907,16 +912,16 @@ jobs:
             exit 1
           fi
 
-          echo "PASS: V2A UI"
-          echo "PASS: V2B Input Bridge"
-          echo "PASS: V2C Lifecycle"
-          echo "PASS: Keyboard PASS integration"
+          echo "PASS: V2A"
+          echo "PASS: V2B"
+          echo "PASS: V2C"
+          echo "PASS: Keyboard integration"
 
       # ============================================================
-      # 7. VERIFY NAVIGATION PROTECTION
+      # 7. NAVIGATION PROTECTION
       # ============================================================
 
-      - name: Verify Navigation remains protected
+      - name: Verify Navigation remains untouched
         shell: bash
         run: |
           set -euo pipefail
@@ -932,30 +937,30 @@ jobs:
             "$BASE/V10CarActivity.java"
 
           if grep -Fq \
-              "NavigationMapView.java" \
+              "NavigationPresentationView" \
               "$BASE/CarAssistantKeyboard.java"; then
-            echo "ERROR: Keyboard touched NavigationMapView."
+            echo "ERROR: Keyboard references NavigationPresentationView."
             exit 1
           fi
 
           if grep -Fq \
-              "NavigationMapView.java" \
+              "NavigationPresentationView" \
               "$BASE/CarAssistantInputBridge.java"; then
-            echo "ERROR: Input bridge touched Navigation."
+            echo "ERROR: Input bridge references NavigationPresentationView."
             exit 1
           fi
 
           if grep -Fq \
-              "NavigationMapView.java" \
+              "NavigationPresentationView" \
               "$BASE/CarAssistantKeyboardController.java"; then
-            echo "ERROR: Controller touched Navigation."
+            echo "ERROR: Controller references NavigationPresentationView."
             exit 1
           fi
 
-          echo "PASS: Navigation protected."
+          echo "PASS: Navigation boundary."
 
       # ============================================================
-      # 8. BUILD ONE FINAL APK
+      # 8. BUILD
       # ============================================================
 
       - name: Assemble Keyboard PASS
@@ -973,7 +978,7 @@ jobs:
             assembleDebug
 
       # ============================================================
-      # 9. PACKAGE
+      # 9. PACKAGE APK
       # ============================================================
 
       - name: Package Keyboard PASS APK
