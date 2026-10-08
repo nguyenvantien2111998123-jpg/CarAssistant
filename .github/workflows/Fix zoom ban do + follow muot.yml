@@ -1,4 +1,4 @@
-name: Patch NavigationMapView Follow V3 Safe
+name: Patch NavigationMapView Follow V4 Safe
 
 on:
   workflow_dispatch:
@@ -11,29 +11,103 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout main
+      - name: 01 - Checkout main
         uses: actions/checkout@v4
         with:
           ref: main
           fetch-depth: 0
 
-      - name: Validate workflow YAML syntax
+      - name: 02 - Setup Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+          cache: gradle
+
+      - name: 03 - Parse running workflow YAML
         shell: bash
         run: |
           set -euo pipefail
 
-          WORKFLOW=".github/workflows/patch-navigation-map-view-follow-v3-safe.yml"
+          WORKFLOW_REL="${GITHUB_WORKFLOW_REF#${GITHUB_REPOSITORY}/}"
+          WORKFLOW_REL="${WORKFLOW_REL%@*}"
 
-          test -s "$WORKFLOW"
+          case "$WORKFLOW_REL" in
+            .github/workflows/*.yml|.github/workflows/*.yaml)
+              ;;
+            *)
+              echo "FAIL: invalid workflow path: $WORKFLOW_REL"
+              exit 1
+              ;;
+          esac
 
-          ruby -e '
-            require "yaml"
-            path = ARGV.fetch(0)
-            YAML.load_file(path)
-            puts "PASS: YAML parse"
-          ' "$WORKFLOW"
+          test -s "$WORKFLOW_REL"
 
-      - name: Verify current source and protected files
+          export WORKFLOW_REL
+
+          ruby <<'RUBY'
+          require "yaml"
+
+          path = ENV.fetch("WORKFLOW_REL")
+          text = File.read(path, encoding: "UTF-8")
+
+          abort("FAIL: workflow file is empty") if text.strip.empty?
+
+          data = YAML.load_file(path)
+
+          abort("FAIL: YAML root is not a mapping") unless data.is_a?(Hash)
+
+          abort("FAIL: missing top-level on") unless
+            data.key?("on") || data.key?(true)
+
+          abort("FAIL: missing top-level jobs") unless
+            data.key?("jobs")
+
+          jobs = data["jobs"]
+
+          abort("FAIL: jobs is not a mapping") unless
+            jobs.is_a?(Hash)
+
+          abort("FAIL: jobs is empty") if jobs.empty?
+
+          jobs.each do |job_id, job|
+            abort("FAIL: invalid job id #{job_id}") unless
+              job_id.is_a?(String)
+
+            abort("FAIL: job #{job_id} is not a mapping") unless
+              job.is_a?(Hash)
+
+            steps = job["steps"]
+
+            abort("FAIL: job #{job_id} has no steps") unless
+              steps.is_a?(Array)
+
+            abort("FAIL: job #{job_id} has zero steps") if
+              steps.empty?
+          end
+
+          puts "PASS: workflow YAML parsed successfully"
+          puts "PASS: workflow structure is valid"
+          RUBY
+
+      - name: 04 - Verify repository structure
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          NAV="v10-source/app/src/main/java/com/carassistant/v10/NavigationMapView.java"
+          GRADLE="v10-source/app/build.gradle"
+          LEGACY="v10-source/app/libs/aasdk-legacy.dex"
+          GRADLEW="v10-source/gradlew"
+
+          test -s "$NAV"
+          test -s "$GRADLE"
+          test -s "$LEGACY"
+          test -s "$GRADLEW"
+
+          echo "PASS: repository structure"
+
+      - name: 05 - Verify exact source baseline
         shell: bash
         run: |
           set -euo pipefail
@@ -45,32 +119,47 @@ jobs:
           EXPECTED_NAV_SHA="1600edf884196a146ce5f4233f8de0a8ea282a4e"
           EXPECTED_GRADLE_SHA="4d512337d46324a33a685d8cdb095e4ecacd3ceb"
 
-          test -s "$NAV"
-          test -s "$GRADLE"
-          test -s "$LEGACY"
-
-          ACTUAL_NAV_SHA="$(git hash-object "$NAV")"
-          ACTUAL_GRADLE_SHA="$(git hash-object "$GRADLE")"
-
-          echo "NavigationMapView SHA:"
-          echo "$ACTUAL_NAV_SHA"
-
-          echo "build.gradle SHA:"
-          echo "$ACTUAL_GRADLE_SHA"
-
-          test "$ACTUAL_NAV_SHA" = "$EXPECTED_NAV_SHA"
-          test "$ACTUAL_GRADLE_SHA" = "$EXPECTED_GRADLE_SHA"
+          test "$(git hash-object "$NAV")" = "$EXPECTED_NAV_SHA"
+          test "$(git hash-object "$GRADLE")" = "$EXPECTED_GRADLE_SHA"
 
           test -z "$(git status --porcelain -- "$NAV")"
           test -z "$(git status --porcelain -- "$GRADLE")"
           test -z "$(git status --porcelain -- "$LEGACY")"
 
+          grep -Fq \
+            'import org.maplibre.android.location.modes.CameraMode;' \
+            "$NAV"
+
+          ! grep -Fq \
+            'import org.maplibre.android.location.modes.RenderMode;' \
+            "$NAV"
+
+          grep -Fq \
+            'private static final double AUTO_FOLLOW_ZOOM = 16.0;' \
+            "$NAV"
+
+          grep -Fq \
+            'private void startAutoFollow() {' \
+            "$NAV"
+
+          grep -Fq \
+            'CameraMode.TRACKING' \
+            "$NAV"
+
+          grep -Fq \
+            'tasks.matching { it.name == '\''mergeDexRelease'\'' }.configureEach' \
+            "$GRADLE"
+
+          grep -Fq \
+            'app/libs/aasdk-legacy.dex' \
+            "$GRADLE"
+
           echo "PASS: exact NavigationMapView baseline"
           echo "PASS: exact build.gradle baseline"
-          echo "PASS: legacy DEX protected"
-          echo "PASS: protected files clean"
+          echo "PASS: legacy DEX baseline"
+          echo "PASS: baseline structure"
 
-      - name: Create Python patch script
+      - name: 06 - Create Python patch script
         shell: bash
         run: |
           set -euo pipefail
@@ -95,10 +184,23 @@ jobs:
 
               if count != 1:
                   raise SystemExit(
-                      f"FAIL: expected exactly one occurrence for {label}, got {count}"
+                      f"FAIL: expected exactly one occurrence for "
+                      f"{label}, got {count}"
                   )
 
               text = text.replace(old, new, 1)
+
+          actual_sha = __import__("hashlib").sha1(
+              b"blob %d\0" % len(
+                  NAV.read_bytes()
+              ) + NAV.read_bytes()
+          ).hexdigest()
+
+          if actual_sha != EXPECTED_SHA:
+              raise SystemExit(
+                  "FAIL: NavigationMapView baseline SHA changed before patch: "
+                  + actual_sha
+              )
 
           require_once(
               "import org.maplibre.android.location.modes.CameraMode;\n",
@@ -175,7 +277,7 @@ jobs:
           print("PASS: compass animation enabled")
           PY
 
-      - name: Python parse patch script
+      - name: 07 - Python parse and execute navigation patch
         shell: bash
         run: |
           set -euo pipefail
@@ -184,16 +286,11 @@ jobs:
 
           echo "PASS: Python syntax parse"
 
-      - name: Apply NavigationMapView patch
-        shell: bash
-        run: |
-          set -euo pipefail
-
           python3 /tmp/patch_navigation.py
 
           echo "PASS: Python patch execution"
 
-      - name: Verify patched source
+      - name: 08 - Verify source after patch
         shell: bash
         run: |
           set -euo pipefail
@@ -210,6 +307,9 @@ jobs:
 
           echo "build.gradle SHA:"
           echo "$CURRENT_GRADLE_SHA"
+
+          test "$CURRENT_NAV_SHA" != \
+            "1600edf884196a146ce5f4233f8de0a8ea282a4e"
 
           test "$CURRENT_GRADLE_SHA" = \
             "4d512337d46324a33a685d8cdb095e4ecacd3ceb"
@@ -235,16 +335,21 @@ jobs:
             "$NAV"
 
           test "$(grep -Fc 'CameraMode.TRACKING_GPS' "$NAV")" -eq 2
+
           test "$(grep -Fc 'CameraMode.TRACKING,' "$NAV")" -eq 0
+
+          test -s "$LEGACY"
 
           echo "PASS: patched source structure"
           echo "PASS: GPS render mode"
           echo "PASS: TRACKING_GPS enabled"
           echo "PASS: old TRACKING mode removed"
           echo "PASS: zoom 17.5"
-          echo "PASS: protected build.gradle unchanged"
+          echo "PASS: compass animation"
+          echo "PASS: build.gradle unchanged"
+          echo "PASS: legacy DEX present"
 
-      - name: Verify source diff
+      - name: 09 - Verify source diff
         shell: bash
         run: |
           set -euo pipefail
@@ -259,8 +364,8 @@ jobs:
           test -z "$(git status --porcelain -- "$LEGACY")"
 
           CHANGED_FILES="$(
-            git status --porcelain \
-              | awk '{print substr($0,4)}'
+            git status --porcelain |
+              awk '{print substr($0,4)}'
           )"
 
           test "$CHANGED_FILES" = "$NAV"
@@ -272,7 +377,7 @@ jobs:
 
           git diff -- "$NAV"
 
-      - name: Gradle Java compile
+      - name: 10 - Java syntax and compile
         shell: bash
         working-directory: v10-source
         run: |
@@ -287,7 +392,7 @@ jobs:
 
           echo "PASS: Java syntax / compile"
 
-      - name: Gradle assembleRelease
+      - name: 11 - Gradle assemble release
         shell: bash
         working-directory: v10-source
         run: |
@@ -305,7 +410,7 @@ jobs:
           echo "PASS: Gradle assembleRelease"
           ls -lh "$APK"
 
-      - name: Verify APK and DEX layout
+      - name: 12 - Verify APK and DEX layout
         shell: bash
         working-directory: v10-source
         run: |
@@ -331,7 +436,7 @@ jobs:
           echo "PASS: APK contains ${#DEX_FILES[@]} DEX files"
           echo "PASS: legacy DEX packaging preserved"
 
-      - name: Final protected-file verification
+      - name: 13 - Final protected-file verification
         shell: bash
         run: |
           set -euo pipefail
@@ -342,28 +447,38 @@ jobs:
 
           EXPECTED_GRADLE_SHA="4d512337d46324a33a685d8cdb095e4ecacd3ceb"
 
-          test "$(git hash-object "$GRADLE")" = "$EXPECTED_GRADLE_SHA"
+          test "$(git hash-object "$GRADLE")" = \
+            "$EXPECTED_GRADLE_SHA"
+
           test -s "$LEGACY"
 
           test -z "$(git status --porcelain -- "$GRADLE")"
           test -z "$(git status --porcelain -- "$LEGACY")"
 
+          test -n "$(git status --porcelain -- "$NAV")"
+
+          test "$(git hash-object "$NAV")" != \
+            "1600edf884196a146ce5f4233f8de0a8ea282a4e"
+
           git diff --check -- "$NAV"
 
           echo "PASS: build.gradle protected"
           echo "PASS: legacy DEX protected"
-          echo "PASS: NavigationMapView patch valid"
-          echo "PASS: final protected-file verification"
+          echo "PASS: NavigationMapView contains intended patch"
+          echo "PASS: protected-file verification"
 
-      - name: Commit only NavigationMapView
+      - name: 14 - Commit only NavigationMapView
         shell: bash
         run: |
           set -euo pipefail
 
           NAV="v10-source/app/src/main/java/com/carassistant/v10/NavigationMapView.java"
+          GRADLE="v10-source/app/build.gradle"
+          LEGACY="v10-source/app/libs/aasdk-legacy.dex"
 
           git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git config user.email \
+            "41898282+github-actions[bot]@users.noreply.github.com"
 
           git add -- "$NAV"
 
@@ -375,6 +490,9 @@ jobs:
 
           test "$STAGED_FILES" = "$NAV"
 
+          test -z "$(git diff --cached -- "$GRADLE")"
+          test -z "$(git diff --cached -- "$LEGACY")"
+
           git commit \
             -m "Patch NavigationMapView GPS auto follow"
 
@@ -382,3 +500,22 @@ jobs:
 
           echo "PASS: committed only NavigationMapView.java"
           echo "PASS: pushed to main"
+
+      - name: 15 - Final PASS
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          NAV="v10-source/app/src/main/java/com/carassistant/v10/NavigationMapView.java"
+
+          test -s "$NAV"
+
+          echo "PASS: NavigationMapView Follow V4"
+          echo "PASS: YAML"
+          echo "PASS: Python"
+          echo "PASS: source patch"
+          echo "PASS: Java compile"
+          echo "PASS: Gradle build"
+          echo "PASS: APK / DEX"
+          echo "PASS: protected files"
+          echo "PASS: commit"
