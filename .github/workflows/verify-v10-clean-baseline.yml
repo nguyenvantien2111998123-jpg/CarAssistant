@@ -1,0 +1,401 @@
+name: CarAssistant V10 - Verify Clean Baseline
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  verify-v10-baseline:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout main
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Verify baseline commit
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          EXPECTED_COMMIT="e8926fc1609679042d0ba3d59dba4c312062e72c"
+          ACTUAL_COMMIT="$(git rev-parse HEAD)"
+
+          echo "========================================"
+          echo "V10 CLEAN BASELINE"
+          echo "========================================"
+
+          echo "Expected:"
+          echo "$EXPECTED_COMMIT"
+
+          echo
+          echo "Actual:"
+          echo "$ACTUAL_COMMIT"
+
+          if [ "$ACTUAL_COMMIT" != "$EXPECTED_COMMIT" ]; then
+            echo
+            echo "ERROR: main is not at the expected V10 cleanup baseline."
+            echo "STOPPING."
+            exit 1
+          fi
+
+          echo
+          echo "PASS: Correct V10 baseline."
+
+      - name: Verify Java source structure
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          JAVA_ROOT="v10-source/app/src/main/java"
+
+          echo "========================================"
+          echo "VERIFY JAVA SOURCE STRUCTURE"
+          echo "========================================"
+
+          if [ ! -d "$JAVA_ROOT/com/carassistant/v10" ]; then
+            echo "ERROR: Normalized V10 source directory is missing."
+            exit 1
+          fi
+
+          if [ -d "$JAVA_ROOT/com/hieptran" ]; then
+            echo "ERROR: Old com/hieptran directory still exists."
+            exit 1
+          fi
+
+          JAVA_COUNT="$(
+            find "$JAVA_ROOT" \
+              -type f \
+              -name '*.java' \
+              | wc -l \
+              | tr -d ' '
+          )"
+
+          echo "Java file count: $JAVA_COUNT"
+
+          if [ "$JAVA_COUNT" != "32" ]; then
+            echo "ERROR: Expected exactly 32 Java files."
+            exit 1
+          fi
+
+          echo "PASS: Exactly 32 Java files."
+
+      - name: Verify package declarations
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          JAVA_ROOT="v10-source/app/src/main/java"
+
+          echo "========================================"
+          echo "VERIFY PACKAGE DECLARATIONS"
+          echo "========================================"
+
+          BAD_PACKAGES="$(
+            grep -R \
+              -n \
+              --include='*.java' \
+              '^package ' \
+              "$JAVA_ROOT" \
+              | grep -vE '^.*package com\.carassistant\.v10(\.|;)' \
+              || true
+          )"
+
+          if [ -n "$BAD_PACKAGES" ]; then
+            echo "ERROR: Invalid package declarations found:"
+            echo "$BAD_PACKAGES"
+            exit 1
+          fi
+
+          OLD_PACKAGE_REFS="$(
+            grep -R \
+              -n \
+              --include='*.java' \
+              'com\.hieptran' \
+              "$JAVA_ROOT" \
+              || true
+          )"
+
+          if [ -n "$OLD_PACKAGE_REFS" ]; then
+            echo "ERROR: Old com.hieptran references remain:"
+            echo "$OLD_PACKAGE_REFS"
+            exit 1
+          fi
+
+          echo "PASS: All Java packages use com.carassistant.v10."
+          echo "PASS: No com.hieptran references remain."
+
+      - name: Verify xposed_init
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          XPOSED_FILE="v10-source/app/src/main/assets/xposed_init"
+          EXPECTED="com.carassistant.v10.aabridge.AACastBridge"
+
+          echo "========================================"
+          echo "VERIFY XPOSED INIT"
+          echo "========================================"
+
+          if [ ! -f "$XPOSED_FILE" ]; then
+            echo "ERROR: xposed_init is missing."
+            exit 1
+          fi
+
+          ACTUAL="$(tr -d '\r\n' < "$XPOSED_FILE")"
+
+          echo "Expected:"
+          echo "$EXPECTED"
+
+          echo
+          echo "Actual:"
+          echo "$ACTUAL"
+
+          if [ "$ACTUAL" != "$EXPECTED" ]; then
+            echo "ERROR: xposed_init is incorrect."
+            exit 1
+          fi
+
+          echo "PASS: xposed_init is correct."
+
+      - name: Verify Android manifest
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          MANIFEST="v10-source/app/src/main/AndroidManifest.xml"
+
+          echo "========================================"
+          echo "VERIFY ANDROID MANIFEST"
+          echo "========================================"
+
+          REQUIRED_CLASSES=(
+            "com.carassistant.v10.V10LauncherActivity"
+            "com.carassistant.v10.V10CarActivity"
+            "com.carassistant.v10.V10ControlReceiver"
+            "com.carassistant.v10.AACastCarService"
+            "com.carassistant.v10.DockStateProvider"
+          )
+
+          for CLASS_NAME in "${REQUIRED_CLASSES[@]}"; do
+            if ! grep -q "$CLASS_NAME" "$MANIFEST"; then
+              echo "ERROR: Missing manifest class:"
+              echo "$CLASS_NAME"
+              exit 1
+            fi
+
+            echo "PASS: $CLASS_NAME"
+          done
+
+          if grep -q "com\.hieptran" "$MANIFEST"; then
+            echo "ERROR: Old com.hieptran reference remains in manifest."
+            exit 1
+          fi
+
+          echo
+          echo "PASS: AndroidManifest package references are normalized."
+
+      - name: Verify ProGuard
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          PROGUARD="v10-source/app/proguard-rules.pro"
+
+          echo "========================================"
+          echo "VERIFY PROGUARD"
+          echo "========================================"
+
+          if grep -q "com\.hieptran" "$PROGUARD"; then
+            echo "ERROR: Old com.hieptran reference remains in ProGuard."
+            grep -n "com\.hieptran" "$PROGUARD"
+            exit 1
+          fi
+
+          if ! grep -q "com\.carassistant\.v10" "$PROGUARD"; then
+            echo "ERROR: Expected com.carassistant.v10 reference not found in ProGuard."
+            exit 1
+          fi
+
+          echo "PASS: ProGuard references are normalized."
+
+      - name: Verify workflows and tools
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          echo "========================================"
+          echo "VERIFY WORKFLOW REFERENCES"
+          echo "========================================"
+
+          OLD_REFS="$(
+            grep -R \
+              -n \
+              --exclude-dir=.git \
+              --include='*.yml' \
+              --include='*.yaml' \
+              --include='*.sh' \
+              --include='*.md' \
+              'com/hieptran/aacast/doudou\|com\.hieptran\.aacast\.doudou\|com\.hieptran' \
+              .github \
+              v10-source \
+              README.vi.md \
+              README.md \
+              2>/dev/null \
+              || true
+          )"
+
+          if [ -n "$OLD_REFS" ]; then
+            echo "ERROR: Old V10 source/package references remain:"
+            echo "$OLD_REFS"
+            exit 1
+          fi
+
+          echo "PASS: No old V10 source/package references remain."
+
+      - name: Verify Gradle configuration
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          echo "========================================"
+          echo "VERIFY GRADLE CONFIGURATION"
+          echo "========================================"
+
+          cd v10-source
+
+          if [ ! -f gradlew ]; then
+            echo "ERROR: gradlew not found."
+            exit 1
+          fi
+
+          chmod +x gradlew
+
+          ./gradlew --version
+
+          echo
+          echo "PASS: Gradle wrapper is available."
+
+      - name: Compile V10 Java sources
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          echo "========================================"
+          echo "COMPILE V10"
+          echo "========================================"
+
+          cd v10-source
+
+          ./gradlew \
+            :app:compileDebugJavaWithJavac \
+            --no-daemon
+
+          echo
+          echo "PASS: V10 Java compilation."
+
+      - name: Assemble V10 debug APK
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          echo "========================================"
+          echo "ASSEMBLE V10 APK"
+          echo "========================================"
+
+          cd v10-source
+
+          ./gradlew \
+            :app:assembleDebug \
+            --no-daemon
+
+          APK="app/build/outputs/apk/debug/app-debug.apk"
+
+          if [ ! -f "$APK" ]; then
+            echo "ERROR: APK was not generated."
+            exit 1
+          fi
+
+          echo
+          echo "APK:"
+          ls -lh "$APK"
+
+          echo
+          echo "SHA256:"
+          sha256sum "$APK"
+
+          echo
+          echo "PASS: V10 debug APK assembled."
+
+      - name: Final baseline verification
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          echo "========================================"
+          echo "FINAL V10 BASELINE VERIFICATION"
+          echo "========================================"
+
+          JAVA_COUNT="$(
+            find v10-source/app/src/main/java \
+              -type f \
+              -name '*.java' \
+              | wc -l \
+              | tr -d ' '
+          )"
+
+          OLD_COUNT="$(
+            find v10-source/app/src/main/java \
+              -type f \
+              -name '*.java' \
+              | grep '/com/hieptran/' \
+              | wc -l \
+              | tr -d ' ' \
+              || true
+          )"
+
+          echo "Java files: $JAVA_COUNT"
+          echo "Old package Java files: $OLD_COUNT"
+
+          if [ "$JAVA_COUNT" != "32" ]; then
+            echo "ERROR: Java count changed."
+            exit 1
+          fi
+
+          if [ "$OLD_COUNT" != "0" ]; then
+            echo "ERROR: Old Java package files remain."
+            exit 1
+          fi
+
+          if grep -R \
+              -n \
+              --include='*.java' \
+              'com\.hieptran' \
+              v10-source/app/src/main/java \
+              >/dev/null 2>&1; then
+            echo "ERROR: Old package reference remains in Java source."
+            exit 1
+          fi
+
+          echo
+          echo "========================================"
+          echo "V10 CLEAN BASELINE VERIFIED"
+          echo "========================================"
+          echo "Commit: e8926fc1609679042d0ba3d59dba4c312062e72c"
+          echo "Java files: 32"
+          echo "Old package files: 0"
+          echo "Compilation: PASS"
+          echo "APK assembly: PASS"
+          echo "========================================"
+
+      - name: Upload V10 debug APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: CarAssistant-V10-clean-baseline-debug
+          path: v10-source/app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error
