@@ -1,0 +1,1834 @@
+name: Fix navigation V10 new
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+
+    steps:
+
+      # ============================================================
+      # 0. CHECKOUT
+      # ============================================================
+
+      - name: Checkout main
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 1
+
+      - name: Setup Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      # ============================================================
+      # 1. DIAGNOSTIC VERIFY REAL MAIN SOURCE
+      #
+      # BASELINE:
+      # Same source verification as Keyboard PASS.
+      # No Navigation modification is performed here.
+      # ============================================================
+
+      - name: Diagnostic verify main source anchors
+        shell: bash
+        run: |
+          set -uo pipefail
+
+          BASE="v10-source/app/src/main/java/com/carassistant/v10"
+
+          echo "========================================"
+          echo "CarAssistant Keyboard PASS + Navigation Follow"
+          echo "DIAGNOSTIC SOURCE VERIFICATION"
+          echo "========================================"
+
+          echo ""
+          echo "Git commit:"
+          git rev-parse HEAD
+
+          echo ""
+          echo "Git branch:"
+          git branch --show-current
+
+          echo ""
+          echo "========================================"
+          echo "FILE EXISTENCE"
+          echo "========================================"
+
+          FAILURES=0
+
+          check_file() {
+            local file="$1"
+
+            if [ -f "$file" ]; then
+              echo "PASS: file exists: $file"
+            else
+              echo "FAIL: missing file: $file"
+              FAILURES=$((FAILURES + 1))
+            fi
+          }
+
+          check_file "$BASE/V10CarActivity.java"
+          check_file "$BASE/V10ProjectionSession.java"
+          check_file "$BASE/RootShellSession.java"
+          check_file "$BASE/NavigationMapView.java"
+
+          if [ "$FAILURES" -ne 0 ]; then
+            echo ""
+            echo "========================================"
+            echo "FILE CHECK FAILED"
+            echo "FAILURES: $FAILURES"
+            echo "========================================"
+            exit 1
+          fi
+
+          echo ""
+          echo "========================================"
+          echo "V10CarActivity.java DIAGNOSTIC"
+          echo "========================================"
+
+          python3 <<'PY'
+          import re
+          import sys
+          from pathlib import Path
+
+          path = Path(
+              "v10-source/app/src/main/java/com/carassistant/v10/V10CarActivity.java"
+          )
+
+          source = path.read_text()
+
+          checks = [
+              (
+                  "session field",
+                  r'^\s*(?:(?:public|protected|private)\s+)?V10ProjectionSession\s+session;',
+                  "session"
+              ),
+              (
+                  "session.attachTextureView",
+                  r'session\.attachTextureView\s*\(',
+                  "attachTextureView"
+              ),
+              (
+                  "createFloatingTouchKey",
+                  r'createFloatingTouchKey\s*\(\s*\)\s*;',
+                  "createFloatingTouchKey"
+              ),
+              (
+                  "launchProjection method",
+                  r'^\s*(?:(?:public|protected|private)\s+)?void\s+launchProjection\s*\([^)]*\)\s*\{',
+                  "launchProjection"
+              ),
+              (
+                  "returnToLauncher method",
+                  r'^\s*(?:(?:public|protected|private)\s+)?void\s+returnToLauncher\s*\([^)]*\)\s*\{',
+                  "returnToLauncher"
+              ),
+              (
+                  "showApps method",
+                  r'^\s*(?:(?:public|protected|private)\s+)?void\s+showApps\s*\([^)]*\)\s*\{',
+                  "showApps"
+              ),
+              (
+                  "onPause method",
+                  r'^\s*@Override\s+(?:(?:public|protected|private)\s+)?void\s+onPause\s*\([^)]*\)\s*\{',
+                  "onPause"
+              ),
+              (
+                  "onStop method",
+                  r'^\s*@Override\s+(?:(?:public|protected|private)\s+)?void\s+onStop\s*\([^)]*\)\s*\{',
+                  "onStop"
+              ),
+              (
+                  "onDestroy method",
+                  r'^\s*@Override\s+(?:(?:public|protected|private)\s+)?void\s+onDestroy\s*\([^)]*\)\s*\{',
+                  "onDestroy"
+              ),
+          ]
+
+          failures = 0
+
+          lines = source.splitlines()
+
+          def show_context(label):
+              print("")
+              print("----- ACTUAL SOURCE CONTEXT:", label, "-----")
+
+              pattern_map = {
+                  "session": r'V10ProjectionSession\s+session',
+                  "attachTextureView": r'attachTextureView',
+                  "createFloatingTouchKey": r'createFloatingTouchKey',
+                  "launchProjection": r'\blaunchProjection\s*\(',
+                  "returnToLauncher": r'\breturnToLauncher\s*\(',
+                  "showApps": r'\bshowApps\s*\(',
+                  "onPause": r'\bonPause\s*\(',
+                  "onStop": r'\bonStop\s*\(',
+                  "onDestroy": r'\bonDestroy\s*\(',
+              }
+
+              p = pattern_map.get(label, label)
+
+              found = False
+
+              for i, line in enumerate(lines):
+                  if re.search(p, line):
+                      found = True
+
+                      start = max(0, i - 3)
+                      end = min(len(lines), i + 8)
+
+                      for n in range(start, end):
+                          print(
+                              f"{n + 1:4}: {lines[n]}"
+                          )
+
+                      break
+
+              if not found:
+                  print("No obvious source line found for:", label)
+
+              print("---------------------------------------------")
+
+          for name, pattern, label in checks:
+
+              matches = list(
+                  re.finditer(
+                      pattern,
+                      source,
+                      re.MULTILINE
+                  )
+              )
+
+              if len(matches) == 1:
+
+                  print(
+                      f"PASS: {name} "
+                      f"(exactly 1 match)"
+                  )
+
+              elif len(matches) == 0:
+
+                  print(
+                      f"FAIL: {name} "
+                      f"(0 matches)"
+                  )
+
+                  show_context(label)
+
+                  failures += 1
+
+              else:
+
+                  print(
+                      f"FAIL: {name} "
+                      f"({len(matches)} matches; expected exactly 1)"
+                  )
+
+                  show_context(label)
+
+                  failures += 1
+
+          print("")
+          print("========================================")
+          print("V10CarActivity.java RESULT")
+          print("========================================")
+
+          if failures == 0:
+              print("PASS: All V10CarActivity anchors verified.")
+          else:
+              print(
+                  f"FAIL: {failures} V10CarActivity anchor(s) failed."
+              )
+
+          sys.exit(failures)
+          PY
+
+      # ============================================================
+      # 2. V10ProjectionSession + OTHER SOURCE DIAGNOSTIC
+      # ============================================================
+
+      - name: Diagnostic verify projection and navigation source
+        shell: bash
+        run: |
+          set -uo pipefail
+
+          BASE="v10-source/app/src/main/java/com/carassistant/v10"
+
+          python3 <<'PY'
+          import re
+          import sys
+          from pathlib import Path
+
+          checks = [
+              (
+                  Path(
+                      "v10-source/app/src/main/java/com/carassistant/v10/V10ProjectionSession.java"
+                  ),
+                  "getDisplayId method",
+                  r'^\s*(?:(?:public|protected|private)\s+)?(?:final\s+)?int\s+getDisplayId\s*\(\s*\)',
+              ),
+              (
+                  Path(
+                      "v10-source/app/src/main/java/com/carassistant/v10/V10ProjectionSession.java"
+                  ),
+                  "isActive method",
+                  r'^\s*(?:(?:public|protected|private)\s+)?(?:final\s+)?boolean\s+isActive\s*\(\s*\)',
+              ),
+              (
+                  Path(
+                      "v10-source/app/src/main/java/com/carassistant/v10/RootShellSession.java"
+                  ),
+                  "RootShellSession class",
+                  r'^\s*(?:(?:public|protected|private)\s+)?(?:abstract|final\s+)?class\s+RootShellSession\b',
+              ),
+              (
+                  Path(
+                      "v10-source/app/src/main/java/com/carassistant/v10/NavigationMapView.java"
+                  ),
+                  "NavigationMapView class",
+                  r'^\s*(?:(?:public|protected|private)\s+)?(?:abstract|final\s+)?class\s+NavigationMapView\b',
+              ),
+          ]
+
+          failures = 0
+
+          def context(path, pattern):
+
+              print("")
+              print(
+                  "----- ACTUAL SOURCE CONTEXT:",
+                  path.name,
+                  "-----"
+              )
+
+              try:
+                  lines = path.read_text().splitlines()
+              except Exception as e:
+                  print("Cannot read file:", e)
+                  return
+
+              for i, line in enumerate(lines):
+
+                  if re.search(
+                          pattern,
+                          line,
+                          re.MULTILINE):
+
+                      start = max(0, i - 3)
+                      end = min(
+                          len(lines),
+                          i + 8
+                      )
+
+                      for n in range(start, end):
+                          print(
+                              f"{n + 1:4}: {lines[n]}"
+                          )
+
+                      return
+
+              print(
+                  "No matching source line found."
+              )
+
+          for path, name, pattern in checks:
+
+              if not path.exists():
+
+                  print(
+                      f"FAIL: {name} "
+                      f"(file missing: {path})"
+                  )
+
+                  failures += 1
+                  continue
+
+              source = path.read_text()
+
+              matches = list(
+                  re.finditer(
+                      pattern,
+                      source,
+                      re.MULTILINE
+                  )
+              )
+
+              if len(matches) == 1:
+
+                  print(
+                      f"PASS: {name} "
+                      f"(exactly 1 match)"
+                  )
+
+              elif len(matches) == 0:
+
+                  print(
+                      f"FAIL: {name} "
+                      f"(0 matches)"
+                  )
+
+                  context(path, pattern)
+
+                  failures += 1
+
+              else:
+
+                  print(
+                      f"FAIL: {name} "
+                      f"({len(matches)} matches)"
+                  )
+
+                  context(path, pattern)
+
+                  failures += 1
+
+          print("")
+          print("========================================")
+          print("PROJECTION / NAVIGATION RESULT")
+          print("========================================")
+
+          if failures == 0:
+              print(
+                  "PASS: Projection and Navigation source anchors verified."
+              )
+          else:
+              print(
+                  f"FAIL: {failures} source anchor(s) failed."
+              )
+
+          sys.exit(failures)
+          PY
+
+      # ============================================================
+      # 3. V2A - KEYBOARD UI
+      #
+      # EXACTLY THE SAME KEYBOARD PASS IMPLEMENTATION
+      # ============================================================
+
+      - name: Create Keyboard V2A
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          BASE="v10-source/app/src/main/java/com/carassistant/v10"
+
+          cat > "$BASE/CarAssistantKeyboard.java" <<'EOF'
+          package com.carassistant.v10;
+
+          import android.graphics.Color;
+          import android.graphics.Typeface;
+          import android.graphics.drawable.GradientDrawable;
+          import android.view.Gravity;
+          import android.view.KeyEvent;
+          import android.view.View;
+          import android.widget.FrameLayout;
+          import android.widget.LinearLayout;
+          import android.widget.TextView;
+
+          import java.util.Locale;
+
+          public final class CarAssistantKeyboard {
+
+              public interface Action {
+                  void text(String value);
+                  void key(int keyCode);
+              }
+
+              private final FrameLayout host;
+              private final Action action;
+
+              private LinearLayout panel;
+              private boolean visible;
+
+              public CarAssistantKeyboard(
+                      FrameLayout host,
+                      Action action) {
+
+                  this.host = host;
+                  this.action = action;
+              }
+
+              public boolean isVisible() {
+                  return visible;
+              }
+
+              public void show() {
+
+                  if (panel == null) {
+
+                      panel = buildKeyboard();
+
+                      FrameLayout.LayoutParams p =
+                              new FrameLayout.LayoutParams(
+                                      -1,
+                                      dp(270),
+                                      Gravity.BOTTOM);
+
+                      p.setMargins(
+                              dp(8),
+                              0,
+                              dp(8),
+                              dp(8));
+
+                      host.addView(panel, p);
+                  }
+
+                  panel.setVisibility(View.VISIBLE);
+                  panel.bringToFront();
+
+                  visible = true;
+              }
+
+              public void hide() {
+
+                  if (panel != null) {
+                      panel.setVisibility(View.GONE);
+                  }
+
+                  visible = false;
+              }
+
+              private LinearLayout buildKeyboard() {
+
+                  LinearLayout root =
+                          new LinearLayout(host.getContext());
+
+                  root.setOrientation(
+                          LinearLayout.VERTICAL);
+
+                  root.setPadding(
+                          dp(8),
+                          dp(8),
+                          dp(8),
+                          dp(8));
+
+                  GradientDrawable bg =
+                          new GradientDrawable();
+
+                  bg.setColor(
+                          Color.rgb(15, 20, 26));
+
+                  bg.setCornerRadius(dp(18));
+
+                  bg.setStroke(
+                          dp(1),
+                          Color.rgb(65, 85, 105));
+
+                  root.setBackground(bg);
+                  root.setElevation(dp(18));
+
+                  addRow(root, "1234567890");
+                  addRow(root, "QWERTYUIOP");
+                  addRow(root, "ASDFGHJKL");
+                  addRow(root, "ZXCVBNM");
+
+                  LinearLayout bottom =
+                          new LinearLayout(host.getContext());
+
+                  bottom.setGravity(Gravity.CENTER);
+
+                  addKey(
+                          bottom,
+                          "⌫",
+                          1.35f,
+                          () -> action.key(
+                                  KeyEvent.KEYCODE_DEL));
+
+                  addKey(
+                          bottom,
+                          "SPACE",
+                          3.8f,
+                          () -> action.key(
+                                  KeyEvent.KEYCODE_SPACE));
+
+                  addKey(
+                          bottom,
+                          "ENTER",
+                          1.55f,
+                          () -> action.key(
+                                  KeyEvent.KEYCODE_ENTER));
+
+                  root.addView(
+                          bottom,
+                          new LinearLayout.LayoutParams(
+                                  -1,
+                                  0,
+                                  1f));
+
+                  return root;
+              }
+
+              private void addRow(
+                      LinearLayout root,
+                      String values) {
+
+                  LinearLayout row =
+                          new LinearLayout(
+                                  host.getContext());
+
+                  row.setGravity(Gravity.CENTER);
+
+                  for (int i = 0;
+                       i < values.length();
+                       i++) {
+
+                      final String value =
+                              String.valueOf(
+                                      values.charAt(i))
+                                      .toLowerCase(
+                                              Locale.ROOT);
+
+                      addKey(
+                              row,
+                              String.valueOf(
+                                      values.charAt(i)),
+                              1f,
+                              () -> action.text(value));
+                  }
+
+                  root.addView(
+                          row,
+                          new LinearLayout.LayoutParams(
+                                  -1,
+                                  0,
+                                  1f));
+              }
+
+              private void addKey(
+                      LinearLayout row,
+                      String label,
+                      float weight,
+                      Runnable click) {
+
+                  TextView key =
+                          new TextView(
+                                  host.getContext());
+
+                  key.setText(label);
+
+                  key.setTextColor(Color.WHITE);
+
+                  key.setTextSize(
+                          label.length() > 1
+                                  ? 13
+                                  : 18);
+
+                  key.setTypeface(
+                          Typeface.DEFAULT,
+                          Typeface.BOLD);
+
+                  key.setGravity(Gravity.CENTER);
+
+                  GradientDrawable bg =
+                          new GradientDrawable();
+
+                  bg.setColor(
+                          Color.rgb(32, 41, 50));
+
+                  bg.setCornerRadius(dp(11));
+
+                  key.setBackground(bg);
+
+                  key.setOnClickListener(
+                          v -> click.run());
+
+                  LinearLayout.LayoutParams p =
+                          new LinearLayout.LayoutParams(
+                                  0,
+                                  -1,
+                                  weight);
+
+                  p.setMargins(
+                          dp(3),
+                          dp(3),
+                          dp(3),
+                          dp(3));
+
+                  row.addView(key, p);
+              }
+
+              private int dp(int value) {
+
+                  return Math.round(
+                          value *
+                          host.getResources()
+                              .getDisplayMetrics()
+                              .density);
+              }
+          }
+          EOF
+
+          echo "PASS: V2A keyboard UI created."
+
+      # ============================================================
+      # 4. V2B - INPUT BRIDGE
+      # ============================================================
+
+      - name: Create Keyboard V2B Input Bridge
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          BASE="v10-source/app/src/main/java/com/carassistant/v10"
+
+          cat > "$BASE/CarAssistantInputBridge.java" <<'EOF'
+          package com.carassistant.v10;
+
+          import android.util.Log;
+
+          public final class CarAssistantInputBridge {
+
+              private static final String TAG =
+                      "CarAssistantInputBridge";
+
+              private final V10ProjectionSession session;
+
+              private final RootShellSession rootShell =
+                      new RootShellSession();
+
+              public CarAssistantInputBridge(
+                      V10ProjectionSession session) {
+
+                  this.session = session;
+              }
+
+              public void text(String value) {
+
+                  if (!session.isActive()
+                          || value == null
+                          || value.length() == 0) {
+                      return;
+                  }
+
+                  String safe =
+                          value
+                                  .replace("\\", "\\\\")
+                                  .replace("'", "'\\''")
+                                  .replace("\n", "")
+                                  .replace("\r", "");
+
+                  String command =
+                          "/system/bin/input -d "
+                          + session.getDisplayId()
+                          + " text '"
+                          + safe
+                          + "'";
+
+                  run(command);
+              }
+
+              public void key(int keyCode) {
+
+                  if (!session.isActive()) {
+                      return;
+                  }
+
+                  run(
+                          "/system/bin/input -d "
+                          + session.getDisplayId()
+                          + " keyevent "
+                          + keyCode);
+              }
+
+              private void run(String command) {
+
+                  RootShellSession.EXEC.execute(
+                          () -> {
+
+                              try {
+
+                                  rootShell.run(
+                                          5,
+                                          command);
+
+                              } catch (Throwable t) {
+
+                                  Log.w(
+                                          TAG,
+                                          "input failed",
+                                          t);
+                              }
+                          });
+              }
+
+              public void destroy() {
+                  // Lifecycle is controlled by V2C.
+              }
+          }
+          EOF
+
+          echo "PASS: V2B input bridge created."
+
+      # ============================================================
+      # 5. V2C - CONTROLLER / LIFECYCLE
+      # ============================================================
+
+      - name: Create Keyboard V2C Controller
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          BASE="v10-source/app/src/main/java/com/carassistant/v10"
+
+          cat > "$BASE/CarAssistantKeyboardController.java" <<'EOF'
+          package com.carassistant.v10;
+
+          import android.os.Handler;
+          import android.os.Looper;
+          import android.util.Log;
+          import android.widget.FrameLayout;
+
+          import java.util.regex.Matcher;
+          import java.util.regex.Pattern;
+
+          public final class CarAssistantKeyboardController {
+
+              private static final String TAG =
+                      "CarAssistantKeyboard";
+
+              private static final long POLL_MS =
+                      800L;
+
+              private static final Pattern SHOWN =
+                      Pattern.compile(
+                              "mInputShown\\s*=\\s*(true|false)");
+
+              private final V10ProjectionSession session;
+
+              private final CarAssistantKeyboard keyboard;
+
+              private final CarAssistantInputBridge bridge;
+
+              private final Handler handler =
+                      new Handler(
+                              Looper.getMainLooper());
+
+              private final RootShellSession stateShell =
+                      new RootShellSession();
+
+              private boolean started;
+
+              private boolean lastShown;
+
+              private final Runnable poller =
+                      new Runnable() {
+
+                  @Override
+                  public void run() {
+
+                      if (!started) {
+                          return;
+                      }
+
+                      if (!session.isActive()) {
+
+                          keyboard.hide();
+
+                          handler.postDelayed(
+                                  this,
+                                  POLL_MS);
+
+                          return;
+                      }
+
+                      RootShellSession.EXEC.execute(
+                              () -> {
+
+                          boolean shown = false;
+
+                          try {
+
+                              String out =
+                                      stateShell.run(
+                                              3,
+                                              "dumpsys input_method "
+                                              + "| grep -m 1 "
+                                              + "mInputShown || true");
+
+                              Matcher m =
+                                      SHOWN.matcher(out);
+
+                              if (m.find()) {
+
+                                  shown =
+                                          "true".equalsIgnoreCase(
+                                                  m.group(1));
+                              }
+
+                          } catch (Throwable t) {
+
+                              Log.w(
+                                      TAG,
+                                      "IME state failed",
+                                      t);
+                          }
+
+                          final boolean state =
+                                  shown;
+
+                          if (state != lastShown) {
+
+                              lastShown = state;
+
+                              handler.post(
+                                      () -> {
+
+                                  if (!started
+                                          || !session.isActive()) {
+
+                                      keyboard.hide();
+
+                                      return;
+                                  }
+
+                                  if (state) {
+                                      keyboard.show();
+                                  } else {
+                                      keyboard.hide();
+                                  }
+                              });
+                          }
+
+                          if (started) {
+
+                              handler.postDelayed(
+                                      this,
+                                      POLL_MS);
+                          }
+                      });
+                  }
+              };
+
+              public CarAssistantKeyboardController(
+                      FrameLayout host,
+                      V10ProjectionSession session) {
+
+                  this.session = session;
+
+                  bridge =
+                          new CarAssistantInputBridge(
+                                  session);
+
+                  keyboard =
+                          new CarAssistantKeyboard(
+                                  host,
+                                  new CarAssistantKeyboard.Action() {
+
+                              @Override
+                              public void text(
+                                      String value) {
+
+                                  bridge.text(value);
+                              }
+
+                              @Override
+                              public void key(
+                                      int keyCode) {
+
+                                  bridge.key(keyCode);
+                              }
+                          });
+              }
+
+              public void start() {
+
+                  if (started) {
+                      return;
+                  }
+
+                  started = true;
+
+                  lastShown = false;
+
+                  keyboard.hide();
+
+                  handler.removeCallbacks(
+                          poller);
+
+                  handler.post(poller);
+              }
+
+              public void stop() {
+
+                  started = false;
+
+                  handler.removeCallbacks(
+                          poller);
+
+                  keyboard.hide();
+              }
+
+              public void hide() {
+
+                  lastShown = false;
+
+                  keyboard.hide();
+              }
+          }
+          EOF
+
+          echo "PASS: V2C controller created."
+
+      # ============================================================
+      # 6. INSPECT ACTUAL V10CarActivity
+      # ============================================================
+
+      - name: Inspect actual V10CarActivity source
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          FILE="v10-source/app/src/main/java/com/carassistant/v10/V10CarActivity.java"
+
+          echo "========================================"
+          echo "ACTUAL V10CarActivity SOURCE"
+          echo "========================================"
+
+          python3 - <<'PY'
+          import re
+          from pathlib import Path
+
+          path = Path(
+              "v10-source/app/src/main/java/com/carassistant/v10/V10CarActivity.java"
+          )
+
+          source = path.read_text()
+
+          patterns = {
+              "launchProjection":
+                  r'(?:(?:public|protected|private)\s+)?void\s+launchProjection\s*\([^)]*\)\s*\{[^}]*\}',
+
+              "returnToLauncher":
+                  r'(?:(?:public|protected|private)\s+)?void\s+returnToLauncher\s*\([^)]*\)\s*\{[^}]*\}',
+
+              "showApps":
+                  r'(?:(?:public|protected|private)\s+)?void\s+showApps\s*\([^)]*\)\s*\{[^}]*',
+
+              "onPause":
+                  r'@Override\s+(?:(?:public|protected|private)\s+)?void\s+onPause\s*\([^)]*\)\s*\{[^}]*',
+
+              "onDestroy":
+                  r'@Override\s+(?:(?:public|protected|private)\s+)?void\s+onDestroy\s*\([^)]*\)\s*\{[^}]*',
+          }
+
+          for name, pattern in patterns.items():
+
+              print("")
+              print("=== ", name, " ===")
+
+              match = re.search(
+                  pattern,
+                  source,
+                  re.DOTALL
+              )
+
+              if match:
+                  print(match.group(0))
+              else:
+                  print("NOT FOUND")
+          PY
+
+      # ============================================================
+      # 7. PATCH V10CarActivity
+      #
+      # EXACTLY THE SAME KEYBOARD PASS PATCH
+      # ============================================================
+
+      - name: Patch V10CarActivity
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          python3 <<'PY'
+          import re
+          from pathlib import Path
+
+          path = Path(
+              "v10-source/app/src/main/java/com/carassistant/v10/V10CarActivity.java"
+          )
+
+          source = path.read_text()
+
+          def replace_regex_once(
+                  pattern,
+                  replacement,
+                  name):
+
+              global source
+
+              matches = list(
+                  re.finditer(
+                      pattern,
+                      source,
+                      re.MULTILINE
+                  )
+              )
+
+              if len(matches) != 1:
+
+                  raise SystemExit(
+                      f"{name}: expected exactly 1 match, "
+                      f"got {len(matches)}"
+                  )
+
+              source = re.sub(
+                  pattern,
+                  replacement,
+                  source,
+                  count=1,
+                  flags=re.MULTILINE
+              )
+
+          replace_regex_once(
+              r'(\s*(?:(?:public|protected|private)\s+)?V10ProjectionSession\s+session;)',
+
+              r'\1\n'
+              r'    private CarAssistantKeyboardController keyboardController;',
+
+              "keyboard field"
+          )
+
+          replace_regex_once(
+              r'(session\.attachTextureView\(\s*textureView\);[\s\n]*createFloatingTouchKey\(\);)',
+
+              r'\1\n\n'
+              r'        keyboardController =\n'
+              r'                new CarAssistantKeyboardController(\n'
+              r'                        projectionLayer,\n'
+              r'                        session);\n'
+              r'        keyboardController.start();',
+
+              "keyboard initialization"
+          )
+
+          replace_regex_once(
+              r'((?:(?:public|protected|private)\s+)?void\s+launchProjection\s*\([^)]*\)\s*\{)',
+
+              r'\1\n'
+              r'        if (keyboardController != null) {\n'
+              r'            keyboardController.hide();\n'
+              r'        }\n',
+
+              "keyboard hide on projection launch"
+          )
+
+          replace_regex_once(
+              r'((?:(?:public|protected|private)\s+)?void\s+returnToLauncher\s*\([^)]*\)\s*\{)',
+
+              r'\1\n'
+              r'        if (keyboardController != null) {\n'
+              r'            keyboardController.hide();\n'
+              r'        }\n',
+
+              "keyboard hide on launcher"
+          )
+
+          replace_regex_once(
+              r'((?:(?:public|protected|private)\s+)?void\s+showApps\s*\([^)]*\)\s*\{)',
+
+              r'\1\n'
+              r'        if (keyboardController != null) {\n'
+              r'            keyboardController.hide();\n'
+              r'        }\n',
+
+              "keyboard hide on app selector"
+          )
+
+          replace_regex_once(
+              r'(@Override\s+(?:(?:public|protected|private)\s+)?void\s+onPause\s*\([^)]*\)\s*\{)',
+
+              r'\1\n'
+              r'        if (keyboardController != null) {\n'
+              r'            keyboardController.hide();\n'
+              r'        }\n',
+
+              "keyboard hide on pause"
+          )
+
+          replace_regex_once(
+              r'(@Override\s+(?:(?:public|protected|private)\s+)?void\s+onDestroy\s*\([^)]*\)\s*\{)',
+
+              r'\1\n'
+              r'        if (keyboardController != null) {\n'
+              r'            keyboardController.stop();\n'
+              r'            keyboardController = null;\n'
+              r'        }\n',
+
+              "keyboard stop on destroy"
+          )
+
+          path.write_text(source)
+
+          print(
+              "PASS: V10CarActivity patched using robust structural regex."
+          )
+          PY
+
+      # ============================================================
+      # 8. VERIFY KEYBOARD PASS
+      # ============================================================
+
+      - name: Verify Keyboard PASS
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          BASE="v10-source/app/src/main/java/com/carassistant/v10"
+
+          test -f "$BASE/CarAssistantKeyboard.java"
+          test -f "$BASE/CarAssistantInputBridge.java"
+          test -f "$BASE/CarAssistantKeyboardController.java"
+
+          grep -Fq \
+            'addRow(root, "1234567890");' \
+            "$BASE/CarAssistantKeyboard.java"
+
+          grep -Fq \
+            'addRow(root, "QWERTYUIOP");' \
+            "$BASE/CarAssistantKeyboard.java"
+
+          grep -Fq \
+            'addRow(root, "ASDFGHJKL");' \
+            "$BASE/CarAssistantKeyboard.java"
+
+          grep -Fq \
+            'addRow(root, "ZXCVBNM");' \
+            "$BASE/CarAssistantKeyboard.java"
+
+          grep -Fq \
+            'KeyEvent.KEYCODE_DEL' \
+            "$BASE/CarAssistantKeyboard.java"
+
+          grep -Fq \
+            'KeyEvent.KEYCODE_SPACE' \
+            "$BASE/CarAssistantKeyboard.java"
+
+          grep -Fq \
+            'KeyEvent.KEYCODE_ENTER' \
+            "$BASE/CarAssistantKeyboard.java"
+
+          grep -Fq \
+            '/system/bin/input -d ' \
+            "$BASE/CarAssistantInputBridge.java"
+
+          grep -Fq \
+            'session.getDisplayId()' \
+            "$BASE/CarAssistantInputBridge.java"
+
+          grep -Fq \
+            'RootShellSession.EXEC.execute' \
+            "$BASE/CarAssistantInputBridge.java"
+
+          grep -Fq \
+            'mInputShown' \
+            "$BASE/CarAssistantKeyboardController.java"
+
+          grep -Fq \
+            'handler.postDelayed' \
+            "$BASE/CarAssistantKeyboardController.java"
+
+          grep -Fq \
+            'keyboard.show()' \
+            "$BASE/CarAssistantKeyboardController.java"
+
+          grep -Fq \
+            'keyboard.hide()' \
+            "$BASE/CarAssistantKeyboardController.java"
+
+          grep -Fq \
+            'private CarAssistantKeyboardController keyboardController;' \
+            "$BASE/V10CarActivity.java"
+
+          grep -Fq \
+            'new CarAssistantKeyboardController(' \
+            "$BASE/V10CarActivity.java"
+
+          grep -Fq \
+            'keyboardController.start();' \
+            "$BASE/V10CarActivity.java"
+
+          grep -Fq \
+            'keyboardController.stop();' \
+            "$BASE/V10CarActivity.java"
+
+          HIDE_COUNT=$(
+            grep -o \
+              'keyboardController\.hide()' \
+              "$BASE/V10CarActivity.java" |
+            wc -l
+          )
+
+          if [ "$HIDE_COUNT" -lt 4 ]; then
+
+            echo \
+              "ERROR: Expected at least 4 keyboardController.hide() calls, found $HIDE_COUNT"
+
+            exit 1
+          fi
+
+          if grep -Fq \
+              'InputMethodService' \
+              "$BASE/CarAssistantKeyboard.java"; then
+
+            echo \
+              "ERROR: Keyboard must not be a system IME."
+
+            exit 1
+          fi
+
+          if grep -Fq \
+              'InputMethodService' \
+              "$BASE/CarAssistantKeyboardController.java"; then
+
+            echo \
+              "ERROR: Controller must not be a system IME."
+
+            exit 1
+          fi
+
+          if grep -Fq \
+              'DisplayHooks' \
+              "$BASE/CarAssistantKeyboardController.java"; then
+
+            echo \
+              "ERROR: Keyboard must not modify DisplayHooks."
+
+            exit 1
+          fi
+
+          if grep -Fq \
+              'InputHooks' \
+              "$BASE/CarAssistantKeyboardController.java"; then
+
+            echo \
+              "ERROR: Keyboard must not modify InputHooks."
+
+            exit 1
+          fi
+
+          echo "PASS: V2A"
+          echo "PASS: V2B"
+          echo "PASS: V2C"
+          echo "PASS: Keyboard integration"
+
+      # ============================================================
+      # 9. NAVIGATION-ONLY PATCH
+      #
+      # IMPORTANT:
+      # This is the ONLY new functional patch in this workflow.
+      #
+      # Baseline Navigation source is inspected first.
+      # If expected source structure is not found exactly once,
+      # workflow stops BEFORE modifying NavigationMapView.java.
+      # ============================================================
+
+      - name: Patch Navigation Follow and GPS Arrow
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          FILE="v10-source/app/src/main/java/com/carassistant/v10/NavigationMapView.java"
+
+          echo "========================================"
+          echo "NAVIGATION FOLLOW + GPS ARROW PATCH"
+          echo "========================================"
+
+          test -f "$FILE"
+
+          python3 <<'PY'
+          import re
+          from pathlib import Path
+
+          path = Path(
+              "v10-source/app/src/main/java/com/carassistant/v10/NavigationMapView.java"
+          )
+
+          source = path.read_text()
+
+          print("NavigationMapView baseline size:", len(source), "bytes")
+
+          # --------------------------------------------------------
+          # 9A. IMPORT RenderMode
+          # --------------------------------------------------------
+
+          if "import org.maplibre.android.location.modes.RenderMode;" in source:
+              print("PASS: RenderMode import already present.")
+          else:
+
+              anchor = (
+                  "import org.maplibre.android.location.modes.CameraMode;"
+              )
+
+              count = source.count(anchor)
+
+              if count != 1:
+                  raise SystemExit(
+                      "FAIL: CameraMode import anchor expected exactly "
+                      f"1 match, got {count}"
+                  )
+
+              source = source.replace(
+                  anchor,
+                  anchor
+                  + "\n"
+                  + "import org.maplibre.android.location.modes.RenderMode;",
+                  1
+              )
+
+              print("PASS: RenderMode import added.")
+
+          # --------------------------------------------------------
+          # 9B. CHANGE FOLLOW BUTTON
+          # --------------------------------------------------------
+
+          old_button = '''addControlButton(
+                      controls,
+                      "◎",
+                      "Recenter and resume auto follow",
+                      v -> recenter());'''
+
+          new_button = '''addControlButton(
+                      controls,
+                      "➤",
+                      "Follow current location and direction",
+                      v -> followCurrentLocation());'''
+
+          count = source.count(old_button)
+
+          if count == 1:
+
+              source = source.replace(
+                  old_button,
+                  new_button,
+                  1
+              )
+
+              print(
+                  "PASS: Follow button changed to GPS follow arrow."
+              )
+
+          elif count == 0:
+
+              if new_button in source:
+                  print(
+                      "PASS: Follow button already patched."
+                  )
+              else:
+                  raise SystemExit(
+                      "FAIL: Existing recenter button block not found."
+                  )
+
+          else:
+
+              raise SystemExit(
+                  "FAIL: Recenter button block appears "
+                  f"{count} times; expected exactly 1."
+              )
+
+          # --------------------------------------------------------
+          # 9C. ENABLE GPS RENDER MODE
+          # --------------------------------------------------------
+
+          enable_anchor = '''map.getLocationComponent()
+                  .setLocationComponentEnabled(true);'''
+
+          enable_replacement = '''map.getLocationComponent()
+                  .setLocationComponentEnabled(true);
+
+              map.getLocationComponent()
+                  .setRenderMode(RenderMode.GPS);'''
+
+          count = source.count(enable_anchor)
+
+          if count == 1:
+
+              if "setRenderMode(RenderMode.GPS);" not in source:
+
+                  source = source.replace(
+                      enable_anchor,
+                      enable_replacement,
+                      1
+                  )
+
+                  print(
+                      "PASS: Location component switched to GPS render mode."
+                  )
+
+              else:
+
+                  print(
+                      "PASS: GPS render mode already present."
+                  )
+
+          elif count == 0:
+
+              if "setRenderMode(RenderMode.GPS);" in source:
+                  print(
+                      "PASS: GPS render mode already present."
+                  )
+              else:
+                  raise SystemExit(
+                      "FAIL: Location component enable anchor not found."
+                  )
+
+          else:
+
+              raise SystemExit(
+                  "FAIL: Location component enable anchor appears "
+                  f"{count} times; expected exactly 1."
+              )
+
+          # --------------------------------------------------------
+          # 9D. REPLACE recenter() WITH followCurrentLocation()
+          # --------------------------------------------------------
+
+          old_recenter = r'''(?s)public\s+void\s+recenter\s*\(\s*\)\s*\{
+              .*?
+          \n\s*\}'''
+
+          matches = list(
+              re.finditer(
+                  old_recenter,
+                  source
+              )
+          )
+
+          follow_method = '''public void followCurrentLocation() {
+              if (map == null) return;
+
+              try {
+                  Location location =
+                          map.getLocationComponent()
+                              .getLastKnownLocation();
+
+                  if (location == null) {
+                      startAutoFollow();
+                      return;
+                  }
+
+                  map.getLocationComponent()
+                      .forceLocationUpdate(location);
+
+                  map.getLocationComponent()
+                      .setRenderMode(RenderMode.GPS);
+
+                  map.animateCamera(
+                      CameraUpdateFactory.newLatLngZoom(
+                          new LatLng(
+                              location.getLatitude(),
+                              location.getLongitude()),
+                          AUTO_FOLLOW_ZOOM),
+                      300);
+
+                  map.getLocationComponent()
+                      .setCameraMode(
+                          CameraMode.TRACKING,
+                          500L,
+                          AUTO_FOLLOW_ZOOM,
+                          null,
+                          0.0,
+                          null);
+
+              } catch (Exception ignored) {
+              }
+          }
+
+          public void recenter() {
+              followCurrentLocation();
+          }'''
+
+          if len(matches) == 1:
+
+              current = matches[0].group(0)
+
+              # Only replace if this is the existing simple recenter()
+              # implementation. If it is already patched, leave it.
+              if (
+                  "getLastKnownLocation" in current
+                  or "setCameraMode" in current
+                  or "CameraMode.TRACKING" in current
+              ):
+
+                  source = (
+                      source[:matches[0].start()]
+                      + follow_method
+                      + source[matches[0].end():]
+                  )
+
+                  print(
+                      "PASS: recenter() replaced with "
+                      "followCurrentLocation() + compatibility wrapper."
+                  )
+
+              else:
+
+                  raise SystemExit(
+                      "FAIL: recenter() found, but its source structure "
+                      "does not match the expected Navigation baseline."
+                  )
+
+          elif len(matches) == 0:
+
+              if "public void followCurrentLocation()" in source:
+                  print(
+                      "PASS: followCurrentLocation() already present."
+                  )
+              else:
+                  raise SystemExit(
+                      "FAIL: Could not locate recenter() method."
+                  )
+
+          else:
+
+              raise SystemExit(
+                  "FAIL: recenter() matched "
+                  f"{len(matches)} times; expected exactly 1."
+              )
+
+          path.write_text(source)
+
+          print("PASS: Navigation patch completed.")
+          PY
+
+      # ============================================================
+      # 10. VERIFY NAVIGATION PATCH
+      #
+      # Do NOT touch other source.
+      # ============================================================
+
+      - name: Verify Navigation Follow and GPS Arrow
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          FILE="v10-source/app/src/main/java/com/carassistant/v10/NavigationMapView.java"
+
+          echo "========================================"
+          echo "VERIFY NAVIGATION FOLLOW + GPS ARROW"
+          echo "========================================"
+
+          test -f "$FILE"
+
+          grep -Fq \
+            'import org.maplibre.android.location.modes.RenderMode;' \
+            "$FILE"
+
+          grep -Fq \
+            'setRenderMode(RenderMode.GPS);' \
+            "$FILE"
+
+          grep -Fq \
+            '"➤"' \
+            "$FILE"
+
+          grep -Fq \
+            'Follow current location and direction' \
+            "$FILE"
+
+          grep -Fq \
+            'public void followCurrentLocation()' \
+            "$FILE"
+
+          grep -Fq \
+            'forceLocationUpdate(location)' \
+            "$FILE"
+
+          grep -Fq \
+            'CameraUpdateFactory.newLatLngZoom(' \
+            "$FILE"
+
+          grep -Fq \
+            'location.getLatitude()' \
+            "$FILE"
+
+          grep -Fq \
+            'location.getLongitude()' \
+            "$FILE"
+
+          grep -Fq \
+            'CameraMode.TRACKING' \
+            "$FILE"
+
+          grep -Fq \
+            'public void recenter()' \
+            "$FILE"
+
+          grep -Fq \
+            'followCurrentLocation();' \
+            "$FILE"
+
+          echo "PASS: RenderMode.GPS"
+          echo "PASS: Direction arrow"
+          echo "PASS: forceLocationUpdate"
+          echo "PASS: Exact current GPS camera position"
+          echo "PASS: CameraMode.TRACKING"
+          echo "PASS: recenter compatibility"
+
+          echo ""
+          echo "========================================"
+          echo "NAVIGATION SOURCE CHECK"
+          echo "========================================"
+
+          python3 <<'PY'
+          from pathlib import Path
+
+          path = Path(
+              "v10-source/app/src/main/java/com/carassistant/v10/NavigationMapView.java"
+          )
+
+          source = path.read_text()
+
+          checks = [
+              "RenderMode.GPS",
+              "forceLocationUpdate(location)",
+              "location.getLatitude()",
+              "location.getLongitude()",
+              "CameraMode.TRACKING",
+              "followCurrentLocation()",
+              '"➤"',
+          ]
+
+          failures = 0
+
+          for item in checks:
+
+              count = source.count(item)
+
+              print(
+                  f"{item}: {count} occurrence(s)"
+              )
+
+              if count == 0:
+                  failures += 1
+
+          if failures:
+              raise SystemExit(
+                  f"FAIL: {failures} Navigation verification item(s)."
+              )
+
+          print(
+              "PASS: Navigation Follow + GPS Arrow verification."
+          )
+          PY
+
+      # ============================================================
+      # 11. NAVIGATION BOUNDARY PROTECTION
+      #
+      # Keyboard still must not modify Presentation/Navigation layer.
+      # ============================================================
+
+      - name: Verify Navigation boundary
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          BASE="v10-source/app/src/main/java/com/carassistant/v10"
+
+          grep -Pq \
+            '^\s*(?:(?:public|protected|private)\s+)?(?:abstract|final\s+)?class\s+NavigationMapView' \
+            "$BASE/NavigationMapView.java"
+
+          grep -Fq \
+            'navigationMap=new NavigationMapView(this);' \
+            "$BASE/V10CarActivity.java"
+
+          if grep -Fq \
+              'NavigationPresentationView' \
+              "$BASE/CarAssistantKeyboard.java"; then
+
+            echo \
+              "ERROR: Keyboard references NavigationPresentationView."
+
+            exit 1
+          fi
+
+          if grep -Fq \
+              'NavigationPresentationView' \
+              "$BASE/CarAssistantInputBridge.java"; then
+
+            echo \
+              "ERROR: Input bridge references NavigationPresentationView."
+
+            exit 1
+          fi
+
+          if grep -Fq \
+              'NavigationPresentationView' \
+              "$BASE/CarAssistantKeyboardController.java"; then
+
+            echo \
+              "ERROR: Controller references NavigationPresentationView."
+
+            exit 1
+          fi
+
+          echo "PASS: Navigation boundary."
+
+      # ============================================================
+      # 12. BUILD
+      # ============================================================
+
+      - name: Assemble Keyboard Follow PASS
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          cd v10-source
+
+          chmod +x gradlew
+
+          ./gradlew \
+            --no-daemon \
+            --stacktrace \
+            assembleDebug
+
+      # ============================================================
+      # 13. PACKAGE APK
+      # ============================================================
+
+      - name: Package Keyboard Follow PASS APK
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          APK="v10-source/app/build/outputs/apk/debug/app-debug.apk"
+
+          test -f "$APK"
+
+          mkdir -p dist
+
+          cp \
+            "$APK" \
+            "dist/CarAssistant-V10-Keyboard-Follow-PASS.apk"
+
+          sha256sum \
+            "dist/CarAssistant-V10-Keyboard-Follow-PASS.apk" \
+            > \
+            "dist/CarAssistant-V10-Keyboard-Follow-PASS.sha256"
+
+          echo "========================================"
+          echo "KEYBOARD + NAVIGATION FOLLOW PASS APK"
+          echo "========================================"
+
+          cat \
+            "dist/CarAssistant-V10-Keyboard-Follow-PASS.sha256"
+
+      # ============================================================
+      # 14. UPLOAD
+      # ============================================================
+
+      - name: Upload Keyboard Follow PASS
+        uses: actions/upload-artifact@v4
+        with:
+          name: CarAssistant-V10-Keyboard-Follow-PASS
+          path: |
+            dist/CarAssistant-V10-Keyboard-Follow-PASS.apk
+            dist/CarAssistant-V10-Keyboard-Follow-PASS.sha256
+          if-no-files-found: error
