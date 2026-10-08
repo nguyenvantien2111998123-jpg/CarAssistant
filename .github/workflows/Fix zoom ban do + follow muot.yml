@@ -1,4 +1,4 @@
-name: fix zoom va auto follow muot
+name: Fix zoom va follow auto muot
 
 on:
   workflow_dispatch:
@@ -9,15 +9,9 @@ permissions:
 jobs:
   navigation-follow-v2:
     runs-on: ubuntu-latest
-    timeout-minutes: 40
 
     steps:
-
-      # ============================================================
-      # 0. CHECKOUT CURRENT MAIN
-      # ============================================================
-
-      - name: Checkout main
+      - name: Checkout exact main baseline
         uses: actions/checkout@v4
         with:
           ref: main
@@ -27,58 +21,39 @@ jobs:
         uses: actions/setup-java@v4
         with:
           distribution: temurin
-          java-version: '17'
+          java-version: "17"
 
-      # ============================================================
-      # 1. VERIFY EXACT CURRENT BASELINE
-      # ============================================================
-
-      - name: Verify current NavigationMapView baseline
+      - name: Verify exact baseline
         shell: bash
         run: |
           set -euo pipefail
 
           FILE="v10-source/app/src/main/java/com/carassistant/v10/NavigationMapView.java"
           GRADLE="v10-source/app/build.gradle"
+          EXPECTED_SHA="1600edf884196a146ce5f4233f8de0a8ea282a4e"
 
           test -f "$FILE"
           test -f "$GRADLE"
 
-          echo "========================================"
-          echo "CURRENT MAIN"
-          echo "========================================"
-
-          echo "Commit:"
-          git rev-parse HEAD
-
-          echo ""
-          echo "NavigationMapView SHA:"
           ACTUAL_SHA="$(git hash-object "$FILE")"
+
+          echo "NavigationMapView SHA:"
           echo "$ACTUAL_SHA"
 
-          EXPECTED_SHA="1600edf884196a146ce5f4233f8de0a8ea282a4e"
-
           if [ "$ACTUAL_SHA" != "$EXPECTED_SHA" ]; then
-            echo ""
-            echo "ERROR: NavigationMapView baseline mismatch."
+            echo "ERROR: NavigationMapView.java SHA mismatch."
             echo "Expected: $EXPECTED_SHA"
             echo "Actual:   $ACTUAL_SHA"
             exit 1
           fi
 
-          echo "PASS: NavigationMapView baseline"
+          grep -Fq 'package com.carassistant.v10;' "$FILE"
+          grep -Fq 'org.maplibre.android.location.modes.CameraMode' "$FILE"
+          grep -Fq 'org.maplibre.gl:android-sdk:11.11.0' "$GRADLE"
 
-          grep -q '^package com\.carassistant\.v10;' "$FILE"
-          echo "PASS: package com.carassistant.v10"
+          echo "PASS: Exact baseline verified."
 
-          grep -q 'org\.maplibre\.gl:android-sdk:11\.11\.0' "$GRADLE"
-          echo "PASS: MapLibre 11.11.0"
-
-      # ============================================================
-      # 2. VERIFY ORIGINAL SOURCE ANCHORS
-      # ============================================================
-
-      - name: Verify original Navigation source
+      - name: Verify exact source structure before patch
         shell: bash
         run: |
           set -euo pipefail
@@ -86,70 +61,73 @@ jobs:
           FILE="v10-source/app/src/main/java/com/carassistant/v10/NavigationMapView.java"
 
           python3 - "$FILE" <<'PY'
-          from pathlib import Path
-          import re
           import sys
+          from pathlib import Path
 
           path = Path(sys.argv[1])
           text = path.read_text(encoding="utf-8")
 
-          checks = [
-              (
-                  "NavigationMapView class",
-                  r"class\s+NavigationMapView\s+extends\s+FrameLayout"
-              ),
-              (
-                  "AUTO_FOLLOW_ZOOM 16.0",
-                  r"private\s+static\s+final\s+double\s+AUTO_FOLLOW_ZOOM\s*=\s*16\.0\s*;"
-              ),
-              (
-                  "follow button ◎",
-                  r'addControlButton\s*\(\s*controls\s*,\s*"◎"\s*,\s*"Recenter and resume auto follow"\s*,\s*v\s*->\s*recenter\s*\(\s*\)\s*\)'
-              ),
-              (
-                  "location component enabled",
-                  r"setLocationComponentEnabled\s*\(\s*true\s*\)"
-              ),
-              (
-                  "startAutoFollow",
-                  r"private\s+void\s+startAutoFollow\s*\(\s*\)"
-              ),
-              (
-                  "recenter",
-                  r"public\s+void\s+recenter\s*\(\s*\)"
-              ),
+          required = [
+              "import org.maplibre.android.location.modes.CameraMode;",
+              "private static final double AUTO_FOLLOW_ZOOM = 16.0;",
+              'addControlButton(',
+              '"◎"',
+              '"Recenter and resume auto follow"',
+              "v -> recenter());",
+              "private void enableLocation()",
+              """map.getLocationComponent()
+                  .setLocationComponentEnabled(true);""",
+              "startAutoFollow();",
+              "private void startAutoFollow()",
+              "public void zoomIn()",
+              "public void recenter()",
+              "getLastKnownLocation()",
+              "CameraMode.TRACKING",
           ]
 
-          failures = 0
+          for anchor in required:
+              if anchor not in text:
+                  print("ERROR: Missing source anchor:")
+                  print(repr(anchor))
+                  sys.exit(1)
 
-          for name, pattern in checks:
+          print("PASS: All expected source anchors found.")
 
-              count = len(
-                  re.findall(
-                      pattern,
-                      text,
-                      re.MULTILINE | re.DOTALL
-                  )
-              )
+          lines = text.splitlines()
 
-              if count == 1:
-                  print(f"PASS: {name}")
-              else:
-                  print(f"FAIL: {name} -> {count} matches")
-                  failures += 1
+          for i, line in enumerate(lines):
+              if "setLocationComponentEnabled(true);" in line:
+                  start = max(0, i - 5)
+                  end = min(len(lines), i + 6)
 
-          if failures:
-              print("")
-              print("ERROR: Current source is not the expected baseline.")
-              sys.exit(1)
+                  print("")
+                  print("===== enableLocation() context =====")
 
-          print("")
-          print("PASS: Original Navigation source verified.")
+                  for n in range(start, end):
+                      print(f"{n + 1}: {lines[n]}")
+
+              if '"◎"' in line:
+                  start = max(0, i - 4)
+                  end = min(len(lines), i + 7)
+
+                  print("")
+                  print("===== Follow button context =====")
+
+                  for n in range(start, end):
+                      print(f"{n + 1}: {lines[n]}")
+
+              if line.strip() == "public void recenter() {":
+                  start = i
+                  end = min(len(lines), i + 35)
+
+                  print("")
+                  print("===== recenter() context =====")
+
+                  for n in range(start, end):
+                      print(f"{n + 1}: {lines[n]}")
+
+                  break
           PY
-
-      # ============================================================
-      # 3. PATCH FOLLOW V2
-      # ============================================================
 
       - name: Patch NavigationMapView Follow V2
         shell: bash
@@ -159,315 +137,313 @@ jobs:
           FILE="v10-source/app/src/main/java/com/carassistant/v10/NavigationMapView.java"
 
           python3 - "$FILE" <<'PY'
-          from pathlib import Path
-          import re
           import sys
+          from pathlib import Path
 
           path = Path(sys.argv[1])
           text = path.read_text(encoding="utf-8")
 
-          # ========================================================
-          # 1. RenderMode import
-          # ========================================================
+          def find_method(text, signature):
+              start = text.find(signature)
 
-          import_line = (
+              if start < 0:
+                  raise RuntimeError(
+                      f"Method not found: {signature}"
+                  )
+
+              brace = text.find("{", start)
+
+              if brace < 0:
+                  raise RuntimeError(
+                      f"Opening brace not found: {signature}"
+                  )
+
+              depth = 0
+              in_string = False
+              escape = False
+              in_line_comment = False
+              in_block_comment = False
+
+              i = brace
+
+              while i < len(text):
+                  ch = text[i]
+                  nxt = text[i + 1] if i + 1 < len(text) else ""
+
+                  if in_line_comment:
+                      if ch == "\n":
+                          in_line_comment = False
+
+                      i += 1
+                      continue
+
+                  if in_block_comment:
+                      if ch == "*" and nxt == "/":
+                          in_block_comment = False
+                          i += 2
+                          continue
+
+                      i += 1
+                      continue
+
+                  if in_string:
+                      if escape:
+                          escape = False
+                      elif ch == "\\":
+                          escape = True
+                      elif ch == '"':
+                          in_string = False
+
+                      i += 1
+                      continue
+
+                  if ch == "/" and nxt == "/":
+                      in_line_comment = True
+                      i += 2
+                      continue
+
+                  if ch == "/" and nxt == "*":
+                      in_block_comment = True
+                      i += 2
+                      continue
+
+                  if ch == '"':
+                      in_string = True
+                      i += 1
+                      continue
+
+                  if ch == "{":
+                      depth += 1
+
+                  elif ch == "}":
+                      depth -= 1
+
+                      if depth == 0:
+                          return start, i + 1
+
+                  i += 1
+
+              raise RuntimeError(
+                  f"Unclosed method: {signature}"
+              )
+
+          render_import = (
               "import org.maplibre.android.location.modes.RenderMode;"
           )
 
-          if import_line not in text:
-
-              anchor = (
+          if render_import not in text:
+              camera_import = (
                   "import org.maplibre.android.location.modes.CameraMode;"
               )
 
-              if anchor not in text:
-                  raise SystemExit(
-                      "ERROR: CameraMode import not found."
+              if camera_import not in text:
+                  raise RuntimeError(
+                      "CameraMode import anchor not found."
                   )
 
               text = text.replace(
-                  anchor,
-                  anchor + "\n" + import_line,
+                  camera_import,
+                  camera_import + "\n" + render_import,
                   1
               )
 
               print("PASS: Added RenderMode import")
-
           else:
-              print("PASS: RenderMode import already present")
+              print("PASS: RenderMode import already exists")
 
-          # ========================================================
-          # 2. AUTO_FOLLOW_ZOOM 16 -> 17
-          # ========================================================
-
-          pattern = (
-              r"private\s+static\s+final\s+double\s+"
-              r"AUTO_FOLLOW_ZOOM\s*=\s*16\.0\s*;"
+          old_zoom = (
+              "private static final double AUTO_FOLLOW_ZOOM = 16.0;"
           )
 
-          matches = list(
-              re.finditer(
-                  pattern,
-                  text
-              )
+          new_zoom = (
+              "private static final double AUTO_FOLLOW_ZOOM = 17.0;"
           )
 
-          if len(matches) == 1:
+          count = text.count(old_zoom)
 
-              text = re.sub(
-                  pattern,
-                  "private static final double AUTO_FOLLOW_ZOOM = 17.0;",
-                  text,
-                  count=1
+          if count != 1:
+              raise RuntimeError(
+                  "Expected exactly one AUTO_FOLLOW_ZOOM 16.0 "
+                  f"anchor, found {count}."
               )
 
-              print("PASS: AUTO_FOLLOW_ZOOM 16.0 -> 17.0")
-
-          elif re.search(
-              r"AUTO_FOLLOW_ZOOM\s*=\s*17\.0\s*;",
-              text
-          ):
-
-              print("PASS: AUTO_FOLLOW_ZOOM already 17.0")
-
-          else:
-
-              raise SystemExit(
-                  "ERROR: AUTO_FOLLOW_ZOOM anchor not found."
-              )
-
-          # ========================================================
-          # 3. FOLLOW BUTTON
-          #
-          # IMPORTANT:
-          # Use regex instead of exact whitespace replacement.
-          # ========================================================
-
-          follow_pattern = (
-              r'addControlButton\s*\(\s*'
-              r'controls\s*,\s*'
-              r'"◎"\s*,\s*'
-              r'"Recenter and resume auto follow"\s*,\s*'
-              r'v\s*->\s*recenter\s*\(\s*\)\s*'
-              r'\)\s*;'
+          text = text.replace(
+              old_zoom,
+              new_zoom,
+              1
           )
 
-          follow_matches = list(
-              re.finditer(
-                  follow_pattern,
-                  text,
-                  re.MULTILINE | re.DOTALL
-              )
-          )
+          print("PASS: AUTO_FOLLOW_ZOOM 16.0 -> 17.0")
 
-          if len(follow_matches) == 1:
+          old_button = """addControlButton(
+                controls,
+                "◎",
+                "Recenter and resume auto follow",
+                v -> recenter());"""
 
-              replacement = '''addControlButton(
+          new_button = """addControlButton(
                 controls,
                 "➤",
                 "Follow current location",
-                v -> followCurrentLocation());'''
+                v -> followCurrentLocation());"""
+
+          if old_button not in text:
+              raise RuntimeError(
+                  "Exact Follow button block not found."
+              )
+
+          text = text.replace(
+              old_button,
+              new_button,
+              1
+          )
+
+          print("PASS: Follow button patched")
+
+          method_start, method_end = find_method(
+              text,
+              "private void enableLocation()"
+          )
+
+          method = text[method_start:method_end]
+
+          location_anchor = """map.getLocationComponent()
+                  .setLocationComponentEnabled(true);"""
+
+          gps_block = """map.getLocationComponent()
+                  .setLocationComponentEnabled(true);
+
+              map.getLocationComponent()
+                  .setRenderMode(RenderMode.GPS);"""
+
+          if method.count(location_anchor) != 1:
+              raise RuntimeError(
+                  "Expected exactly one location component "
+                  "anchor inside enableLocation()."
+              )
+
+          if "setRenderMode(RenderMode.GPS);" not in method:
+              method = method.replace(
+                  location_anchor,
+                  gps_block,
+                  1
+              )
 
               text = (
-                  text[:follow_matches[0].start()]
-                  + replacement
-                  + text[follow_matches[0].end():]
+                  text[:method_start]
+                  + method
+                  + text[method_end:]
               )
 
-              print("PASS: Follow button patched")
-
-          elif "v -> followCurrentLocation()" in text:
-
-              print("PASS: Follow button already patched")
-
+              print(
+                  "PASS: Added RenderMode.GPS "
+                  "inside enableLocation()"
+              )
           else:
-
-              print("ERROR: Current follow button block not found.")
-
-              print("")
-              print("Relevant source:")
-
-              lines = text.splitlines()
-
-              for i, line in enumerate(lines):
-
-                  if 'addControlButton(' in line:
-
-                      start = max(0, i - 2)
-                      end = min(len(lines), i + 12)
-
-                      for n in range(start, end):
-                          print(
-                              f"{n + 1:4}: {lines[n]}"
-                          )
-
-                      break
-
-              raise SystemExit(1)
-
-          # ========================================================
-          # 4. GPS RENDER MODE
-          # ========================================================
-
-          gps_anchor = '''        map.getLocationComponent()
-                .setLocationComponentEnabled(true);
-
-          startAutoFollow();'''
-
-          gps_replacement = '''        map.getLocationComponent()
-                .setLocationComponentEnabled(true);
-
-          map.getLocationComponent()
-                .setRenderMode(RenderMode.GPS);
-
-           startAutoFollow();'''
-
-          if "setRenderMode(RenderMode.GPS);" not in text:
-
-              if gps_anchor not in text:
-                  raise SystemExit(
-                      "ERROR: Location component anchor not found."
-                  )
-
-              text = text.replace(
-                  gps_anchor,
-                  gps_replacement,
-                  1
+              print(
+                  "PASS: RenderMode.GPS already exists "
+                  "inside enableLocation()"
               )
 
-              print("PASS: Added GPS render mode")
+          follow_signature = (
+              "private void followCurrentLocation()"
+          )
 
-          else:
-              print("PASS: GPS render mode already present")
+          if follow_signature not in text:
+              zoom_method = "public void zoomIn()"
+              insert_at = text.find(zoom_method)
 
-          # ========================================================
-          # 5. INSERT followCurrentLocation()
-          # ========================================================
-
-          if "private void followCurrentLocation()" not in text:
-
-              marker = "    public void zoomIn() {"
-
-              if marker not in text:
-                  raise SystemExit(
-                      "ERROR: zoomIn() insertion marker not found."
+              if insert_at < 0:
+                  raise RuntimeError(
+                      "public void zoomIn() anchor not found."
                   )
 
-              method = '''    private void followCurrentLocation() {
+              follow_method = """
+          private void followCurrentLocation() {
 
-           if (map == null) {
-            return;
+              if (map == null) {
+                  return;
+              }
+
+              try {
+
+                  Location location =
+                          map.getLocationComponent()
+                                  .getLastKnownLocation();
+
+                  if (location == null) {
+                      startAutoFollow();
+                      return;
+                  }
+
+                  map.getLocationComponent()
+                          .setRenderMode(RenderMode.GPS);
+
+                  map.animateCamera(
+                          CameraUpdateFactory.newLatLngZoom(
+                                  new LatLng(
+                                          location.getLatitude(),
+                                          location.getLongitude()),
+                                  AUTO_FOLLOW_ZOOM),
+                          500);
+
+                  map.getLocationComponent()
+                          .setCameraMode(
+                                  CameraMode.TRACKING,
+                                  500L,
+                                  AUTO_FOLLOW_ZOOM,
+                                  null,
+                                  0.0,
+                                  null);
+
+              } catch (Exception ignored) {
+              }
           }
 
-           try {
+          """
 
-            Location location =
-                    map.getLocationComponent()
-                            .getLastKnownLocation();
-
-            if (location == null) {
-
-                startAutoFollow();
-
-                return;
-            }
-
-            map.getLocationComponent()
-                    .setRenderMode(RenderMode.GPS);
-
-            LatLng current =
-                    new LatLng(
-                            location.getLatitude(),
-                            location.getLongitude());
-
-            map.animateCamera(
-                    CameraUpdateFactory.newLatLngZoom(
-                            current,
-                            AUTO_FOLLOW_ZOOM),
-                    500);
-
-            map.getLocationComponent()
-                    .setCameraMode(
-                            CameraMode.TRACKING,
-                            500L,
-                            AUTO_FOLLOW_ZOOM,
-                            null,
-                            0.0,
-                            null);
-
-           } catch (Exception ignored) {
-           }
-           }
-
-           '''
-
-              text = text.replace(
-                  marker,
-                  method + marker,
-                  1
+              text = (
+                  text[:insert_at]
+                  + follow_method
+                  + text[insert_at:]
               )
 
               print(
-                  "PASS: followCurrentLocation() inserted"
+                  "PASS: Inserted followCurrentLocation()"
               )
-
           else:
-
               print(
-                  "PASS: followCurrentLocation() already present"
+                  "PASS: followCurrentLocation() "
+                  "already exists"
               )
 
-          # ========================================================
-          # 6. REPLACE recenter() BODY
-          # ========================================================
-
-          recenter_pattern = re.compile(
-              r'public\s+void\s+recenter\s*\(\s*\)\s*\{.*?\n\s*\}',
-              re.MULTILINE | re.DOTALL
+          recenter_start, recenter_end = find_method(
+              text,
+              "public void recenter()"
           )
 
-          matches = list(
-              recenter_pattern.finditer(text)
-          )
+          new_recenter = """public void recenter() {
 
-          if len(matches) != 1:
-
-              raise SystemExit(
-                  f"ERROR: Expected exactly one recenter(), "
-                  f"found {len(matches)}."
-              )
-
-          replacement = '''public void recenter() {
-
-          followCurrentLocation();
-          }'''
+              followCurrentLocation();
+          }"""
 
           text = (
-              text[:matches[0].start()]
-              + replacement
-              + text[matches[0].end():]
+              text[:recenter_start]
+              + new_recenter
+              + text[recenter_end:]
           )
 
           print(
-              "PASS: recenter() redirected to followCurrentLocation()"
+              "PASS: recenter() replaced safely"
           )
 
           path.write_text(
               text,
               encoding="utf-8"
           )
-
-          print("")
-          print(
-              "PASS: Follow V2 patch completed in workspace."
-          )
           PY
 
-      # ============================================================
-      # 4. VERIFY PATCH
-      # ============================================================
-
-      - name: Verify Follow V2 patch
+      - name: Verify final patched source
         shell: bash
         run: |
           set -euo pipefail
@@ -475,67 +451,63 @@ jobs:
           FILE="v10-source/app/src/main/java/com/carassistant/v10/NavigationMapView.java"
 
           python3 - "$FILE" <<'PY'
-          from pathlib import Path
-          import re
           import sys
+          from pathlib import Path
 
           text = Path(sys.argv[1]).read_text(
               encoding="utf-8"
           )
 
-          checks = [
-              (
-                  "RenderMode import",
-                  r"import\s+org\.maplibre\.android\.location\.modes\.RenderMode;"
-              ),
-              (
-                  "AUTO_FOLLOW_ZOOM 17",
-                  r"AUTO_FOLLOW_ZOOM\s*=\s*17\.0\s*;"
-              ),
-              (
-                  "Follow button",
-                  r'addControlButton\s*\(\s*controls\s*,\s*"➤"\s*,\s*"Follow current location"\s*,\s*v\s*->\s*followCurrentLocation\s*\(\s*\)\s*\)\s*;'
-              ),
-              (
-                  "GPS render mode",
-                  r"setRenderMode\s*\(\s*RenderMode\.GPS\s*\)"
-              ),
-              (
-                  "followCurrentLocation",
-                  r"private\s+void\s+followCurrentLocation\s*\(\s*\)"
-              ),
-              (
-                  "recenter delegates",
-                  r"public\s+void\s+recenter\s*\(\s*\)\s*\{\s*followCurrentLocation\s*\(\s*\)\s*;\s*\}"
-              ),
-          ]
+          checks = {
+              "RenderMode import":
+                  "import org.maplibre.android.location.modes.RenderMode;"
+                  in text,
 
-          failures = 0
+              "AUTO_FOLLOW_ZOOM 17":
+                  "private static final double AUTO_FOLLOW_ZOOM = 17.0;"
+                  in text,
 
-          for name, pattern in checks:
+              "Follow button":
+                  """addControlButton(
+                controls,
+                "➤",
+                "Follow current location",
+                v -> followCurrentLocation());"""
+                  in text,
 
-              if re.search(
-                  pattern,
-                  text,
-                  re.MULTILINE | re.DOTALL
-              ):
+              "GPS render mode":
+                  "setRenderMode(RenderMode.GPS);" in text,
+
+              "followCurrentLocation":
+                  "private void followCurrentLocation()" in text,
+
+              "recenter delegation":
+                  """public void recenter() {
+
+              followCurrentLocation();
+          }"""
+                  in text,
+          }
+
+          failed = False
+
+          for name, ok in checks.items():
+              if ok:
                   print(f"PASS: {name}")
               else:
                   print(f"FAIL: {name}")
-                  failures += 1
+                  failed = True
 
-          if failures:
+          if failed:
               sys.exit(1)
 
           print("")
-          print("PASS: Follow V2 verification complete.")
+          print(
+              "PASS: Follow V2 source verification complete."
+          )
           PY
 
-      # ============================================================
-      # 5. SHOW DIFF
-      # ============================================================
-
-      - name: Show NavigationMapView diff
+      - name: Show final source diff
         shell: bash
         run: |
           set -euo pipefail
@@ -543,11 +515,7 @@ jobs:
           git diff -- \
             v10-source/app/src/main/java/com/carassistant/v10/NavigationMapView.java
 
-      # ============================================================
-      # 6. COMPILE
-      # ============================================================
-
-      - name: Compile debug Java
+      - name: Compile Debug Java
         working-directory: v10-source
         shell: bash
         run: |
@@ -558,68 +526,49 @@ jobs:
           ./gradlew \
             --no-daemon \
             --stacktrace \
-            compileDebugJavaWithJavac
+            :app:compileDebugJavaWithJavac
 
-      # ============================================================
-      # 7. BUILD APK
-      # ============================================================
-
-      - name: Build debug APK
+      - name: Build Debug APK
         working-directory: v10-source
         shell: bash
         run: |
           set -euo pipefail
 
+          chmod +x gradlew
+
           ./gradlew \
             --no-daemon \
             --stacktrace \
-            assembleDebug
+            :app:assembleDebug
 
-      # ============================================================
-      # 8. PACKAGE APK
-      # ============================================================
-
-      - name: Package Navigation Follow V2 APK
+      - name: Package APK
         shell: bash
         run: |
           set -euo pipefail
 
-          APK="v10-source/app/build/outputs/apk/debug/app-debug.apk"
+          APK="$(
+            find v10-source/app/build/outputs/apk \
+              -type f \
+              -name "*.apk" \
+              | head -n 1
+          )"
 
-          test -f "$APK"
+          if [ -z "$APK" ]; then
+            echo "ERROR: APK not found."
+            exit 1
+          fi
 
           mkdir -p dist
 
-          cp \
-            "$APK" \
+          cp "$APK" \
             "dist/CarAssistant-Navigation-Follow-V2.apk"
 
           sha256sum \
-            "dist/CarAssistant-Navigation-Follow-V2.apk" \
-            > \
-            "dist/CarAssistant-Navigation-Follow-V2.sha256"
-
-          echo ""
-          echo "========================================"
-          echo "APK CREATED"
-          echo "========================================"
-
-          ls -lh \
             "dist/CarAssistant-Navigation-Follow-V2.apk"
 
-          cat \
-            "dist/CarAssistant-Navigation-Follow-V2.sha256"
-
-      # ============================================================
-      # 9. UPLOAD
-      # ============================================================
-
-      - name: Upload Navigation Follow V2 APK
+      - name: Upload APK artifact
         uses: actions/upload-artifact@v4
         with:
           name: CarAssistant-Navigation-Follow-V2
-          path: |
-            dist/CarAssistant-Navigation-Follow-V2.apk
-            dist/CarAssistant-Navigation-Follow-V2.sha256
+          path: dist/CarAssistant-Navigation-Follow-V2.apk
           if-no-files-found: error
-          retention-days: 14
