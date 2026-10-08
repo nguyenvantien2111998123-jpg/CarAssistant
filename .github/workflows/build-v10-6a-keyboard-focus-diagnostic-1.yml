@@ -1,0 +1,512 @@
+name: Keyboard Focus Diagnostic 1
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Restore exact V10-6A source baseline
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          BASELINE="9075636a7d5947c1b0eee49c2bd3fd0e1b6b0cf1"
+
+          echo "========================================"
+          echo "Restoring V10-6A baseline"
+          echo "========================================"
+          echo "$BASELINE"
+
+          git fetch origin "$BASELINE" --depth=1
+          git checkout "$BASELINE" -- v10-source
+
+          test -f \
+            v10-source/app/src/main/java/com/hieptran/aacast/doudou/V10ProjectionSession.java
+
+          test -f \
+            v10-source/app/src/main/java/com/hieptran/aacast/doudou/V10CarActivity.java
+
+          test -f \
+            v10-source/app/src/main/java/com/hieptran/aacast/doudou/RootView.java
+
+          if [ -f \
+            v10-source/app/src/main/java/com/hieptran/aacast/doudou/V10ProjectionService.java
+          ]; then
+            echo "ERROR: V10ProjectionService.java exists."
+            echo "This is not the V10-6A architecture."
+            exit 1
+          fi
+
+          echo "PASS: Exact V10-6A source restored."
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Verify untouched V10-6A CORE before diagnostic patch
+        working-directory: v10-source
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          SRC="app/src/main/java/com/hieptran/aacast/doudou"
+
+          test -f "$SRC/V10ProjectionSession.java"
+          test -f "$SRC/V10CarActivity.java"
+          test -f "$SRC/RootView.java"
+
+          if [ -f "$SRC/V10ProjectionService.java" ]; then
+            echo "ERROR: V10ProjectionService.java detected."
+            exit 1
+          fi
+
+          echo ""
+          echo "V10-6A CORE checks:"
+          grep -q "class V10ProjectionSession" \
+            "$SRC/V10ProjectionSession.java"
+
+          grep -q "class V10CarActivity" \
+            "$SRC/V10CarActivity.java"
+
+          grep -q "class RootView" \
+            "$SRC/RootView.java"
+
+          echo "PASS: V10-6A CORE source is present."
+          echo "PASS: V10-8 ProjectionService is absent."
+
+      - name: Verify AACastBridge before diagnostic patch
+        working-directory: v10-source
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          FILE="app/src/main/java/com/hieptran/aacast/doudou/aabridge/AACastBridge.java"
+
+          test -f "$FILE"
+
+          grep -q "public final class AACastBridge" "$FILE"
+          grep -q 'if ("android".equals(packageName))' "$FILE"
+          grep -q "DisplayHooks.installDisplayFlags" "$FILE"
+          grep -q "DisplayHooks.installInputPolicy" "$FILE"
+          grep -q "InputHooks.install" "$FILE"
+
+          if grep -q "KeyboardFocusHooks" "$FILE"; then
+            echo "ERROR: Diagnostic hook already exists before patch."
+            exit 1
+          fi
+
+          echo "PASS: AACastBridge is clean before diagnostic patch."
+
+      - name: Add Keyboard Focus diagnostic hook
+        working-directory: v10-source
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          HOOK_DIR="app/src/main/java/com/hieptran/aacast/doudou/hook"
+          FILE="$HOOK_DIR/KeyboardFocusHooks.java"
+
+          mkdir -p "$HOOK_DIR"
+
+          cat > "$FILE" <<'EOF'
+          package com.carassistant.v10.hook;
+
+          import android.view.inputmethod.EditorInfo;
+
+          import de.robv.android.xposed.XC_MethodHook;
+          import de.robv.android.xposed.XposedBridge;
+          import de.robv.android.xposed.XposedHelpers;
+
+          /**
+           * Diagnostic-only hook for Android input focus.
+           *
+           * IMPORTANT:
+           * - Does not modify arguments.
+           * - Does not modify return values.
+           * - Does not inject text.
+           * - Does not create or show a keyboard.
+           *
+           * It observes InputMethodManagerService's
+           * startInputOrWindowGainedFocus() path and logs EditorInfo.
+           */
+          public final class KeyboardFocusHooks {
+
+              private static final String TAG =
+                      "[V10 KeyboardFocusDiag]";
+
+              private static boolean installed;
+
+              private KeyboardFocusHooks() {
+              }
+
+              public static void install(ClassLoader classLoader) {
+                  if (installed) {
+                      return;
+                  }
+
+                  installed = true;
+
+                  try {
+                      Class<?> ims =
+                              XposedHelpers.findClass(
+                                      "com.android.server.inputmethod.InputMethodManagerService",
+                                      classLoader);
+
+                      XposedBridge.hookAllMethods(
+                              ims,
+                              "startInputOrWindowGainedFocus",
+                              new XC_MethodHook() {
+
+                                  @Override
+                                  protected void beforeHookedMethod(
+                                          MethodHookParam param) {
+
+                                      try {
+                                          EditorInfo editorInfo =
+                                                  findEditorInfo(param.args);
+
+                                          if (editorInfo == null) {
+                                              return;
+                                          }
+
+                                          String packageName =
+                                                  safe(editorInfo.packageName);
+
+                                          int inputType =
+                                                  editorInfo.inputType;
+
+                                          int imeOptions =
+                                                  editorInfo.imeOptions;
+
+                                          StringBuilder argsInfo =
+                                                  new StringBuilder();
+
+                                          if (param.args != null) {
+                                              for (int i = 0;
+                                                   i < param.args.length;
+                                                   i++) {
+
+                                                  Object arg =
+                                                          param.args[i];
+
+                                                  if (arg == null) {
+                                                      continue;
+                                                  }
+
+                                                  argsInfo.append(
+                                                          " arg")
+                                                          .append(i)
+                                                          .append("=")
+                                                          .append(
+                                                              arg.getClass()
+                                                                  .getName());
+
+                                                  if (arg instanceof Integer) {
+                                                      argsInfo.append(
+                                                              ":")
+                                                              .append(arg);
+                                                  }
+                                              }
+                                          }
+
+                                          XposedBridge.log(
+                                                  TAG
+                                                  + " FOCUS"
+                                                  + " package="
+                                                  + packageName
+                                                  + " inputType="
+                                                  + inputType
+                                                  + " imeOptions="
+                                                  + imeOptions
+                                                  + argsInfo);
+
+                                      } catch (Throwable t) {
+                                          XposedBridge.log(
+                                                  TAG
+                                                  + " diagnostic error: "
+                                                  + t);
+                                      }
+                                  }
+                              });
+
+                      XposedBridge.log(
+                              TAG
+                              + " hook installed");
+
+                  } catch (Throwable t) {
+                      XposedBridge.log(
+                              TAG
+                              + " hook unavailable: "
+                              + t);
+                  }
+              }
+
+              private static EditorInfo findEditorInfo(
+                      Object[] args) {
+
+                  if (args == null) {
+                      return null;
+                  }
+
+                  for (Object arg : args) {
+                      if (arg instanceof EditorInfo) {
+                          return (EditorInfo) arg;
+                      }
+                  }
+
+                  return null;
+              }
+
+              private static String safe(String value) {
+                  return value == null ? "<null>" : value;
+              }
+          }
+          EOF
+
+          test -s "$FILE"
+
+          echo "PASS: KeyboardFocusHooks.java created."
+
+      - name: Patch AACastBridge to install diagnostic hook
+        working-directory: v10-source
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          FILE="app/src/main/java/com/hieptran/aacast/doudou/aabridge/AACastBridge.java"
+
+          python3 - "$FILE" <<'PY'
+          from pathlib import Path
+          import sys
+
+          path = Path(sys.argv[1])
+          text = path.read_text(encoding="utf-8")
+
+          import_marker = (
+              "import com.carassistant.v10.hook.InputHooks;"
+          )
+
+          install_marker = (
+              "            InputHooks.install(param.classLoader);"
+          )
+
+          if "KeyboardFocusHooks" in text:
+              raise SystemExit(
+                  "ERROR: KeyboardFocusHooks already present."
+              )
+
+          if import_marker not in text:
+              raise SystemExit(
+                  "ERROR: InputHooks import marker not found."
+              )
+
+          if install_marker not in text:
+              raise SystemExit(
+                  "ERROR: InputHooks install marker not found."
+              )
+
+          text = text.replace(
+              import_marker,
+              import_marker
+              + "\n"
+              + "import com.carassistant.v10.hook.KeyboardFocusHooks;",
+              1
+          )
+
+          text = text.replace(
+              install_marker,
+              install_marker
+              + "\n"
+              + "            KeyboardFocusHooks.install(param.classLoader);",
+              1
+          )
+
+          path.write_text(
+              text,
+              encoding="utf-8"
+          )
+
+          print("PASS: AACastBridge diagnostic hook installed.")
+          PY
+
+      - name: Verify diagnostic patch only
+        working-directory: v10-source
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          SRC="app/src/main/java/com/hieptran/aacast/doudou"
+          BRIDGE="$SRC/aabridge/AACastBridge.java"
+          HOOK="$SRC/hook/KeyboardFocusHooks.java"
+
+          echo "========================================"
+          echo "Verifying diagnostic patch"
+          echo "========================================"
+
+          test -f "$HOOK"
+
+          grep -q "KeyboardFocusHooks" "$BRIDGE"
+          grep -q "KeyboardFocusHooks.install(param.classLoader)" "$BRIDGE"
+
+          grep -q "startInputOrWindowGainedFocus" "$HOOK"
+          grep -q "EditorInfo" "$HOOK"
+          grep -q "editorInfo.packageName" "$HOOK"
+          grep -q "editorInfo.inputType" "$HOOK"
+          grep -q "editorInfo.imeOptions" "$HOOK"
+
+          grep -q "Does not modify arguments" "$HOOK"
+          grep -q "Does not inject text" "$HOOK"
+
+          echo "PASS: Focus method diagnostic exists."
+          echo "PASS: EditorInfo detection exists."
+          echo "PASS: Package name logging exists."
+          echo "PASS: inputType logging exists."
+          echo "PASS: imeOptions logging exists."
+
+          echo ""
+          echo "Checking that diagnostic did not add keyboard/input injection..."
+
+          if grep -R -q \
+            -E "/system/bin/input|input text|keyevent|injectInputEvent" \
+            "$HOOK"; then
+            echo "ERROR: Diagnostic hook contains input injection."
+            exit 1
+          fi
+
+          echo "PASS: No input injection in diagnostic hook."
+
+          echo ""
+          echo "Checking V10-8 architecture is still absent..."
+
+          if [ -f "$SRC/V10ProjectionService.java" ]; then
+            echo "ERROR: V10ProjectionService.java detected."
+            exit 1
+          fi
+
+          echo "PASS: V10-6A architecture retained."
+
+      - name: Verify Projection CORE was not modified
+        working-directory: v10-source
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          SRC="app/src/main/java/com/hieptran/aacast/doudou"
+
+          echo "Projection CORE source:"
+          sha256sum \
+            "$SRC/V10ProjectionSession.java" \
+            "$SRC/V10CarActivity.java" \
+            "$SRC/RootView.java"
+
+          echo ""
+          echo "Checking diagnostic files only..."
+
+          test -f "$SRC/hook/KeyboardFocusHooks.java"
+
+          echo "PASS: Diagnostic patch is isolated."
+
+      - name: Compile Java
+        working-directory: v10-source
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          chmod +x ./gradlew
+
+          ./gradlew \
+            --no-daemon \
+            --stacktrace \
+            compileDebugJavaWithJavac
+
+          echo "PASS: Java compile."
+
+      - name: Build V10-6A diagnostic APK
+        working-directory: v10-source
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          chmod +x ./gradlew
+
+          ./gradlew \
+            --no-daemon \
+            --stacktrace \
+            assembleDebug
+
+          echo "PASS: APK assemble."
+
+      - name: Locate APK
+        working-directory: v10-source
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          APK="$(find app/build/outputs/apk \
+            -type f \
+            -name "*.apk" \
+            -print -quit)"
+
+          if [ -z "$APK" ]; then
+            echo "ERROR: APK not found."
+            find app/build/outputs -maxdepth 5 -type f -print || true
+            exit 1
+          fi
+
+          echo "APK=$APK"
+          ls -lh "$APK"
+
+          test -s "$APK"
+
+          echo "PASS: Diagnostic APK exists."
+
+      - name: Package diagnostic APK
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          APK="$(find v10-source/app/build/outputs/apk \
+            -type f \
+            -name "*.apk" \
+            -print -quit)"
+
+          test -n "$APK"
+
+          cp "$APK" \
+            CarAssistant-V10-6A-Keyboard-Focus-Diagnostic-1.apk
+
+          sha256sum \
+            CarAssistant-V10-6A-Keyboard-Focus-Diagnostic-1.apk \
+            > CarAssistant-V10-6A-Keyboard-Focus-Diagnostic-1.sha256
+
+          echo ""
+          echo "========================================"
+          echo "KEYBOARD FOCUS DIAGNOSTIC APK READY"
+          echo "========================================"
+
+          ls -lh \
+            CarAssistant-V10-6A-Keyboard-Focus-Diagnostic-1.apk
+
+          echo ""
+          echo "SHA256:"
+          cat \
+            CarAssistant-V10-6A-Keyboard-Focus-Diagnostic-1.sha256
+
+      - name: Upload diagnostic APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: CarAssistant-V10-6A-Keyboard-Focus-Diagnostic-1
+          path: |
+            CarAssistant-V10-6A-Keyboard-Focus-Diagnostic-1.apk
+            CarAssistant-V10-6A-Keyboard-Focus-Diagnostic-1.sha256
+          if-no-files-found: error
+          retention-days: 14
