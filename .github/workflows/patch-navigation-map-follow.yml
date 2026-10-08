@@ -1,0 +1,257 @@
+name: fix zoom va follow muot
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  patch-navigation-map:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout main
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Verify NavigationMapView baseline
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          FILE="v10-source/app/src/main/java/com/carassistant/v10/NavigationMapView.java"
+
+          test -f "$FILE"
+
+          grep -Fq 'import org.maplibre.android.location.modes.CameraMode;' "$FILE"
+          grep -Fq 'private static final double AUTO_FOLLOW_ZOOM = 16.0;' "$FILE"
+          grep -Fq '"◎"' "$FILE"
+          grep -Fq '"Recenter and resume auto follow"' "$FILE"
+          grep -Fq 'private void startAutoFollow()' "$FILE"
+          grep -Fq 'public void recenter()' "$FILE"
+          grep -Fq 'setLocationComponentEnabled(true);' "$FILE"
+
+          if grep -Fq 'import org.maplibre.android.location.modes.RenderMode;' "$FILE"; then
+            echo "FAIL: RenderMode import already exists."
+            exit 1
+          fi
+
+          if grep -Fq 'private void followCurrentLocation()' "$FILE"; then
+            echo "FAIL: followCurrentLocation() already exists."
+            exit 1
+          fi
+
+          echo "PASS: NavigationMapView baseline matches expected source structure."
+
+      - name: Patch NavigationMapView
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          FILE="v10-source/app/src/main/java/com/carassistant/v10/NavigationMapView.java"
+
+          python3 - "$FILE" <<'PY'
+          from pathlib import Path
+          import sys
+
+          path = Path(sys.argv[1])
+          text = path.read_text(encoding="utf-8")
+
+          def replace_once(old, new, name):
+              count = text.count(old)
+              if count != 1:
+                  raise SystemExit(
+                      f"FAIL: {name}: expected exactly 1 match, found {count}"
+                  )
+              return text.replace(old, new, 1)
+
+          text = replace_once(
+              "import org.maplibre.android.location.modes.CameraMode;",
+              "import org.maplibre.android.location.modes.CameraMode;\n"
+              "import org.maplibre.android.location.modes.RenderMode;",
+              "RenderMode import"
+          )
+
+          text = replace_once(
+              "private static final double AUTO_FOLLOW_ZOOM = 16.0;",
+              "private static final double AUTO_FOLLOW_ZOOM = 17.0;",
+              "AUTO_FOLLOW_ZOOM"
+          )
+
+          text = replace_once(
+              '''        addControlButton(
+                  controls,
+                  "◎",
+                  "Recenter and resume auto follow",
+                  v -> recenter());''',
+              '''        addControlButton(
+                  controls,
+                  "➤",
+                  "Follow current location and direction",
+                  v -> followCurrentLocation());''',
+              "follow button"
+          )
+
+          text = replace_once(
+              '''        map.getLocationComponent()
+                  .setLocationComponentEnabled(true);
+
+              startAutoFollow();''',
+              '''        map.getLocationComponent()
+                  .setLocationComponentEnabled(true);
+
+              map.getLocationComponent()
+                  .setRenderMode(RenderMode.GPS);
+
+              startAutoFollow();''',
+              "GPS render mode"
+          )
+
+          old_recenter = '''    public void recenter() {
+
+          if (map == null) {
+              return;
+          }
+
+          try {
+
+              Location location =
+                      map.getLocationComponent()
+                              .getLastKnownLocation();
+
+              if (location == null) {
+
+                  startAutoFollow();
+
+                  return;
+              }
+
+              map.getLocationComponent()
+                      .setCameraMode(
+                              CameraMode.TRACKING,
+                              500L,
+                              AUTO_FOLLOW_ZOOM,
+                              null,
+                              0.0,
+                              null);
+
+          } catch (Exception ignored) {
+          }
+          }'''
+
+          new_recenter = '''    private void followCurrentLocation() {
+
+          if (map == null) {
+              return;
+          }
+
+          try {
+
+              Location location =
+                      map.getLocationComponent()
+                              .getLastKnownLocation();
+
+              if (location == null) {
+                  startAutoFollow();
+                  return;
+              }
+
+              map.getLocationComponent()
+                      .setRenderMode(RenderMode.GPS);
+
+              map.animateCamera(
+                      CameraUpdateFactory.newLatLngZoom(
+                              new LatLng(
+                                      location.getLatitude(),
+                                      location.getLongitude()),
+                              AUTO_FOLLOW_ZOOM),
+                      500);
+
+              map.getLocationComponent()
+                      .setCameraMode(
+                              CameraMode.TRACKING,
+                              800L,
+                              AUTO_FOLLOW_ZOOM,
+                              null,
+                              0.0,
+                              null);
+
+          } catch (Exception ignored) {
+              startAutoFollow();
+          }
+          }
+
+          public void recenter() {
+          followCurrentLocation();
+          }'''
+
+          text = replace_once(
+              old_recenter,
+              new_recenter,
+              "recenter implementation"
+          )
+
+          path.write_text(text, encoding="utf-8")
+
+          print("PASS: NavigationMapView patched.")
+
+          PY
+
+      - name: Verify final source
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          FILE="v10-source/app/src/main/java/com/carassistant/v10/NavigationMapView.java"
+
+          grep -Fq 'import org.maplibre.android.location.modes.RenderMode;' "$FILE"
+          grep -Fq 'private static final double AUTO_FOLLOW_ZOOM = 17.0;' "$FILE"
+          grep -Fq '"➤"' "$FILE"
+          grep -Fq '"Follow current location and direction"' "$FILE"
+          grep -Fq 'setRenderMode(RenderMode.GPS);' "$FILE"
+          grep -Fq 'private void followCurrentLocation()' "$FILE"
+          grep -Fq 'public void recenter()' "$FILE"
+          grep -Fq 'followCurrentLocation();' "$FILE"
+
+          COUNT=$(grep -Fc 'setRenderMode(RenderMode.GPS);' "$FILE")
+          test "$COUNT" -eq 2
+
+          echo "PASS: All expected navigation-follow changes are present."
+
+      - name: Verify only NavigationMapView changed
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          CHANGED=$(git status --short)
+
+          echo "Changed files:"
+          echo "$CHANGED"
+
+          if [ "$(printf '%s\n' "$CHANGED" | grep -c '^ M ')" -ne 1 ]; then
+            echo "FAIL: Unexpected number of modified files."
+            exit 1
+          fi
+
+          printf '%s\n' "$CHANGED" |
+            grep -Fq ' M v10-source/app/src/main/java/com/carassistant/v10/NavigationMapView.java'
+
+          echo "PASS: Only NavigationMapView.java changed."
+
+      - name: Commit patch
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          git add \
+            v10-source/app/src/main/java/com/carassistant/v10/NavigationMapView.java
+
+          git commit -m "Improve navigation auto-follow and direction tracking"
+
+          git push origin HEAD:main
