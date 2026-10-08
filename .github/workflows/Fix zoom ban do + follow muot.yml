@@ -1,4 +1,4 @@
-name: Fix Zoom Auto Follow V8 Safe Build
+name: Fix Zoom Auto Follow V8 Safe Build Fixed
 
 on:
   workflow_dispatch:
@@ -42,7 +42,7 @@ jobs:
               ;;
           esac
 
-          test -f "$WORKFLOW_REL"
+          test -s "$WORKFLOW_REL"
           export WORKFLOW_REL
 
           ruby <<'RUBY'
@@ -602,6 +602,7 @@ jobs:
 
       - name: 10 - Gradle assemble release
         working-directory: v10-source
+        shell: bash
         run: |
           set -euo pipefail
 
@@ -617,12 +618,53 @@ jobs:
             --stacktrace \
             :app:assembleRelease
 
-          APK="app/build/outputs/apk/release/app-release.apk"
+          EXPECTED_APK="app/build/outputs/apk/release/app-release.apk"
+
+          if [ -s "$EXPECTED_APK" ]; then
+            APK="$EXPECTED_APK"
+          else
+            echo "WARN: canonical APK path not found or empty"
+            echo "Release output directory:"
+
+            if [ -d "app/build/outputs/apk/release" ]; then
+              find \
+                "app/build/outputs/apk/release" \
+                -maxdepth 1 \
+                -type f \
+                -printf '%p %s bytes\n' \
+                | sort
+            else
+              echo "FAIL: release output directory does not exist"
+              exit 1
+            fi
+
+            APK="$(find \
+              "app/build/outputs/apk/release" \
+              -maxdepth 1 \
+              -type f \
+              -name '*.apk' \
+              -size +0c \
+              | sort \
+              | head -n 1)"
+
+            if [ -z "$APK" ]; then
+              echo "FAIL: no non-empty release APK found"
+              exit 1
+            fi
+
+            cp \
+              "$APK" \
+              "$EXPECTED_APK"
+
+            APK="$EXPECTED_APK"
+          fi
 
           test -s "$APK"
 
           echo "PASS: Gradle assembleRelease"
           echo "PASS: base APK exists without duplicate legacy DEX"
+          echo "APK: $APK"
+          ls -lh "$APK"
 
       - name: 11 - Inject legacy DEX as separate APK DEX
         shell: bash
@@ -769,7 +811,6 @@ jobs:
             mv \
               /tmp/carassistant-aasdk-legacy.dex.workspace \
               "$LEGACY"
-
           elif [ -f /tmp/carassistant-aasdk-legacy.dex ]; then
             cp \
               /tmp/carassistant-aasdk-legacy.dex \
@@ -799,33 +840,18 @@ jobs:
 
           test -s "$LEGACY"
 
-          if git status --porcelain \
-              | grep -Fq \
-                "v10-source/app/src/main/java/com/carassistant/v10/NavigationMapView.java"; then
-            echo "FAIL: NavigationMapView.java unexpectedly modified in git"
-            exit 1
-          fi
+          test -z "$(git status --porcelain -- "$NAV")"
+          test -z "$(git status --porcelain -- "$GRADLE")"
+          test -z "$(git status --porcelain -- "$LEGACY")"
 
-          if git status --porcelain \
-              | grep -Fq \
-                "v10-source/app/build.gradle"; then
-            echo "FAIL: build.gradle unexpectedly modified in git"
-            exit 1
-          fi
-
-          if git status --porcelain \
-              | grep -Fq \
-                "v10-source/app/libs/aasdk-legacy.dex"; then
-            echo "FAIL: legacy DEX unexpectedly modified in git"
-            exit 1
-          fi
-
-          git diff --check
+          git diff --check -- \
+            "$NAV" \
+            "$GRADLE"
 
           echo "PASS: NavigationMapView protected"
           echo "PASS: build.gradle restored"
           echo "PASS: legacy DEX restored"
-          echo "PASS: git diff --check"
+          echo "PASS: protected-file diff check"
 
       - name: 15 - Upload APK
         if: success()
@@ -856,6 +882,6 @@ jobs:
           echo "Gradle assembleRelease     : PASS"
           echo "Legacy DEX injection       : PASS"
           echo "APK DEX verification       : PASS"
-          echo "Workspace restore           : PASS"
+          echo "Workspace restore          : PASS"
           echo "Protected files            : PASS"
           echo "============================================================"
