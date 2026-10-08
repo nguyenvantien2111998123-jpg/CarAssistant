@@ -1565,7 +1565,7 @@ jobs:
           set -euo pipefail
 
           BASE="v10-source/app/src/main/java/com/carassistant/v10"
-      # ============================================================
+            # ============================================================
       # 9. NAVIGATION FOLLOW V1
       # ============================================================
 
@@ -1599,7 +1599,6 @@ jobs:
             exit 1
           fi
 
-          echo ""
           echo "PASS: NavigationMapView baseline"
 
           mkdir -p "$DRAWABLE_DIR"
@@ -1629,140 +1628,189 @@ jobs:
 
           text = path.read_text(encoding="utf-8")
 
-          def replace_once(pattern, replacement, label):
+          def replace_once(old, new, label):
               global text
 
-              new_text, count = re.subn(
-                  pattern,
-                  replacement,
-                  text,
-                  count=1,
-                  flags=re.MULTILINE | re.DOTALL,
-              )
+              count = text.count(old)
 
               if count != 1:
                   raise SystemExit(
                       f"{label}: expected exactly 1 match, found {count}"
                   )
 
-              text = new_text
+              text = text.replace(old, new, 1)
 
           # --------------------------------------------------------
-          # 9A. IMPORTS
+          # 9A. VERIFY ORIGINAL SOURCE STRUCTURE
           # --------------------------------------------------------
 
-          if "import org.maplibre.android.location.modes.RenderMode;" not in text:
+          if "private void enableLocation()" not in text:
+              raise SystemExit(
+                  "NavigationMapView: enableLocation() not found"
+              )
+
+          if "private void startAutoFollow()" not in text:
+              raise SystemExit(
+                  "NavigationMapView: startAutoFollow() not found"
+              )
+
+          if text.count("private void enableLocation()") != 1:
+              raise SystemExit(
+                  "NavigationMapView: enableLocation() must exist exactly once"
+              )
+
+          if text.count("private void startAutoFollow()") != 1:
+              raise SystemExit(
+                  "NavigationMapView: startAutoFollow() must exist exactly once"
+              )
+
+          print(
+              "PASS: NavigationMapView method anchors"
+          )
+
+          # --------------------------------------------------------
+          # 9B. IMPORTS
+          # --------------------------------------------------------
+
+          camera_import = (
+              "import org.maplibre.android.location.modes.CameraMode;\n"
+          )
+
+          render_import = (
+              "import org.maplibre.android.location.modes.RenderMode;\n"
+          )
+
+          request_import = (
+              "import org.maplibre.android.location.engine.LocationEngineRequest;\n"
+          )
+
+          if render_import not in text:
               replace_once(
-                  r"(import\s+org\.maplibre\.android\.location\.modes\.CameraMode;\s*\n)",
-                  r"\1"
-                  "import org.maplibre.android.location.modes.RenderMode;\n"
-                  "import org.maplibre.android.location.engine.LocationEngineRequest;\n",
+                  camera_import,
+                  camera_import
+                  + render_import
+                  + request_import,
                   "location imports",
               )
 
+          else:
+              if request_import not in text:
+                  replace_once(
+                      render_import,
+                      render_import + request_import,
+                      "LocationEngineRequest import",
+                  )
+
           # --------------------------------------------------------
-          # 9B. FOLLOW ZOOM
+          # 9C. FOLLOW ZOOM
           # --------------------------------------------------------
 
           replace_once(
-              r"private\s+static\s+final\s+double\s+AUTO_FOLLOW_ZOOM\s*=\s*16\.0\s*;",
+              "private static final double AUTO_FOLLOW_ZOOM = 16.0;",
               "private static final double AUTO_FOLLOW_ZOOM = 17.0;",
               "follow zoom",
           )
 
           # --------------------------------------------------------
-          # 9C. LOCATION COMPONENT ACTIVATION
+          # 9D. REPLACE enableLocation() BY METHOD BOUNDARY
           #
           # IMPORTANT:
-          # Use structural regex instead of exact whitespace matching.
-          # The real main source has different indentation than the
-          # previous workflow expected.
+          # Do NOT depend on the original whitespace.
+          # The current source may change indentation.
           # --------------------------------------------------------
 
-          replace_once(
-              r"""
-              (?P<indent>\s*)
-              LocationComponentOptions\s+options\s*=\s*
-              LocationComponentOptions
-              \s*\.\s*builder\(context\)
-              \s*\.\s*pulseEnabled\(true\)
-              \s*\.\s*trackingGesturesManagement\(true\)
-              \s*\.\s*build\(\)
-              \s*;
-
-              \s*
-              LocationComponentActivationOptions\s+activation\s*=\s*
-              LocationComponentActivationOptions
-              \s*\.\s*builder\(
-              \s*context\s*,\s*
-              map\.getStyle\(\)
-              \s*\)
-              \s*\.\s*locationComponentOptions\(
-              \s*options\s*
-              \)
-              \s*\.\s*build\(\)
-              \s*;
-              """,
-              """        LocationComponentOptions options =
-                LocationComponentOptions
-                        .builder(context)
-                        .pulseEnabled(true)
-                        .trackingGesturesManagement(true)
-                        .trackingAnimationDurationMultiplier(1.0f)
-                        .gpsDrawable(
-                                R.drawable.car_navigation_arrow)
-                        .build();
-
-          LocationEngineRequest locationRequest =
-                new LocationEngineRequest.Builder(
-                        750L)
-                        .setFastestInterval(750L)
-                        .setPriority(
-                                LocationEngineRequest.PRIORITY_HIGH_ACCURACY)
-                        .build();
-
-          LocationComponentActivationOptions activation =
-                LocationComponentActivationOptions
-                        .builder(
-                                context,
-                                map.getStyle())
-                        .locationComponentOptions(
-                                options)
-                        .useDefaultLocationEngine(true)
-                        .locationEngineRequest(
-                                locationRequest)
-                        .build();
-              """,
-              "location activation",
+          enable_start = text.index(
+              "    private void enableLocation()"
           )
 
-          # --------------------------------------------------------
-          # 9D. ENABLE LOCATION COMPONENT
-          # --------------------------------------------------------
+          follow_start = text.index(
+              "    private void startAutoFollow()",
+              enable_start,
+          )
 
-          replace_once(
-              r"""
-              map\.getLocationComponent\(\)
-              \s*\.\s*setLocationComponentEnabled\(true\)
-              \s*;
+          new_enable_method = """    private void enableLocation() {
 
-              \s*
-              startAutoFollow\(\)
-              \s*;
-              """,
-              """        map.getLocationComponent()
-                .setLocationComponentEnabled(true);
+          if (map == null) {
+              return;
+          }
+
+          Context context =
+                  getContext();
+
+          if (context == null) {
+              return;
+          }
+
+          if (context.checkSelfPermission(
+                  Manifest.permission.ACCESS_FINE_LOCATION)
+                  != PackageManager.PERMISSION_GRANTED) {
+
+              if (context instanceof Activity) {
+
+                  ((Activity) context).requestPermissions(
+                          new String[]{
+                                  Manifest.permission.ACCESS_FINE_LOCATION,
+                                  Manifest.permission.ACCESS_COARSE_LOCATION
+                          },
+                          LOCATION_REQUEST);
+              }
+
+              return;
+          }
+
+          LocationComponentOptions options =
+                  LocationComponentOptions
+                          .builder(context)
+                          .pulseEnabled(true)
+                          .trackingGesturesManagement(true)
+                          .trackingAnimationDurationMultiplier(1.0f)
+                          .gpsDrawable(
+                                  R.drawable.car_navigation_arrow)
+                          .build();
+
+          LocationEngineRequest locationRequest =
+                  new LocationEngineRequest.Builder(
+                          750L)
+                          .setFastestInterval(750L)
+                          .setPriority(
+                                  LocationEngineRequest.PRIORITY_HIGH_ACCURACY)
+                          .build();
+
+          LocationComponentActivationOptions activation =
+                  LocationComponentActivationOptions
+                          .builder(
+                                  context,
+                                  map.getStyle())
+                          .locationComponentOptions(
+                                  options)
+                          .useDefaultLocationEngine(true)
+                          .locationEngineRequest(
+                                  locationRequest)
+                          .build();
 
           map.getLocationComponent()
-                .setRenderMode(
-                        RenderMode.GPS);
+                  .activateLocationComponent(
+                          activation);
 
           map.getLocationComponent()
-                .setMaxAnimationFps(60);
+                  .setLocationComponentEnabled(true);
+
+          map.getLocationComponent()
+                  .setRenderMode(
+                          RenderMode.GPS);
+
+          map.getLocationComponent()
+                  .setMaxAnimationFps(60);
 
           startAutoFollow();
-              """,
-              "location render mode",
+          }
+
+          """
+
+          text = (
+              text[:enable_start]
+              + new_enable_method
+              + text[follow_start:]
           )
 
           # --------------------------------------------------------
@@ -1784,12 +1832,18 @@ jobs:
               "CameraMode.TRACKING_GPS,",
           )
 
+          # --------------------------------------------------------
+          # 9F. WRITE PATCH
+          # --------------------------------------------------------
+
           path.write_text(
               text,
               encoding="utf-8",
           )
 
-          print("PASS: NavigationMapView patched structurally.")
+          print(
+              "PASS: NavigationMapView patched structurally."
+          )
           PY
 
           echo ""
@@ -1810,11 +1864,7 @@ jobs:
             "$NAV"
 
           grep -Fq \
-            '.setRenderMode(' \
-            "$NAV"
-
-          grep -Fq \
-            'RenderMode.GPS' \
+            '.trackingAnimationDurationMultiplier(1.0f)' \
             "$NAV"
 
           grep -Fq \
@@ -1826,7 +1876,11 @@ jobs:
             "$NAV"
 
           grep -Fq \
-            '.trackingAnimationDurationMultiplier(1.0f)' \
+            '.setRenderMode(' \
+            "$NAV"
+
+          grep -Fq \
+            'RenderMode.GPS' \
             "$NAV"
 
           grep -Fq \
@@ -1862,8 +1916,11 @@ jobs:
           echo "PASS: navigation animation FPS = 60"
           echo "PASS: Navigation Follow V1"
 
+      # ============================================================
+      # 10. POST-PATCH SOURCE VERIFY
+      # ============================================================
 
-      - name: Verify Navigation Follow V1
+      - name: Verify Navigation source after patch
         shell: bash
         run: |
           set -euo pipefail
@@ -1872,43 +1929,106 @@ jobs:
           NAV="$BASE/NavigationMapView.java"
           ARROW="v10-source/app/src/main/res/drawable/car_navigation_arrow.xml"
 
-          grep -Pq \
-            '^\s*(?:(?:public|protected|private)\s+)?(?:abstract|final\s+)?class\s+NavigationMapView' \
-            "$NAV"
+          python3 <<'PY'
+          from pathlib import Path
+          import re
+
+          nav = Path(
+              "v10-source/app/src/main/java/com/carassistant/v10/NavigationMapView.java"
+          )
+
+          source = nav.read_text(encoding="utf-8")
+
+          checks = [
+              (
+                  "NavigationMapView class",
+                  r'public\s+final\s+class\s+NavigationMapView\s+extends\s+FrameLayout'
+              ),
+              (
+                  "enableLocation method",
+                  r'private\s+void\s+enableLocation\s*\(\s*\)\s*\{'
+              ),
+              (
+                  "startAutoFollow method",
+                  r'private\s+void\s+startAutoFollow\s*\(\s*\)\s*\{'
+              ),
+              (
+                  "GPS render mode",
+                  r'RenderMode\.GPS'
+              ),
+              (
+                  "GPS camera mode",
+                  r'CameraMode\.TRACKING_GPS'
+              ),
+              (
+                  "high accuracy",
+                  r'LocationEngineRequest\.PRIORITY_HIGH_ACCURACY'
+              ),
+              (
+                  "navigation arrow",
+                  r'R\.drawable\.car_navigation_arrow'
+              ),
+          ]
+
+          failures = 0
+
+          for name, pattern in checks:
+              matches = re.findall(
+                  pattern,
+                  source,
+                  re.MULTILINE,
+              )
+
+              if len(matches) >= 1:
+                  print(
+                      f"PASS: {name}"
+                  )
+              else:
+                  print(
+                      f"FAIL: {name}"
+                  )
+                  failures += 1
+
+          tracking_gps = source.count(
+              "CameraMode.TRACKING_GPS,"
+          )
+
+          if tracking_gps != 2:
+              print(
+                  "FAIL: CameraMode.TRACKING_GPS count =",
+                  tracking_gps,
+              )
+              failures += 1
+          else:
+              print(
+                  "PASS: CameraMode.TRACKING_GPS count = 2"
+              )
+
+          if "CameraMode.TRACKING," in source:
+              print(
+                  "FAIL: old CameraMode.TRACKING remains"
+              )
+              failures += 1
+          else:
+              print(
+                  "PASS: old CameraMode.TRACKING removed"
+              )
+
+          if failures:
+              raise SystemExit(
+                  f"Navigation source verification failed: {failures}"
+              )
+
+          print(
+              "PASS: Navigation source after patch"
+          )
+          PY
+
+          test -s "$ARROW"
 
           grep -Fq \
             'navigationMap=new NavigationMapView(this);' \
             "$BASE/V10CarActivity.java"
-
-          grep -Fq \
-            'private static final double AUTO_FOLLOW_ZOOM = 17.0;' \
-            "$NAV"
-
-          grep -Fq \
-            'RenderMode.GPS' \
-            "$NAV"
-
-          grep -Fq \
-            'R.drawable.car_navigation_arrow' \
-            "$NAV"
-
-          grep -Fq \
-            'LocationEngineRequest.PRIORITY_HIGH_ACCURACY' \
-            "$NAV"
-
-          grep -Fq \
-            '.trackingAnimationDurationMultiplier(1.0f)' \
-            "$NAV"
-
-          grep -Fq \
-            '.setMaxAnimationFps(60)' \
-            "$NAV"
-
-          test "$(grep -Fc \
-            'CameraMode.TRACKING_GPS,' \
-            "$NAV")" -eq 2
-
-          test -s "$ARROW"
 
           if grep -Fq \
               'NavigationPresentationView' \
@@ -1932,23 +2052,27 @@ jobs:
           fi
 
           echo "========================================"
-          echo "NAVIGATION FOLLOW V1 : PASS"
+          echo "NAVIGATION FOLLOW V1 : SOURCE PASS"
           echo "========================================"
-          echo "Zoom                    : 17.0"
-          echo "Location update         : 750 ms"
-          echo "Location priority       : HIGH_ACCURACY"
-          echo "Location render         : GPS"
-          echo "Vehicle arrow           : custom drawable"
-          echo "Camera tracking         : TRACKING_GPS"
-          echo "Animation FPS           : 60"
-          echo "Keyboard boundary       : PASS"
-
 
       # ============================================================
-      # 10. BUILD
+      # 11. SHOW DIFF
       # ============================================================
 
-      - name: Assemble Keyboard PASS
+      - name: Show Navigation patch diff
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          git diff -- \
+            v10-source/app/src/main/java/com/carassistant/v10/NavigationMapView.java \
+            v10-source/app/src/main/res/drawable/car_navigation_arrow.xml
+
+      # ============================================================
+      # 12. JAVA SYNTAX / COMPILE
+      # ============================================================
+
+      - name: Java compile verification
         shell: bash
         run: |
           set -euo pipefail
@@ -1960,58 +2084,13 @@ jobs:
           ./gradlew \
             --no-daemon \
             --stacktrace \
-            assembleDebug
-
-
-      # ============================================================
-      # 11. PACKAGE APK
-      # ============================================================
-
-      - name: Package Keyboard PASS APK
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          APK="v10-source/app/build/outputs/apk/debug/app-debug.apk"
-
-          test -f "$APK"
-
-          mkdir -p dist
-
-          cp \
-            "$APK" \
-            "dist/CarAssistant-V10-Keyboard-PASS.apk"
-
-          sha256sum \
-            "dist/CarAssistant-V10-Keyboard-PASS.apk" \
-            > \
-            "dist/CarAssistant-V10-Keyboard-PASS.sha256"
-
-          echo "========================================"
-          echo "KEYBOARD PASS APK"
-          echo "========================================"
-
-          cat \
-            "dist/CarAssistant-V10-Keyboard-PASS.sha256"
-
+            compileDebugJavaWithJavac
 
       # ============================================================
-      # 12. UPLOAD
+      # 13. BUILD APK
       # ============================================================
 
-      - name: Upload Keyboard PASS
-        uses: actions/upload-artifact@v4
-        with:
-          name: CarAssistant-V10-Keyboard-PASS
-          path: |
-            dist/CarAssistant-V10-Keyboard-PASS.apk
-            dist/CarAssistant-V10-Keyboard-PASS.sha256
-          if-no-files-found: error
-      # ============================================================
-      # 10. BUILD
-      # ============================================================
-
-      - name: Assemble Keyboard PASS
+      - name: Assemble Keyboard PASS APK
         shell: bash
         run: |
           set -euo pipefail
@@ -2026,7 +2105,7 @@ jobs:
             assembleDebug
 
       # ============================================================
-      # 11. PACKAGE APK
+      # 14. PACKAGE APK
       # ============================================================
 
       - name: Package Keyboard PASS APK
@@ -2057,7 +2136,7 @@ jobs:
             "dist/CarAssistant-V10-Keyboard-PASS.sha256"
 
       # ============================================================
-      # 12. UPLOAD
+      # 15. UPLOAD
       # ============================================================
 
       - name: Upload Keyboard PASS
@@ -2068,3 +2147,4 @@ jobs:
             dist/CarAssistant-V10-Keyboard-PASS.apk
             dist/CarAssistant-V10-Keyboard-PASS.sha256
           if-no-files-found: error
+          
