@@ -1,4 +1,4 @@
-name: Fix Zoom Auto Follow V5 Safe Build
+name: Fix Zoom Auto Follow V6 Safe Build
 
 on:
   workflow_dispatch:
@@ -7,18 +7,14 @@ permissions:
   contents: read
 
 jobs:
-  fix-zoom-auto-follow-v5:
+  verify-patch-compile-build:
     name: Verify Patch Compile and Build V10
     runs-on: ubuntu-latest
-
-    defaults:
-      run:
-        shell: bash
 
     steps:
 
       # ============================================================
-      # 01 - CHECKOUT
+      # 01 - CHECKOUT MAIN
       # ============================================================
       - name: 01 - Checkout main
         uses: actions/checkout@v5
@@ -27,33 +23,47 @@ jobs:
           fetch-depth: 1
 
       # ============================================================
-      # 02 - SETUP JAVA
+      # 02 - JAVA 17
       # ============================================================
       - name: 02 - Setup Java 17
         uses: actions/setup-java@v5
         with:
           distribution: temurin
-          java-version: '17'
+          java-version: 17
           cache: gradle
 
       # ============================================================
-      # 03 - RESOLVE AND PARSE THE ACTUAL WORKFLOW
+      # 03 - YAML PARSE
       #
-      # KHONG hard-code ten workflow.
+      # IMPORTANT:
+      # Resolve the exact workflow currently executing.
       #
-      # GITHUB_WORKFLOW_REF co dang:
+      # GITHUB_WORKFLOW_REF example:
       #
-      # owner/repository/.github/workflows/file.yml@refs/heads/main
+      # owner/repo/.github/workflows/file.yml@refs/heads/main
       #
-      # Workflow tu lay chinh ten file dang chay.
+      # We remove exactly:
+      #
+      # owner/repo/
+      #
+      # and then:
+      #
+      # @refs/...
+      #
+      # Result:
+      #
+      # .github/workflows/file.yml
       # ============================================================
-      - name: 03 - YAML parse actual workflow
+      - name: 03 - Parse running workflow YAML
         shell: bash
         run: |
           set -euo pipefail
 
-          WORKFLOW_REL="${GITHUB_WORKFLOW_REF#*/}"
+          WORKFLOW_REL="${GITHUB_WORKFLOW_REF#${GITHUB_REPOSITORY}/}"
           WORKFLOW_REL="${WORKFLOW_REL%@*}"
+
+          echo "GITHUB_REPOSITORY:"
+          echo "$GITHUB_REPOSITORY"
 
           echo "GITHUB_WORKFLOW_REF:"
           echo "$GITHUB_WORKFLOW_REF"
@@ -162,15 +172,20 @@ jobs:
           test -f "$LEGACY"
           test -f "$GRADLEW"
 
+          test -s "$NAV"
+          test -s "$GRADLE"
+          test -s "$LEGACY"
+          test -s "$GRADLEW"
+
           echo "PASS: NavigationMapView.java exists"
-          echo "PASS: app/build.gradle exists"
+          echo "PASS: build.gradle exists"
           echo "PASS: aasdk-legacy.dex exists"
           echo "PASS: gradlew exists"
 
       # ============================================================
-      # 05 - VERIFY CURRENT SOURCE BASELINE
+      # 05 - VERIFY EXACT BASELINE
       #
-      # Khong patch neu source khong dung baseline.
+      # Phần đã PASS trước đó giữ nguyên.
       # ============================================================
       - name: 05 - Verify exact source baseline
         shell: bash
@@ -179,6 +194,7 @@ jobs:
 
           NAV="v10-source/app/src/main/java/com/carassistant/v10/NavigationMapView.java"
           GRADLE="v10-source/app/build.gradle"
+          LEGACY="v10-source/app/libs/aasdk-legacy.dex"
 
           EXPECTED_NAV_SHA="1600edf884196a146ce5f4233f8de0a8ea282a4e"
           EXPECTED_GRADLE_SHA="4d512337d46324a33a685d8cdb095e4ecacd3ceb"
@@ -254,14 +270,7 @@ jobs:
           echo "PASS: expected pre-patch structure verified"
 
       # ============================================================
-      # 06 - PYTHON PATCH ENGINE
-      #
-      # Buoc nay:
-      # 1. Tao patch engine
-      # 2. py_compile
-      # 3. execute
-      #
-      # Moi replace deu bat buoc EXACTLY 1 match.
+      # 06 - PYTHON PARSE + EXECUTE PATCH
       # ============================================================
       - name: 06 - Python parse and execute patch
         shell: bash
@@ -467,6 +476,7 @@ jobs:
           print(
               "PASS: patch engine executed"
           )
+
           print(
               "PASS: NavigationMapView patched"
           )
@@ -475,11 +485,15 @@ jobs:
           python3 -m py_compile \
             /tmp/apply_navigation_patch.py
 
+          echo "PASS: Python syntax"
+
           python3 \
             /tmp/apply_navigation_patch.py
 
+          echo "PASS: Python patch execution"
+
       # ============================================================
-      # 07 - VERIFY PATCHED SOURCE
+      # 07 - VERIFY SOURCE AFTER PATCH
       # ============================================================
       - name: 07 - Verify source after patch
         shell: bash
@@ -525,7 +539,6 @@ jobs:
             'followCurrentLocation();' \
             "$NAV"
 
-          # Old structure must not remain.
           ! grep -Fq \
             'private static final double AUTO_FOLLOW_ZOOM = 16.0;' \
             "$NAV"
@@ -538,7 +551,9 @@ jobs:
             '"Recenter and resume auto follow",' \
             "$NAV"
 
-          # Exact counts.
+          # --------------------------------------------------------
+          # Exact structure/count verification
+          # --------------------------------------------------------
           python3 <<'PY'
           from pathlib import Path
 
@@ -602,7 +617,7 @@ jobs:
 
 
           # --------------------------------------------------------
-          # Java brace balance.
+          # Java brace balance
           # --------------------------------------------------------
           depth = 0
           in_block_comment = False
@@ -671,6 +686,7 @@ jobs:
 
           echo "PASS: patched source verified"
           echo "PASS: build.gradle unchanged"
+          echo "PASS: git diff --check"
 
       # ============================================================
       # 08 - JAVA SYNTAX / COMPILE
@@ -693,7 +709,8 @@ jobs:
       # ============================================================
       # 09 - GRADLE RELEASE BUILD
       #
-      # Preserve legacy DEX mechanism.
+      # KHÔNG sửa build.gradle.
+      # Giữ nguyên legacy DEX mechanism đã PASS.
       # ============================================================
       - name: 09 - Gradle assemble release
         working-directory: v10-source
@@ -751,7 +768,7 @@ jobs:
           echo "PASS: APK contains $DEX_COUNT DEX files"
 
       # ============================================================
-      # 11 - VERIFY BUILD.GRADLE STILL UNCHANGED
+      # 11 - PROTECTED FILES
       # ============================================================
       - name: 11 - Verify protected files
         shell: bash
@@ -794,7 +811,7 @@ jobs:
       - name: 12 - Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: CarAssistant-V10-Follow-V5
+          name: CarAssistant-V10-Follow-V6
           path: v10-source/app/build/outputs/apk/release/app-release.apk
           if-no-files-found: error
 
@@ -808,7 +825,7 @@ jobs:
 
           echo
           echo "============================================================"
-          echo "CARASSISTANT V10 FOLLOW V5 : PASS"
+          echo "CARASSISTANT V10 FOLLOW V6 : PASS"
           echo "============================================================"
           echo
           echo "YAML parse                 : PASS"
