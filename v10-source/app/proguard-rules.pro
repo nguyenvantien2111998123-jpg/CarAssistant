@@ -1,11 +1,11 @@
 # ---------------------------------------------------------------------------
 # 1) Xposed entry — assets/xposed_init trỏ tới class này BẰNG TÊN CHUỖI
 # ---------------------------------------------------------------------------
--keep class com.hieptran.aacast.doudou.aabridge.AACastBridge { public *; }
--keepnames class com.hieptran.aacast.doudou.aabridge.AACastBridge
+-keep class com.carassistant.v10.aabridge.AACastBridge { public *; }
+-keepnames class com.carassistant.v10.aabridge.AACastBridge
 
 # Hook classes (giữ cho log/stacktrace đọc được)
--keep class com.hieptran.aacast.doudou.hook.** { *; }
+-keep class com.carassistant.v10.hook.** { *; }
 
 # ---------------------------------------------------------------------------
 # 2) Android Auto SDK cũ: giữ TÊN vì SDK tự load class theo tên
@@ -20,11 +20,11 @@
 # ---------------------------------------------------------------------------
 # 3) Thành phần app (manifest nạp bằng tên)
 # ---------------------------------------------------------------------------
--keep class com.hieptran.aacast.doudou.MainActivity { *; }
--keep class com.hieptran.aacast.doudou.AACastCarActivity { *; }
--keep class com.hieptran.aacast.doudou.AACastCarService { *; }
--keep class com.hieptran.aacast.doudou.DockStateProvider { *; }
--keep class com.hieptran.aacast.doudou.RootShellSession { *; }
+-keep class com.carassistant.v10.MainActivity { *; }
+-keep class com.carassistant.v10.AACastCarActivity { *; }
+-keep class com.carassistant.v10.AACastCarService { *; }
+-keep class com.carassistant.v10.DockStateProvider { *; }
+-keep class com.carassistant.v10.RootShellSession { *; }
 
 # ---------------------------------------------------------------------------
 # 4) Thư viện ngoài không có trong APK (annotation của GMS / JSR-305)

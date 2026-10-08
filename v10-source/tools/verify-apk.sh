@@ -32,11 +32,11 @@ echo
 echo "===== 3. Dex: class phải được ĐỊNH NGHĨA ====="
 CLASSES="$(defined_classes)"
 for s in \
-    "Lcom/hieptran/aacast/doudou/aabridge/AACastBridge;" \
-    "Lcom/hieptran/aacast/doudou/AACastCarService;" \
-    "Lcom/hieptran/aacast/doudou/AACastCarActivity;" \
-    "Lcom/hieptran/aacast/doudou/hook/GearheadDockPatcher;" \
-    "Lcom/hieptran/aacast/doudou/hook/InputHooks;" \
+    "Lcom/carassistant/v10/aabridge/AACastBridge;" \
+    "Lcom/carassistant/v10/AACastCarService;" \
+    "Lcom/carassistant/v10/AACastCarActivity;" \
+    "Lcom/carassistant/v10/hook/GearheadDockPatcher;" \
+    "Lcom/carassistant/v10/hook/InputHooks;" \
     "Lcom/google/android/apps/auto/sdk/CarActivity;" \
     "Lcom/google/android/gms/car/CarActivityHost;"; do
   if grep -Fx "$s" <<< "$CLASSES" > /dev/null; then echo "  ok: $s"; else echo "  THIẾU: $s"; exit 1; fi
