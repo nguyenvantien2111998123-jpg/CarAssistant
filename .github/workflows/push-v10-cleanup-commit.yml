@@ -1,4 +1,4 @@
-name: CarAssistant V10 - Apply Cleanup Safely
+name: CarAssistant V10 - Apply Cleanup From Current Main
 
 on:
   workflow_dispatch:
@@ -18,38 +18,23 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
 
-      - name: Verify exact repository state
+      - name: Verify current main and cleanup commit
         shell: bash
         run: |
           set -euo pipefail
 
-          EXPECTED_MAIN="5806a66ac2f92857a6768c30b14bdbe5ff43d596"
           CLEANUP_COMMIT="a5eaf450ab0d8b65dd4e16bfb25ccbfece620efd"
           CLEANUP_PARENT="97f50f032da8d1d851c60bd5af7f057be296460c"
           CLEANUP_MESSAGE="Normalize CarAssistant V10 source structure"
 
-          echo "========================================"
-          echo "V10 CLEANUP - STATE VERIFICATION"
-          echo "========================================"
-
           MAIN_COMMIT="$(git rev-parse HEAD)"
+
+          echo "========================================"
+          echo "V10 CLEANUP - CURRENT MAIN"
+          echo "========================================"
 
           echo "Current main:"
           echo "$MAIN_COMMIT"
-
-          if [ "$MAIN_COMMIT" != "$EXPECTED_MAIN" ]; then
-            echo
-            echo "ERROR: main changed after this workflow was prepared."
-            echo "Expected:"
-            echo "$EXPECTED_MAIN"
-            echo "Actual:"
-            echo "$MAIN_COMMIT"
-            echo
-            echo "STOPPING SAFELY."
-            echo "No cherry-pick."
-            echo "No force-push."
-            exit 1
-          fi
 
           echo
           echo "Fetching cleanup commit..."
@@ -69,40 +54,42 @@ jobs:
           echo "$ACTUAL_MESSAGE"
 
           if [ "$ACTUAL_PARENT" != "$CLEANUP_PARENT" ]; then
-            echo
-            echo "ERROR: Cleanup parent SHA does not match."
+            echo "ERROR: Cleanup parent SHA mismatch."
             exit 1
           fi
 
           if [ "$ACTUAL_MESSAGE" != "$CLEANUP_MESSAGE" ]; then
-            echo
-            echo "ERROR: Cleanup commit message does not match."
+            echo "ERROR: Cleanup message mismatch."
             exit 1
           fi
 
           echo
-          echo "Checking cleanup parent is already in current main..."
+          echo "Checking cleanup parent is in current main..."
 
           if ! git merge-base --is-ancestor "$CLEANUP_PARENT" "$MAIN_COMMIT"; then
-            echo "ERROR: Cleanup parent is not an ancestor of current main."
+            echo "ERROR: Cleanup parent is NOT an ancestor of current main."
+            echo
             echo "STOPPING SAFELY."
+            echo "No cherry-pick."
+            echo "No push."
+            echo "No force-push."
             exit 1
           fi
 
           echo "PASS: Cleanup parent is in current main."
 
           echo
-          echo "Checking cleanup commit is NOT already in main..."
+          echo "Checking cleanup commit is not already in main..."
 
           if git merge-base --is-ancestor "$CLEANUP_COMMIT" "$MAIN_COMMIT"; then
             echo "ERROR: Cleanup commit is already contained in main."
-            echo "Nothing should be applied."
+            echo "Nothing to apply."
             exit 1
           fi
 
           echo "PASS: Cleanup commit is not yet in main."
 
-      - name: Verify cleanup diff before applying
+      - name: Verify cleanup diff
         shell: bash
         run: |
           set -euo pipefail
@@ -113,7 +100,7 @@ jobs:
           echo "VERIFY CLEANUP DIFF"
           echo "========================================"
 
-          echo "Cleanup commit:"
+          echo "Cleanup statistics:"
           git show --no-ext-diff --stat "$CLEANUP_COMMIT"
 
           echo
@@ -125,7 +112,7 @@ jobs:
             "$CLEANUP_COMMIT"
 
           echo
-          echo "Checking cleanup commit is based on expected parent..."
+          echo "Checking cleanup commit parent..."
 
           PARENT="$(git show -s --format='%P' "$CLEANUP_COMMIT")"
 
@@ -134,9 +121,10 @@ jobs:
             exit 1
           fi
 
-          echo "PASS: Cleanup commit identity verified."
+          echo
+          echo "Cleanup diff verification PASS."
 
-      - name: Apply cleanup with cherry-pick
+      - name: Apply cleanup commit
         shell: bash
         run: |
           set -euo pipefail
@@ -150,63 +138,41 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
+          BEFORE="$(git rev-parse HEAD)"
+
+          echo "Main before cherry-pick:"
+          echo "$BEFORE"
+
+          echo
           echo "Cherry-picking cleanup commit..."
+
           if ! git cherry-pick "$CLEANUP_COMMIT"; then
             echo
-            echo "ERROR: Cherry-pick conflict detected."
-            echo "Aborting cherry-pick."
+            echo "ERROR: Cherry-pick conflict."
+            echo "Aborting."
             git cherry-pick --abort
             echo
-            echo "STOPPING SAFELY."
             echo "No push performed."
             exit 1
           fi
 
+          AFTER="$(git rev-parse HEAD)"
+
           echo
           echo "Cherry-pick PASS."
 
-          echo "New HEAD:"
-          git rev-parse HEAD
-
-          echo
           echo "New commit:"
-          git log -1 --oneline
-
-      - name: Verify resulting commit
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          EXPECTED_MAIN="5806a66ac2f92857a6768c30b14bdbe5ff43d596"
-          CLEANUP_COMMIT="a5eaf450ab0d8b65dd4e16bfb25ccbfece620efd"
-
-          echo "========================================"
-          echo "VERIFY RESULT BEFORE PUSH"
-          echo "========================================"
-
-          NEW_HEAD="$(git rev-parse HEAD)"
-
-          if [ "$NEW_HEAD" = "$EXPECTED_MAIN" ]; then
-            echo "ERROR: HEAD did not advance."
-            exit 1
-          fi
-
-          echo "Old main:"
-          echo "$EXPECTED_MAIN"
+          echo "$AFTER"
 
           echo
-          echo "New HEAD:"
-          echo "$NEW_HEAD"
+          echo "Checking new commit parent..."
 
-          echo
-          echo "Checking new HEAD parent..."
+          NEW_PARENT="$(git show -s --format='%P' "$AFTER")"
 
-          NEW_PARENT="$(git show -s --format='%P' "$NEW_HEAD")"
-
-          if [ "$NEW_PARENT" != "$EXPECTED_MAIN" ]; then
+          if [ "$NEW_PARENT" != "$BEFORE" ]; then
             echo "ERROR: New cleanup commit does not directly follow current main."
             echo "Expected parent:"
-            echo "$EXPECTED_MAIN"
+            echo "$BEFORE"
             echo "Actual parent:"
             echo "$NEW_PARENT"
             exit 1
@@ -214,27 +180,36 @@ jobs:
 
           echo "PASS: New commit directly follows current main."
 
+      - name: Final safety verification
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          echo "========================================"
+          echo "FINAL SAFETY CHECK"
+          echo "========================================"
+
+          echo "Current HEAD:"
+          git rev-parse HEAD
+
           echo
-          echo "Checking cleanup diff..."
-
-          if ! git diff --check "$EXPECTED_MAIN" "$NEW_HEAD"; then
-            echo "ERROR: git diff --check failed."
-            exit 1
-          fi
-
-          echo "PASS: git diff --check."
+          echo "Current commit:"
+          git log -1 --format='%H%n%s'
 
           echo
-          echo "Changed files in resulting commit:"
+          echo "Diff check:"
+          git diff --check HEAD^ HEAD
+
+          echo
+          echo "Changed files:"
           git diff-tree \
             --no-commit-id \
             --name-status \
             -r \
-            "$NEW_HEAD"
+            HEAD
 
           echo
-          echo "Cleanup source commit being applied:"
-          echo "$CLEANUP_COMMIT"
+          echo "FINAL SAFETY CHECK PASS."
 
       - name: Push main using CARASSISTANT_PAT
         shell: bash
@@ -244,7 +219,7 @@ jobs:
           set -euo pipefail
 
           if [ -z "${CARASSISTANT_PAT:-}" ]; then
-            echo "ERROR: CARASSISTANT_PAT secret is empty or unavailable."
+            echo "ERROR: CARASSISTANT_PAT is empty or unavailable."
             exit 1
           fi
 
@@ -262,4 +237,4 @@ jobs:
           echo "PUSH PASS"
           echo "========================================"
 
-          echo "V10 source structure cleanup is now on main."
+          echo "CarAssistant V10 source structure cleanup is now on main."
