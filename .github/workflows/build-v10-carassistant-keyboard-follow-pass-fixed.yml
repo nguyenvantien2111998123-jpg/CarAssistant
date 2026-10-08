@@ -20,7 +20,6 @@ jobs:
 
           if [ -z "${PAT_TOKEN:-}" ]; then
             echo "FAIL: PAT_TOKEN secret is not configured."
-            echo "This workflow must use a PAT with permission to modify GitHub Actions workflow files."
             exit 1
           fi
 
@@ -46,6 +45,7 @@ jobs:
 
           python3 <<'PY'
           from pathlib import Path
+          import hashlib
 
           src_path = Path(
               ".github/workflows/build-v10-carassistant-keyboard-follow-pass.yml"
@@ -82,6 +82,11 @@ jobs:
               if MARKER_10 in line
           )
 
+          if idx_10 <= idx_9:
+              raise SystemExit(
+                  "FAIL: Section 10 appears before Section 9."
+              )
+
           start_line = idx_9
 
           if (
@@ -98,16 +103,14 @@ jobs:
           ):
               end_line -= 1
 
-          if end_line <= start_line:
-              raise SystemExit(
-                  "FAIL: Invalid Section 9 / Section 10 ordering."
-              )
+          prefix = "".join(src_lines[:start_line])
+          suffix = "".join(src_lines[end_line:])
 
           new_section = r'''      # ============================================================
       # 9. NAVIGATION-ONLY PATCH
       #
       # Structural patch against the verified NavigationMapView.java
-      # at the current CarAssistant baseline.
+      # baseline.
       #
       # IMPORTANT:
       # - No full-file replacement.
@@ -163,13 +166,19 @@ jobs:
               )
 
           if render_import not in source:
+
               source = source.replace(
                   camera_import,
                   camera_import + "\n" + render_import,
                   1
               )
-              print("PASS: RenderMode import added.")
+
+              print(
+                  "PASS: RenderMode import added."
+              )
+
           else:
+
               if source.count(render_import) != 1:
                   raise SystemExit(
                       "FAIL: RenderMode import exists more than once."
@@ -180,10 +189,7 @@ jobs:
               )
 
           # ==========================================================
-          # 2. PATCH THE REAL EXISTING ◎ RECENTER BUTTON
-          #
-          # Exact structure verified from NavigationMapView.java
-          # at commit 99f336b.
+          # 2. EXACT EXISTING RECENTER BUTTON
           # ==========================================================
 
           old_button = '''addControlButton(
@@ -215,10 +221,13 @@ jobs:
           elif button_count == 0:
 
               if source.count(new_button) == 1:
+
                   print(
                       "PASS: Follow button already patched."
                   )
+
               else:
+
                   raise SystemExit(
                       "FAIL: Expected exact existing ◎ recenter "
                       "button was not found."
@@ -234,11 +243,6 @@ jobs:
 
           # ==========================================================
           # 3. ENABLE GPS RENDER MODE
-          #
-          # Exact existing anchor verified from baseline:
-          #
-          # map.getLocationComponent()
-          #         .setLocationComponentEnabled(true);
           # ==========================================================
 
           old_enable = '''map.getLocationComponent()
@@ -250,22 +254,20 @@ jobs:
               map.getLocationComponent()
                   .setRenderMode(RenderMode.GPS);'''
 
-          enable_count = source.count(old_enable)
+          gps_render_count = source.count(
+              "setRenderMode(RenderMode.GPS);"
+          )
 
-          if "setRenderMode(RenderMode.GPS);" in source:
+          if gps_render_count == 0:
 
-              if source.count(
-                  "setRenderMode(RenderMode.GPS);"
-              ) != 1:
+              enable_count = source.count(old_enable)
+
+              if enable_count != 1:
                   raise SystemExit(
-                      "FAIL: RenderMode.GPS exists more than once."
+                      "FAIL: Expected exact "
+                      "setLocationComponentEnabled(true) "
+                      "anchor was not found exactly once."
                   )
-
-              print(
-                  "PASS: GPS render mode already present."
-              )
-
-          elif enable_count == 1:
 
               source = source.replace(
                   old_enable,
@@ -277,21 +279,20 @@ jobs:
                   "PASS: GPS render mode added."
               )
 
+          elif gps_render_count == 1:
+
+              print(
+                  "PASS: GPS render mode already present."
+              )
+
           else:
 
               raise SystemExit(
-                  "FAIL: Expected exact "
-                  "setLocationComponentEnabled(true) "
-                  "anchor was not found exactly once."
+                  "FAIL: RenderMode.GPS exists more than once."
               )
 
           # ==========================================================
-          # 4. REPLACE THE REAL EXISTING recenter() METHOD
-          #
-          # The exact current method was inspected from commit
-          # 99f336b before this workflow was written.
-          #
-          # We deliberately do NOT use forceLocationUpdate().
+          # 4. REPLACE EXACT BASELINE recenter()
           # ==========================================================
 
           old_recenter = '''public void recenter() {
@@ -398,13 +399,15 @@ jobs:
                   and source.count(
                       "public void recenter()"
                   ) == 1
-                  and "followCurrentLocation();" in source
               ):
+
                   print(
                       "PASS: followCurrentLocation() patch "
                       "already present."
                   )
+
               else:
+
                   raise SystemExit(
                       "FAIL: Exact baseline recenter() method "
                       "was not found."
@@ -413,8 +416,7 @@ jobs:
           else:
 
               raise SystemExit(
-                  "FAIL: Exact baseline recenter() method "
-                  "found "
+                  "FAIL: Exact baseline recenter() method found "
                   + str(recenter_count)
                   + " times; expected exactly 1."
               )
@@ -423,52 +425,58 @@ jobs:
           # 5. FINAL STRUCTURAL VERIFICATION
           # ==========================================================
 
-          required_once = [
-              render_import,
-              "setRenderMode(RenderMode.GPS);",
-              'v -> followCurrentLocation());',
-              "public void followCurrentLocation()",
-              "CameraUpdateFactory.newLatLngZoom(",
-              "location.getLatitude()",
-              "location.getLongitude()",
-              "CameraMode.TRACKING",
-              "public void recenter()",
-          ]
+          checks = {
+              render_import: 1,
+              "setRenderMode(RenderMode.GPS);": 2,
+              'v -> followCurrentLocation());': 1,
+              "public void followCurrentLocation()": 1,
+              "CameraUpdateFactory.newLatLngZoom(": 1,
+              "location.getLatitude()": 1,
+              "location.getLongitude()": 1,
+              "public void recenter()": 1,
+          }
 
-          for item in required_once:
+          for item, expected in checks.items():
 
               count = source.count(item)
 
-              if count != 1:
+              if count != expected:
+
                   raise SystemExit(
-                      "FAIL: Final structural check failed for: "
+                      "FAIL: Structural check failed: "
                       + item
-                      + " ; count="
+                      + " ; expected="
+                      + str(expected)
+                      + " ; actual="
                       + str(count)
                   )
 
+          if source.count(
+              "CameraMode.TRACKING"
+          ) < 2:
+
+              raise SystemExit(
+                  "FAIL: CameraMode.TRACKING count is below 2."
+              )
+
           if "forceLocationUpdate(" in source:
+
               raise SystemExit(
                   "FAIL: forceLocationUpdate() must NOT be introduced."
               )
 
           if source.count(
-              'v -> recenter());'
+              "v -> recenter());"
           ) != 0:
-              raise SystemExit(
-                  "FAIL: Old ◎ recenter button callback still exists."
-              )
 
-          if source.count(
-              'v -> followCurrentLocation());'
-          ) != 1:
               raise SystemExit(
-                  "FAIL: Follow button callback is not exactly once."
+                  "FAIL: Old ◎ recenter callback still exists."
               )
 
           if source.count(
               "setLocationComponentEnabled(true);"
           ) != 1:
+
               raise SystemExit(
                   "FAIL: Location enable call count changed."
               )
@@ -495,24 +503,93 @@ jobs:
           PY_INNER
 
           echo "PASS: Section 9 patch completed."
+          }'''
 
-      # 10. VERIFY NAVIGATION PATCH
-'''
+          # ==========================================================
+          # CRITICAL:
+          # ACTUALLY WRITE THE GENERATED WORKFLOW.
+          # ==========================================================
 
-          dst_lines = (
-              src_lines[:start_line]
-              + new_section.splitlines(keepends=True)
-              + src_lines[end_line:]
+          generated = (
+              prefix
+              + new_section
+              + suffix
           )
 
           dst_path.write_text(
-              "".join(dst_lines),
+              generated,
               encoding="utf-8"
           )
+
+          if not dst_path.exists():
+              raise SystemExit(
+                  "FAIL: Destination workflow was not created."
+              )
+
+          generated_text = dst_path.read_text(
+              encoding="utf-8"
+          )
+
+          # ==========================================================
+          # VERIFY GENERATED FILE STRUCTURE
+          # ==========================================================
+
+          if not generated_text.startswith(prefix):
+              raise SystemExit(
+                  "FAIL: Generated workflow prefix mismatch."
+              )
+
+          if not generated_text.endswith(suffix):
+              raise SystemExit(
+                  "FAIL: Generated workflow suffix mismatch."
+              )
+
+          if generated_text.count(MARKER_9) != 1:
+              raise SystemExit(
+                  "FAIL: Generated Section 9 marker count != 1."
+              )
+
+          if generated_text.count(MARKER_10) != 1:
+              raise SystemExit(
+                  "FAIL: Generated Section 10 marker count != 1."
+              )
+
+          if (
+              "import org.maplibre.android.location.modes.RenderMode;"
+              not in generated_text
+          ):
+              raise SystemExit(
+                  "FAIL: Generated workflow does not contain RenderMode patch."
+              )
 
           print(
               "PASS: Fixed workflow generated."
           )
+
+          print(
+              "Generated workflow size:",
+              len(generated_text),
+              "bytes"
+          )
+
+          # ==========================================================
+          # PREVIEW HASHES
+          # ==========================================================
+
+          print(
+              "Source SHA256:",
+              hashlib.sha256(
+                  src_text.encode("utf-8")
+              ).hexdigest()
+          )
+
+          print(
+              "Generated SHA256:",
+              hashlib.sha256(
+                  generated_text.encode("utf-8")
+              ).hexdigest()
+          )
+
           PY
 
       - name: Verify only Section 9 changed
@@ -527,8 +604,8 @@ jobs:
           test -f "$DST"
 
           python3 <<'PY'
-          import hashlib
           from pathlib import Path
+          import hashlib
 
           src_text = Path(
               ".github/workflows/build-v10-carassistant-keyboard-follow-pass.yml"
@@ -541,203 +618,94 @@ jobs:
           MARKER_9 = "# 9. NAVIGATION-ONLY PATCH"
           MARKER_10 = "# 10. VERIFY NAVIGATION PATCH"
 
-          if src_text.count(MARKER_9) != 1:
-              raise SystemExit(
-                  "FAIL: Source Section 9 marker count is not 1."
+          def split_workflow(text, label):
+
+              if text.count(MARKER_9) != 1:
+                  raise SystemExit(
+                      f"FAIL: {label} Section 9 marker count != 1."
+                  )
+
+              if text.count(MARKER_10) != 1:
+                  raise SystemExit(
+                      f"FAIL: {label} Section 10 marker count != 1."
+                  )
+
+              lines = text.splitlines(keepends=True)
+
+              idx9 = next(
+                  i for i, line in enumerate(lines)
+                  if MARKER_9 in line
               )
 
-          if dst_text.count(MARKER_9) != 1:
-              raise SystemExit(
-                  "FAIL: Destination Section 9 marker count is not 1."
+              idx10 = next(
+                  i for i, line in enumerate(lines)
+                  if MARKER_10 in line
               )
 
-          if src_text.count(MARKER_10) != 1:
-              raise SystemExit(
-                  "FAIL: Source Section 10 marker count is not 1."
+              start = (
+                  idx9 - 1
+                  if idx9 > 0
+                  and "# =====" in lines[idx9 - 1]
+                  else idx9
               )
 
-          if dst_text.count(MARKER_10) != 1:
-              raise SystemExit(
-                  "FAIL: Destination Section 10 marker count is not 1."
+              end = (
+                  idx10 - 1
+                  if idx10 > 0
+                  and "# =====" in lines[idx10 - 1]
+                  else idx10
               )
 
-          src_lines = src_text.splitlines(keepends=True)
-          dst_lines = dst_text.splitlines(keepends=True)
+              if end <= start:
+                  raise SystemExit(
+                      f"FAIL: Invalid Section 9 boundaries in {label}."
+                  )
 
-          idx_9_src = next(
-              i for i, line in enumerate(src_lines)
-              if MARKER_9 in line
+              return (
+                  "".join(lines[:start]),
+                  "".join(lines[start:end]),
+                  "".join(lines[end:])
+              )
+
+          src_prefix, src_section, src_suffix = split_workflow(
+              src_text,
+              "SOURCE"
           )
 
-          idx_10_src = next(
-              i for i, line in enumerate(src_lines)
-              if MARKER_10 in line
+          dst_prefix, dst_section, dst_suffix = split_workflow(
+              dst_text,
+              "DESTINATION"
           )
 
-          idx_9_dst = next(
-              i for i, line in enumerate(dst_lines)
-              if MARKER_9 in line
-          )
+          src_prefix_b = src_prefix.encode("utf-8")
+          dst_prefix_b = dst_prefix.encode("utf-8")
 
-          idx_10_dst = next(
-              i for i, line in enumerate(dst_lines)
-              if MARKER_10 in line
-          )
-
-          start_src = (
-              idx_9_src - 1
-              if idx_9_src > 0
-              and "# =====" in src_lines[idx_9_src - 1]
-              else idx_9_src
-          )
-
-          end_src = (
-              idx_10_src - 1
-              if idx_10_src > 0
-              and "# =====" in src_lines[idx_10_src - 1]
-              else idx_10_src
-          )
-
-          start_dst = (
-              idx_9_dst - 1
-              if idx_9_dst > 0
-              and "# =====" in dst_lines[idx_9_dst - 1]
-              else idx_9_dst
-          )
-
-          end_dst = (
-              idx_10_dst - 1
-              if idx_10_dst > 0
-              and "# =====" in dst_lines[idx_10_dst - 1]
-              else idx_10_dst
-          )
-
-          prefix_src = "".join(
-              src_lines[:start_src]
-          ).encode("utf-8")
-
-          prefix_dst = "".join(
-              dst_lines[:start_dst]
-          ).encode("utf-8")
-
-          suffix_src = "".join(
-              src_lines[end_src:]
-          ).encode("utf-8")
-
-          suffix_dst = "".join(
-              dst_lines[end_dst:]
-          ).encode("utf-8")
-
-          section_src = "".join(
-              src_lines[start_src:end_src]
-          ).encode("utf-8")
-
-          section_dst = "".join(
-              dst_lines[start_dst:end_dst]
-          ).encode("utf-8")
+          src_suffix_b = src_suffix.encode("utf-8")
+          dst_suffix_b = dst_suffix.encode("utf-8")
 
           print(
               "Prefix SHA256 SRC:",
-              hashlib.sha256(prefix_src).hexdigest()
+              hashlib.sha256(src_prefix_b).hexdigest()
           )
 
           print(
               "Prefix SHA256 DST:",
-              hashlib.sha256(prefix_dst).hexdigest()
+              hashlib.sha256(dst_prefix_b).hexdigest()
           )
 
           print(
               "Suffix SHA256 SRC:",
-              hashlib.sha256(suffix_src).hexdigest()
+              hashlib.sha256(src_suffix_b).hexdigest()
           )
 
           print(
               "Suffix SHA256 DST:",
-              hashlib.sha256(suffix_dst).hexdigest()
+              hashlib.sha256(dst_suffix_b).hexdigest()
           )
 
-          if prefix_src != prefix_dst:
+          if src_prefix_b != dst_prefix_b:
               raise SystemExit(
                   "FAIL: Prefix before Section 9 changed."
               )
 
-          print(
-              "PASS: Prefix identical."
-          )
-
-          if suffix_src != suffix_dst:
-              raise SystemExit(
-                  "FAIL: Suffix after Section 9 changed."
-              )
-
-          print(
-              "PASS: Suffix identical."
-          )
-
-          if section_src == section_dst:
-              raise SystemExit(
-                  "FAIL: Section 9 was not modified."
-              )
-
-          print(
-              "PASS: Only Section 9 differs."
-          )
-
           PY
-
-      - name: YAML syntax check
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          python3 - <<'PY'
-          import yaml
-
-          path = (
-              ".github/workflows/"
-              "build-v10-carassistant-keyboard-follow-pass-fixed.yml"
-          )
-
-          with open(
-              path,
-              "r",
-              encoding="utf-8"
-          ) as f:
-              yaml.safe_load(f)
-
-          print(
-              "PASS: Fixed workflow YAML syntax."
-          )
-          PY
-
-      - name: Commit fixed workflow
-        shell: bash
-        env:
-          PAT_TOKEN: ${{ secrets.PAT_TOKEN }}
-        run: |
-          set -euo pipefail
-
-          if [ -z "${PAT_TOKEN:-}" ]; then
-            echo "FAIL: PAT_TOKEN is required."
-            exit 1
-          fi
-
-          git config user.name "github-actions[bot]"
-
-          git config user.email \
-            "41898282+github-actions[bot]@users.noreply.github.com"
-
-          git add \
-            .github/workflows/build-v10-carassistant-keyboard-follow-pass-fixed.yml
-
-          git diff --cached --check
-
-          git commit \
-            -m "fix workflow: structurally patch Navigation Section 9"
-
-          git remote set-url origin \
-            "https://x-access-token:${PAT_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
-
-          git push origin main
-
-          echo "PASS: Fixed workflow committed to main."
