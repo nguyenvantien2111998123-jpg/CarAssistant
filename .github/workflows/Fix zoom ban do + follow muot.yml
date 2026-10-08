@@ -1,4 +1,4 @@
-name: Patch NavigationMapView Follow V4 Safe
+name: Patch NavigationMapView Follow V5 Safe
 
 on:
   workflow_dispatch:
@@ -166,6 +166,7 @@ jobs:
 
           cat > /tmp/patch_navigation.py <<'PY'
           from pathlib import Path
+          import hashlib
 
           NAV = Path(
               "v10-source/app/src/main/java/com/carassistant/v10/NavigationMapView.java"
@@ -175,7 +176,19 @@ jobs:
               "1600edf884196a146ce5f4233f8de0a8ea282a4e"
           )
 
-          text = NAV.read_text(encoding="utf-8")
+          original = NAV.read_bytes()
+
+          actual_sha = hashlib.sha1(
+              b"blob %d\0" % len(original) + original
+          ).hexdigest()
+
+          if actual_sha != EXPECTED_SHA:
+              raise SystemExit(
+                  "FAIL: NavigationMapView baseline SHA changed before patch: "
+                  + actual_sha
+              )
+
+          text = original.decode("utf-8")
 
           def require_once(old: str, new: str, label: str) -> None:
               global text
@@ -189,18 +202,6 @@ jobs:
                   )
 
               text = text.replace(old, new, 1)
-
-          actual_sha = __import__("hashlib").sha1(
-              b"blob %d\0" % len(
-                  NAV.read_bytes()
-              ) + NAV.read_bytes()
-          ).hexdigest()
-
-          if actual_sha != EXPECTED_SHA:
-              raise SystemExit(
-                  "FAIL: NavigationMapView baseline SHA changed before patch: "
-                  + actual_sha
-              )
 
           require_once(
               "import org.maplibre.android.location.modes.CameraMode;\n",
@@ -428,15 +429,138 @@ jobs:
               sort -V
           )
 
-          test "${#DEX_FILES[@]}" -ge 2
+          test "${#DEX_FILES[@]}" -ge 1
 
           echo "APK DEX files:"
           printf '%s\n' "${DEX_FILES[@]}"
 
           echo "PASS: APK contains ${#DEX_FILES[@]} DEX files"
-          echo "PASS: legacy DEX packaging preserved"
+          echo "PASS: Gradle APK generated"
 
-      - name: 13 - Final protected-file verification
+      - name: 13 - Inject legacy DEX as separate APK DEX
+        shell: bash
+        working-directory: v10-source
+        run: |
+          set -euo pipefail
+
+          APK="app/build/outputs/apk/release/app-release.apk"
+          LEGACY="app/libs/aasdk-legacy.dex"
+
+          test -s "$APK"
+          test -s "$LEGACY"
+
+          mapfile -t DEX_FILES < <(
+            unzip -Z1 "$APK" |
+              grep -E '^classes[0-9]*\.dex$' |
+              sort -V
+          )
+
+          test "${#DEX_FILES[@]}" -ge 1
+
+          LAST="${DEX_FILES[${#DEX_FILES[@]}-1]}"
+
+          if [ "$LAST" = "classes.dex" ]; then
+            NEXT="classes2.dex"
+          else
+            NUMBER="${LAST#classes}"
+            NUMBER="${NUMBER%.dex}"
+            NEXT="classes$((NUMBER + 1)).dex"
+          fi
+
+          echo "Existing APK DEX files:"
+          printf '%s\n' "${DEX_FILES[@]}"
+
+          echo "Injecting legacy DEX as: $NEXT"
+
+          TMP_DEX_DIR="$RUNNER_TEMP/carassistant-dex"
+
+          rm -rf "$TMP_DEX_DIR"
+          mkdir -p "$TMP_DEX_DIR"
+
+          cp \
+            "$LEGACY" \
+            "$TMP_DEX_DIR/$NEXT"
+
+          (
+            cd "$TMP_DEX_DIR"
+
+            zip -q \
+              "$GITHUB_WORKSPACE/v10-source/$APK" \
+              "$NEXT"
+          )
+
+          if command -v zipalign >/dev/null 2>&1; then
+            ZIPALIGN="$(command -v zipalign)"
+          else
+            ZIPALIGN="$(
+              find "$ANDROID_HOME/build-tools" \
+                -type f \
+                -name zipalign \
+                | sort -V \
+                | tail -n 1
+            )"
+          fi
+
+          test -x "$ZIPALIGN"
+
+          ALIGNED="$RUNNER_TEMP/carassistant-aligned.apk"
+
+          "$ZIPALIGN" \
+            -f \
+            4 \
+            "$APK" \
+            "$ALIGNED"
+
+          mv \
+            "$ALIGNED" \
+            "$APK"
+
+          EXTRACTED="$RUNNER_TEMP/$NEXT"
+
+          unzip -p \
+            "$APK" \
+            "$NEXT" \
+            > "$EXTRACTED"
+
+          cmp -s \
+            "$LEGACY" \
+            "$EXTRACTED"
+
+          echo "PASS: legacy DEX injected as $NEXT"
+          echo "PASS: injected DEX matches original byte-for-byte"
+
+      - name: 14 - Verify final APK DEX layout
+        shell: bash
+        working-directory: v10-source
+        run: |
+          set -euo pipefail
+
+          APK="app/build/outputs/apk/release/app-release.apk"
+
+          test -s "$APK"
+
+          echo "APK SHA256:"
+          sha256sum "$APK"
+
+          echo "APK DEX files:"
+
+          unzip -Z1 "$APK" |
+            grep -E '^classes[0-9]*\.dex$' |
+            sort -V
+
+          DEX_COUNT="$(
+            unzip -Z1 "$APK" |
+              grep -E '^classes[0-9]*\.dex$' |
+              wc -l |
+              tr -d ' '
+          )"
+
+          test "$DEX_COUNT" -ge 2
+
+          echo "PASS: APK contains $DEX_COUNT DEX files"
+          echo "PASS: final APK DEX layout"
+
+      - name: 15 - Final protected-file verification
         shell: bash
         run: |
           set -euo pipefail
@@ -460,14 +584,25 @@ jobs:
           test "$(git hash-object "$NAV")" != \
             "1600edf884196a146ce5f4233f8de0a8ea282a4e"
 
+          grep -Fq \
+            'private static final double AUTO_FOLLOW_ZOOM = 17.5;' \
+            "$NAV"
+
+          grep -Fq \
+            '.setRenderMode(RenderMode.GPS);' \
+            "$NAV"
+
+          test "$(grep -Fc 'CameraMode.TRACKING_GPS' "$NAV")" -eq 2
+
           git diff --check -- "$NAV"
 
+          echo "PASS: NavigationMapView modified as intended"
           echo "PASS: build.gradle protected"
           echo "PASS: legacy DEX protected"
-          echo "PASS: NavigationMapView contains intended patch"
+          echo "PASS: intended patch verified"
           echo "PASS: protected-file verification"
 
-      - name: 14 - Commit only NavigationMapView
+      - name: 16 - Commit only NavigationMapView
         shell: bash
         run: |
           set -euo pipefail
@@ -481,8 +616,6 @@ jobs:
             "41898282+github-actions[bot]@users.noreply.github.com"
 
           git add -- "$NAV"
-
-          test -n "$(git diff --cached --name-only)"
 
           STAGED_FILES="$(
             git diff --cached --name-only
@@ -501,7 +634,7 @@ jobs:
           echo "PASS: committed only NavigationMapView.java"
           echo "PASS: pushed to main"
 
-      - name: 15 - Final PASS
+      - name: 17 - Final PASS
         shell: bash
         run: |
           set -euo pipefail
@@ -510,7 +643,7 @@ jobs:
 
           test -s "$NAV"
 
-          echo "PASS: NavigationMapView Follow V4"
+          echo "PASS: NavigationMapView Follow V5"
           echo "PASS: YAML"
           echo "PASS: Python"
           echo "PASS: source patch"
