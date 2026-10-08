@@ -1315,56 +1315,321 @@ jobs:
           echo "PASS: Keyboard integration"
 
       # ============================================================
-      # 9. NAVIGATION PROTECTION
+            # ============================================================
+      # 9. NAVIGATION FOLLOW V1
       # ============================================================
 
-      - name: Verify Navigation remains untouched
+      - name: Patch Navigation Follow V1
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          NAV="v10-source/app/src/main/java/com/carassistant/v10/NavigationMapView.java"
+          DRAWABLE_DIR="v10-source/app/src/main/res/drawable"
+          ARROW="v10-source/app/src/main/res/drawable/car_navigation_arrow.xml"
+
+          EXPECTED_NAV_SHA="1600edf884196a146ce5f4233f8de0a8ea282a4e"
+
+          echo "========================================"
+          echo "NAVIGATION FOLLOW V1"
+          echo "========================================"
+
+          ACTUAL_NAV_SHA="$(git hash-object "$NAV")"
+
+          echo "NavigationMapView baseline SHA:"
+          echo "$ACTUAL_NAV_SHA"
+
+          if [ "$ACTUAL_NAV_SHA" != "$EXPECTED_NAV_SHA" ]; then
+            echo ""
+            echo "ERROR: NavigationMapView baseline mismatch."
+            echo "Expected:"
+            echo "$EXPECTED_NAV_SHA"
+            echo "Actual:"
+            echo "$ACTUAL_NAV_SHA"
+            exit 1
+          fi
+
+          echo ""
+          echo "PASS: NavigationMapView baseline"
+
+          mkdir -p "$DRAWABLE_DIR"
+
+          cat > "$ARROW" <<'EOF'
+          <?xml version="1.0" encoding="utf-8"?>
+          <vector xmlns:android="http://schemas.android.com/apk/res/android"
+              android:width="36dp"
+              android:height="36dp"
+              android:viewportWidth="24"
+              android:viewportHeight="24">
+
+              <path
+                  android:fillColor="#FFFFFF"
+                  android:pathData="M12,1 L4,21 L12,17 L20,21 Z" />
+
+          </vector>
+          EOF
+
+          python3 <<'PY'
+          from pathlib import Path
+
+          path = Path(
+              "v10-source/app/src/main/java/com/carassistant/v10/NavigationMapView.java"
+          )
+
+          text = path.read_text(encoding="utf-8")
+
+          def replace_once(old, new, label):
+              global text
+
+              count = text.count(old)
+
+              if count != 1:
+                  raise SystemExit(
+                      f"{label}: expected exactly 1 match, found {count}"
+                  )
+
+              text = text.replace(old, new, 1)
+
+          replace_once(
+              "import org.maplibre.android.location.modes.CameraMode;\n",
+              "import org.maplibre.android.location.modes.CameraMode;\n"
+              "import org.maplibre.android.location.modes.RenderMode;\n"
+              "import org.maplibre.android.location.engine.LocationEngineRequest;\n",
+              "location imports",
+          )
+
+          replace_once(
+              "private static final double AUTO_FOLLOW_ZOOM = 16.0;",
+              "private static final double AUTO_FOLLOW_ZOOM = 17.0;",
+              "follow zoom",
+          )
+
+          replace_once(
+              """        LocationComponentOptions options =
+                LocationComponentOptions
+                        .builder(context)
+                        .pulseEnabled(true)
+                        .trackingGesturesManagement(true)
+                        .build();
+
+           LocationComponentActivationOptions activation =
+                LocationComponentActivationOptions
+                        .builder(
+                                context,
+                                map.getStyle())
+                        .locationComponentOptions(
+                                options)
+                        .build();
+          """,
+              """        LocationComponentOptions options =
+                LocationComponentOptions
+                        .builder(context)
+                        .pulseEnabled(true)
+                        .trackingGesturesManagement(true)
+                        .trackingAnimationDurationMultiplier(1.0f)
+                        .gpsDrawable(
+                                R.drawable.car_navigation_arrow)
+                        .build();
+
+          LocationEngineRequest locationRequest =
+                new LocationEngineRequest.Builder(
+                        750L)
+                        .setFastestInterval(750L)
+                        .setPriority(
+                                LocationEngineRequest.PRIORITY_HIGH_ACCURACY)
+                        .build();
+
+          LocationComponentActivationOptions activation =
+                LocationComponentActivationOptions
+                        .builder(
+                                context,
+                                map.getStyle())
+                        .locationComponentOptions(
+                                options)
+                        .useDefaultLocationEngine(true)
+                        .locationEngineRequest(
+                                locationRequest)
+                        .build();
+          """,
+              "location activation",
+          )
+
+          replace_once(
+              """        map.getLocationComponent()
+                .setLocationComponentEnabled(true);
+
+          startAutoFollow();
+          """,
+              """        map.getLocationComponent()
+                .setLocationComponentEnabled(true);
+
+          map.getLocationComponent()
+                .setRenderMode(
+                        RenderMode.GPS);
+
+          map.getLocationComponent()
+                .setMaxAnimationFps(60);
+
+          startAutoFollow();
+          """,
+              "location render mode",
+          )
+
+          count_tracking = text.count(
+              "CameraMode.TRACKING,"
+          )
+
+          if count_tracking != 2:
+              raise SystemExit(
+                  "camera mode anchor: expected exactly 2 "
+                  f"TRACKING calls, found {count_tracking}"
+              )
+
+          text = text.replace(
+              "CameraMode.TRACKING,",
+              "CameraMode.TRACKING_GPS,",
+          )
+
+          path.write_text(
+              text,
+              encoding="utf-8",
+          )
+          PY
+
+          echo ""
+          echo "========================================"
+          echo "VERIFY NAVIGATION FOLLOW PATCH"
+          echo "========================================"
+
+          grep -Fq \
+            'private static final double AUTO_FOLLOW_ZOOM = 17.0;' \
+            "$NAV"
+
+          grep -Fq \
+            'import org.maplibre.android.location.modes.RenderMode;' \
+            "$NAV"
+
+          grep -Fq \
+            'import org.maplibre.android.location.engine.LocationEngineRequest;' \
+            "$NAV"
+
+          grep -Fq \
+            '.setRenderMode(' \
+            "$NAV"
+
+          grep -Fq \
+            'RenderMode.GPS' \
+            "$NAV"
+
+          grep -Fq \
+            'R.drawable.car_navigation_arrow' \
+            "$NAV"
+
+          grep -Fq \
+            'LocationEngineRequest.PRIORITY_HIGH_ACCURACY' \
+            "$NAV"
+
+          TRACKING_GPS_COUNT="$(
+            grep -Fc \
+              'CameraMode.TRACKING_GPS,' \
+              "$NAV"
+          )"
+
+          if [ "$TRACKING_GPS_COUNT" -ne 2 ]; then
+            echo "ERROR: expected 2 TRACKING_GPS calls."
+            echo "Actual: $TRACKING_GPS_COUNT"
+            exit 1
+          fi
+
+          if grep -Fq \
+              'CameraMode.TRACKING,' \
+              "$NAV"; then
+            echo "ERROR: old CameraMode.TRACKING remains."
+            exit 1
+          fi
+
+          test -s "$ARROW"
+
+          echo "PASS: follow zoom = 17.0"
+          echo "PASS: GPS render mode"
+          echo "PASS: custom navigation arrow"
+          echo "PASS: 750 ms high-accuracy location request"
+          echo "PASS: TRACKING_GPS camera"
+          echo "PASS: navigation animation FPS = 60"
+          echo "PASS: Navigation Follow V1"
+
+          
+      - name: Verify Navigation Follow V1
         shell: bash
         run: |
           set -euo pipefail
 
           BASE="v10-source/app/src/main/java/com/carassistant/v10"
+          NAV="$BASE/NavigationMapView.java"
+          ARROW="v10-source/app/src/main/res/drawable/car_navigation_arrow.xml"
 
           grep -Pq \
             '^\s*(?:(?:public|protected|private)\s+)?(?:abstract|final\s+)?class\s+NavigationMapView' \
-            "$BASE/NavigationMapView.java"
+            "$NAV"
 
           grep -Fq \
             'navigationMap=new NavigationMapView(this);' \
             "$BASE/V10CarActivity.java"
 
+          grep -Fq \
+            'private static final double AUTO_FOLLOW_ZOOM = 17.0;' \
+            "$NAV"
+
+          grep -Fq \
+            'RenderMode.GPS' \
+            "$NAV"
+
+          grep -Fq \
+            'R.drawable.car_navigation_arrow' \
+            "$NAV"
+
+          grep -Fq \
+            'LocationEngineRequest.PRIORITY_HIGH_ACCURACY' \
+            "$NAV"
+
+          test "$(grep -Fc \
+            'CameraMode.TRACKING_GPS,' \
+            "$NAV")" -eq 2
+
+          test -s "$ARROW"
+
           if grep -Fq \
               'NavigationPresentationView' \
               "$BASE/CarAssistantKeyboard.java"; then
-
-            echo \
-              "ERROR: Keyboard references NavigationPresentationView."
-
+            echo "ERROR: Keyboard references NavigationPresentationView."
             exit 1
           fi
 
           if grep -Fq \
               'NavigationPresentationView' \
               "$BASE/CarAssistantInputBridge.java"; then
-
-            echo \
-              "ERROR: Input bridge references NavigationPresentationView."
-
+            echo "ERROR: Input bridge references NavigationPresentationView."
             exit 1
           fi
 
           if grep -Fq \
               'NavigationPresentationView' \
               "$BASE/CarAssistantKeyboardController.java"; then
-
-            echo \
-              "ERROR: Controller references NavigationPresentationView."
-
+            echo "ERROR: Controller references NavigationPresentationView."
             exit 1
           fi
 
-          echo "PASS: Navigation boundary."
-
+          echo "========================================"
+          echo "NAVIGATION FOLLOW V1 : PASS"
+          echo "========================================"
+          echo "Zoom                    : 17.0"
+          echo "Location update         : 750 ms"
+          echo "Location priority       : HIGH_ACCURACY"
+          echo "Location render         : GPS"
+          echo "Vehicle arrow           : custom drawable"
+          echo "Camera tracking         : TRACKING_GPS"
+          echo "Animation FPS           : 60"
+          echo "Keyboard boundary       : PASS"
       # ============================================================
       # 10. BUILD
       # ============================================================
