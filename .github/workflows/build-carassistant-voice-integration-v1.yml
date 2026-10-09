@@ -372,12 +372,11 @@ jobs:
 
           activity_path.write_text(java, encoding="utf-8")
 
-          # RECORD_AUDIO already exists in this manifest. Add service visibility
-          # query without replacing existing package or launcher queries.
           tree = ET.parse(manifest_path)
           root = tree.getroot()
           android_ns = "{http://schemas.android.com/apk/res/android}"
           queries = root.find("queries")
+
           if queries is None:
               raise SystemExit("FAIL: manifest has no <queries> section")
 
@@ -392,22 +391,36 @@ jobs:
           if not found:
               intent = ET.SubElement(queries, "intent")
               action = ET.SubElement(intent, "action")
-              action.set(android_ns + "name",
-                         "android.speech.RecognitionService")
+              action.set(
+                  android_ns + "name",
+                  "android.speech.RecognitionService"
+              )
 
+          # Critical fix: preserve the Android XML namespace on serialization.
+          ET.register_namespace(
+              "android",
+              "http://schemas.android.com/apk/res/android"
+          )
           ET.indent(tree, space="    ")
-          tree.write(manifest_path, encoding="utf-8", xml_declaration=True)
+          tree.write(
+              manifest_path,
+              encoding="utf-8",
+              xml_declaration=True
+          )
           ET.parse(manifest_path)
 
           final_java = activity_path.read_text(encoding="utf-8")
+          final_manifest = manifest_path.read_text(encoding="utf-8")
+
           assert "VOICE_SILENCE_STOP_MS = 4000L" in final_java
           assert 'EXTRA_LANGUAGE, "vi-VN"' in final_java
           assert "voice.setOnClickListener(v -> startVoiceRecognition())" in final_java
           assert "processVoiceCommand(matches.get(0))" in final_java
-          assert "android.permission.RECORD_AUDIO" in manifest_path.read_text()
+          assert "android.permission.RECORD_AUDIO" in final_manifest
+          assert "android:name=" in final_manifest
           assert "org.maplibre.gl:android-sdk:11.11.0" in gradle_path.read_text()
-          print("PASS: Voice patch and Manifest checks")
 
+          print("PASS: Voice patch and Manifest namespace checks")
           PY
 
       - name: Validate Java anchors and Manifest XML
@@ -422,15 +435,20 @@ jobs:
               "v10-source/app/src/main/java/com/carassistant/v10/V10CarActivity.java"
           ).read_text(encoding="utf-8")
 
-          ET.parse("v10-source/app/src/main/AndroidManifest.xml")
+          manifest = Path(
+              "v10-source/app/src/main/AndroidManifest.xml"
+          )
+          ET.parse(manifest)
 
           assert source.count("private void startVoiceRecognition()") == 1
           assert source.count("private void processVoiceCommand(String spoken)") == 1
-          assert source.count("voice.setOnClickListener(v -> startVoiceRecognition())") == 1
+          assert source.count(
+              "voice.setOnClickListener(v -> startVoiceRecognition())"
+          ) == 1
+          assert "VOICE_SILENCE_STOP_MS = 4000L" in source
           assert "EXTRA_PREFER_OFFLINE" not in source
 
           print("PASS: Java anchors and Manifest XML")
-
           PY
 
       - name: Build CarAssistant debug APK
