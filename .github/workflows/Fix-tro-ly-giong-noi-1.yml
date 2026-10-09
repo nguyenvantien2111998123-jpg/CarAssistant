@@ -1,0 +1,780 @@
+name: Fix tro ly giong noi 1
+
+on:
+ workflow_dispatch:
+
+permissions:
+ contents: read
+
+jobs:
+ build:
+  runs-on: ubuntu-latest
+  timeout-minutes: 40
+
+  steps:
+  - name: Checkout baseline source
+    uses: actions/checkout@v4
+    with:
+      ref: main
+      fetch-depth: 1
+
+  - name: Setup Java 17
+    uses: actions/setup-java@v4
+    with:
+      distribution: temurin
+      java-version: '17'
+
+  - name: Setup Gradle 8.13
+    uses: gradle/actions/setup-gradle@v4
+    with:
+      gradle-version: '8.13'
+
+  - name: Verify baseline and patch Voice Mic V2
+    shell: bash
+    run: |
+      set -euo pipefail
+
+      python3 - <<'PY'
+      from pathlib import Path
+      import subprocess
+      import xml.etree.ElementTree as ET
+
+      base = Path(
+          "v10-source/app/src/main/java/com/carassistant/v10"
+      )
+      activity_path = base / "V10CarActivity.java"
+      manifest_path = Path(
+          "v10-source/app/src/main/AndroidManifest.xml"
+      )
+      gradle_path = Path("v10-source/app/build.gradle")
+
+      expected = {
+          activity_path: "61e82df0fd17e7851c7bf1628ac03a9391e48523",
+          manifest_path: "e6ffd5005ff0d0f8610c5950f20e17acba5410df",
+          gradle_path: "4d512337d46324a33a685d8cdb095e4ecacd3ceb",
+      }
+
+      for path, sha in expected.items():
+          actual = subprocess.check_output(
+              ["git", "hash-object", str(path)],
+              text=True
+          ).strip()
+
+          if actual != sha:
+              raise SystemExit(
+                  f"FAIL-CLOSED: {path} changed. "
+                  f"Expected {sha}; got {actual}"
+              )
+
+          print(f"PASS: verified {path}")
+
+      java = activity_path.read_text(encoding="utf-8")
+
+      def replace_once(old, new, label):
+          global java
+          count = java.count(old)
+
+          if count != 1:
+              raise SystemExit(
+                  f"FAIL-CLOSED: {label}; "
+                  f"expected 1 anchor, got {count}"
+              )
+
+          java = java.replace(old, new, 1)
+          print(f"PASS: patched {label}")
+
+      replace_once(
+          "import android.os.Looper;\n",
+          "import android.os.Looper;\n"
+          "import android.Manifest;\n"
+          "import android.media.AudioManager;\n"
+          "import android.media.ToneGenerator;\n"
+          "import android.speech.RecognitionListener;\n"
+          "import android.speech.RecognizerIntent;\n"
+          "import android.speech.SpeechRecognizer;\n"
+          "import android.widget.Toast;\n",
+          "voice imports"
+      )
+
+      replace_once(
+          "    private boolean resumed;\n",
+          "    private boolean resumed;\n"
+          "    private TextView voiceButton;\n"
+          "    private TextView voiceTranscript;\n"
+          "    private SpeechRecognizer voiceRecognizer;\n"
+          "    private boolean voiceListening;\n"
+          "    private boolean voiceSessionCancelled;\n"
+          "    private final Handler voiceHandler = "
+          "new Handler(Looper.getMainLooper());\n"
+          "    private Runnable voiceSilenceStop;\n"
+          "    private static final long VOICE_SILENCE_STOP_MS = 4000L;\n",
+          "voice state fields"
+      )
+
+      replace_once(
+          '        TextView voice=sidebarButton("🎙");\n'
+          '        voice.setTextSize(20);\n'
+          '        voice.setOnClickListener(v->{});\n',
+          '        TextView voice=sidebarButton("🎙");\n'
+          '        voice.setTextSize(20);\n'
+          '        voiceButton = voice;\n'
+          '        voice.setOnClickListener(v -> toggleVoiceRecognition());\n',
+          "mic button toggle"
+      )
+
+      replace_once(
+          "        FrameLayout main=new FrameLayout(this);\n"
+          "        dashboard.addView(main,new LinearLayout.LayoutParams(0,-1,1f));\n",
+          "        FrameLayout main=new FrameLayout(this);\n"
+          "        dashboard.addView(main,new LinearLayout.LayoutParams(0,-1,1f));\n"
+          "\n"
+          "        voiceTranscript = new TextView(this);\n"
+          "        voiceTranscript.setTextColor(Color.WHITE);\n"
+          "        voiceTranscript.setTextSize(15);\n"
+          "        voiceTranscript.setGravity(Gravity.CENTER);\n"
+          "        voiceTranscript.setMaxLines(2);\n"
+          "        voiceTranscript.setPadding(dp(12), dp(6), dp(12), dp(6));\n"
+          "        GradientDrawable voiceBg = new GradientDrawable();\n"
+          "        voiceBg.setColor(Color.rgb(210, 17, 24, 32));\n"
+          "        voiceBg.setCornerRadius(dp(12));\n"
+          "        voiceTranscript.setBackground(voiceBg);\n"
+          "        voiceTranscript.setVisibility(View.GONE);\n"
+          "        FrameLayout.LayoutParams voiceTextParams =\n"
+          "                new FrameLayout.LayoutParams(-1, dp(58), Gravity.TOP);\n"
+          "        voiceTextParams.setMargins(dp(12), dp(12), dp(12), 0);\n"
+          "        main.addView(voiceTranscript, voiceTextParams);\n",
+          "live transcript UI"
+      )
+
+      helper = r'''
+          private void toggleVoiceRecognition() {
+              if (voiceListening) {
+                  cancelVoiceRecognitionFromButton();
+              } else {
+                  startVoiceRecognition();
+              }
+          }
+
+          private void playVoiceTone(int tone) {
+              final ToneGenerator generator;
+
+              try {
+                  generator = new ToneGenerator(
+                          AudioManager.STREAM_NOTIFICATION, 70);
+                  generator.startTone(tone, 120);
+              } catch (RuntimeException e) {
+                  return;
+              }
+
+              voiceHandler.postDelayed(() -> {
+                  try {
+                      generator.release();
+                  } catch (RuntimeException ignored) {
+                  }
+              }, 250);
+          }
+
+          private void showVoiceTranscript(String value) {
+              if (voiceTranscript == null) return;
+
+              voiceTranscript.setText(value == null ? "" : value);
+              voiceTranscript.setVisibility(
+                      value == null || value.trim().isEmpty()
+                              ? View.GONE : View.VISIBLE);
+          }
+
+          private void resetVoiceUi() {
+              if (voiceButton != null) {
+                  voiceButton.setText("🎙");
+              }
+
+              showVoiceTranscript(null);
+          }
+
+          private void startVoiceRecognition() {
+              if (checkSelfPermission(Manifest.permission.RECORD_AUDIO)
+                      != PackageManager.PERMISSION_GRANTED) {
+                  Toast.makeText(this,
+                          "Chưa có quyền microphone. Hãy cấp quyền Microphone cho CarAssistant trong Cài đặt.",
+                          Toast.LENGTH_LONG).show();
+                  return;
+              }
+
+              if (!SpeechRecognizer.isRecognitionAvailable(this)) {
+                  Toast.makeText(this,
+                          "Không tìm thấy dịch vụ nhận dạng giọng nói.",
+                          Toast.LENGTH_LONG).show();
+                  resetVoiceUi();
+                  return;
+              }
+
+              stopVoiceRecognition();
+
+              try {
+                  final SpeechRecognizer session =
+                          SpeechRecognizer.createSpeechRecognizer(this);
+
+                  voiceRecognizer = session;
+                  voiceListening = true;
+                  voiceSessionCancelled = false;
+
+                  session.setRecognitionListener(new RecognitionListener() {
+                      @Override
+                      public void onReadyForSpeech(Bundle params) {
+                          if (voiceRecognizer != session
+                                  || voiceSessionCancelled) return;
+
+                          if (voiceButton != null) {
+                              voiceButton.setText("NGHE…");
+                          }
+
+                          showVoiceTranscript("Đang nghe...");
+                      }
+
+                      @Override
+                      public void onBeginningOfSpeech() {
+                          if (voiceRecognizer != session
+                                  || voiceSessionCancelled) return;
+
+                          if (voiceButton != null) {
+                              voiceButton.setText("NGHE…");
+                          }
+                      }
+
+                      @Override
+                      public void onRmsChanged(float rmsdB) {}
+
+                      @Override
+                      public void onBufferReceived(byte[] buffer) {}
+
+                      @Override
+                      public void onEndOfSpeech() {
+                          if (voiceRecognizer != session
+                                  || voiceSessionCancelled) return;
+
+                          cancelVoiceSilenceStop();
+
+                          if (voiceButton != null) {
+                              voiceButton.setText("XỬ LÝ…");
+                          }
+                      }
+
+                      @Override
+                      public void onError(int error) {
+                          if (voiceRecognizer != session
+                                  || voiceSessionCancelled) return;
+
+                          voiceListening = false;
+                          destroyVoiceRecognizer(session);
+                          resetVoiceUi();
+                          playVoiceTone(ToneGenerator.TONE_PROP_ACK);
+
+                          if (error != SpeechRecognizer.ERROR_NO_MATCH
+                                  && error != SpeechRecognizer.ERROR_SPEECH_TIMEOUT) {
+                              Toast.makeText(V10CarActivity.this,
+                                      "Lỗi nhận dạng giọng nói. Bạn thử lại nhé.",
+                                      Toast.LENGTH_SHORT).show();
+                          }
+                      }
+
+                      @Override
+                      public void onResults(Bundle results) {
+                          if (voiceRecognizer != session
+                                  || voiceSessionCancelled) return;
+
+                          ArrayList<String> matches = results == null
+                                  ? null
+                                  : results.getStringArrayList(
+                                          SpeechRecognizer.RESULTS_RECOGNITION);
+
+                          String spoken = matches == null || matches.isEmpty()
+                                  ? null : matches.get(0);
+
+                          voiceListening = false;
+                          destroyVoiceRecognizer(session);
+                          resetVoiceUi();
+                          playVoiceTone(ToneGenerator.TONE_PROP_ACK);
+
+                          if (spoken == null || spoken.trim().isEmpty()) {
+                              return;
+                          }
+
+                          processVoiceCommand(spoken);
+                      }
+
+                      @Override
+                      public void onPartialResults(Bundle partialResults) {
+                          if (voiceRecognizer != session
+                                  || voiceSessionCancelled) return;
+
+                          ArrayList<String> partial = partialResults == null
+                                  ? null
+                                  : partialResults.getStringArrayList(
+                                          SpeechRecognizer.RESULTS_RECOGNITION);
+
+                          if (partial != null && !partial.isEmpty()) {
+                              String current = partial.get(0);
+
+                              if (current != null && !current.trim().isEmpty()) {
+                                  showVoiceTranscript(current);
+                              }
+
+                              scheduleVoiceSilenceStop(session);
+                          }
+                      }
+
+                      @Override
+                      public void onEvent(int eventType, Bundle params) {}
+                  });
+
+                  Intent intent = new Intent(
+                          RecognizerIntent.ACTION_RECOGNIZE_SPEECH);
+
+                  intent.putExtra(
+                          RecognizerIntent.EXTRA_LANGUAGE_MODEL,
+                          RecognizerIntent.LANGUAGE_MODEL_FREE_FORM);
+                  intent.putExtra(
+                          RecognizerIntent.EXTRA_LANGUAGE, "vi-VN");
+                  intent.putExtra(
+                          RecognizerIntent.EXTRA_LANGUAGE_PREFERENCE, "vi-VN");
+                  intent.putExtra(
+                          RecognizerIntent.EXTRA_PARTIAL_RESULTS, true);
+                  intent.putExtra(
+                          RecognizerIntent.EXTRA_SPEECH_INPUT_COMPLETE_SILENCE_LENGTH_MILLIS,
+                          VOICE_SILENCE_STOP_MS);
+                  intent.putExtra(
+                          RecognizerIntent.EXTRA_SPEECH_INPUT_POSSIBLY_COMPLETE_SILENCE_LENGTH_MILLIS,
+                          VOICE_SILENCE_STOP_MS);
+
+                  session.startListening(intent);
+
+                  if (voiceButton != null) {
+                      voiceButton.setText("NGHE…");
+                  }
+
+                  playVoiceTone(ToneGenerator.TONE_PROP_BEEP);
+
+              } catch (RuntimeException e) {
+                  voiceListening = false;
+                  stopVoiceRecognition();
+                  resetVoiceUi();
+
+                  Toast.makeText(this,
+                          "Không thể khởi động nhận dạng giọng nói.",
+                          Toast.LENGTH_SHORT).show();
+              }
+          }
+
+          private void scheduleVoiceSilenceStop(
+                  final SpeechRecognizer session) {
+              cancelVoiceSilenceStop();
+
+              Runnable pending = () -> {
+                  if (voiceRecognizer != session
+                          || voiceSessionCancelled) return;
+
+                  voiceSilenceStop = null;
+
+                  try {
+                      session.stopListening();
+                  } catch (RuntimeException ignored) {
+                  }
+              };
+
+              voiceSilenceStop = pending;
+              voiceHandler.postDelayed(
+                      pending, VOICE_SILENCE_STOP_MS);
+          }
+
+          private void cancelVoiceSilenceStop() {
+              Runnable pending = voiceSilenceStop;
+              voiceSilenceStop = null;
+
+              if (pending != null) {
+                  voiceHandler.removeCallbacks(pending);
+              }
+          }
+
+          private void destroyVoiceRecognizer(
+                  SpeechRecognizer session) {
+              cancelVoiceSilenceStop();
+
+              if (voiceRecognizer == session) {
+                  voiceRecognizer = null;
+              }
+
+              try {
+                  session.destroy();
+              } catch (RuntimeException ignored) {
+              }
+          }
+
+          private void cancelVoiceRecognitionFromButton() {
+              if (!voiceListening) return;
+
+              voiceSessionCancelled = true;
+              voiceListening = false;
+
+              SpeechRecognizer current = voiceRecognizer;
+              voiceRecognizer = null;
+
+              cancelVoiceSilenceStop();
+
+              if (current != null) {
+                  try {
+                      current.cancel();
+                  } catch (RuntimeException ignored) {
+                  }
+
+                  try {
+                      current.destroy();
+                  } catch (RuntimeException ignored) {
+                  }
+              }
+
+              resetVoiceUi();
+              playVoiceTone(ToneGenerator.TONE_PROP_ACK);
+          }
+
+          private void stopVoiceRecognition() {
+              voiceSessionCancelled = true;
+              voiceListening = false;
+
+              cancelVoiceSilenceStop();
+
+              SpeechRecognizer current = voiceRecognizer;
+              voiceRecognizer = null;
+
+              if (current != null) {
+                  try {
+                      current.cancel();
+                  } catch (RuntimeException ignored) {
+                  }
+
+                  try {
+                      current.destroy();
+                  } catch (RuntimeException ignored) {
+                  }
+              }
+
+              resetVoiceUi();
+          }
+
+          private void processVoiceCommand(String spoken) {
+              String raw = spoken == null ? "" : spoken.trim();
+              String command = raw.toLowerCase(Locale.ROOT);
+
+              if (command.isEmpty()) return;
+
+              if (command.contains("danh sách ứng dụng")
+                      || command.equals("mở ứng dụng")
+                      || command.equals("mở app")) {
+                  showApps();
+                  Toast.makeText(this,
+                          "Đã mở danh sách ứng dụng.",
+                          Toast.LENGTH_SHORT).show();
+                  return;
+              }
+
+              String appPrefix = "mở ứng dụng ";
+              String shortAppPrefix = "mở app ";
+
+              if (command.startsWith(appPrefix)) {
+                  String target = raw.substring(appPrefix.length()).trim();
+
+                  if (!target.isEmpty()) {
+                      launchVoiceAppByName(target);
+                  } else {
+                      showApps();
+                  }
+                  return;
+              }
+
+              if (command.startsWith(shortAppPrefix)) {
+                  String target = raw.substring(shortAppPrefix.length()).trim();
+
+                  if (!target.isEmpty()) {
+                      launchVoiceAppByName(target);
+                  } else {
+                      showApps();
+                  }
+                  return;
+              }
+
+              if (command.contains("mở youtube")
+                      || command.equals("youtube")
+                      || command.contains("open youtube")) {
+                  launchVoiceTarget("youtube");
+                  return;
+              }
+
+              if (command.contains("mở bản đồ")
+                      || command.contains("mở google maps")
+                      || command.contains("mở maps")
+                      || command.equals("maps")
+                      || command.contains("open maps")) {
+                  launchVoiceTarget("maps");
+                  return;
+              }
+
+              Toast.makeText(this,
+                      "Chưa hỗ trợ lệnh: " + raw,
+                      Toast.LENGTH_SHORT).show();
+          }
+
+          private void launchVoiceAppByName(String spokenName) {
+              String query = spokenName == null
+                      ? "" : spokenName.trim().toLowerCase(Locale.ROOT);
+
+              if (query.isEmpty()) {
+                  showApps();
+                  return;
+              }
+
+              AppInfo match = null;
+
+              for (AppInfo app : apps) {
+                  String label = app.name == null
+                          ? "" : app.name.trim().toLowerCase(Locale.ROOT);
+                  String packageName =
+                          app.component.getPackageName().toLowerCase(Locale.ROOT);
+
+                  if (query.equals(label) || query.equals(packageName)) {
+                      match = app;
+                      break;
+                  }
+              }
+
+              if (match == null) {
+                  for (AppInfo app : apps) {
+                      String label = app.name == null
+                              ? "" : app.name.trim().toLowerCase(Locale.ROOT);
+                      String packageName =
+                              app.component.getPackageName().toLowerCase(Locale.ROOT);
+
+                      if ((!label.isEmpty() && label.contains(query))
+                              || packageName.contains(
+                                      query.replace(" ", ""))) {
+                          match = app;
+                          break;
+                      }
+                  }
+              }
+
+              if (match == null) {
+                  Toast.makeText(this,
+                          "Không tìm thấy ứng dụng: " + spokenName,
+                          Toast.LENGTH_LONG).show();
+                  return;
+              }
+
+              launchProjection(match.component);
+
+              Toast.makeText(this,
+                      "Đang mở " + match.name,
+                      Toast.LENGTH_SHORT).show();
+          }
+
+          private void launchVoiceTarget(String target) {
+              for (AppInfo app : apps) {
+                  String packageName =
+                          app.component.getPackageName().toLowerCase(Locale.ROOT);
+                  String label = app.name == null
+                          ? "" : app.name.toLowerCase(Locale.ROOT);
+
+                  boolean match = target.equals("youtube")
+                          ? packageName.contains("youtube")
+                              || label.contains("youtube")
+                          : packageName.contains("maps")
+                              || label.contains("maps")
+                              || label.contains("bản đồ");
+
+                  if (match) {
+                      launchProjection(app.component);
+
+                      Toast.makeText(this,
+                              "Đang mở " + app.name,
+                              Toast.LENGTH_SHORT).show();
+                      return;
+                  }
+              }
+
+              Toast.makeText(this,
+                      target.equals("youtube")
+                              ? "Không tìm thấy YouTube đã cài đặt."
+                              : "Không tìm thấy ứng dụng bản đồ đã cài đặt.",
+                      Toast.LENGTH_LONG).show();
+          }
+      '''
+
+      replace_once(
+          "    private void buildAppPanel() {\n",
+          helper + "\n    private void buildAppPanel() {\n",
+          "voice recognition and command handlers"
+      )
+
+      replace_once(
+          "    public void onDestroy() {\n",
+          "    public void onDestroy() {\n"
+          "        stopVoiceRecognition();\n",
+          "voice cleanup on destroy"
+      )
+
+      activity_path.write_text(java, encoding="utf-8")
+
+      tree = ET.parse(manifest_path)
+      root = tree.getroot()
+      android_ns = "{http://schemas.android.com/apk/res/android}"
+
+      queries = root.find("queries")
+
+      if queries is None:
+          raise SystemExit(
+              "FAIL-CLOSED: manifest has no <queries> section"
+          )
+
+      found = any(
+          action.get(android_ns + "name")
+              == "android.speech.RecognitionService"
+          for intent in queries.findall("intent")
+          for action in intent.findall("action")
+      )
+
+      if not found:
+          intent = ET.SubElement(queries, "intent")
+          action = ET.SubElement(intent, "action")
+          action.set(
+              android_ns + "name",
+              "android.speech.RecognitionService"
+          )
+
+      ET.register_namespace(
+          "android",
+          "http://schemas.android.com/apk/res/android"
+      )
+      ET.indent(tree, space="    ")
+      tree.write(
+          manifest_path,
+          encoding="utf-8",
+          xml_declaration=True
+      )
+      ET.parse(manifest_path)
+
+      final_java = activity_path.read_text(encoding="utf-8")
+      final_manifest = manifest_path.read_text(encoding="utf-8")
+      gradle = gradle_path.read_text(encoding="utf-8")
+
+      required = [
+          "private void toggleVoiceRecognition()",
+          "private void cancelVoiceRecognitionFromButton()",
+          "private void showVoiceTranscript(String value)",
+          "private void launchVoiceAppByName(String spokenName)",
+          "onPartialResults(Bundle partialResults)",
+          "voiceSessionCancelled",
+          "ToneGenerator.TONE_PROP_BEEP",
+          "ToneGenerator.TONE_PROP_ACK",
+          "processVoiceCommand(spoken)",
+          "VOICE_SILENCE_STOP_MS = 4000L",
+      ]
+
+      for item in required:
+          if item not in final_java:
+              raise SystemExit(
+                  f"FAIL: required voice feature missing: {item}"
+              )
+
+      if final_java.count("private void processVoiceCommand(String spoken)") != 1:
+          raise SystemExit("FAIL: processVoiceCommand anchor count")
+
+      if final_java.count("private void startVoiceRecognition()") != 1:
+          raise SystemExit("FAIL: startVoiceRecognition anchor count")
+
+      if "android.permission.RECORD_AUDIO" not in final_manifest:
+          raise SystemExit("FAIL: RECORD_AUDIO permission missing")
+
+      if "android.speech.RecognitionService" not in final_manifest:
+          raise SystemExit("FAIL: recognition service query missing")
+
+      if "org.maplibre.gl:android-sdk:11.11.0" not in gradle:
+          raise SystemExit("FAIL: unexpected MapLibre dependency")
+
+      print("PASS: baseline and Voice Mic V2 patch checks")
+      PY
+
+  - name: Validate Java anchors and Manifest XML
+    shell: bash
+    run: |
+      set -euo pipefail
+
+      python3 - <<'PY'
+      from pathlib import Path
+      import xml.etree.ElementTree as ET
+
+      source = Path(
+          "v10-source/app/src/main/java/com/carassistant/v10/V10CarActivity.java"
+      ).read_text(encoding="utf-8")
+
+      manifest = Path(
+          "v10-source/app/src/main/AndroidManifest.xml"
+      )
+      ET.parse(manifest)
+
+      checks = [
+          ("toggleVoiceRecognition", "private void toggleVoiceRecognition()"),
+          ("startVoiceRecognition", "private void startVoiceRecognition()"),
+          ("processVoiceCommand", "private void processVoiceCommand(String spoken)"),
+          ("cancelVoiceRecognitionFromButton", "private void cancelVoiceRecognitionFromButton()"),
+          ("live transcript", "showVoiceTranscript(current)"),
+          ("app launch", "private void launchVoiceAppByName(String spokenName)"),
+      ]
+
+      for label, anchor in checks:
+          count = source.count(anchor)
+          if count != 1:
+              raise SystemExit(
+                  f"FAIL: {label}; expected one anchor, got {count}"
+              )
+
+      if "voice.setOnClickListener(v -> toggleVoiceRecognition())" not in source:
+          raise SystemExit("FAIL: mic toggle listener missing")
+
+      if "requestPermissions(" in source:
+          raise SystemExit("FAIL: unexpected runtime permission request")
+
+      if "onRequestPermissionsResult(" in source:
+          raise SystemExit("FAIL: unexpected permission callback")
+
+      print("PASS: Java anchors and Manifest XML")
+      PY
+
+  - name: Build CarAssistant debug APK
+    shell: bash
+    run: |
+      set -euo pipefail
+      cd v10-source
+      gradle --no-daemon --stacktrace assembleDebug
+
+  - name: Package APK and checksum
+    shell: bash
+    run: |
+      set -euo pipefail
+
+      APK="v10-source/app/build/outputs/apk/debug/app-debug.apk"
+      test -s "$APK"
+
+      mkdir -p dist
+      cp "$APK" dist/CarAssistant-Voice-Mic-V2.apk
+
+      sha256sum dist/CarAssistant-Voice-Mic-V2.apk \
+        > dist/CarAssistant-Voice-Mic-V2.sha256
+
+      cat dist/CarAssistant-Voice-Mic-V2.sha256
+
+  - name: Upload Voice Mic V2 APK
+    uses: actions/upload-artifact@v4
+    with:
+      name: CarAssistant-Voice-Mic-V2
+      path: |
+        dist/CarAssistant-Voice-Mic-V2.apk
+        dist/CarAssistant-Voice-Mic-V2.sha256
+      if-no-files-found: error
