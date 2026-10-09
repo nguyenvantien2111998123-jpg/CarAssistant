@@ -86,6 +86,7 @@ jobs:
 
           bash /tmp/create-voice-project.sh
 
+      
       - name: Apply isolated 4-second silence-stop patch
         shell: bash
         run: |
@@ -93,133 +94,133 @@ jobs:
 
           python3 - <<'PY'
           import pathlib
+          import re
+          import textwrap
 
           java_path = pathlib.Path(
               "carassistant-voice/app/src/main/java/com/carassistant/voice/MainActivity.java"
           )
           gradle_path = pathlib.Path("carassistant-voice/app/build.gradle")
-
           java = java_path.read_text(encoding="utf-8")
 
-          def replace_once(old, new, label):
+          def sub_once(pattern, replacement, label):
               global java
-              count = java.count(old)
-              assert count == 1, (
-                  f"FAIL: expected exactly one match for {label}; found {count}"
+              java, count = re.subn(
+                  pattern, replacement, java, count=1, flags=re.MULTILINE
               )
-              java = java.replace(old, new, 1)
-              print(f"PASS: patch {label}")
+              assert count == 1, (
+                  f"FAIL: {label}; expected one match, found {count}"
+              )
+              print(f"PASS: {label}")
 
-          replace_once(
-              "import android.os.Bundle;\n"
-              "import android.speech.RecognitionListener;",
-              "import android.os.Bundle;\n"
-              "import android.os.Handler;\n"
-              "import android.os.Looper;\n"
-              "import android.speech.RecognitionListener;",
+          sub_once(
+              r'^([ \t]*)import android\.os\.Bundle;\n'
+              r'\1import android\.speech\.RecognitionListener;',
+              lambda m: (
+                  m.group(1) + "import android.os.Bundle;\n"
+                  + m.group(1) + "import android.os.Handler;\n"
+                  + m.group(1) + "import android.os.Looper;\n"
+                  + m.group(1) + "import android.speech.RecognitionListener;"
+              ),
               "Handler imports"
           )
 
-          replace_once(
-              "private static final int MIC_REQUEST = 41;\n\n"
-              "    private SpeechRecognizer recognizer;",
-              "private static final int MIC_REQUEST = 41;\n"
-              "    private static final long SILENCE_STOP_DELAY_MS = 4000L;\n\n"
-              "    private final Handler mainHandler =\n"
-              "            new Handler(Looper.getMainLooper());\n"
-              "    private Runnable silenceStopRunnable;\n"
-              "    private SpeechRecognizer recognizer;",
-              "4-second timer state"
+          sub_once(
+              r'^([ \t]*)private static final int MIC_REQUEST = 41;\n'
+              r'[ \t]*\n[ \t]*private SpeechRecognizer recognizer;',
+              lambda m: (
+                  m.group(1) + "private static final int MIC_REQUEST = 41;\n"
+                  + m.group(1) + "private static final long SILENCE_STOP_DELAY_MS = 4000L;\n\n"
+                  + m.group(1) + "private final Handler mainHandler =\n"
+                  + m.group(1) + "        new Handler(Looper.getMainLooper());\n"
+                  + m.group(1) + "private Runnable silenceStopRunnable;\n"
+                  + m.group(1) + "private SpeechRecognizer recognizer;"
+              ),
+              "4-second timer fields"
           )
 
-          replace_once(
-              "if (recognizer != session) {\n"
-              "                    return;\n"
-              "                }\n\n"
-              "                status.setText(errorMessage(error));",
-              "if (recognizer != session) {\n"
-              "                    return;\n"
-              "                }\n\n"
-              "                cancelSilenceStop();\n"
-              "                status.setText(errorMessage(error));",
-              "cancel timer on error"
-          )
-
-          replace_once(
-              "if (recognizer != session) {\n"
-              "                    return;\n"
-              "                }\n\n"
-              "                showResults(results, false, session);",
-              "if (recognizer != session) {\n"
-              "                    return;\n"
-              "                }\n\n"
-              "                cancelSilenceStop();\n"
-              "                showResults(results, false, session);",
-              "cancel timer on final result"
-          )
-
-          replace_once(
-              "showResults(results, true, session);\n"
-              "            }",
-              "showResults(results, true, session);\n"
-              "                scheduleSilenceStop(session);\n"
-              "            }",
+          sub_once(
+              r'^([ \t]*)showResults\(results, true, session\);\n\1\}',
+              lambda m: (
+                  m.group(0).split("\n")[0] + "\n"
+                  + m.group(1) + "scheduleSilenceStop(session);\n"
+                  + m.group(1) + "}"
+              ),
               "schedule timer after partial result"
           )
 
-          replace_once(
-              "private void parseCommand(String spoken) {",
-              "private void scheduleSilenceStop(\n"
-              "            final SpeechRecognizer session) {\n"
-              "        cancelSilenceStop();\n\n"
-              "        Runnable pending = () -> {\n"
-              "            if (recognizer != session) {\n"
-              "                return;\n"
-              "            }\n\n"
-              "            silenceStopRunnable = null;\n"
-              "            status.setText(\"Đang hoàn tất câu nói...\");\n"
-              "            try {\n"
-              "                session.stopListening();\n"
-              "            } catch (RuntimeException e) {\n"
-              "                status.setText(\n"
-              "                        \"Không thể kết thúc phiên nghe an toàn.\");\n"
-              "            }\n"
-              "        };\n\n"
-              "        silenceStopRunnable = pending;\n"
-              "        mainHandler.postDelayed(pending, SILENCE_STOP_DELAY_MS);\n"
-              "    }\n\n"
-              "    private void cancelSilenceStop() {\n"
-              "        Runnable pending = silenceStopRunnable;\n"
-              "        silenceStopRunnable = null;\n"
-              "        if (pending != null) {\n"
-              "            mainHandler.removeCallbacks(pending);\n"
-              "        }\n"
-              "    }\n\n"
-              "    private void parseCommand(String spoken) {",
-              "silence timer helpers"
+          helper = textwrap.dedent("""\
+              private void scheduleSilenceStop(
+                      final SpeechRecognizer session) {
+                  cancelSilenceStop();
+
+                  Runnable pending = () -> {
+                      if (recognizer != session) {
+                          return;
+                      }
+
+                      silenceStopRunnable = null;
+                      status.setText("Đang hoàn tất câu nói...");
+                      try {
+                          session.stopListening();
+                      } catch (RuntimeException e) {
+                          status.setText(
+                                  "Không thể kết thúc phiên nghe an toàn.");
+                      }
+                  };
+
+                  silenceStopRunnable = pending;
+                  mainHandler.postDelayed(pending, SILENCE_STOP_DELAY_MS);
+              }
+
+              private void cancelSilenceStop() {
+                  Runnable pending = silenceStopRunnable;
+                  silenceStopRunnable = null;
+                  if (pending != null) {
+                      mainHandler.removeCallbacks(pending);
+                  }
+              }
+
+          """)
+
+          sub_once(
+              r'^([ \t]*)private void parseCommand\(String spoken\) \{',
+              lambda m: (
+                  textwrap.indent(helper, m.group(1))
+                  + m.group(0)
+              ),
+              "timer helper methods"
           )
 
-          replace_once(
-              "private void stopRecognizer() {\n"
-              "        SpeechRecognizer previous = recognizer;",
-              "private void stopRecognizer() {\n"
-              "        cancelSilenceStop();\n"
-              "        SpeechRecognizer previous = recognizer;",
-              "timer cleanup"
+          sub_once(
+              r'^([ \t]*)private void destroyRecognizer\(SpeechRecognizer session\) \{\n',
+              lambda m: (
+                  m.group(0) + m.group(1) + "    cancelSilenceStop();\n"
+              ),
+              "cancel timer when session ends"
+          )
+
+          sub_once(
+              r'^([ \t]*)private void stopRecognizer\(\) \{\n',
+              lambda m: (
+                  m.group(0) + m.group(1) + "    cancelSilenceStop();\n"
+              ),
+              "cancel timer when restarting"
           )
 
           java_path.write_text(java, encoding="utf-8")
 
           gradle = gradle_path.read_text(encoding="utf-8")
-          assert "versionCode 2" in gradle
-          assert "versionName '0.2.0'" in gradle
+          assert "versionCode 2" in gradle, "Unexpected Fix1 versionCode"
+          assert "versionName '0.2.0'" in gradle, "Unexpected Fix1 versionName"
+
           gradle = gradle.replace("versionCode 2", "versionCode 3", 1)
           gradle = gradle.replace(
               "versionName '0.2.0'", "versionName '0.3.0'", 1
           )
           gradle_path.write_text(gradle, encoding="utf-8")
 
-          print("PASS: Fix1 baseline preserved with isolated patch")
+          print("PASS: Fix1 baseline retained")
           print("PASS: version advanced to 0.3.0")
           PY
 
