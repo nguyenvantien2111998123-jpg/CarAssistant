@@ -1,0 +1,214 @@
+name: Fix chop den 2
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  diagnostic-build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+
+    steps:
+      - name: Checkout current main source
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 1
+
+      - name: Setup Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Setup Gradle 8.13
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.13'
+
+      - name: Verify baseline and apply isolated diagnostic patch
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          python3 - <<'PY'
+          from pathlib import Path
+          import subprocess
+          import textwrap
+
+          workflow = Path(
+              ".github/workflows/build-carassistant-voice-integration-v1.yml"
+          )
+          expected_workflow_sha = (
+              "17f1cd02ce35bbbd66699516eab285ca4aea3a1f"
+          )
+
+          actual_workflow_sha = subprocess.check_output(
+              ["git", "hash-object", str(workflow)],
+              text=True
+          ).strip()
+
+          if actual_workflow_sha != expected_workflow_sha:
+              raise SystemExit(
+                  "FAIL-CLOSED: Voice Integration V1 workflow changed. "
+                  f"Expected {expected_workflow_sha}; "
+                  f"got {actual_workflow_sha}"
+              )
+
+          print("PASS: verified Voice Integration V1 workflow SHA")
+
+          lines = workflow.read_text(encoding="utf-8").splitlines()
+          start = None
+
+          for index, line in enumerate(lines):
+              if line.strip() == "python3 - <<'PY'":
+                  start = index + 1
+                  break
+
+          if start is None:
+              raise SystemExit(
+                  "FAIL-CLOSED: cannot find original Python patch block"
+              )
+
+          end = None
+          for index in range(start, len(lines)):
+              if lines[index].strip() == "PY":
+                  end = index
+                  break
+
+          if end is None:
+              raise SystemExit(
+                  "FAIL-CLOSED: Python patch block has no closing marker"
+              )
+
+          original_patch = textwrap.dedent(
+              "\n".join(lines[start:end]) + "\n"
+          )
+
+          print("PASS: extracted original integration patch")
+          exec(compile(
+              original_patch,
+              "<voice-integration-v1-patch>",
+              "exec"
+          ), {})
+
+          activity = Path(
+              "v10-source/app/src/main/java/com/carassistant/v10/"
+              "V10CarActivity.java"
+          )
+
+          java = activity.read_text(encoding="utf-8")
+          anchor = "processVoiceCommand(matches.get(0));"
+
+          if java.count(anchor) != 1:
+              raise SystemExit(
+                  "FAIL-CLOSED: expected exactly one voice command "
+                  f"dispatch anchor; found {java.count(anchor)}"
+              )
+
+          replacement = (
+              'android.util.Log.i("CA_VOICE_DIAG", '
+              '"RESULT_READY delay=500ms");\n'
+              "                              handler.postDelayed(() -> {\n"
+              '                                  android.util.Log.i('
+              '"CA_VOICE_DIAG", "DISPATCH_COMMAND");\n'
+              "                                  processVoiceCommand("
+              "matches.get(0));\n"
+              "                              }, 500L);"
+          )
+
+          java = java.replace(anchor, replacement, 1)
+          activity.write_text(java, encoding="utf-8")
+
+          check = activity.read_text(encoding="utf-8")
+
+          if check.count('Log.i("CA_VOICE_DIAG", "DISPATCH_COMMAND")') != 1:
+              raise SystemExit(
+                  "FAIL-CLOSED: diagnostic dispatch marker missing"
+              )
+
+          if check.count("}, 500L);") != 1:
+              raise SystemExit(
+                  "FAIL-CLOSED: expected exactly one 500 ms delay"
+              )
+
+          if check.count("processVoiceCommand(matches.get(0));") != 1:
+              raise SystemExit(
+                  "FAIL-CLOSED: original command dispatch not preserved"
+              )
+
+          print("PASS: isolated 500 ms diagnostic patch applied")
+          print("PASS: changes are limited to the temporary build workspace")
+          PY
+
+      - name: Verify diagnostic patch and Manifest XML
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          python3 - <<'PY'
+          from pathlib import Path
+          import xml.etree.ElementTree as ET
+
+          activity = Path(
+              "v10-source/app/src/main/java/com/carassistant/v10/"
+              "V10CarActivity.java"
+          )
+          manifest = Path(
+              "v10-source/app/src/main/AndroidManifest.xml"
+          )
+          gradle = Path("v10-source/app/build.gradle")
+
+          source = activity.read_text(encoding="utf-8")
+          ET.parse(manifest)
+
+          assert source.count("private void startVoiceRecognition()") == 1
+          assert source.count("private void processVoiceCommand(String spoken)") == 1
+          assert source.count("processVoiceCommand(matches.get(0));") == 1
+          assert source.count("}, 500L);") == 1
+          assert 'Log.i("CA_VOICE_DIAG", "RESULT_READY delay=500ms")' in source
+          assert 'Log.i("CA_VOICE_DIAG", "DISPATCH_COMMAND")' in source
+          assert "VOICE_SILENCE_STOP_MS = 4000L" in source
+          assert "org.maplibre.gl:android-sdk:11.11.0" in gradle.read_text(
+              encoding="utf-8"
+          )
+
+          print("PASS: Java diagnostic anchors")
+          print("PASS: Manifest XML")
+          print("PASS: MapLibre dependency")
+          PY
+
+      - name: Build CarAssistant debug APK
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd v10-source
+          gradle --no-daemon --stacktrace assembleDebug
+
+      - name: Package APK and checksum
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          APK="v10-source/app/build/outputs/apk/debug/app-debug.apk"
+          test -s "$APK"
+
+          mkdir -p dist
+          cp "$APK" dist/CarAssistant-Voice-Flicker-Diagnostic-V1.apk
+
+          sha256sum dist/CarAssistant-Voice-Flicker-Diagnostic-V1.apk \
+            > dist/CarAssistant-Voice-Flicker-Diagnostic-V1.sha256
+
+          cat dist/CarAssistant-Voice-Flicker-Diagnostic-V1.sha256
+
+      - name: Upload diagnostic APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: CarAssistant-Voice-Flicker-Diagnostic-V1
+          path: |
+            dist/CarAssistant-Voice-Flicker-Diagnostic-V1.apk
+            dist/CarAssistant-Voice-Flicker-Diagnostic-V1.sha256
+          if-no-files-found: error
