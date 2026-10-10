@@ -1,0 +1,657 @@
+
+name: Tro ly V5.2 YouTube JSON Resolver
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Verify original source workflows
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          import hashlib
+
+          expected = {
+              ".github/workflows/build-carassistant-voice-standalone-v5.yml":
+                  "c75feb842cf9cf03c75f4d33d3014abeb4f2672d",
+              ".github/workflows/build-carassistant-voice-standalone-v5-app-picker-patch.yml":
+                  "9028dfa690a8c31e89a50ce342c3cee7e6c50be3",
+              ".github/workflows/build-carassistant-voice-v51-autoplay-first-result-patch.yml":
+                  "c0836de5e73635d44ba0cfcfb9ab8e0c5866bc44",
+          }
+
+          for name, wanted in expected.items():
+              path = Path(name)
+              if not path.is_file():
+                  raise SystemExit(f"FAIL: missing source: {name}")
+
+              data = path.read_bytes()
+              actual = hashlib.sha1(
+                  b"blob " + str(len(data)).encode() + b"\0" + data
+              ).hexdigest()
+
+              if actual != wanted:
+                  raise SystemExit(
+                      f"FAIL: source changed: {name}; "
+                      f"expected {wanted}, got {actual}"
+                  )
+
+              print(f"PASS: verified {name}")
+          PY
+
+      - name: Setup Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.13'
+
+      - name: Generate isolated V5 and app picker
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -m pip install --quiet pyyaml
+
+          python3 - <<'PY'
+          from pathlib import Path
+          import yaml
+
+          sources = [
+              (
+                  ".github/workflows/build-carassistant-voice-standalone-v5.yml",
+                  "Generate isolated V5 project",
+                  "/tmp/v52-generate.sh",
+              ),
+              (
+                  ".github/workflows/build-carassistant-voice-standalone-v5-app-picker-patch.yml",
+                  "Apply isolated installed-app picker patch",
+                  "/tmp/v52-picker.sh",
+              ),
+          ]
+
+          for filename, step_name, output in sources:
+              data = yaml.safe_load(
+                  Path(filename).read_text(encoding="utf-8")
+              )
+              steps = data.get("jobs", {}).get("build", {}).get("steps", [])
+              matches = [
+                  step for step in steps
+                  if step.get("name") == step_name
+              ]
+
+              if len(matches) != 1:
+                  raise SystemExit(
+                      f"FAIL: expected one step {step_name}; "
+                      f"found {len(matches)}"
+                  )
+
+              script = matches[0].get("run", "")
+              if not script.strip():
+                  raise SystemExit(f"FAIL: empty script: {step_name}")
+
+              Path(output).write_text(
+                  script.rstrip() + "\n", encoding="utf-8"
+              )
+              print(f"PASS: extracted {step_name}")
+          PY
+
+          bash -n /tmp/v52-generate.sh
+          bash -n /tmp/v52-picker.sh
+          bash /tmp/v52-generate.sh
+          bash /tmp/v52-picker.sh
+
+          test -s carassistant-voice/app/src/main/java/com/carassistant/voice/MainActivity.java
+          test -s carassistant-voice/app/src/main/java/com/carassistant/voice/FloatingMicService.java
+          test -s carassistant-voice/app/build.gradle
+          test -s carassistant-voice/app/src/main/AndroidManifest.xml
+
+          echo "PASS: isolated V5 project generated"
+
+      - name: Apply experimental JSON resolver
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          import re
+          import xml.etree.ElementTree as ET
+
+          root = Path("carassistant-voice")
+          main = root / "app/src/main/java/com/carassistant/voice/MainActivity.java"
+          manifest = root / "app/src/main/AndroidManifest.xml"
+          java = main.read_text(encoding="utf-8")
+
+          anchor = "import java.util.ArrayList;"
+          if anchor not in java:
+              raise SystemExit("FAIL: Java import anchor missing")
+
+          imports = [
+              "import java.io.BufferedReader;",
+              "import java.io.InputStreamReader;",
+              "import java.net.HttpURLConnection;",
+              "import java.net.URL;",
+              "import java.nio.charset.StandardCharsets;",
+              "import org.json.JSONArray;",
+              "import org.json.JSONException;",
+              "import org.json.JSONObject;",
+          ]
+          missing = [item for item in imports if item not in java]
+          if missing:
+              java = java.replace(
+                  anchor, anchor + "\n" + "\n".join(missing), 1
+              )
+
+          methods = r'''
+              private volatile String youtubeResolveDiagnostic =
+                      "Chưa bắt đầu truy vấn YouTube.";
+
+              private String fetchYouTubeSearchPage(String address) {
+                  HttpURLConnection connection = null;
+                  youtubeResolveDiagnostic = "Đang kết nối đến YouTube.";
+
+                  try {
+                      connection = (HttpURLConnection)
+                              new URL(address).openConnection();
+                      connection.setRequestMethod("GET");
+                      connection.setConnectTimeout(10000);
+                      connection.setReadTimeout(10000);
+                      connection.setInstanceFollowRedirects(true);
+                      connection.setRequestProperty(
+                              "User-Agent",
+                              "Mozilla/5.0 (Linux; Android 12) "
+                              + "AppleWebKit/537.36 "
+                              + "(KHTML, like Gecko) Chrome/126.0 Mobile Safari/537.36");
+                      connection.setRequestProperty(
+                              "Accept-Language", "vi-VN,vi;q=0.9,en;q=0.7");
+                      connection.setRequestProperty(
+                              "Accept",
+                              "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8");
+
+                      int code = connection.getResponseCode();
+                      if (code < 200 || code >= 300) {
+                          youtubeResolveDiagnostic =
+                                  "YouTube trả mã HTTP " + code
+                                  + "; có thể bị giới hạn hoặc yêu cầu xác minh.";
+                          return null;
+                      }
+
+                      StringBuilder body = new StringBuilder();
+                      try (BufferedReader reader = new BufferedReader(
+                              new InputStreamReader(
+                                      connection.getInputStream(),
+                                      StandardCharsets.UTF_8))) {
+                          String line;
+                          int total = 0;
+                          while ((line = reader.readLine()) != null
+                                  && total < 2500000) {
+                              body.append(line).append('\n');
+                              total += line.length();
+                          }
+                      }
+
+                      if (body.length() == 0) {
+                          youtubeResolveDiagnostic =
+                                  "YouTube trả về trang rỗng.";
+                          return null;
+                      }
+
+                      youtubeResolveDiagnostic =
+                              "Đã nhận trang YouTube (" + body.length()
+                              + " ký tự); đang phân tích JSON.";
+                      return body.toString();
+
+                  } catch (java.net.UnknownHostException e) {
+                      youtubeResolveDiagnostic =
+                              "Không phân giải được DNS YouTube; kiểm tra mạng hoặc DNS.";
+                      return null;
+                  } catch (java.net.SocketTimeoutException e) {
+                      youtubeResolveDiagnostic =
+                              "YouTube phản hồi quá thời gian chờ.";
+                      return null;
+                  } catch (javax.net.ssl.SSLException e) {
+                      youtubeResolveDiagnostic =
+                              "Lỗi TLS/SSL khi kết nối YouTube.";
+                      return null;
+                  } catch (Exception e) {
+                      youtubeResolveDiagnostic =
+                              "Lỗi kết nối YouTube: "
+                              + e.getClass().getSimpleName() + ".";
+                      return null;
+                  } finally {
+                      if (connection != null) {
+                          connection.disconnect();
+                      }
+                  }
+              }
+
+              private String extractBalancedJsonObject(String html, int from) {
+                  if (html == null || from < 0 || from >= html.length()) {
+                      return null;
+                  }
+
+                  int open = -1;
+                  int limit = Math.min(html.length(), from + 1000);
+                  for (int i = from; i < limit; i++) {
+                      if (html.charAt(i) == '{') {
+                          open = i;
+                          break;
+                      }
+                  }
+                  if (open < 0) return null;
+
+                  int depth = 0;
+                  boolean inString = false;
+                  boolean escaped = false;
+
+                  for (int i = open; i < html.length(); i++) {
+                      char c = html.charAt(i);
+
+                      if (inString) {
+                          if (escaped) {
+                              escaped = false;
+                          } else if (c == '\\') {
+                              escaped = true;
+                          } else if (c == '"') {
+                              inString = false;
+                          }
+                          continue;
+                      }
+
+                      if (c == '"') {
+                          inString = true;
+                      } else if (c == '{') {
+                          depth++;
+                      } else if (c == '}') {
+                          depth--;
+                          if (depth == 0) {
+                              return html.substring(open, i + 1);
+                          }
+                          if (depth < 0) return null;
+                      }
+                  }
+                  return null;
+              }
+
+              private JSONObject extractYouTubeInitialData(String html) {
+                  if (html == null || html.isEmpty()) return null;
+
+                  String[] anchors = {
+                      "ytInitialData",
+                      "window[\"ytInitialData\"]",
+                      "window['ytInitialData']"
+                  };
+
+                  for (String anchor : anchors) {
+                      int from = 0;
+                      while ((from = html.indexOf(anchor, from)) >= 0) {
+                          String json = extractBalancedJsonObject(
+                                  html, from + anchor.length());
+
+                          if (json != null) {
+                              try {
+                                  JSONObject parsed = new JSONObject(json);
+                                  if (parsed.length() > 0) return parsed;
+                              } catch (JSONException ignored) {
+                                  // Try another occurrence.
+                              }
+                          }
+                          from += anchor.length();
+                      }
+                  }
+                  return null;
+              }
+
+              private boolean validYouTubeVideoId(String id) {
+                  return id != null
+                          && id.matches("[A-Za-z0-9_-]{11}");
+              }
+
+              private String firstVideoIdInside(Object node) {
+                  try {
+                      if (node instanceof JSONObject) {
+                          JSONObject object = (JSONObject) node;
+
+                          if (object.has("videoId")) {
+                              String id = object.optString("videoId", "");
+                              if (validYouTubeVideoId(id)) return id;
+                          }
+
+                          java.util.Iterator<String> keys = object.keys();
+                          while (keys.hasNext()) {
+                              String found = firstVideoIdInside(
+                                      object.opt(keys.next()));
+                              if (found != null) return found;
+                          }
+
+                      } else if (node instanceof JSONArray) {
+                          JSONArray array = (JSONArray) node;
+                          for (int i = 0; i < array.length(); i++) {
+                              String found = firstVideoIdInside(array.opt(i));
+                              if (found != null) return found;
+                          }
+                      }
+                  } catch (RuntimeException ignored) {
+                      // Skip malformed nodes.
+                  }
+                  return null;
+              }
+
+              private String findFirstRendererVideoId(
+                      Object node, boolean music) {
+                  try {
+                      if (node instanceof JSONObject) {
+                          JSONObject object = (JSONObject) node;
+                          java.util.Iterator<String> keys = object.keys();
+
+                          while (keys.hasNext()) {
+                              String key = keys.next();
+                              Object child = object.opt(key);
+
+                              boolean wanted = music
+                                      ? ("musicResponsiveListItemRenderer".equals(key)
+                                          || "musicTwoRowItemRenderer".equals(key))
+                                      : "videoRenderer".equals(key);
+
+                              if (wanted) {
+                                  String id = firstVideoIdInside(child);
+                                  if (validYouTubeVideoId(id)) return id;
+                              }
+
+                              String nested = findFirstRendererVideoId(
+                                      child, music);
+                              if (validYouTubeVideoId(nested)) return nested;
+                          }
+
+                      } else if (node instanceof JSONArray) {
+                          JSONArray array = (JSONArray) node;
+                          for (int i = 0; i < array.length(); i++) {
+                              String nested = findFirstRendererVideoId(
+                                      array.opt(i), music);
+                              if (validYouTubeVideoId(nested)) return nested;
+                          }
+                      }
+                  } catch (RuntimeException ignored) {
+                      // Continue through the JSON tree.
+                  }
+                  return null;
+              }
+
+              private String resolveYouTubeFirstResult(
+                      String target, String query) {
+                  String encoded = Uri.encode(query);
+                  String pageUrl;
+
+                  if ("youtube".equals(target)) {
+                      pageUrl =
+                              "https://www.youtube.com/results?search_query="
+                              + encoded;
+                  } else if ("ytmusic".equals(target)) {
+                      pageUrl =
+                              "https://music.youtube.com/search?q=" + encoded;
+                  } else {
+                      youtubeResolveDiagnostic =
+                              "Đích tìm kiếm không được hỗ trợ.";
+                      return null;
+                  }
+
+                  String html = fetchYouTubeSearchPage(pageUrl);
+                  if (html == null || html.isEmpty()) return null;
+
+                  JSONObject initialData = extractYouTubeInitialData(html);
+                  if (initialData == null) {
+                      youtubeResolveDiagnostic =
+                              "Đã kết nối nhưng không tìm thấy ytInitialData hợp lệ. "
+                              + "YouTube có thể trả trang consent, xác minh "
+                              + "hoặc đã đổi cấu trúc.";
+                      return null;
+                  }
+
+                  String videoId = findFirstRendererVideoId(
+                          initialData, "ytmusic".equals(target));
+
+                  if (!validYouTubeVideoId(videoId)) {
+                      videoId = firstVideoIdInside(initialData);
+                  }
+
+                  if (!validYouTubeVideoId(videoId)) {
+                      youtubeResolveDiagnostic =
+                              "JSON đọc được nhưng không có videoId hợp lệ "
+                              + "trong dữ liệu kết quả.";
+                      return null;
+                  }
+
+                  youtubeResolveDiagnostic =
+                          "Đã tìm được videoId hợp lệ: " + videoId;
+
+                  if ("ytmusic".equals(target)) {
+                      return "https://music.youtube.com/watch?v="
+                              + videoId + "&autoplay=1";
+                  }
+                  return "https://www.youtube.com/watch?v="
+                          + videoId + "&autoplay=1";
+              }
+
+              private void resolveAndOpenYouTubeFirstResult(
+                      String target, String query) {
+                  action.setText("Đang tìm và phân tích kết quả đầu tiên trên "
+                          + ("ytmusic".equals(target)
+                              ? "YouTube Music…" : "YouTube…"));
+
+                  new Thread(() -> {
+                      String resolved =
+                              resolveYouTubeFirstResult(target, query);
+                      String diagnostic = youtubeResolveDiagnostic;
+
+                      runOnUiThread(() -> {
+                          if (resolved == null || resolved.trim().isEmpty()) {
+                              action.setText(
+                                      "Không mở trang tìm kiếm thay thế.\n"
+                                      + "Chẩn đoán: " + diagnostic);
+                              return;
+                          }
+
+                          try {
+                              openTarget(target, resolved);
+                              action.setText(
+                                      "Đã tìm thấy video ID và gửi yêu cầu mở video. "
+                                      + "Nếu không tự phát, kiểm tra ứng dụng YouTube.");
+                          } catch (RuntimeException e) {
+                              action.setText(
+                                      "Đã tìm thấy ID nhưng không mở được video: "
+                                      + e.getClass().getSimpleName());
+                          }
+                      });
+                  }, "voice-youtube-json-resolver").start();
+              }
+          '''
+
+          marker = "private void parseCommand(String spoken) {"
+          if java.count(marker) != 1:
+              raise SystemExit(
+                  "FAIL: expected exactly one parseCommand method"
+              )
+
+          if "resolveAndOpenYouTubeFirstResult(String target, String query)" not in java:
+              java = java.replace(marker, methods + "\n              " + marker, 1)
+
+          parse_start = java.find(marker)
+          parse_end = java.find("private String errorMessage(int error)", parse_start)
+          if parse_start < 0 or parse_end < 0:
+              raise SystemExit("FAIL: parseCommand boundaries not found")
+
+          parser = java[parse_start:parse_end]
+
+          pattern = re.compile(
+              r'(?m)^(?P<i>[ \t]*)String url = searchUrl\(target, query\);\n'
+              r'(?P=i)action\.setText\("Đích: " \+ target \+ "\\nNội dung: " \+ query\n'
+              r'(?P=i)[ \t]+\+ "\\nĐang gửi yêu cầu mở tìm kiếm\. "\n'
+              r'(?P=i)[ \t]+\+ "Ứng dụng có thể hiển thị kết quả thay vì tự phát\."\);\n'
+              r'(?P=i)openTarget\(target, url\);'
+          )
+
+          replacement = (
+              'if ("youtube".equals(target) || "ytmusic".equals(target)) {\n'
+              '    resolveAndOpenYouTubeFirstResult(target, query);\n'
+              '} else {\n'
+              '    String url = searchUrl(target, query);\n'
+              '    action.setText("Đích: " + target + "\\nNội dung: " + query);\n'
+              '    openTarget(target, url);\n'
+              '}'
+          )
+
+          patched, count = pattern.subn(
+              lambda match: (
+                  match.group("i")
+                  + replacement.replace(
+                      "\n", "\n" + match.group("i")
+                  )
+              ),
+              parser,
+              count=1,
+          )
+
+          if count != 1:
+              raise SystemExit(
+                  "FAIL: original search block did not match exactly; "
+                  f"matches={count}. No fallback patch applied."
+              )
+
+          java = java[:parse_start] + patched + java[parse_end:]
+          main.write_text(java, encoding="utf-8")
+
+          xml = manifest.read_text(encoding="utf-8")
+          if "android.permission.INTERNET" not in xml:
+              xml, count = re.subn(
+                  r"(<manifest[^>]*>)",
+                  r'\1\n    <uses-permission android:name="android.permission.INTERNET" />',
+                  xml,
+                  count=1,
+              )
+              if count != 1:
+                  raise SystemExit("FAIL: cannot add INTERNET permission")
+              manifest.write_text(xml, encoding="utf-8")
+
+          ET.parse(manifest)
+          print("PASS: JSON resolver inserted")
+          print("PASS: YouTube and YouTube Music routed through resolver")
+          print("PASS: Zing and Spotify branch preserved")
+          print("PASS: manifest XML")
+          PY
+
+      - name: Validate resolver and preserved features
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          import xml.etree.ElementTree as ET
+
+          root = Path("carassistant-voice")
+          main = root / "app/src/main/java/com/carassistant/voice/MainActivity.java"
+          service = root / "app/src/main/java/com/carassistant/voice/FloatingMicService.java"
+          manifest = root / "app/src/main/AndroidManifest.xml"
+          gradle = root / "app/build.gradle"
+
+          java = main.read_text(encoding="utf-8")
+          overlay = service.read_text(encoding="utf-8")
+          xml = manifest.read_text(encoding="utf-8")
+          build = gradle.read_text(encoding="utf-8")
+          ET.parse(manifest)
+
+          checks = {
+              "V5 version unchanged":
+                  "versionCode 5" in build and "versionName '0.5.0'" in build,
+              "JSON parser":
+                  "extractYouTubeInitialData" in java,
+              "Balanced JSON parser":
+                  "extractBalancedJsonObject" in java,
+              "Video ID validation":
+                  'id.matches("[A-Za-z0-9_-]{11}")' in java,
+              "YouTube watch URL":
+                  "www.youtube.com/watch?v=" in java,
+              "YouTube Music URL":
+                  "music.youtube.com/watch?v=" in java,
+              "Autoplay requested":
+                  "&autoplay=1" in java,
+              "No search fallback":
+                  "Không mở trang tìm kiếm thay thế" in java,
+              "Network diagnostics":
+                  "UnknownHostException" in java and "SocketTimeoutException" in java,
+              "YouTube packages preserved":
+                  '"com.google.android.youtube"' in java,
+              "YouTube Music package preserved":
+                  '"com.google.android.apps.youtube.music"' in java,
+              "Zing package retained":
+                  '"com.zing.mp3"' in java,
+              "Spotify package retained":
+                  '"com.spotify.music"' in java,
+              "Vietnamese speech recognition":
+                  '"vi-VN"' in java,
+              "Partial speech results":
+                  "onPartialResults" in java,
+              "Four-second silence":
+                  "SILENCE_MS = 4000L" in java,
+              "End beep":
+                  "TONE_PROP_ACK" in java,
+              "Auto-hide":
+                  "HIDE_MS = 2500L" in java,
+              "Floating mic":
+                  "TYPE_APPLICATION_OVERLAY" in overlay,
+              "Internet permission":
+                  'android:name="android.permission.INTERNET"' in xml,
+          }
+
+          for label, passed in checks.items():
+              print(("PASS" if passed else "FAIL") + ": " + label)
+              if not passed:
+                  raise SystemExit("Missing required feature: " + label)
+
+          print("PASS: all static checks")
+          PY
+
+      - name: Build experimental APK
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd carassistant-voice
+          gradle --no-daemon --stacktrace assembleDebug
+
+      - name: Package APK and SHA256
+        shell: bash
+        run: |
+          set -euo pipefail
+          APK="carassistant-voice/app/build/outputs/apk/debug/app-debug.apk"
+          test -s "$APK"
+
+          mkdir -p dist
+          cp "$APK" dist/CarAssistant-Voice-V52-YouTube-JSON-EXPERIMENT.apk
+          sha256sum dist/CarAssistant-Voice-V52-YouTube-JSON-EXPERIMENT.apk \
+            > dist/CarAssistant-Voice-V52-YouTube-JSON-EXPERIMENT.sha256
+
+          cat dist/CarAssistant-Voice-V52-YouTube-JSON-EXPERIMENT.sha256
+
+      - name: Upload experimental APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: CarAssistant-Voice-V52-YouTube-JSON-EXPERIMENT
+          path: |
+            dist/CarAssistant-Voice-V52-YouTube-JSON-EXPERIMENT.apk
+            dist/CarAssistant-Voice-V52-YouTube-JSON-EXPERIMENT.sha256
+          if-no-files-found: error
