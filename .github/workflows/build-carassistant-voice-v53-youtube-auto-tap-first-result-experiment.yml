@@ -108,7 +108,6 @@ jobs:
                   script.rstrip() + "\n", encoding="utf-8"
               )
               print(f"PASS: extracted {step_name}")
-
           PY
 
           bash -n /tmp/v53-generate.sh
@@ -130,7 +129,6 @@ jobs:
 
           python3 - <<'PY'
           from pathlib import Path
-          import re
           import xml.etree.ElementTree as ET
 
           root = Path("carassistant-voice")
@@ -139,7 +137,7 @@ jobs:
 
           java = main.read_text(encoding="utf-8")
 
-          # The original voice search branch must match exactly.
+          # Locate the parser and its ending without matching escaped newlines.
           marker = "private void parseCommand(String spoken) {"
           if java.count(marker) != 1:
               raise SystemExit("FAIL: parseCommand anchor mismatch")
@@ -152,55 +150,59 @@ jobs:
               raise SystemExit("FAIL: parser end anchor missing")
 
           parser = java[parse_start:parse_end]
+          url_line = "String url = searchUrl(target, query);"
+          open_line = "openTarget(target, url);"
 
-          pattern = re.compile(
-              r'(?m)^(?P<i>[ \t]*)String url = searchUrl\(target, query\);\n'
-              r'(?P=i)action\.setText\("Đích: " \+ target \+ "\\\\nNội dung: " \+ query\n'
-              r'(?P=i)[ \t]+\+ "\\\\nĐang gửi yêu cầu mở tìm kiếm\. "\n'
-              r'(?P=i)[ \t]+\+ "Ứng dụng có thể hiển thị kết quả thay vì tự phát\."\);\n'
-              r'(?P=i)openTarget\(target, url\);'
-          )
-
-          replacement = (
-              'if ("youtube".equals(target) || "ytmusic".equals(target)) {\n'
-              '    getSharedPreferences("voice_v5_settings", MODE_PRIVATE)\n'
-              '            .edit()\n'
-              '            .putBoolean("auto_click_first_result", true)\n'
-              '            .putLong("auto_click_armed_at", '
-              'android.os.SystemClock.uptimeMillis())\n'
-              '            .putString("auto_click_query", query)\n'
-              '            .apply();\n'
-              '    String url = searchUrl(target, query);\n'
-              '    action.setText("Đang mở kết quả tìm kiếm. '
-              'CarAssistant sẽ thử chọn video đầu tiên nếu Trợ năng đã bật.");\n'
-              '    openTarget(target, url);\n'
-              '} else {\n'
-              '    String url = searchUrl(target, query);\n'
-              '    action.setText("Đích: " + target + "\\\\nNội dung: " + query);\n'
-              '    openTarget(target, url);\n'
-              '}'
-          )
-
-          patched, count = pattern.subn(
-              lambda match: (
-                  match.group("i")
-                  + replacement.replace(
-                      "\n", "\n" + match.group("i")
-                  )
-              ),
-              parser,
-              count=1,
-          )
-
-          if count != 1:
+          if parser.count(url_line) != 1 or parser.count(open_line) != 1:
               raise SystemExit(
-                  "FAIL: original search block did not match exactly; "
-                  f"matches={count}. Stop without fallback."
+                  "FAIL: unexpected search block; "
+                  f"url={parser.count(url_line)}, "
+                  f"open={parser.count(open_line)}"
               )
 
+          lines = parser.splitlines(keepends=True)
+          url_index = next(
+              i for i, line in enumerate(lines) if url_line in line
+          )
+          open_index = next(
+              i for i, line in enumerate(lines) if open_line in line
+          )
+
+          if open_index < url_index:
+              raise SystemExit("FAIL: unexpected search statement order")
+
+          indent = lines[url_index][:len(lines[url_index]) -
+                                    len(lines[url_index].lstrip(" \t"))]
+
+          replacement_lines = [
+              indent + 'if ("youtube".equals(target) || "ytmusic".equals(target)) {\n',
+              indent + '    getSharedPreferences("voice_v5_settings", MODE_PRIVATE)\n',
+              indent + '            .edit()\n',
+              indent + '            .putBoolean("auto_click_first_result", true)\n',
+              indent + '            .putLong("auto_click_armed_at",\n',
+              indent + '                    android.os.SystemClock.uptimeMillis())\n',
+              indent + '            .putString("auto_click_query", query)\n',
+              indent + '            .apply();\n',
+              indent + '    String url = searchUrl(target, query);\n',
+              indent + '    action.setText("Đang mở kết quả tìm kiếm. " +\n',
+              indent + '            "CarAssistant sẽ thử chọn video đầu tiên nếu Trợ năng đã bật.");\n',
+              indent + '    openTarget(target, url);\n',
+              indent + '} else {\n',
+              indent + '    String url = searchUrl(target, query);\n',
+              indent + '    action.setText("Đích: " + target + "\\nNội dung: " + query\n',
+              indent + '            + "\\nĐang gửi yêu cầu mở tìm kiếm. " +\n',
+              indent + '            "Ứng dụng có thể hiển thị kết quả thay vì tự phát.");\n',
+              indent + '    openTarget(target, url);\n',
+              indent + '}\n',
+          ]
+
+          lines[url_index:open_index + 1] = replacement_lines
+          patched = "".join(lines)
           java = java[:parse_start] + patched + java[parse_end:]
+
           main.write_text(java, encoding="utf-8")
-          print("PASS: YouTube search arms a single accessibility click")
+          print("PASS: stable Java anchors matched")
+          print("PASS: YouTube search arms accessibility click")
           print("PASS: other app search branch retained")
 
           # Register an opt-in AccessibilityService.
@@ -299,7 +301,6 @@ jobs:
                   long armedAt = prefs.getLong("auto_click_armed_at", 0L);
                   long now = android.os.SystemClock.uptimeMillis();
 
-                  // Allow the search results screen to load before scanning.
                   if (now - armedAt < 1200L) return;
                   if (now - lastAttemptAt < 500L) return;
                   lastAttemptAt = now;
@@ -319,7 +320,6 @@ jobs:
 
                   if (clickable == null) return;
 
-                  // Disarm first to avoid clicking recommendations in the player.
                   prefs.edit()
                           .putBoolean("auto_click_first_result", false)
                           .apply();
