@@ -360,27 +360,57 @@ jobs:
               1,
           )
 
-      old_tail = r'''String url = searchUrl(target, query);
-          action.setText("Đích: " + target + "\nNội dung: " + query
-                  + "\nĐang gửi yêu cầu mở tìm kiếm. "
-                  + "Ứng dụng có thể hiển thị kết quả thay vì tự phát.");
-          openTarget(target, url);'''
+      # Replace only the search-launch block inside parseCommand().
+      # Match Java indentation flexibly, but fail if the expected block
+      # is missing or appears more than once.
+      import re
 
-      if old_tail not in java:
+      parse_start = java.find("private void parseCommand(String spoken) {")
+      parse_end = java.find("private String errorMessage(int error)", parse_start)
+
+      if parse_start < 0 or parse_end < 0:
+          raise SystemExit("FAIL: parseCommand boundaries not found")
+
+      parser = java[parse_start:parse_end]
+
+      pattern = re.compile(
+          r'(?m)^(?P<i>[ \t]*)String url = searchUrl\(target, query\);\n'
+          r'(?P=i)action\.setText\("Đích: " \+ target \+ "\\nNội dung: " \+ query\n'
+          r'(?P=i)[ \t]+\+ "\\nĐang gửi yêu cầu mở tìm kiếm\. "\n'
+          r'(?P=i)[ \t]+\+ "Ứng dụng có thể hiển thị kết quả thay vì tự phát\."\);\n'
+          r'(?P=i)openTarget\(target, url\);'
+      )
+
+      replacement = (
+          'if ("youtube".equals(target) || "ytmusic".equals(target)) {\n'
+          '    resolveAndOpenYouTubeFirstResult(target, query);\n'
+          '} else {\n'
+          '    String url = searchUrl(target, query);\n'
+          '    action.setText("Đích: " + target + "\\nNội dung: " + query);\n'
+          '    openTarget(target, url);\n'
+          '}'
+      )
+
+      patched, count = pattern.subn(
+          lambda match: (
+              match.group("i")
+              + replacement.replace("\n", "\n" + match.group("i"))
+          ),
+          parser,
+          count=1,
+      )
+
+      if count != 1:
           raise SystemExit(
-              "FAIL: exact V5 parseCommand search block not found"
+              "FAIL: expected exactly one search-launch block in parseCommand; "
+              "found " + str(count)
           )
 
-      new_tail = r'''if ("youtube".equals(target)
-                  || "ytmusic".equals(target)) {
-              resolveAndOpenYouTubeFirstResult(target, query);
-          } else {
-              String url = searchUrl(target, query);
-              action.setText("Đích: " + target + "\nNội dung: " + query);
-              openTarget(target, url);
-          }'''
+      java = java[:parse_start] + patched + java[parse_end:]
+      main.write_text(java, encoding="utf-8")
 
-      java = java.replace(old_tail, new_tail, 1)
+      print("PASS: YouTube resolver routed from parseCommand")
+      print("PASS: Zing and Spotify search path preserved")
       main.write_text(java, encoding="utf-8")
 
       xml = manifest.read_text(encoding="utf-8")
