@@ -1,551 +1,491 @@
-name: Tro ly CarAsistant 6
+
+name: Tro ly CarAsistant 6 tu phat YouTube, YouTube music 
 
 on:
- workflow_dispatch:
+  workflow_dispatch:
 
 permissions:
- contents: read
+  contents: read
 
 jobs:
- build:
-  runs-on: ubuntu-latest
-  timeout-minutes: 30
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
 
-  steps:
-  - name: Checkout repository
-    uses: actions/checkout@v4
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
 
-  - name: Verify immutable V5.1 baseline
-    shell: bash
-    run: |
-      set -euo pipefail
-      BASE=".github/workflows/build-carassistant-voice-standalone-v5-app-picker-patch.yml"
-      test -s "$BASE"
-      test -s ".github/workflows/build-carassistant-voice-standalone-v5.yml"
-      echo "PASS: V5.1 baseline exists; this workflow does not modify it."
+      - name: Verify immutable source workflows
+        shell: bash
+        run: |
+          set -euo pipefail
 
-  - name: Setup Java 17
-    uses: actions/setup-java@v4
-    with:
-      distribution: temurin
-      java-version: '17'
+          python3 - <<'PY'
+          from pathlib import Path
+          import hashlib
 
-  - name: Setup Gradle
-    uses: gradle/actions/setup-gradle@v4
-    with:
-      gradle-version: '8.13'
+          expected = {
+              ".github/workflows/build-carassistant-voice-standalone-v5.yml":
+                  "c75feb842cf9cf03c75f4d33d3014abeb4f2672d",
+              ".github/workflows/build-carassistant-voice-standalone-v5-app-picker-patch.yml":
+                  "9028dfa690a8c31e89a50ce342c3cee7e6c50be3",
+              ".github/workflows/build-carassistant-voice-v51-autoplay-first-result-patch.yml":
+                  "2d4bb30c0547ba7ba82c5253b5b9920a8e2534c6",
+          }
 
-  - name: Rebuild exact isolated V5.1 baseline
-    shell: bash
-    run: |
-      set -euo pipefail
-      python3 -m pip install --quiet pyyaml
+          for name, wanted in expected.items():
+              path = Path(name)
+              if not path.is_file():
+                  raise SystemExit(f"FAIL: missing source {name}")
 
-      python3 - <<'PY'
-      from pathlib import Path
-      import yaml
+              data = path.read_bytes()
+              actual = hashlib.sha1(
+                  b"blob " + str(len(data)).encode() + b"\0" + data
+              ).hexdigest()
 
-      v5_path = Path(
-          ".github/workflows/build-carassistant-voice-standalone-v5.yml"
-      )
-      picker_path = Path(
-          ".github/workflows/build-carassistant-voice-standalone-v5-app-picker-patch.yml"
-      )
+              if actual != wanted:
+                  raise SystemExit(
+                      f"FAIL: source changed: {name}; "
+                      f"expected {wanted}, got {actual}"
+                  )
 
-      v5_data = yaml.safe_load(v5_path.read_text(encoding="utf-8"))
-      picker_data = yaml.safe_load(picker_path.read_text(encoding="utf-8"))
+              print(f"PASS: immutable source verified: {name}")
+          PY
 
-      def get_run(data, step_name, source_label):
-          steps = data.get("jobs", {}).get("build", {}).get("steps", [])
-          matches = [
-              step for step in steps
-              if step.get("name") == step_name
-          ]
+      - name: Setup Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
 
-          if len(matches) != 1:
-              raise SystemExit(
-                  f"FAIL: expected exactly one '{step_name}' step in "
-                  f"{source_label}; found {len(matches)}"
-              )
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.13'
 
-          script = matches[0].get("run", "")
-          if not script.strip():
-              raise SystemExit(
-                  f"FAIL: empty run script for '{step_name}' in "
-                  f"{source_label}"
-              )
+      - name: Rebuild isolated V5 plus app picker
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -m pip install --quiet pyyaml
 
-          return script.rstrip() + "\n"
+          python3 - <<'PY'
+          from pathlib import Path
+          import yaml
 
-      # Extract the real generator directly from V5.
-      # Do not execute the picker workflow's wrapper: it reuses
-      # /tmp/generate-v5.sh and can overwrite the script being executed.
-      generator = get_run(
-          v5_data,
-          "Generate isolated V5 project",
-          str(v5_path),
-      )
-
-      picker_patch = get_run(
-          picker_data,
-          "Apply isolated installed-app picker patch",
-          str(picker_path),
-      )
-
-      # Use separate filenames so neither script overwrites the other.
-      Path("/tmp/generate-v5-source.sh").write_text(
-          generator, encoding="utf-8"
-      )
-      Path("/tmp/app-picker-patch.sh").write_text(
-          picker_patch, encoding="utf-8"
-      )
-
-      print("PASS: extracted original V5 project generator directly")
-      print("PASS: extracted installed-app picker patch")
-      print("PASS: original workflows were read only")
-      PY
-
-      # Validate both scripts before executing either one.
-      bash -n /tmp/generate-v5-source.sh
-      bash -n /tmp/app-picker-patch.sh
-
-      # Generate the original V5 project, then apply the existing picker.
-      bash /tmp/generate-v5-source.sh
-      bash /tmp/app-picker-patch.sh
-
-      # Fail immediately if any required project file is missing.
-      test -s carassistant-voice/app/src/main/java/com/carassistant/voice/MainActivity.java
-      test -s carassistant-voice/app/src/main/java/com/carassistant/voice/FloatingMicService.java
-      test -s carassistant-voice/app/build.gradle
-      test -s carassistant-voice/app/src/main/AndroidManifest.xml
-      test -s carassistant-voice/settings.gradle
-      test -s carassistant-voice/build.gradle
-
-      echo "PASS: isolated V5.1 project files generated and picker patch applied"
-
-  - name: Apply isolated first-result resolver patch
-    shell: bash
-    run: |
-      set -euo pipefail
-
-      python3 - <<'PY'
-      from pathlib import Path
-      import re
-      import xml.etree.ElementTree as ET
-
-      root = Path("carassistant-voice")
-      main = root / "app/src/main/java/com/carassistant/voice/MainActivity.java"
-      manifest = root / "app/src/main/AndroidManifest.xml"
-
-      java = main.read_text(encoding="utf-8")
-
-      additions = [
-          "import java.io.BufferedReader;",
-          "import java.io.InputStreamReader;",
-          "import java.net.HttpURLConnection;",
-          "import java.net.URL;",
-          "import java.nio.charset.StandardCharsets;",
-          "import java.util.regex.Matcher;",
-          "import java.util.regex.Pattern;",
-      ]
-
-      anchor = "import java.util.ArrayList;"
-      if anchor not in java:
-          raise SystemExit("FAIL: Java import anchor not found")
-
-      missing = [item for item in additions if item not in java]
-      if missing:
-          java = java.replace(
-              anchor,
-              anchor + "\n" + "\n".join(missing),
-              1,
+          v5_path = Path(
+              ".github/workflows/build-carassistant-voice-standalone-v5.yml"
+          )
+          picker_path = Path(
+              ".github/workflows/build-carassistant-voice-standalone-v5-app-picker-patch.yml"
           )
 
-      methods = r'''
-          private String fetchSearchPage(String address) {
-              HttpURLConnection connection = null;
+          v5 = yaml.safe_load(v5_path.read_text(encoding="utf-8"))
+          picker = yaml.safe_load(picker_path.read_text(encoding="utf-8"))
 
-              try {
-                  connection =
-                          (HttpURLConnection) new URL(address).openConnection();
+          def extract(data, step_name, source):
+              steps = data.get("jobs", {}).get("build", {}).get("steps", [])
+              matches = [
+                  step for step in steps
+                  if step.get("name") == step_name
+              ]
 
-                  connection.setRequestMethod("GET");
-                  connection.setConnectTimeout(7000);
-                  connection.setReadTimeout(7000);
-                  connection.setInstanceFollowRedirects(true);
-                  connection.setRequestProperty(
-                          "User-Agent",
-                          "Mozilla/5.0 (Linux; Android 12) "
-                          + "AppleWebKit/537.36 "
-                          + "(KHTML, like Gecko) Chrome/126.0 Mobile Safari/537.36");
-                  connection.setRequestProperty(
-                          "Accept-Language", "vi-VN,vi;q=0.9,en;q=0.7");
+              if len(matches) != 1:
+                  raise SystemExit(
+                      f"FAIL: {source}: expected exactly one "
+                      f"{step_name}; found {len(matches)}"
+                  )
 
-                  int code = connection.getResponseCode();
-                  if (code < 200 || code >= 300) {
-                      return null;
-                  }
+              script = matches[0].get("run", "")
+              if not script.strip():
+                  raise SystemExit(f"FAIL: empty script: {step_name}")
 
-                  StringBuilder body = new StringBuilder();
+              return script.rstrip() + "\n"
 
-                  try (BufferedReader reader = new BufferedReader(
-                          new InputStreamReader(
-                                  connection.getInputStream(),
-                                  StandardCharsets.UTF_8))) {
-                      String line;
-                      int total = 0;
+          generator = extract(
+              v5, "Generate isolated V5 project", str(v5_path)
+          )
+          picker_script = extract(
+              picker,
+              "Apply isolated installed-app picker patch",
+              str(picker_path),
+          )
 
-                      while ((line = reader.readLine()) != null
-                              && total < 1500000) {
-                          body.append(line).append('\n');
-                          total += line.length();
-                      }
-                  }
+          Path("/tmp/v52-generate-source.sh").write_text(
+              generator, encoding="utf-8"
+          )
+          Path("/tmp/v52-picker-source.sh").write_text(
+              picker_script, encoding="utf-8"
+          )
 
-                  return body.toString();
+          print("PASS: extracted original V5 generator")
+          print("PASS: extracted existing app picker patch")
+          PY
 
-              } catch (Exception e) {
-                  return null;
-              } finally {
-                  if (connection != null) {
-                      connection.disconnect();
-                  }
-              }
-          }
+          bash -n /tmp/v52-generate-source.sh
+          bash -n /tmp/v52-picker-source.sh
 
-          private String firstMatch(
-                  String text, String expression, int group) {
-              if (text == null) {
-                  return null;
-              }
+          bash /tmp/v52-generate-source.sh
+          bash /tmp/v52-picker-source.sh
 
-              Matcher matcher = Pattern.compile(
-                      expression,
-                      Pattern.CASE_INSENSITIVE | Pattern.DOTALL)
-                      .matcher(text);
+          test -s carassistant-voice/app/src/main/java/com/carassistant/voice/MainActivity.java
+          test -s carassistant-voice/app/src/main/java/com/carassistant/voice/FloatingMicService.java
+          test -s carassistant-voice/app/build.gradle
+          test -s carassistant-voice/app/src/main/AndroidManifest.xml
 
-              return matcher.find() ? matcher.group(group) : null;
-          }
+          echo "PASS: isolated V5 project and picker generated"
 
-          private String resolveFirstResult(
-                  String target, String query) {
-              String encoded = Uri.encode(query);
-              String pageUrl;
-              String html;
+      - name: Apply YouTube and YouTube Music resolver patch
+        shell: bash
+        run: |
+          set -euo pipefail
 
-              switch (target) {
-                  case "youtube": {
-                      pageUrl =
-                              "https://www.youtube.com/results?search_query="
-                              + encoded;
-                      html = fetchSearchPage(pageUrl);
+          python3 - <<'PY'
+          from pathlib import Path
+          import re
+          import xml.etree.ElementTree as ET
 
-                      String videoId = firstMatch(
-                              html,
-                              "\"videoId\"\\s*:\\s*\"([A-Za-z0-9_-]{11})\"",
-                              1);
+          root = Path("carassistant-voice")
+          main = root / "app/src/main/java/com/carassistant/voice/MainActivity.java"
+          manifest = root / "app/src/main/AndroidManifest.xml"
 
-                      return videoId == null
-                              ? null
-                              : "https://www.youtube.com/watch?v=" + videoId;
-                  }
+          java = main.read_text(encoding="utf-8")
 
-                  case "ytmusic": {
-                      pageUrl =
-                              "https://music.youtube.com/search?q=" + encoded;
-                      html = fetchSearchPage(pageUrl);
+          imports = [
+              "import java.io.BufferedReader;",
+              "import java.io.InputStreamReader;",
+              "import java.net.HttpURLConnection;",
+              "import java.net.URL;",
+              "import java.nio.charset.StandardCharsets;",
+              "import java.util.regex.Matcher;",
+              "import java.util.regex.Pattern;",
+          ]
 
-                      String musicId = firstMatch(
-                              html,
-                              "\"videoId\"\\s*:\\s*\"([A-Za-z0-9_-]{11})\"",
-                              1);
+          anchor = "import java.util.ArrayList;"
+          if anchor not in java:
+              raise SystemExit("FAIL: Java import anchor missing")
 
-                      if (musicId == null) {
-                          musicId = firstMatch(
-                                  html,
-                                  "\"playlistItemData\".*?\"videoId\""
-                                  + "\\s*:\\s*\"([A-Za-z0-9_-]{11})\"",
-                                  1);
-                      }
+          missing = [item for item in imports if item not in java]
+          if missing:
+              java = java.replace(
+                  anchor, anchor + "\n" + "\n".join(missing), 1
+              )
 
-                      return musicId == null
-                              ? null
-                              : "https://music.youtube.com/watch?v=" + musicId;
-                  }
+          methods = r'''
+              private String fetchYouTubeSearchPage(String address) {
+                  HttpURLConnection connection = null;
 
-                  case "zing": {
-                      pageUrl =
-                              "https://zingmp3.vn/tim-kiem/tat-ca?q=" + encoded;
-                      html = fetchSearchPage(pageUrl);
+                  try {
+                      connection =
+                              (HttpURLConnection) new URL(address).openConnection();
 
-                      String zingPath = firstMatch(
-                              html,
-                              "href=\"((?:https?://zingmp3\\.vn)?"
-                              + "/bai-hat/[^\"\\s<>]+)",
-                              1);
+                      connection.setRequestMethod("GET");
+                      connection.setConnectTimeout(8000);
+                      connection.setReadTimeout(8000);
+                      connection.setInstanceFollowRedirects(true);
+                      connection.setRequestProperty(
+                              "User-Agent",
+                              "Mozilla/5.0 (Linux; Android 12) "
+                              + "AppleWebKit/537.36 "
+                              + "(KHTML, like Gecko) Chrome/126.0 Mobile Safari/537.36");
+                      connection.setRequestProperty(
+                              "Accept-Language", "vi-VN,vi;q=0.9,en;q=0.7");
 
-                      if (zingPath == null) {
+                      int code = connection.getResponseCode();
+                      if (code < 200 || code >= 300) {
                           return null;
                       }
 
-                      if (zingPath.startsWith("/")) {
-                          return "https://zingmp3.vn" + zingPath;
+                      StringBuilder body = new StringBuilder();
+
+                      try (BufferedReader reader = new BufferedReader(
+                              new InputStreamReader(
+                                      connection.getInputStream(),
+                                      StandardCharsets.UTF_8))) {
+                          String line;
+                          int total = 0;
+
+                          while ((line = reader.readLine()) != null
+                                  && total < 2000000) {
+                              body.append(line).append('\n');
+                              total += line.length();
+                          }
                       }
 
-                      return zingPath;
-                  }
+                      return body.toString();
 
-                  case "spotify": {
-                      pageUrl =
-                              "https://open.spotify.com/search/" + encoded;
-                      html = fetchSearchPage(pageUrl);
-
-                      String trackUrl = firstMatch(
-                              html,
-                              "https?://open\\.spotify\\.com/track/"
-                              + "[A-Za-z0-9]+",
-                              0);
-
-                      if (trackUrl != null) {
-                          return trackUrl;
-                      }
-
-                      String trackId = firstMatch(
-                              html,
-                              "\"uri\"\\s*:\\s*"
-                              + "\"spotify:track:([A-Za-z0-9]+)\"",
-                              1);
-
-                      return trackId == null
-                              ? null
-                              : "https://open.spotify.com/track/" + trackId;
-                  }
-
-                  default:
+                  } catch (Exception e) {
                       return null;
+                  } finally {
+                      if (connection != null) {
+                          connection.disconnect();
+                      }
+                  }
               }
-          }
 
-          private void resolveAndOpenFirstResult(
-                  String target, String query) {
-              action.setText(
-                      "Đang phân giải kết quả đầu tiên cho "
-                      + target + "…");
+              private String firstYouTubeMatch(
+                      String data, String expression) {
+                  if (data == null || data.isEmpty()) {
+                      return null;
+                  }
 
-              new Thread(() -> {
-                  String resolved = resolveFirstResult(target, query);
+                  Matcher matcher = Pattern.compile(
+                          expression,
+                          Pattern.CASE_INSENSITIVE | Pattern.DOTALL)
+                          .matcher(data);
 
-                  runOnUiThread(() -> {
-                      if (resolved == null || resolved.trim().isEmpty()) {
-                          String search = searchUrl(target, query);
+                  return matcher.find() ? matcher.group(1) : null;
+              }
 
-                          action.setText(
-                                  "Chưa phân giải được liên kết nội dung cụ thể cho "
-                                  + target
-                                  + ". Đang thử mở trang tìm kiếm; "
-                                  + "chưa xác nhận phát tự động.");
+              private String resolveYouTubeFirstResult(
+                      String target, String query) {
+                  String encoded = Uri.encode(query);
+                  String pageUrl;
+                  String html;
 
-                          openTarget(target, search);
+                  if ("youtube".equals(target)) {
+                      pageUrl =
+                              "https://www.youtube.com/results?search_query="
+                              + encoded;
+                  } else if ("ytmusic".equals(target)) {
+                      pageUrl =
+                              "https://music.youtube.com/search?q=" + encoded;
+                  } else {
+                      return null;
+                  }
 
-                          action.setText(
-                                  "Không xác định được kết quả đầu tiên. "
-                                  + "Đã thử mở trang tìm kiếm; "
-                                  + "chưa xác nhận phát.");
-                          return;
+                  html = fetchYouTubeSearchPage(pageUrl);
+                  if (html == null || html.isEmpty()) {
+                      return null;
+                  }
+
+                  String videoId = null;
+
+                  if ("youtube".equals(target)) {
+                      // Prefer an ID inside a video result renderer.
+                      videoId = firstYouTubeMatch(
+                              html,
+                              "\\"videoRenderer\\"\\\\s*:\\\\s*\\\\{.{0,20000}?"
+                              + "\\"videoId\\"\\\\s*:\\\\s*\\"([A-Za-z0-9_-]{11})\\"");
+
+                      // Some response variants omit the renderer wrapper.
+                      if (videoId == null) {
+                          videoId = firstYouTubeMatch(
+                                  html,
+                                  "\\"videoId\\"\\\\s*:\\\\s*"
+                                  + "\\"([A-Za-z0-9_-]{11})\\"");
                       }
 
-                      openTarget(target, resolved);
+                      return videoId == null
+                              ? null
+                              : "https://www.youtube.com/watch?v="
+                                  + videoId + "&autoplay=1";
+                  }
 
-                      if ("spotify".equals(target)) {
-                          action.setText(
-                                  "Đã gửi yêu cầu mở track Spotify cụ thể. "
-                                  + "Chưa xác minh trạng thái đang phát. "
-                                  + "Nếu ứng dụng yêu cầu đăng nhập, quyền "
-                                  + "hoặc không tự phát, hãy kiểm tra Spotify.");
-                      } else {
-                          action.setText(
-                                  "Đã gửi yêu cầu mở nội dung cụ thể: "
-                                  + resolved
-                                  + ". Chưa xác minh âm thanh đã phát.");
-                      }
-                  });
-              }, "voice-first-result-resolver").start();
-          }
+                  // Prefer a YouTube Music song/list item over generic IDs.
+                  videoId = firstYouTubeMatch(
+                          html,
+                          "\\"musicResponsiveListItemRenderer\\""
+                          + ".{0,30000}?\\"videoId\\"\\\\s*:\\\\s*"
+                          + "\\"([A-Za-z0-9_-]{11})\\"");
 
-      '''
+                  if (videoId == null) {
+                      videoId = firstYouTubeMatch(
+                              html,
+                              "\\"playlistItemData\\".{0,3000}?"
+                              + "\\"videoId\\"\\\\s*:\\\\s*"
+                              + "\\"([A-Za-z0-9_-]{11})\\"");
+                  }
 
-      marker = "private void parseCommand(String spoken) {"
+                  if (videoId == null) {
+                      videoId = firstYouTubeMatch(
+                              html,
+                              "\\"videoId\\"\\\\s*:\\\\s*"
+                              + "\\"([A-Za-z0-9_-]{11})\\"");
+                  }
 
-      if java.count(marker) != 1:
-          raise SystemExit(
-              "FAIL: expected exactly one parseCommand anchor"
-          )
+                  return videoId == null
+                          ? null
+                          : "https://music.youtube.com/watch?v="
+                              + videoId + "&autoplay=1";
+              }
 
-      if "resolveAndOpenFirstResult(String target, String query)" not in java:
-          java = java.replace(
-              marker,
-              methods + "\n              " + marker,
-              1,
-          )
+              private void resolveAndOpenYouTubeFirstResult(
+                      String target, String query) {
+                  action.setText(
+                          "Đang tìm kết quả đầu tiên trên "
+                          + ("ytmusic".equals(target)
+                              ? "YouTube Music…" : "YouTube…"));
 
-      old_tail = r'''String url = searchUrl(target, query);
+                  new Thread(() -> {
+                      String resolved =
+                              resolveYouTubeFirstResult(target, query);
+
+                      runOnUiThread(() -> {
+                          if (resolved == null || resolved.trim().isEmpty()) {
+                              action.setText(
+                                      "Không lấy được ID kết quả đầu tiên. "
+                                      + "Không mở trang tìm kiếm thay thế. "
+                                      + "Hãy kiểm tra mạng hoặc thử câu lệnh khác.");
+                              return;
+                          }
+
+                          try {
+                              openTarget(target, resolved);
+                              action.setText(
+                                      "Đã gửi liên kết nội dung cụ thể đến "
+                                      + ("ytmusic".equals(target)
+                                          ? "YouTube Music." : "YouTube.")
+                                      + " Nếu ứng dụng không tự phát, "
+                                      + "kiểm tra phiên bản ứng dụng và trạng thái đăng nhập.");
+                          } catch (RuntimeException e) {
+                              action.setText(
+                                      "Không mở được nội dung trong ứng dụng đã chọn: "
+                                      + e.getClass().getSimpleName());
+                          }
+                      });
+                  }, "voice-youtube-first-result").start();
+              }
+          '''
+
+          marker = "private void parseCommand(String spoken) {"
+          if java.count(marker) != 1:
+              raise SystemExit(
+                  "FAIL: expected exactly one parseCommand method"
+              )
+
+          if "resolveAndOpenYouTubeFirstResult(String target, String query)"
+                  not in java:
+              java = java.replace(marker, methods + "\n              " + marker, 1)
+
+          old_tail = r'''String url = searchUrl(target, query);
               action.setText("Đích: " + target + "\nNội dung: " + query
                       + "\nĐang gửi yêu cầu mở tìm kiếm. "
                       + "Ứng dụng có thể hiển thị kết quả thay vì tự phát.");
               openTarget(target, url);'''
 
-      if old_tail not in java:
-          raise SystemExit(
-              "FAIL: expected V5.1 parseCommand search block not found"
-          )
-
-      java = java.replace(
-          old_tail,
-          "resolveAndOpenFirstResult(target, query);",
-          1,
-      )
-
-      main.write_text(java, encoding="utf-8")
-
-      # INTERNET permission is required for the resolver's HTTP requests.
-      xml = manifest.read_text(encoding="utf-8")
-
-      if "android.permission.INTERNET" not in xml:
-          xml, count = re.subn(
-              r"(<manifest[^>]*>)",
-              r'\1\n    <uses-permission android:name="android.permission.INTERNET" />',
-              xml,
-              count=1,
-          )
-
-          if count != 1:
+          if old_tail not in java:
               raise SystemExit(
-                  "FAIL: could not add INTERNET permission"
+                  "FAIL: exact V5 parseCommand search block not found"
               )
 
-      manifest.write_text(xml, encoding="utf-8")
-      ET.parse(manifest)
+          new_tail = r'''if ("youtube".equals(target)
+                      || "ytmusic".equals(target)) {
+                  resolveAndOpenYouTubeFirstResult(target, query);
+              } else {
+                  String url = searchUrl(target, query);
+                  action.setText("Đích: " + target + "\nNội dung: " + query);
+                  openTarget(target, url);
+              }'''
 
-      print("PASS: isolated resolver patch applied")
-      print("PASS: Android Manifest XML")
-      PY
+          java = java.replace(old_tail, new_tail, 1)
+          main.write_text(java, encoding="utf-8")
 
-  - name: Validate preserved features and resolver
-    shell: bash
-    run: |
-      set -euo pipefail
+          xml = manifest.read_text(encoding="utf-8")
+          if "android.permission.INTERNET" not in xml:
+              xml, count = re.subn(
+                  r"(<manifest[^>]*>)",
+                  r'\1\n    <uses-permission android:name="android.permission.INTERNET" />',
+                  xml,
+                  count=1,
+              )
+              if count != 1:
+                  raise SystemExit("FAIL: could not add INTERNET permission")
 
-      python3 - <<'PY'
-      from pathlib import Path
-      import xml.etree.ElementTree as ET
+          manifest.write_text(xml, encoding="utf-8")
+          ET.parse(manifest)
 
-      root = Path("carassistant-voice")
-      main = root / "app/src/main/java/com/carassistant/voice/MainActivity.java"
-      service = root / "app/src/main/java/com/carassistant/voice/FloatingMicService.java"
-      manifest = root / "app/src/main/AndroidManifest.xml"
-      gradle = root / "app/build.gradle"
+          print("PASS: YouTube first-result resolver inserted")
+          print("PASS: YouTube Music first-result resolver inserted")
+          print("PASS: Zing and Spotify command path preserved")
+          print("PASS: INTERNET permission and manifest XML")
+          PY
 
-      java = main.read_text(encoding="utf-8")
-      overlay = service.read_text(encoding="utf-8")
-      xml = manifest.read_text(encoding="utf-8")
-      build = gradle.read_text(encoding="utf-8")
+      - name: Validate patch and preserved voice features
+        shell: bash
+        run: |
+          set -euo pipefail
 
-      ET.parse(manifest)
+          python3 - <<'PY'
+          from pathlib import Path
+          import xml.etree.ElementTree as ET
 
-      checks = {
-          "V5 version unchanged":
-              "versionCode 5" in build
-              and "versionName '0.5.0'" in build,
+          root = Path("carassistant-voice")
+          main = root / "app/src/main/java/com/carassistant/voice/MainActivity.java"
+          service = root / "app/src/main/java/com/carassistant/voice/FloatingMicService.java"
+          manifest = root / "app/src/main/AndroidManifest.xml"
+          gradle = root / "app/build.gradle"
 
-          "YouTube and ReVanced picker":
-              '"com.google.android.youtube"' in java
-              and '"app.revanced.android.youtube"' in java,
+          java = main.read_text(encoding="utf-8")
+          overlay = service.read_text(encoding="utf-8")
+          xml = manifest.read_text(encoding="utf-8")
+          build = gradle.read_text(encoding="utf-8")
 
-          "YouTube Music and Morphe picker":
-              '"com.google.android.apps.youtube.music"' in java
-              and '"com.google.android.apps.youtube.music.morphe"' in java,
+          ET.parse(manifest)
 
-          "Zing and Spotify picker":
-              '"com.zing.mp3"' in java
-              and '"com.spotify.music"' in java,
+          checks = {
+              "V5 version unchanged":
+                  "versionCode 5" in build
+                  and "versionName '0.5.0'" in build,
+              "YouTube package choices":
+                  '"com.google.android.youtube"' in java
+                  and '"app.revanced.android.youtube"' in java,
+              "YouTube Music package choices":
+                  '"com.google.android.apps.youtube.music"' in java
+                  and '"com.google.android.apps.youtube.music.morphe"' in java,
+              "Zing package retained": '"com.zing.mp3"' in java,
+              "Spotify package retained": '"com.spotify.music"' in java,
+              "Vietnamese speech recognition": '"vi-VN"' in java,
+              "Partial speech results": "onPartialResults" in java,
+              "Four-second silence": "SILENCE_MS = 4000L" in java,
+              "End beep": "TONE_PROP_ACK" in java,
+              "Auto-hide": "HIDE_MS = 2500L" in java,
+              "Floating mic": "TYPE_APPLICATION_OVERLAY" in overlay,
+              "YouTube watch URL": "www.youtube.com/watch?v=" in java,
+              "YouTube Music watch URL": "music.youtube.com/watch?v=" in java,
+              "Autoplay requested": '"&autoplay=1"' in java,
+              "No search fallback in resolver":
+                  "Không mở trang tìm kiếm thay thế" in java,
+              "Internet permission":
+                  'android:name="android.permission.INTERNET"' in xml,
+          }
 
-          "Partial transcript callback":
-              "onPartialResults" in java,
+          for label, passed in checks.items():
+              print(("PASS" if passed else "FAIL") + ": " + label)
+              if not passed:
+                  raise SystemExit("Missing required feature: " + label)
 
-          "Four-second silence":
-              "SILENCE_MS = 4000L" in java,
+          print("PASS: manifest XML")
+          PY
 
-          "End beep":
-              "TONE_PROP_ACK" in java,
+      - name: Build APK
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd carassistant-voice
+          gradle --no-daemon --stacktrace assembleDebug
 
-          "Auto-hide":
-              "HIDE_MS = 2500L" in java,
+      - name: Package APK and SHA256
+        shell: bash
+        run: |
+          set -euo pipefail
 
-          "Floating mic":
-              "TYPE_APPLICATION_OVERLAY" in overlay,
+          APK="carassistant-voice/app/build/outputs/apk/debug/app-debug.apk"
+          test -s "$APK"
 
-          "YouTube video URL":
-              "www.youtube.com/watch?v=" in java,
+          mkdir -p dist
+          cp "$APK" dist/CarAssistant-Voice-V52-YouTube-AutoPlay-PATCH.apk
+          sha256sum dist/CarAssistant-Voice-V52-YouTube-AutoPlay-PATCH.apk \
+            > dist/CarAssistant-Voice-V52-YouTube-AutoPlay-PATCH.sha256
 
-          "YouTube Music item URL":
-              "music.youtube.com/watch?v=" in java,
+          cat dist/CarAssistant-Voice-V52-YouTube-AutoPlay-PATCH.sha256
 
-          "Zing song link inspection":
-              "/bai-hat/" in java,
-
-          "Spotify track URL and URI":
-              "spotify:track:" in java
-              and "open.spotify.com/track/" in java,
-
-          "Spotify playback not falsely confirmed":
-              "Chưa xác minh trạng thái đang phát" in java,
-
-          "Network permission":
-              "android.permission.INTERNET" in xml,
-
-          "Bounded network timeouts":
-              "setConnectTimeout(7000)" in java
-              and "setReadTimeout(7000)" in java,
-      }
-
-      for label, passed in checks.items():
-          print(("PASS" if passed else "FAIL") + ": " + label)
-          if not passed:
-              raise SystemExit("Missing requirement: " + label)
-
-      print("PASS: all mandatory feature checks")
-      PY
-
-  - name: Build APK
-    shell: bash
-    run: |
-      set -euo pipefail
-      cd carassistant-voice
-      gradle --no-daemon --stacktrace assembleDebug
-
-  - name: Package APK and SHA256
-    shell: bash
-    run: |
-      set -euo pipefail
-
-      APK="carassistant-voice/app/build/outputs/apk/debug/app-debug.apk"
-      test -s "$APK"
-
-      mkdir -p dist
-      cp "$APK" \
-        dist/CarAssistant-Voice-V51-AutoPlay-First-Result-PATCH.apk
-
-      sha256sum \
-        dist/CarAssistant-Voice-V51-AutoPlay-First-Result-PATCH.apk \
-        > dist/CarAssistant-Voice-V51-AutoPlay-First-Result-PATCH.sha256
-
-      cat dist/CarAssistant-Voice-V51-AutoPlay-First-Result-PATCH.sha256
-
-  - name: Upload APK artifact
-    uses: actions/upload-artifact@v4
-    with:
-      name: CarAssistant-Voice-V51-AutoPlay-First-Result-PATCH
-      path: |
-        dist/CarAssistant-Voice-V51-AutoPlay-First-Result-PATCH.apk
-        dist/CarAssistant-Voice-V51-AutoPlay-First-Result-PATCH.sha256
-      if-no-files-found: error
+      - name: Upload APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: CarAssistant-Voice-V52-YouTube-AutoPlay-PATCH
+          path: |
+            dist/CarAssistant-Voice-V52-YouTube-AutoPlay-PATCH.apk
+            dist/CarAssistant-Voice-V52-YouTube-AutoPlay-PATCH.sha256
+          if-no-files-found: error
