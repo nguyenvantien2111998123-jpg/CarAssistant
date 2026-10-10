@@ -189,50 +189,59 @@ jobs:
           PY
 
       - name: Patch CarAssistant YouTube receiver
+      - name: Patch CarAssistant YouTube receiver
         shell: bash
         run: |
           set -euo pipefail
 
           python3 - <<'PY'
           import pathlib
+          import re
 
           path = pathlib.Path(
               "v10-source/app/src/main/java/com/carassistant/v10/V10ControlReceiver.java"
           )
           java = path.read_text(encoding="utf-8")
 
-          old = '''    public static final String EXTRA_COMMAND =
-              "command";
-          '''
-          new = '''    public static final String EXTRA_COMMAND =
-              "command";
+          # Add EXTRA_QUERY after the real EXTRA_COMMAND declaration.
+          pattern = (
+              r'(?m)^([ \t]*)public static final String EXTRA_COMMAND ='
+              r'\s*\n[ \t]*"command";[ \t]*$'
+          )
+          replacement = (
+              r'\1public static final String EXTRA_COMMAND ='
+              '\n' + r'\1        "command";'
+              '\n\n' + r'\1public static final String EXTRA_QUERY ='
+              '\n' + r'\1        "query";'
+          )
 
-          public static final String EXTRA_QUERY =
-            "query";
-          '''
-          assert java.count(old) == 1, "EXTRA_COMMAND anchor mismatch"
-          java = java.replace(old, new, 1)
+          java, count = re.subn(pattern, replacement, java, count=1)
+          assert count == 1, (
+              f"FAIL: EXTRA_COMMAND declaration count = {count}"
+          )
 
-          old = '''        switch (command) {
+          # Insert the new case immediately before the existing back case.
+          pattern = r'(?m)^([ \t]*)case "back":'
+          insertion = (
+              r'\1case "search_youtube": {' + '\n'
+              r'\1    String query = intent.getStringExtra(EXTRA_QUERY);' + '\n'
+              r'\1    if (query != null && !query.trim().isEmpty()) {' + '\n'
+              r'\1        activity.handleVoiceYoutubeSearch(query.trim());' + '\n'
+              r'\1    }' + '\n'
+              r'\1    break;' + '\n'
+              r'\1}' + '\n\n'
+              r'\1case "back":'
+          )
 
-            case "back":
-          '''
-          new = '''        switch (command) {
+          java, count = re.subn(pattern, insertion, java, count=1)
+          assert count == 1, f"FAIL: back case anchor count = {count}"
 
-            case "search_youtube":
-                String query = intent.getStringExtra(EXTRA_QUERY);
-                if (query != null && !query.trim().isEmpty()) {
-                    activity.handleVoiceYoutubeSearch(query.trim());
-                }
-                break;
-
-            case "back":
-          '''
-          assert java.count(old) == 1, "switch anchor mismatch"
-          java = java.replace(old, new, 1)
+          assert java.count('case "search_youtube": {') == 1
+          assert java.count('public static final String EXTRA_QUERY =') == 1
 
           path.write_text(java, encoding="utf-8")
-          print("PASS: receiver handles search_youtube")
+          print("PASS: EXTRA_QUERY added")
+          print("PASS: search_youtube receiver added")
           PY
 
       - name: Patch display-directed YouTube search
