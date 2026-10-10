@@ -88,7 +88,7 @@ jobs:
 
           java = main.read_text(encoding="utf-8")
 
-          # Add only the imports that are not already present.
+          # Add only imports that are not already present.
           import_additions = {
               "import android.content.Intent;": [
                   "import android.content.pm.PackageManager;",
@@ -115,7 +115,7 @@ jobs:
                       1,
                   )
 
-          # Add per-service picker buttons.
+          # Add four service-specific picker buttons.
           field_anchor = "private SharedPreferences preferences;"
           fields = """
               private Button chooseYoutubeButton;
@@ -145,7 +145,7 @@ jobs:
                   "FAIL: could not locate the old fallback selector UI"
               )
 
-          # Add the four service-specific buttons.
+          # Add four service-specific buttons.
           ui_anchor = "root.addView(status);"
           ui = r'''
                   root.addView(makeText("CHỌN APP ĐÃ CÀI THEO DỊCH VỤ", 14));
@@ -190,7 +190,7 @@ jobs:
               flags=re.DOTALL,
           )
 
-          # App list, persistent settings, and button labels.
+          # Per-service app list, persistent selection, and button labels.
           helpers = r'''
               private void refreshAppChoiceButtons() {
                   if (preferences == null) {
@@ -219,7 +219,8 @@ jobs:
                       button.setText(
                               service + ": Chưa chọn (sẽ mở trình duyệt)");
                   } else {
-                      button.setText(service + ": " + label + " — Đổi app");
+                      button.setText(
+                              service + ": " + label + " — Đổi app");
                   }
               }
 
@@ -243,7 +244,40 @@ jobs:
                       if (info.activityInfo == null) continue;
 
                       String pkg = info.activityInfo.packageName;
-                      if (pkg == null
+                      if (pkg == null) continue;
+
+                      boolean allowed = false;
+
+                      switch (target) {
+                          case "youtube":
+                              allowed =
+                                      pkg.equals("com.google.android.youtube")
+                                      || pkg.equals(
+                                              "app.revanced.android.youtube");
+                              break;
+
+                          case "ytmusic":
+                              allowed =
+                                      pkg.equals(
+                                              "com.google.android.apps.youtube.music")
+                                      || pkg.equals(
+                                              "com.google.android.apps.youtube.music.morphe");
+                              break;
+
+                          case "zing":
+                              allowed = pkg.equals("com.zing.mp3");
+                              break;
+
+                          case "spotify":
+                              allowed = pkg.equals("com.spotify.music");
+                              break;
+
+                          default:
+                              allowed = false;
+                              break;
+                      }
+
+                      if (!allowed
                               || pkg.equals(getPackageName())
                               || packages.contains(pkg)) {
                           continue;
@@ -254,12 +288,6 @@ jobs:
                       labels.add(
                               (name == null ? pkg : name.toString())
                               + " (" + pkg + ")");
-                  }
-
-                  if (packages.isEmpty()) {
-                      action.setText(
-                              "Không tìm thấy ứng dụng có thể mở từ danh sách app.");
-                      return;
                   }
 
                   String service;
@@ -273,9 +301,20 @@ jobs:
                       case "zing":
                           service = "Zing MP3";
                           break;
-                      default:
+                      case "spotify":
                           service = "Spotify";
                           break;
+                      default:
+                          action.setText("Dịch vụ không hợp lệ.");
+                          return;
+                  }
+
+                  if (packages.isEmpty()) {
+                      action.setText(
+                              "Chưa tìm thấy app tương thích cho "
+                              + service
+                              + ". Kiểm tra app đã cài và có launcher.");
+                      return;
                   }
 
                   labels.add(0, "Bỏ chọn — dùng trình duyệt");
@@ -319,9 +358,7 @@ jobs:
                   1,
               )
 
-          
-          # Replace packageFor() using balanced braces.
-          # This avoids matching the inner switch brace instead of the method brace.
+          # Replace packageFor() using balanced-brace matching.
           package_signature = "private String packageFor(String target) {"
           package_start = java.find(package_signature)
 
@@ -363,9 +400,7 @@ jobs:
 
           print("PASS: packageFor replaced with balanced-brace matching")
 
-
-          # Replace openTarget() so an unselected service uses browser,
-          # while a selected app never silently falls back to browser.
+          # Selected app is used directly. No silent browser fallback on error.
           open_pattern = re.compile(
               r'private void openTarget\(String target, String url\) \{.*?'
               r'\n[ \t]*\}\n\n[ \t]*private void parseCommand',
@@ -409,16 +444,24 @@ jobs:
           )
 
           if count != 1:
-              raise SystemExit(
-                  "FAIL: openTarget replacement failed"
-              )
+              raise SystemExit("FAIL: openTarget replacement failed")
 
           print("PASS: openTarget uses selected app or browser fallback")
 
           main.write_text(java, encoding="utf-8")
 
-          # Android 11+ package visibility: list launcher apps only.
+          # Android 11+: expose launcher apps and explicitly supported packages.
           xml = manifest.read_text(encoding="utf-8")
+
+          package_names = [
+              "com.google.android.youtube",
+              "app.revanced.android.youtube",
+              "com.google.android.apps.youtube.music",
+              "com.google.android.apps.youtube.music.morphe",
+              "com.zing.mp3",
+              "com.spotify.music",
+          ]
+
           if "<queries>" not in xml:
               queries = """
               <queries>
@@ -429,15 +472,40 @@ jobs:
               </queries>
               """
               xml, count = re.subn(
-                  r'</manifest>',
+                  r"</manifest>",
                   queries + "\n</manifest>",
                   xml,
                   count=1,
               )
               if count != 1:
                   raise SystemExit("FAIL: could not add package visibility")
-              manifest.write_text(xml, encoding="utf-8")
 
+          package_entries = "".join(
+              '    <package android:name="' + pkg + '" />\n'
+              for pkg in package_names
+              if 'android:name="' + pkg + '"' not in xml
+          )
+
+          if package_entries:
+              xml, count = re.subn(
+                  r"([ \t]*)</queries>",
+                  lambda match: (
+                      "\n"
+                      + package_entries
+                      + match.group(1)
+                      + "</queries>"
+                  ),
+                  xml,
+                  count=1,
+              )
+              if count != 1:
+                  raise SystemExit(
+                      "FAIL: could not add supported package visibility"
+                  )
+
+          manifest.write_text(xml, encoding="utf-8")
+
+          print("PASS: launcher and supported-package visibility configured")
           print("PASS: installed-app picker patch applied")
           PY
 
@@ -459,6 +527,7 @@ jobs:
           ET.parse(manifest)
           java = main.read_text(encoding="utf-8")
           service = overlay.read_text(encoding="utf-8")
+          xml = manifest.read_text(encoding="utf-8")
           build = gradle.read_text(encoding="utf-8")
 
           assert "versionCode 5" in build
@@ -473,7 +542,17 @@ jobs:
               "Saved app selection": 'preferences.getString("app_" + target, null)' in java,
               "Browser for unselected service": "Chưa chọn app cho " in java,
               "No browser fallback on selected-app error": "Không tự chuyển sang trình duyệt" in java,
-              "Launcher package visibility": "<queries>" in manifest.read_text(encoding="utf-8"),
+              "Launcher package visibility": "<queries>" in xml,
+              "YouTube package filter": '"com.google.android.youtube"' in java and '"app.revanced.android.youtube"' in java,
+              "YouTube Music package filter": '"com.google.android.apps.youtube.music"' in java and '"com.google.android.apps.youtube.music.morphe"' in java,
+              "Zing MP3 package filter": '"com.zing.mp3"' in java,
+              "Spotify package filter": '"com.spotify.music"' in java,
+              "Manifest YouTube package": 'android:name="com.google.android.youtube"' in xml,
+              "Manifest YouTube ReVanced package": 'android:name="app.revanced.android.youtube"' in xml,
+              "Manifest YouTube Music package": 'android:name="com.google.android.apps.youtube.music"' in xml,
+              "Manifest YouTube Music Morphe package": 'android:name="com.google.android.apps.youtube.music.morphe"' in xml,
+              "Manifest Zing MP3 package": 'android:name="com.zing.mp3"' in xml,
+              "Manifest Spotify package": 'android:name="com.spotify.music"' in xml,
               "Vietnamese speech recognition": '"vi-VN"' in java,
               "Four-second silence": "SILENCE_MS = 4000L" in java,
               "End beep retained": "TONE_PROP_ACK" in java,
