@@ -1,0 +1,355 @@
+name: Tro ly CarAsistant 4
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Setup Gradle 8.13
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.13'
+
+      - name: Generate V4 from the verified V3 workflow
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          python3 - <<'PY'
+          import pathlib
+          import re
+          import textwrap
+
+          workflow = pathlib.Path(
+              ".github/workflows/build-carassistant-voice-standalone-v3.yml"
+          )
+          assert workflow.is_file(), "V3 workflow is missing"
+
+          raw = workflow.read_text(encoding="utf-8")
+          assert "name: Tro ly CarAsistant 3" in raw, \
+              "V3 workflow identity mismatch"
+          assert "com.carassistant.voice" in raw, \
+              "V3 package anchor missing"
+          assert 'cat > "$J/MainActivity.java" <<\'EOF\'' in raw, \
+              "V3 MainActivity generator anchor missing"
+          assert 'cat > "$J/FloatingMicService.java" <<\'EOF\'' in raw, \
+              "V3 floating mic generator anchor missing"
+
+          project = pathlib.Path("carassistant-voice")
+          java_dir = project / "app/src/main/java/com/carassistant/voice"
+          java_dir.mkdir(parents=True, exist_ok=True)
+
+          lines = raw.splitlines()
+          extracted = {}
+
+          pattern = re.compile(
+              r'^\s*cat > "(\$P|\$J)/([^"]+)" <<\'EOF\'$'
+          )
+
+          i = 0
+          while i < len(lines):
+              match = pattern.match(lines[i])
+              if not match:
+                  i += 1
+                  continue
+
+              prefix, relative = match.groups()
+              i += 1
+              body = []
+
+              while i < len(lines) and lines[i].strip() != "EOF":
+                  line = lines[i]
+                  body.append(line[10:] if line.startswith("          ") else line)
+                  i += 1
+
+              assert i < len(lines), "Unclosed V3 heredoc"
+              content = "\n".join(body) + "\n"
+
+              if prefix == "$P":
+                  destination = project / relative
+              else:
+                  destination = java_dir / relative
+
+              extracted[str(destination)] = content
+              destination.parent.mkdir(parents=True, exist_ok=True)
+              destination.write_text(content, encoding="utf-8")
+              i += 1
+
+          required = {
+              "carassistant-voice/settings.gradle",
+              "carassistant-voice/build.gradle",
+              "carassistant-voice/app/build.gradle",
+              "carassistant-voice/app/src/main/AndroidManifest.xml",
+              "carassistant-voice/app/src/main/java/com/carassistant/voice/MainActivity.java",
+              "carassistant-voice/app/src/main/java/com/carassistant/voice/FloatingMicService.java",
+          }
+
+          missing = required - set(extracted)
+          assert not missing, "Missing generated V3 files: " + str(sorted(missing))
+
+          gradle_file = project / "app/build.gradle"
+          gradle = gradle_file.read_text(encoding="utf-8")
+          assert "versionCode 3" in gradle and "versionName '0.3.0'" in gradle, \
+              "V3 version anchor mismatch"
+          gradle = gradle.replace("versionCode 3", "versionCode 4", 1)
+          gradle = gradle.replace("versionName '0.3.0'", "versionName '0.4.0'", 1)
+          gradle_file.write_text(gradle, encoding="utf-8")
+
+          main_file = java_dir / "MainActivity.java"
+          source = main_file.read_text(encoding="utf-8")
+          assert "private void parseCommand(String spoken)" in source, \
+              "V3 parser anchor missing"
+          assert "private String errorMessage(int error)" in source, \
+              "V3 error handler anchor missing"
+
+          parser = r'''    private void parseCommand(String spoken) {
+              String original = spoken == null ? "" : spoken.trim();
+              if (original.isEmpty()) {
+                  action.setText("Không nhận được câu lệnh.");
+                  return;
+              }
+
+              String normalized = java.text.Normalizer.normalize(
+                      original, java.text.Normalizer.Form.NFD)
+                      .replaceAll("\\p{M}+", "")
+                      .toLowerCase(Locale.ROOT)
+                      .replaceAll("\\s+", " ");
+
+              boolean openCommand = normalized.startsWith("mo ");
+              boolean searchCommand = normalized.startsWith("tim ")
+                      || normalized.startsWith("tim kiem ")
+                      || normalized.startsWith("phat ")
+                      || normalized.startsWith("phat nhac ");
+
+              String openTarget = normalized
+                      .replaceFirst("^mo\\s+", "")
+                      .replaceFirst("\\s+(giup toi|nhe)$", "")
+                      .trim();
+
+              if (openCommand && (openTarget.equals("youtube")
+                      || openTarget.equals("ung dung youtube"))) {
+                  boolean opened = launchApp(
+                          "com.google.android.youtube",
+                          "https://www.youtube.com/");
+                  action.setText("ACTION: OPEN_APP\nAPP: YouTube\nKẾT QUẢ: "
+                          + (opened ? "Đã gửi yêu cầu mở YouTube."
+                                    : "Không mở được YouTube."));
+                  return;
+              }
+
+              if (openCommand) {
+                  String packageName = null;
+                  String appName = openTarget;
+                  String fallback = null;
+
+                  if (openTarget.contains("google maps")
+                          || openTarget.equals("maps")
+                          || openTarget.contains("ban do")) {
+                      packageName = "com.google.android.apps.maps";
+                      appName = "Google Maps";
+                      fallback = "https://maps.google.com/";
+                  } else if (openTarget.contains("chrome")) {
+                      packageName = "com.android.chrome";
+                      appName = "Chrome";
+                      fallback = "https://www.google.com/";
+                  } else if (openTarget.contains("spotify")) {
+                      packageName = "com.spotify.music";
+                      appName = "Spotify";
+                      fallback = "https://open.spotify.com/";
+                  }
+
+                  if (packageName != null) {
+                      boolean opened = launchApp(packageName, fallback);
+                      action.setText("ACTION: OPEN_APP\nAPP: " + appName
+                              + "\nKẾT QUẢ: "
+                              + (opened ? "Đã gửi yêu cầu mở ứng dụng."
+                                        : "Không mở được ứng dụng."));
+                  } else {
+                      action.setText("ACTION: UNKNOWN_APP\nAPP: " + appName
+                              + "\nHỗ trợ: YouTube, Google Maps, Chrome, Spotify.");
+                  }
+                  return;
+              }
+
+              if (searchCommand || normalized.contains("youtube")) {
+                  String query = extractQuery(original);
+                  if (query.isEmpty()) {
+                      action.setText("Thiếu từ khóa tìm kiếm.");
+                      return;
+                  }
+
+                  boolean youtube = normalized.contains("youtube")
+                          || normalized.startsWith("phat ");
+                  String url = youtube
+                          ? "https://www.youtube.com/results?search_query="
+                                  + Uri.encode(query)
+                          : "https://www.google.com/search?q=" + Uri.encode(query);
+
+                  boolean opened = openUrl(url);
+                  action.setText("ACTION: "
+                          + (youtube ? "SEARCH_YOUTUBE" : "WEB_SEARCH")
+                          + "\nQUERY: " + query
+                          + "\nKẾT QUẢ: "
+                          + (opened ? "Đã gửi yêu cầu mở kết quả tìm kiếm."
+                                    : "Không mở được kết quả tìm kiếm."));
+                  return;
+              }
+
+              if (normalized.equals("dung nghe") || normalized.equals("huy")) {
+                  action.setText("ACTION: STOP\nĐã nhận lệnh dừng.");
+                  return;
+              }
+
+              action.setText("ACTION: UNKNOWN\nTEXT: " + original
+                      + "\nCâu lệnh chưa được hỗ trợ; chưa thực hiện hành động.");
+          }
+
+          private String extractQuery(String original) {
+              return original
+                      .replaceFirst(
+                              "(?iu)^(carassistant\\s+)?(hãy\\s+)?"
+                                      + "(tìm kiếm|tìm|phát(?:\\s+nhạc)?|mở)\\s*",
+                              "")
+                      .replaceFirst(
+                              "(?iu)\\s+(trên youtube|trên google|giúp tôi|nhé)$",
+                              "")
+                      .trim();
+          }
+
+          private boolean launchApp(String packageName, String fallbackUrl) {
+              try {
+                  android.content.Intent launch = getPackageManager()
+                          .getLaunchIntentForPackage(packageName);
+                  if (launch != null) {
+                      startActivity(launch);
+                      return true;
+                  }
+              } catch (RuntimeException ignored) {
+              }
+              return fallbackUrl != null && openUrl(fallbackUrl);
+          }
+
+          private boolean openUrl(String url) {
+              try {
+                  android.content.Intent intent = new android.content.Intent(
+                          android.content.Intent.ACTION_VIEW,
+                          android.net.Uri.parse(url));
+                  startActivity(intent);
+                  return true;
+              } catch (RuntimeException e) {
+                  return false;
+              }
+          }
+
+          '''
+
+          source, count = re.subn(
+              r'(?ms)^    private void parseCommand\(String spoken\) \{.*?'
+              r'(?=^    private String errorMessage\(int error\) \{)',
+              lambda _: parser,
+              source,
+              count=1,
+          )
+          assert count == 1, "Parser patch failed closed"
+          source = source.replace(
+              "CarAssistant Voice V3", "CarAssistant Voice V4"
+          )
+          main_file.write_text(source, encoding="utf-8")
+
+          print("PASS: V3 workflow source verified")
+          print("PASS: V3-generated project files extracted")
+          print("PASS: separate V4 version set to 0.4.0")
+          print("PASS: V4 command execution patch applied")
+          print("V3 workflow file was read only; it was not modified.")
+          PY
+
+      - name: Validate V4 files
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          python3 - <<'PY'
+          import pathlib
+          import xml.etree.ElementTree as ET
+
+          root = pathlib.Path("carassistant-voice")
+          manifest = root / "app/src/main/AndroidManifest.xml"
+          gradle = (root / "app/build.gradle").read_text(encoding="utf-8")
+          main = (
+              root / "app/src/main/java/com/carassistant/voice/MainActivity.java"
+          ).read_text(encoding="utf-8")
+          overlay = (
+              root / "app/src/main/java/com/carassistant/voice/FloatingMicService.java"
+          ).read_text(encoding="utf-8")
+
+          ET.parse(manifest)
+          assert "versionCode 4" in gradle
+          assert "versionName '0.4.0'" in gradle
+
+          checks = {
+              "Vietnamese recognition": '"vi-VN"' in main,
+              "4-second silence timer": "SILENCE_MS = 4000L" in main,
+              "End beep": "TONE_PROP_ACK" in main,
+              "Auto-hide": "HIDE_MS = 2500L" in main,
+              "Floating mic": "TYPE_APPLICATION_OVERLAY" in overlay,
+              "YouTube search URL": "youtube.com/results?search_query=" in main,
+              "Google search URL": "google.com/search?q=" in main,
+              "App launch": "getLaunchIntentForPackage" in main,
+              "Google Maps command": "com.google.android.apps.maps" in main,
+              "Unknown command handling": "ACTION: UNKNOWN" in main,
+          }
+
+          for label, passed in checks.items():
+              print(("PASS" if passed else "FAIL") + ": " + label)
+              assert passed, "Missing feature: " + label
+
+          print("PASS: AndroidManifest.xml parsed")
+          print("PASS: V4 version and feature checks")
+          PY
+
+      - name: Build standalone Voice V4 APK
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd carassistant-voice
+          gradle --no-daemon --stacktrace assembleDebug
+
+      - name: Package APK and SHA-256
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          APK="carassistant-voice/app/build/outputs/apk/debug/app-debug.apk"
+          test -s "$APK"
+
+          mkdir -p dist
+          cp "$APK" dist/CarAssistant-Voice-Standalone-V4.apk
+          sha256sum dist/CarAssistant-Voice-Standalone-V4.apk \
+            > dist/CarAssistant-Voice-Standalone-V4.sha256
+
+          cat dist/CarAssistant-Voice-Standalone-V4.sha256
+
+      - name: Upload V4 APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: CarAssistant-Voice-Standalone-V4
+          path: |
+            dist/CarAssistant-Voice-Standalone-V4.apk
+            dist/CarAssistant-Voice-Standalone-V4.sha256
+          if-no-files-found: error
