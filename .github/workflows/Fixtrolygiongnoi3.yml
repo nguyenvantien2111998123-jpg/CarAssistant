@@ -1,0 +1,252 @@
+name: CarAssistant Voice Integration V3
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - name: Checkout current main source
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 1
+
+      - name: Setup Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Setup Gradle 8.13
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.13'
+
+      - name: Apply verified Voice V2 baseline patch
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -m pip install --quiet pyyaml
+          python3 - <<'PY'
+          from pathlib import Path
+          import subprocess
+          import yaml
+
+          workflow_path = Path(".github/workflows/build-carassistant-voice-commands-v2.yml")
+          if not workflow_path.is_file():
+              raise SystemExit("FAIL-CLOSED: Voice V2 workflow not found")
+
+          data = yaml.safe_load(workflow_path.read_text(encoding="utf-8"))
+          steps = data["jobs"]["build"]["steps"]
+          step = next((s for s in steps if s.get("name") == "Verify baseline and patch voice recognition"), None)
+          if not step or "run" not in step:
+              raise SystemExit("FAIL-CLOSED: cannot find verified Voice V2 patch step")
+
+          result = subprocess.run(["bash", "-euo", "pipefail", "-c", step["run"]])
+          if result.returncode:
+              raise SystemExit(result.returncode)
+          PY
+
+      - name: Apply Voice V3 fixes with fail-closed anchors
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+
+          path = Path("v10-source/app/src/main/java/com/carassistant/v10/V10CarActivity.java")
+          java = path.read_text(encoding="utf-8")
+
+          def replace_once(old, new, label):
+              global java
+              count = java.count(old)
+              if count != 1:
+                  raise SystemExit(f"FAIL-CLOSED: {label}; expected 1 anchor, found {count}")
+              java = java.replace(old, new, 1)
+              print("PASS:", label)
+
+          replace_once(
+              "    private Runnable voiceForceStop;\n",
+              "    private Runnable voiceForceStop;\n"
+              "    private Runnable voiceStatusHide;\n"
+              "    private TextView floatingVoiceButton;\n",
+              "V3 state fields"
+          )
+          replace_once(
+              "              private void updateVoiceStatus(String value) {\n"
+              "                  if (voiceStatus == null) return;",
+              "              private void updateVoiceStatus(String value) {\n"
+              "                  if (voiceStatusHide != null) {\n"
+              "                      voiceHandler.removeCallbacks(voiceStatusHide);\n"
+              "                      voiceStatusHide = null;\n"
+              "                  }\n"
+              "                  if (voiceStatus == null) return;",
+              "cancel stale status-hide timer"
+          )
+          replace_once(
+              "              private void playVoiceTone() {\n",
+              "              private void scheduleVoiceStatusHide(long delayMs) {\n"
+              "                  if (voiceStatusHide != null) voiceHandler.removeCallbacks(voiceStatusHide);\n"
+              "                  voiceStatusHide = () -> {\n"
+              "                      voiceStatusHide = null;\n"
+              "                      updateVoiceStatus(null);\n"
+              "                  };\n"
+              "                  voiceHandler.postDelayed(voiceStatusHide, delayMs);\n"
+              "              }\n\n"
+              "              private void toggleVoiceRecognition() {\n"
+              "                  if (voiceRecognizer != null) stopVoiceRecognition();\n"
+              "                  else startVoiceRecognition();\n"
+              "              }\n\n"
+              "              private void playVoiceTone() {\n",
+              "status auto-hide and tap-to-toggle"
+          )
+          replace_once(
+              "              private void finishVoiceTone() {\n"
+              "                  if (!voiceEndTonePlayed) {\n"
+              "                      voiceEndTonePlayed = true;\n"
+              "                      playVoiceTone();\n"
+              "                  }\n"
+              "              }",
+              "              private void finishVoiceTone() {\n"
+              "                  if (voiceEndTonePlayed) return;\n"
+              "                  voiceEndTonePlayed = true;\n"
+              "                  try {\n"
+              "                      if (voiceTone == null) voiceTone = new ToneGenerator(AudioManager.STREAM_MUSIC, 90);\n"
+              "                      voiceTone.startTone(ToneGenerator.TONE_PROP_ACK, 300);\n"
+              "                  } catch (RuntimeException ignored) {\n"
+              "                  }\n"
+              "              }",
+              "distinct end-of-listening tone"
+          )
+          replace_once(
+              "                          session.stopListening();\n"
+              "                      } catch (RuntimeException ignored) {\n"
+              "                      }\n\n"
+              "                      Runnable force = () -> {",
+              "                          session.stopListening();\n"
+              "                      } catch (RuntimeException ignored) {\n"
+              "                      }\n"
+              "                      finishVoiceTone();\n\n"
+              "                      Runnable force = () -> {",
+              "end tone at four-second silence stop"
+          )
+          replace_once(
+              "                              processVoiceCommand(spoken);\n",
+              "                              processVoiceCommand(spoken);\n"
+              "                              scheduleVoiceStatusHide(2500L);\n",
+              "auto-hide status after command"
+          )
+          replace_once(
+              "        createFloatingTouchKey();\n",
+              "        createFloatingTouchKey();\n"
+              "        createFloatingVoiceButton();\n",
+              "attach floating mic to projection layer"
+          )
+          replace_once(
+              '        voice.setOnClickListener(v -> startVoiceRecognition());\n',
+              '        voice.setOnClickListener(v -> toggleVoiceRecognition());\n',
+              "make sidebar mic toggle/cancel"
+          )
+
+          mic = r'''    private void createFloatingVoiceButton() {
+              if (projectionLayer == null || floatingVoiceButton != null) return;
+              TextView button = new TextView(this);
+              floatingVoiceButton = button;
+              button.setText("🎙");
+              button.setTextColor(Color.WHITE);
+              button.setTextSize(25);
+              button.setGravity(Gravity.CENTER);
+              button.setContentDescription("Mở trợ lý giọng nói");
+              GradientDrawable background = new GradientDrawable();
+              background.setShape(GradientDrawable.OVAL);
+              background.setColor(Color.rgb(20, 70, 120));
+              background.setStroke(dp(2), Color.rgb(66, 165, 245));
+              button.setBackground(background);
+              button.setElevation(dp(16));
+              FrameLayout.LayoutParams params = new FrameLayout.LayoutParams(
+                      dp(58), dp(58), Gravity.TOP | Gravity.END);
+              params.setMargins(0, dp(190), dp(18), 0);
+              projectionLayer.addView(button, params);
+              button.setOnClickListener(v -> toggleVoiceRecognition());
+              button.bringToFront();
+          }
+
+          '''
+          replace_once(
+              "    private void showFloatingMenu() {\n",
+              mic + "    private void showFloatingMenu() {\n",
+              "floating mic button implementation"
+          )
+          replace_once(
+              "    public void onDestroy() {\n        stopVoiceRecognition();\n",
+              "    public void onDestroy() {\n"
+              "        if (voiceStatusHide != null) { voiceHandler.removeCallbacks(voiceStatusHide); voiceStatusHide = null; }\n"
+              "        stopVoiceRecognition();\n",
+              "cleanup status timer"
+          )
+
+          path.write_text(java, encoding="utf-8")
+          check = path.read_text(encoding="utf-8")
+          for anchor in (
+              "ToneGenerator.TONE_PROP_ACK, 300",
+              "scheduleVoiceStatusHide(2500L)",
+              "private void createFloatingVoiceButton()",
+              "button.setOnClickListener(v -> toggleVoiceRecognition())",
+          ):
+              if anchor not in check:
+                  raise SystemExit("FAIL-CLOSED: missing V3 result: " + anchor)
+          print("PASS: all V3 feature anchors verified")
+          PY
+
+      - name: Validate Java feature anchors and Manifest XML
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          import xml.etree.ElementTree as ET
+          p = Path("v10-source/app/src/main/java/com/carassistant/v10/V10CarActivity.java")
+          java = p.read_text(encoding="utf-8")
+          ET.parse("v10-source/app/src/main/AndroidManifest.xml")
+          for anchor in (
+              "private void createFloatingVoiceButton()",
+              "ToneGenerator.TONE_PROP_ACK, 300",
+              "scheduleVoiceStatusHide(2500L)",
+              "voiceHandler.postDelayed(voiceStatusHide, delayMs)",
+          ):
+              assert anchor in java, "Missing feature: " + anchor
+          assert java.count("private void createFloatingVoiceButton()") == 1
+          print("PASS: Java V3 anchors and Manifest XML")
+          PY
+
+      - name: Build CarAssistant debug APK
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd v10-source
+          gradle --no-daemon --stacktrace assembleDebug
+
+      - name: Package APK and checksum
+        shell: bash
+        run: |
+          set -euo pipefail
+          APK="v10-source/app/build/outputs/apk/debug/app-debug.apk"
+          test -s "$APK"
+          mkdir -p dist
+          cp "$APK" dist/CarAssistant-Voice-Integration-V3.apk
+          sha256sum dist/CarAssistant-Voice-Integration-V3.apk > dist/CarAssistant-Voice-Integration-V3.sha256
+          cat dist/CarAssistant-Voice-Integration-V3.sha256
+
+      - name: Upload APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: CarAssistant-Voice-Integration-V3
+          path: |
+            dist/CarAssistant-Voice-Integration-V3.apk
+            dist/CarAssistant-Voice-Integration-V3.sha256
+          if-no-files-found: error
