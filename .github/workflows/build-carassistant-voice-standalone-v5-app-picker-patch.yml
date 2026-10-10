@@ -1,0 +1,493 @@
+
+name: Tro ly CarAssistant 5.1
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Verify V3 and V5 sources
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -s .github/workflows/build-carassistant-voice-standalone-v3.yml
+          test -s .github/workflows/build-carassistant-voice-standalone-v5.yml
+          echo "PASS: V3 and V5 source workflows exist."
+
+      - name: Setup Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.13'
+
+      - name: Generate isolated V5 project from current workflow
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -m pip install --quiet pyyaml
+
+          python3 - <<'PY'
+          from pathlib import Path
+          import yaml
+
+          path = Path(
+              ".github/workflows/build-carassistant-voice-standalone-v5.yml"
+          )
+          data = yaml.safe_load(path.read_text(encoding="utf-8"))
+
+          steps = data["jobs"]["build"]["steps"]
+          target = [
+              step for step in steps
+              if step.get("name") == "Generate isolated V5 project"
+          ]
+
+          if len(target) != 1:
+              raise SystemExit(
+                  "FAIL: expected exactly one V5 project-generation step"
+              )
+
+          script = target[0].get("run", "")
+          if not script or "MainActivity.java" not in script:
+              raise SystemExit("FAIL: V5 generation script is incomplete")
+
+          Path("/tmp/generate-v5.sh").write_text(
+              script + "\n", encoding="utf-8"
+          )
+          print("PASS: extracted the existing V5 generation step")
+          PY
+
+          bash /tmp/generate-v5.sh
+
+      - name: Apply isolated installed-app picker patch
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          python3 - <<'PY'
+          from pathlib import Path
+          import re
+
+          root = Path("carassistant-voice")
+          main = root / "app/src/main/java/com/carassistant/voice/MainActivity.java"
+          manifest = root / "app/src/main/AndroidManifest.xml"
+
+          java = main.read_text(encoding="utf-8")
+
+          # Add only the imports that are not already present.
+          import_additions = {
+              "import android.content.Intent;": [
+                  "import android.content.pm.PackageManager;",
+                  "import android.content.pm.ResolveInfo;",
+              ],
+              "import java.util.ArrayList;": [
+                  "import java.util.List;",
+              ],
+          }
+
+          for anchor, additions in import_additions.items():
+              missing = [
+                  item for item in additions
+                  if item not in java
+              ]
+              if missing:
+                  if anchor not in java:
+                      raise SystemExit(
+                          "FAIL: missing import anchor: " + anchor
+                      )
+                  java = java.replace(
+                      anchor,
+                      anchor + "\n" + "\n".join(missing),
+                      1,
+                  )
+
+          # Add per-service picker buttons.
+          field_anchor = "private SharedPreferences preferences;"
+          fields = """
+              private Button chooseYoutubeButton;
+              private Button chooseYoutubeMusicButton;
+              private Button chooseZingButton;
+              private Button chooseSpotifyButton;
+          """
+
+          if "chooseYoutubeButton" not in java:
+              if field_anchor not in java:
+                  raise SystemExit("FAIL: preferences field not found")
+              java = java.replace(
+                  field_anchor, field_anchor + fields, 1
+              )
+
+          # Remove the old global fallback selector UI.
+          java, removed = re.subn(
+              r'\n[ \t]*root\.addView\(makeText\("KHI ỨNG DỤNG KHÔNG CÓ SẴN", 14\)\);'
+              r'.*?root\.addView\(fallbackSpinner\);\n',
+              "\n",
+              java,
+              count=1,
+              flags=re.DOTALL,
+          )
+          if removed != 1:
+              raise SystemExit(
+                  "FAIL: could not locate the old fallback selector UI"
+              )
+
+          # Add the four service-specific buttons.
+          ui_anchor = "root.addView(status);"
+          ui = r'''
+                  root.addView(makeText("CHỌN APP ĐÃ CÀI THEO DỊCH VỤ", 14));
+
+                  chooseYoutubeButton = new Button(this);
+                  chooseYoutubeButton.setOnClickListener(
+                          v -> chooseInstalledApp("youtube"));
+                  root.addView(chooseYoutubeButton);
+
+                  chooseYoutubeMusicButton = new Button(this);
+                  chooseYoutubeMusicButton.setOnClickListener(
+                          v -> chooseInstalledApp("ytmusic"));
+                  root.addView(chooseYoutubeMusicButton);
+
+                  chooseZingButton = new Button(this);
+                  chooseZingButton.setOnClickListener(
+                          v -> chooseInstalledApp("zing"));
+                  root.addView(chooseZingButton);
+
+                  chooseSpotifyButton = new Button(this);
+                  chooseSpotifyButton.setOnClickListener(
+                          v -> chooseInstalledApp("spotify"));
+                  root.addView(chooseSpotifyButton);
+
+                  refreshAppChoiceButtons();
+          '''
+
+          if "CHỌN APP ĐÃ CÀI THEO DỊCH VỤ" not in java:
+              if ui_anchor not in java:
+                  raise SystemExit("FAIL: UI insertion anchor not found")
+              java = java.replace(
+                  ui_anchor, ui_anchor + "\n" + ui, 1
+              )
+
+          # Remove the listener belonging to the old fallback selector.
+          java, _ = re.subn(
+              r'\n[ \t]*fallbackSpinner\.setOnItemSelectedListener\(.*?'
+              r'\n[ \t]*\}\);\n',
+              "\n",
+              java,
+              count=1,
+              flags=re.DOTALL,
+          )
+
+          # App list, persistent settings, and button labels.
+          helpers = r'''
+              private void refreshAppChoiceButtons() {
+                  if (preferences == null) {
+                      preferences = getSharedPreferences(
+                              "voice_v5_settings", MODE_PRIVATE);
+                  }
+
+                  setAppChoiceLabel(
+                          chooseYoutubeButton, "YouTube", "youtube");
+                  setAppChoiceLabel(
+                          chooseYoutubeMusicButton, "YouTube Music", "ytmusic");
+                  setAppChoiceLabel(
+                          chooseZingButton, "Zing MP3", "zing");
+                  setAppChoiceLabel(
+                          chooseSpotifyButton, "Spotify", "spotify");
+              }
+
+              private void setAppChoiceLabel(
+                      Button button, String service, String key) {
+                  if (button == null) return;
+
+                  String label = preferences.getString(
+                          "app_label_" + key, null);
+
+                  if (label == null || label.trim().isEmpty()) {
+                      button.setText(
+                              service + ": Chưa chọn (sẽ mở trình duyệt)");
+                  } else {
+                      button.setText(service + ": " + label + " — Đổi app");
+                  }
+              }
+
+              private void chooseInstalledApp(String target) {
+                  if (preferences == null) {
+                      preferences = getSharedPreferences(
+                              "voice_v5_settings", MODE_PRIVATE);
+                  }
+
+                  Intent launcher = new Intent(Intent.ACTION_MAIN);
+                  launcher.addCategory(Intent.CATEGORY_LAUNCHER);
+
+                  PackageManager pm = getPackageManager();
+                  List<ResolveInfo> found =
+                          pm.queryIntentActivities(launcher, 0);
+
+                  ArrayList<String> packages = new ArrayList<>();
+                  ArrayList<String> labels = new ArrayList<>();
+
+                  for (ResolveInfo info : found) {
+                      if (info.activityInfo == null) continue;
+
+                      String pkg = info.activityInfo.packageName;
+                      if (pkg == null
+                              || pkg.equals(getPackageName())
+                              || packages.contains(pkg)) {
+                          continue;
+                      }
+
+                      CharSequence name = info.loadLabel(pm);
+                      packages.add(pkg);
+                      labels.add(
+                              (name == null ? pkg : name.toString())
+                              + " (" + pkg + ")");
+                  }
+
+                  if (packages.isEmpty()) {
+                      action.setText(
+                              "Không tìm thấy ứng dụng có thể mở từ danh sách app.");
+                      return;
+                  }
+
+                  String service;
+                  switch (target) {
+                      case "youtube":
+                          service = "YouTube";
+                          break;
+                      case "ytmusic":
+                          service = "YouTube Music";
+                          break;
+                      case "zing":
+                          service = "Zing MP3";
+                          break;
+                      default:
+                          service = "Spotify";
+                          break;
+                  }
+
+                  labels.add(0, "Bỏ chọn — dùng trình duyệt");
+
+                  new AlertDialog.Builder(this)
+                          .setTitle("Chọn app cho " + service)
+                          .setItems(
+                                  labels.toArray(new String[0]),
+                                  (dialog, which) -> {
+                              SharedPreferences.Editor editor =
+                                      preferences.edit();
+
+                              if (which == 0) {
+                                  editor.remove("app_" + target);
+                                  editor.remove("app_label_" + target);
+                              } else {
+                                  editor.putString(
+                                          "app_" + target,
+                                          packages.get(which - 1));
+                                  editor.putString(
+                                          "app_label_" + target,
+                                          labels.get(which));
+                              }
+
+                              editor.apply();
+                              refreshAppChoiceButtons();
+                          })
+                          .setNegativeButton("Hủy", null)
+                          .show();
+              }
+
+          '''
+
+          package_anchor = "private String packageFor(String target) {"
+          if "private void chooseInstalledApp(String target)" not in java:
+              if package_anchor not in java:
+                  raise SystemExit("FAIL: packageFor method not found")
+              java = java.replace(
+                  package_anchor,
+                  helpers + "\n              " + package_anchor,
+                  1,
+              )
+
+          # Replace fixed package names with saved user selections.
+          package_pattern = re.compile(
+              r'private String packageFor\(String target\) \{.*?\n[ \t]*\}',
+              re.DOTALL,
+          )
+
+          package_method = r'''private String packageFor(String target) {
+                  if (preferences == null) {
+                      preferences = getSharedPreferences(
+                              "voice_v5_settings", MODE_PRIVATE);
+                  }
+                  return preferences.getString("app_" + target, null);
+              }'''
+
+          java, count = package_pattern.subn(
+              lambda _: package_method, java, count=1
+          )
+          if count != 1:
+              raise SystemExit("FAIL: packageFor replacement failed")
+
+          # Selected package opens directly; only unselected services use web.
+          open_pattern = re.compile(
+              r'private void openTarget\(String target, String url\) \{.*?'
+              r'\n[ \t]*\}\n\n[ \t]*private void parseCommand',
+              re.DOTALL,
+          )
+
+          open_method = r'''private void openTarget(String target, String url) {
+                  if ("browser".equals(target)) {
+                      openWeb(url);
+                      return;
+                  }
+
+                  String pkg = packageFor(target);
+
+                  if (pkg == null || pkg.trim().isEmpty()) {
+                      action.setText(
+                              "Chưa chọn app cho " + target
+                              + ". Đang mở bằng trình duyệt.");
+                      openWeb(url);
+                      return;
+                  }
+
+                  try {
+                      Intent intent = new Intent(
+                              Intent.ACTION_VIEW, Uri.parse(url));
+                      intent.setPackage(pkg);
+                      startActivity(intent);
+
+                      action.setText(
+                              "Đã gửi liên kết đến app đã chọn: " + pkg
+                              + ". Kiểm tra app có hỗ trợ liên kết tìm kiếm.");
+                  } catch (RuntimeException e) {
+                      action.setText(
+                              "App đã chọn không mở được liên kết: " + pkg
+                              + ". Không tự chuyển sang trình duyệt.");
+                  }
+              }
+
+              private void parseCommand'''
+
+          java, count = open_pattern.subn(
+              lambda _: open_method, java, count=1
+          )
+          if count != 1:
+              raise SystemExit("FAIL: openTarget replacement failed")
+
+          main.write_text(java, encoding="utf-8")
+
+          # Android 11+ package visibility: list launcher apps only.
+          xml = manifest.read_text(encoding="utf-8")
+          if "<queries>" not in xml:
+              queries = """
+              <queries>
+                  <intent>
+                      <action android:name="android.intent.action.MAIN" />
+                      <category android:name="android.intent.category.LAUNCHER" />
+                  </intent>
+              </queries>
+              """
+              xml, count = re.subn(
+                  r'</manifest>',
+                  queries + "\n</manifest>",
+                  xml,
+                  count=1,
+              )
+              if count != 1:
+                  raise SystemExit("FAIL: could not add package visibility")
+              manifest.write_text(xml, encoding="utf-8")
+
+          print("PASS: installed-app picker patch applied")
+          PY
+
+      - name: Validate V5 sources and voice features
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          python3 - <<'PY'
+          from pathlib import Path
+          import xml.etree.ElementTree as ET
+
+          root = Path("carassistant-voice")
+          main = root / "app/src/main/java/com/carassistant/voice/MainActivity.java"
+          overlay = root / "app/src/main/java/com/carassistant/voice/FloatingMicService.java"
+          manifest = root / "app/src/main/AndroidManifest.xml"
+          gradle = root / "app/build.gradle"
+
+          ET.parse(manifest)
+          java = main.read_text(encoding="utf-8")
+          service = overlay.read_text(encoding="utf-8")
+          build = gradle.read_text(encoding="utf-8")
+
+          assert "versionCode 5" in build
+          assert "versionName '0.5.0'" in build
+
+          checks = {
+              "V5 title": "CarAssistant Voice V5" in java,
+              "YouTube app picker": 'chooseInstalledApp("youtube")' in java,
+              "YouTube Music app picker": 'chooseInstalledApp("ytmusic")' in java,
+              "Zing MP3 app picker": 'chooseInstalledApp("zing")' in java,
+              "Spotify app picker": 'chooseInstalledApp("spotify")' in java,
+              "Saved app selection": 'preferences.getString("app_" + target, null)' in java,
+              "Browser for unselected service": "Chưa chọn app cho " in java,
+              "No browser fallback on selected-app error": "Không tự chuyển sang trình duyệt" in java,
+              "Launcher package visibility": "<queries>" in manifest.read_text(encoding="utf-8"),
+              "Vietnamese speech recognition": '"vi-VN"' in java,
+              "Four-second silence": "SILENCE_MS = 4000L" in java,
+              "End beep retained": "TONE_PROP_ACK" in java,
+              "Auto-hide retained": "HIDE_MS = 2500L" in java,
+              "Floating mic retained": "TYPE_APPLICATION_OVERLAY" in service,
+          }
+
+          for label, passed in checks.items():
+              print(("PASS" if passed else "FAIL") + ": " + label)
+              if not passed:
+                  raise SystemExit("Missing required feature: " + label)
+
+          print("PASS: Android manifest XML")
+          print("PASS: all V5 source feature checks")
+          PY
+
+      - name: Build V5 APK
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd carassistant-voice
+          gradle --no-daemon --stacktrace assembleDebug
+
+      - name: Package APK and SHA256
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          APK="carassistant-voice/app/build/outputs/apk/debug/app-debug.apk"
+          test -s "$APK"
+
+          mkdir -p dist
+          cp "$APK" dist/CarAssistant-Voice-Standalone-V5-App-Picker-Patch.apk
+          sha256sum dist/CarAssistant-Voice-Standalone-V5-App-Picker-Patch.apk \
+            > dist/CarAssistant-Voice-Standalone-V5-App-Picker-Patch.sha256
+
+          cat dist/CarAssistant-Voice-Standalone-V5-App-Picker-Patch.sha256
+
+      - name: Upload V5 patch APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: CarAssistant-Voice-Standalone-V5-App-Picker-Patch
+          path: |
+            dist/CarAssistant-Voice-Standalone-V5-App-Picker-Patch.apk
+            dist/CarAssistant-Voice-Standalone-V5-App-Picker-Patch.sha256
+          if-no-files-found: error
