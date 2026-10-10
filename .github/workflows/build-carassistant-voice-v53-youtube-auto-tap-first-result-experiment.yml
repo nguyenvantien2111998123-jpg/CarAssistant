@@ -1,0 +1,483 @@
+name: Tro ly CarAssistant V5.3 YouTube Auto Tap First Result
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Verify immutable source workflows
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          python3 - <<'PY'
+          from pathlib import Path
+          import hashlib
+
+          expected = {
+              ".github/workflows/build-carassistant-voice-standalone-v5.yml":
+                  "c75feb842cf9cf03c75f4d33d3014abeb4f2672d",
+              ".github/workflows/build-carassistant-voice-standalone-v5-app-picker-patch.yml":
+                  "9028dfa690a8c31e89a50ce342c3cee7e6c50be3",
+          }
+
+          for name, wanted in expected.items():
+              path = Path(name)
+              if not path.is_file():
+                  raise SystemExit(f"FAIL: missing source {name}")
+
+              data = path.read_bytes()
+              actual = hashlib.sha1(
+                  b"blob " + str(len(data)).encode() + b"\0" + data
+              ).hexdigest()
+
+              if actual != wanted:
+                  raise SystemExit(
+                      f"FAIL: source changed: {name}; "
+                      f"expected {wanted}, got {actual}"
+                  )
+
+              print(f"PASS: verified {name}")
+          PY
+
+      - name: Setup Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.13'
+
+      - name: Extract and generate isolated V5 project
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -m pip install --quiet pyyaml
+
+          python3 - <<'PY'
+          from pathlib import Path
+          import yaml
+
+          sources = [
+              (
+                  ".github/workflows/build-carassistant-voice-standalone-v5.yml",
+                  "Generate isolated V5 project",
+                  "/tmp/v53-generate.sh",
+              ),
+              (
+                  ".github/workflows/build-carassistant-voice-standalone-v5-app-picker-patch.yml",
+                  "Apply isolated installed-app picker patch",
+                  "/tmp/v53-picker.sh",
+              ),
+          ]
+
+          for filename, step_name, output in sources:
+              data = yaml.safe_load(
+                  Path(filename).read_text(encoding="utf-8")
+              )
+              steps = data.get("jobs", {}).get("build", {}).get("steps", [])
+              matches = [
+                  step for step in steps
+                  if step.get("name") == step_name
+              ]
+
+              if len(matches) != 1:
+                  raise SystemExit(
+                      f"FAIL: expected exactly one step {step_name}; "
+                      f"found {len(matches)}"
+                  )
+
+              script = matches[0].get("run", "")
+              if not script.strip():
+                  raise SystemExit(f"FAIL: empty script: {step_name}")
+
+              Path(output).write_text(
+                  script.rstrip() + "\n", encoding="utf-8"
+              )
+              print(f"PASS: extracted {step_name}")
+
+          PY
+
+          bash -n /tmp/v53-generate.sh
+          bash -n /tmp/v53-picker.sh
+          bash /tmp/v53-generate.sh
+          bash /tmp/v53-picker.sh
+
+          test -s carassistant-voice/app/src/main/java/com/carassistant/voice/MainActivity.java
+          test -s carassistant-voice/app/src/main/java/com/carassistant/voice/FloatingMicService.java
+          test -s carassistant-voice/app/build.gradle
+          test -s carassistant-voice/app/src/main/AndroidManifest.xml
+
+          echo "PASS: isolated V5 project generated"
+
+      - name: Add YouTube first-result accessibility experiment
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          python3 - <<'PY'
+          from pathlib import Path
+          import re
+          import xml.etree.ElementTree as ET
+
+          root = Path("carassistant-voice")
+          main = root / "app/src/main/java/com/carassistant/voice/MainActivity.java"
+          manifest = root / "app/src/main/AndroidManifest.xml"
+
+          java = main.read_text(encoding="utf-8")
+
+          # The original voice search branch must match exactly.
+          marker = "private void parseCommand(String spoken) {"
+          if java.count(marker) != 1:
+              raise SystemExit("FAIL: parseCommand anchor mismatch")
+
+          parse_start = java.index(marker)
+          parse_end = java.find(
+              "private String errorMessage(int error)", parse_start
+          )
+          if parse_end < 0:
+              raise SystemExit("FAIL: parser end anchor missing")
+
+          parser = java[parse_start:parse_end]
+
+          pattern = re.compile(
+              r'(?m)^(?P<i>[ \t]*)String url = searchUrl\(target, query\);\n'
+              r'(?P=i)action\.setText\("Đích: " \+ target \+ "\\\\nNội dung: " \+ query\n'
+              r'(?P=i)[ \t]+\+ "\\\\nĐang gửi yêu cầu mở tìm kiếm\. "\n'
+              r'(?P=i)[ \t]+\+ "Ứng dụng có thể hiển thị kết quả thay vì tự phát\."\);\n'
+              r'(?P=i)openTarget\(target, url\);'
+          )
+
+          replacement = (
+              'if ("youtube".equals(target) || "ytmusic".equals(target)) {\n'
+              '    getSharedPreferences("voice_v5_settings", MODE_PRIVATE)\n'
+              '            .edit()\n'
+              '            .putBoolean("auto_click_first_result", true)\n'
+              '            .putLong("auto_click_armed_at", '
+              'android.os.SystemClock.uptimeMillis())\n'
+              '            .putString("auto_click_query", query)\n'
+              '            .apply();\n'
+              '    String url = searchUrl(target, query);\n'
+              '    action.setText("Đang mở kết quả tìm kiếm. '
+              'CarAssistant sẽ thử chọn video đầu tiên nếu Trợ năng đã bật.");\n'
+              '    openTarget(target, url);\n'
+              '} else {\n'
+              '    String url = searchUrl(target, query);\n'
+              '    action.setText("Đích: " + target + "\\\\nNội dung: " + query);\n'
+              '    openTarget(target, url);\n'
+              '}'
+          )
+
+          patched, count = pattern.subn(
+              lambda match: (
+                  match.group("i")
+                  + replacement.replace(
+                      "\n", "\n" + match.group("i")
+                  )
+              ),
+              parser,
+              count=1,
+          )
+
+          if count != 1:
+              raise SystemExit(
+                  "FAIL: original search block did not match exactly; "
+                  f"matches={count}. Stop without fallback."
+              )
+
+          java = java[:parse_start] + patched + java[parse_end:]
+          main.write_text(java, encoding="utf-8")
+          print("PASS: YouTube search arms a single accessibility click")
+          print("PASS: other app search branch retained")
+
+          # Register an opt-in AccessibilityService.
+          android = "{http://schemas.android.com/apk/res/android}"
+          ET.register_namespace("android", android)
+
+          tree = ET.parse(manifest)
+          manifest_root = tree.getroot()
+          application = manifest_root.find("application")
+
+          if application is None:
+              raise SystemExit("FAIL: manifest application missing")
+
+          service_name = ".YouTubeFirstResultAccessibilityService"
+
+          if any(
+              item.get(android + "name") == service_name
+              for item in application.findall("service")
+          ):
+              raise SystemExit("FAIL: accessibility service already exists")
+
+          service = ET.SubElement(application, "service", {
+              android + "name": service_name,
+              android + "permission":
+                  "android.permission.BIND_ACCESSIBILITY_SERVICE",
+              android + "exported": "true",
+              android + "label":
+                  "CarAssistant tự chọn video đầu tiên",
+          })
+
+          intent_filter = ET.SubElement(service, "intent-filter")
+          ET.SubElement(intent_filter, "action", {
+              android + "name":
+                  "android.accessibilityservice.AccessibilityService"
+          })
+
+          ET.SubElement(service, "meta-data", {
+              android + "name": "android.accessibilityservice",
+              android + "resource":
+                  "@xml/voice_auto_click_accessibility",
+          })
+
+          tree.write(manifest, encoding="utf-8", xml_declaration=True)
+
+          config = root / "app/src/main/res/xml/voice_auto_click_accessibility.xml"
+          config.parent.mkdir(parents=True, exist_ok=True)
+          config.write_text(
+              """<?xml version="1.0" encoding="utf-8"?>
+          <accessibility-service
+              xmlns:android="http://schemas.android.com/apk/res/android"
+              android:accessibilityEventTypes="typeWindowStateChanged|typeWindowContentChanged"
+              android:accessibilityFeedbackType="feedbackGeneric"
+              android:notificationTimeout="200"
+              android:canRetrieveWindowContent="true"
+              android:packageNames="com.google.android.youtube,com.google.android.apps.youtube.music"
+              android:accessibilityFlags="flagReportViewIds" />
+          """,
+              encoding="utf-8",
+          )
+
+          service_java = root / "app/src/main/java/com/carassistant/voice/YouTubeFirstResultAccessibilityService.java"
+          service_java.write_text(
+              r'''package com.carassistant.voice;
+
+          import android.accessibilityservice.AccessibilityService;
+          import android.content.SharedPreferences;
+          import android.view.accessibility.AccessibilityEvent;
+          import android.view.accessibility.AccessibilityNodeInfo;
+          import java.util.Locale;
+
+          public class YouTubeFirstResultAccessibilityService
+                  extends AccessibilityService {
+
+              private static final String PREFS = "voice_v5_settings";
+              private long lastAttemptAt = 0L;
+
+              @Override
+              public void onAccessibilityEvent(AccessibilityEvent event) {
+                  if (event == null || event.getPackageName() == null) return;
+
+                  String pkg = event.getPackageName().toString();
+                  boolean youtube =
+                          "com.google.android.youtube".equals(pkg);
+                  boolean music =
+                          "com.google.android.apps.youtube.music".equals(pkg);
+
+                  if (!youtube && !music) return;
+
+                  SharedPreferences prefs =
+                          getSharedPreferences(PREFS, MODE_PRIVATE);
+
+                  if (!prefs.getBoolean("auto_click_first_result", false)) {
+                      return;
+                  }
+
+                  long armedAt = prefs.getLong("auto_click_armed_at", 0L);
+                  long now = android.os.SystemClock.uptimeMillis();
+
+                  // Allow the search results screen to load before scanning.
+                  if (now - armedAt < 1200L) return;
+                  if (now - lastAttemptAt < 500L) return;
+                  lastAttemptAt = now;
+
+                  AccessibilityNodeInfo root = getRootInActiveWindow();
+                  if (root == null) return;
+
+                  AccessibilityNodeInfo candidate =
+                          findFirstVideoTitle(root, music);
+
+                  if (candidate == null) return;
+
+                  AccessibilityNodeInfo clickable = candidate;
+                  while (clickable != null && !clickable.isClickable()) {
+                      clickable = clickable.getParent();
+                  }
+
+                  if (clickable == null) return;
+
+                  // Disarm first to avoid clicking recommendations in the player.
+                  prefs.edit()
+                          .putBoolean("auto_click_first_result", false)
+                          .apply();
+
+                  clickable.performAction(
+                          AccessibilityNodeInfo.ACTION_CLICK);
+              }
+
+              private AccessibilityNodeInfo findFirstVideoTitle(
+                      AccessibilityNodeInfo node, boolean music) {
+                  if (node == null) return null;
+
+                  String rawId = node.getViewIdResourceName();
+                  String id = rawId == null ? "" :
+                          rawId.toLowerCase(Locale.ROOT);
+
+                  if (music) {
+                      if (id.contains("music_title")
+                              || id.contains("musicresponsivelistitemrenderer")) {
+                          return node;
+                      }
+                  } else {
+                      if (id.contains("video_title")) {
+                          return node;
+                      }
+                  }
+
+                  for (int i = 0; i < node.getChildCount(); i++) {
+                      AccessibilityNodeInfo found =
+                              findFirstVideoTitle(node.getChild(i), music);
+                      if (found != null) return found;
+                  }
+
+                  return null;
+              }
+
+              @Override
+              public void onInterrupt() {
+                  // Nothing to interrupt.
+              }
+          }
+          ''',
+              encoding="utf-8",
+          )
+
+          ET.parse(manifest)
+          ET.parse(config)
+
+          print("PASS: Accessibility service registered")
+          print("PASS: Accessibility XML is valid")
+          print("PASS: Java service source generated")
+          PY
+
+      - name: Validate preserved V5 features
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          python3 - <<'PY'
+          from pathlib import Path
+          import xml.etree.ElementTree as ET
+
+          root = Path("carassistant-voice")
+          main = root / "app/src/main/java/com/carassistant/voice/MainActivity.java"
+          overlay_file = root / "app/src/main/java/com/carassistant/voice/FloatingMicService.java"
+          manifest = root / "app/src/main/AndroidManifest.xml"
+          gradle = root / "app/build.gradle"
+          service_file = root / "app/src/main/java/com/carassistant/voice/YouTubeFirstResultAccessibilityService.java"
+          config = root / "app/src/main/res/xml/voice_auto_click_accessibility.xml"
+
+          java = main.read_text(encoding="utf-8")
+          overlay = overlay_file.read_text(encoding="utf-8")
+          xml = manifest.read_text(encoding="utf-8")
+          build = gradle.read_text(encoding="utf-8")
+          service_java = service_file.read_text(encoding="utf-8")
+
+          ET.parse(manifest)
+          ET.parse(config)
+
+          checks = {
+              "V5 version unchanged":
+                  "versionCode 5" in build
+                  and "versionName '0.5.0'" in build,
+              "Voice search arms click":
+                  'putBoolean("auto_click_first_result", true)' in java,
+              "YouTube search URL":
+                  "www.youtube.com/results?search_query=" in java,
+              "YouTube Music search URL":
+                  "music.youtube.com/search?q=" in java,
+              "YouTube package preserved":
+                  '"com.google.android.youtube"' in java,
+              "YouTube Music package preserved":
+                  '"com.google.android.apps.youtube.music"' in java,
+              "Zing package retained":
+                  '"com.zing.mp3"' in java,
+              "Spotify package retained":
+                  '"com.spotify.music"' in java,
+              "Vietnamese speech recognition":
+                  '"vi-VN"' in java,
+              "Partial speech results":
+                  "onPartialResults" in java,
+              "Four-second silence":
+                  "SILENCE_MS = 4000L" in java,
+              "End beep":
+                  "TONE_PROP_ACK" in java,
+              "Status auto-hide":
+                  "HIDE_MS = 2500L" in java,
+              "Floating mic":
+                  "TYPE_APPLICATION_OVERLAY" in overlay,
+              "Accessibility click action":
+                  "AccessibilityNodeInfo.ACTION_CLICK" in service_java,
+              "Accessibility service declared":
+                  "YouTubeFirstResultAccessibilityService" in xml,
+              "Accessibility config exists":
+                  config.is_file(),
+              "Internet permission":
+                  'android:name="android.permission.INTERNET"' in xml,
+          }
+
+          for label, passed in checks.items():
+              print(("PASS" if passed else "FAIL") + ": " + label)
+              if not passed:
+                  raise SystemExit("Missing required feature: " + label)
+
+          print("PASS: all static checks")
+          PY
+
+      - name: Build experimental APK
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd carassistant-voice
+          gradle --no-daemon --stacktrace assembleDebug
+
+      - name: Package APK and SHA256
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          APK="carassistant-voice/app/build/outputs/apk/debug/app-debug.apk"
+          test -s "$APK"
+
+          mkdir -p dist
+
+          cp "$APK" \
+            dist/CarAssistant-Voice-V53-YouTube-AUTO-TAP-EXPERIMENT.apk
+
+          sha256sum \
+            dist/CarAssistant-Voice-V53-YouTube-AUTO-TAP-EXPERIMENT.apk \
+            > dist/CarAssistant-Voice-V53-YouTube-AUTO-TAP-EXPERIMENT.sha256
+
+          cat dist/CarAssistant-Voice-V53-YouTube-AUTO-TAP-EXPERIMENT.sha256
+
+      - name: Upload experimental APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: CarAssistant-Voice-V53-YouTube-AUTO-TAP-EXPERIMENT
+          path: |
+            dist/CarAssistant-Voice-V53-YouTube-AUTO-TAP-EXPERIMENT.apk
+            dist/CarAssistant-Voice-V53-YouTube-AUTO-TAP-EXPERIMENT.sha256
+          if-no-files-found: error
