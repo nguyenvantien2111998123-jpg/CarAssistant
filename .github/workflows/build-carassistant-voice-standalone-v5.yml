@@ -1,0 +1,523 @@
+
+name: Tro ly CarAssistant 4
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Verify V3 source exists
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -s .github/workflows/build-carassistant-voice-standalone-v3.yml
+          echo "PASS: V3 source exists; it will only be read."
+
+      - name: Setup Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.13'
+
+      - name: Generate isolated V5 project
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          python3 - <<'PY'
+          from pathlib import Path
+          import re
+
+          workflow = Path(
+              ".github/workflows/build-carassistant-voice-standalone-v3.yml"
+          ).read_text(encoding="utf-8")
+
+          pattern = re.compile(
+              r"(?m)^ {10}cat > \"([^\"]+)\" <<'EOF'\n"
+              r"(.*?)^ {10}EOF[ \t]*$",
+              re.DOTALL,
+          )
+          matches = list(pattern.finditer(workflow))
+
+          if len(matches) != 6:
+              raise SystemExit(
+                  f"FAIL: expected 6 V3 generated files, found {len(matches)}. "
+                  "Stop without modifying the repository."
+              )
+
+          project = Path("carassistant-voice")
+          java_dir = project / "app/src/main/java/com/carassistant/voice"
+
+          path_map = {
+              "$P/settings.gradle": project / "settings.gradle",
+              "$P/build.gradle": project / "build.gradle",
+              "$P/app/build.gradle": project / "app/build.gradle",
+              "$P/app/src/main/AndroidManifest.xml":
+                  project / "app/src/main/AndroidManifest.xml",
+              "$J/FloatingMicService.java":
+                  java_dir / "FloatingMicService.java",
+              "$J/MainActivity.java": java_dir / "MainActivity.java",
+          }
+
+          extracted = {}
+          for match in matches:
+              source_path = match.group(1)
+              if source_path not in path_map:
+                  raise SystemExit(f"FAIL: unexpected source path {source_path}")
+
+              lines = match.group(2).splitlines()
+              content = "\n".join(
+                  line[10:] if line.startswith(" " * 10) else line
+                  for line in lines
+              ) + "\n"
+              extracted[source_path] = content
+
+          if set(extracted) != set(path_map):
+              raise SystemExit("FAIL: V3 source file set did not match.")
+
+          for source_path, content in extracted.items():
+              output = path_map[source_path]
+              output.parent.mkdir(parents=True, exist_ok=True)
+              output.write_text(content, encoding="utf-8")
+
+          gradle_file = project / "app/build.gradle"
+          gradle = gradle_file.read_text(encoding="utf-8")
+          if "versionCode 3" not in gradle or "versionName '0.3.0'" not in gradle:
+              raise SystemExit("FAIL: unexpected V3 Gradle version.")
+          gradle = gradle.replace("versionCode 3", "versionCode 5", 1)
+          gradle = gradle.replace("versionName '0.3.0'", "versionName '0.5.0'", 1)
+          gradle_file.write_text(gradle, encoding="utf-8")
+
+          main_file = java_dir / "MainActivity.java"
+          java = main_file.read_text(encoding="utf-8")
+
+          required_anchors = [
+              "import android.app.Activity;",
+              "import android.content.Intent;",
+              "import android.widget.ScrollView;",
+              "import java.util.Locale;",
+              "private Button overlayButton;",
+              "root.addView(status);",
+              "setContentView(scroll);",
+              "private void parseCommand(String spoken)",
+              "private String errorMessage(int error)",
+          ]
+          for anchor in required_anchors:
+              if anchor not in java:
+                  raise SystemExit(f"FAIL: V3 source anchor missing: {anchor}")
+
+          import_changes = {
+              "import android.app.Activity;":
+                  "import android.app.Activity;\n"
+                  "import android.app.AlertDialog;",
+              "import android.content.Intent;":
+                  "import android.content.Intent;\n"
+                  "import android.content.SharedPreferences;",
+              "import android.widget.ScrollView;":
+                  "import android.widget.ScrollView;\n"
+                  "import android.widget.ArrayAdapter;\n"
+                  "import android.widget.Spinner;",
+              "import java.util.Locale;":
+                  "import java.util.Locale;\n"
+                  "import java.text.Normalizer;",
+          }
+          for old, new in import_changes.items():
+              java = java.replace(old, new, 1)
+
+          java = java.replace(
+              "private Button overlayButton;",
+              "private Button overlayButton;\n"
+              "    private Spinner destinationSpinner;\n"
+              "    private Spinner fallbackSpinner;\n"
+              "    private SharedPreferences preferences;\n"
+              "    private static final String[] DESTINATIONS = {\n"
+              '        "YouTube", "YouTube Music", "Zing MP3", '
+              '"Spotify", "Trình duyệt"\n'
+              "    };\n"
+              "    private static final String[] FALLBACKS = {\n"
+              '        "Hỏi trước khi mở trình duyệt", '
+              '"Tự động dùng trình duyệt", '
+              '"Báo lỗi, không chuyển ứng dụng"\n'
+              "    };",
+              1,
+          )
+
+          ui_anchor = "root.addView(status);"
+          ui_addition = r'''
+                  preferences = getSharedPreferences("voice_v5_settings", MODE_PRIVATE);
+
+                  root.addView(makeText("ỨNG DỤNG PHÁT MẶC ĐỊNH", 14));
+                  destinationSpinner = new Spinner(this);
+                  ArrayAdapter<String> destinationAdapter = new ArrayAdapter<>(
+                          this, android.R.layout.simple_spinner_item, DESTINATIONS);
+                  destinationAdapter.setDropDownViewResource(
+                          android.R.layout.simple_spinner_dropdown_item);
+                  destinationSpinner.setAdapter(destinationAdapter);
+                  destinationSpinner.setSelection(
+                          Math.max(0, Math.min(4,
+                                  preferences.getInt("destination", 0))));
+                  root.addView(destinationSpinner);
+
+                  root.addView(makeText("KHI ỨNG DỤNG KHÔNG CÓ SẴN", 14));
+                  fallbackSpinner = new Spinner(this);
+                  ArrayAdapter<String> fallbackAdapter = new ArrayAdapter<>(
+                          this, android.R.layout.simple_spinner_item, FALLBACKS);
+                  fallbackAdapter.setDropDownViewResource(
+                          android.R.layout.simple_spinner_dropdown_item);
+                  fallbackSpinner.setAdapter(fallbackAdapter);
+                  fallbackSpinner.setSelection(
+                          Math.max(0, Math.min(2,
+                                  preferences.getInt("fallback", 0))));
+                  root.addView(fallbackSpinner);
+          '''
+          java = java.replace(ui_anchor, ui_anchor + "\n" + ui_addition, 1)
+
+          listener_anchor = "setContentView(scroll);"
+          listeners = r'''
+                  destinationSpinner.setOnItemSelectedListener(
+                          new android.widget.AdapterView.OnItemSelectedListener() {
+                      @Override
+                      public void onItemSelected(
+                              android.widget.AdapterView<?> parent,
+                              View view, int position, long id) {
+                          preferences.edit().putInt("destination", position).apply();
+                      }
+
+                      @Override
+                      public void onNothingSelected(
+                              android.widget.AdapterView<?> parent) {}
+                  });
+
+                  fallbackSpinner.setOnItemSelectedListener(
+                          new android.widget.AdapterView.OnItemSelectedListener() {
+                      @Override
+                      public void onItemSelected(
+                              android.widget.AdapterView<?> parent,
+                              View view, int position, long id) {
+                          preferences.edit().putInt("fallback", position).apply();
+                      }
+
+                      @Override
+                      public void onNothingSelected(
+                              android.widget.AdapterView<?> parent) {}
+                  });
+          '''
+          java = java.replace(listener_anchor, listener_anchor + "\n" + listeners, 1)
+          java = java.replace("CarAssistant Voice V3", "CarAssistant Voice V5", 1)
+
+          parser_pattern = re.compile(
+              r"    private void parseCommand\(String spoken\) \{.*?"
+              r"    private String errorMessage\(int error\)",
+              re.DOTALL,
+          )
+
+          new_parser = r'''    private String normalize(String value) {
+                  return Normalizer.normalize(value, Normalizer.Form.NFD)
+                          .replaceAll("\\p{M}+", "")
+                          .toLowerCase(Locale.ROOT)
+                          .trim()
+                          .replaceAll("\\s+", " ");
+              }
+
+              private String detectDestination(String normalized) {
+                  if (normalized.contains("youtube music")
+                          || normalized.contains("yt music")) return "ytmusic";
+                  if (normalized.contains("zing mp3") || normalized.contains("zing")) {
+                      return "zing";
+                  }
+                  if (normalized.contains("spotify")) return "spotify";
+                  if (normalized.contains("youtube")) return "youtube";
+                  if (normalized.contains("trinh duyet")
+                          || normalized.contains("browser")
+                          || normalized.contains("chrome")) return "browser";
+                  return null;
+              }
+
+              private String packageFor(String target) {
+                  switch (target) {
+                      case "youtube": return "com.google.android.youtube";
+                      case "ytmusic": return "com.google.android.apps.youtube.music";
+                      case "spotify": return "com.spotify.music";
+                      default: return null;
+                  }
+              }
+
+              private String homeUrl(String target) {
+                  switch (target) {
+                      case "youtube": return "https://www.youtube.com/";
+                      case "ytmusic": return "https://music.youtube.com/";
+                      case "zing": return "https://zingmp3.vn/";
+                      case "spotify": return "https://open.spotify.com/";
+                      default: return "https://www.google.com/";
+                  }
+              }
+
+              private String searchUrl(String target, String query) {
+                  String encoded = Uri.encode(query);
+                  switch (target) {
+                      case "youtube":
+                          return "https://www.youtube.com/results?search_query=" + encoded;
+                      case "ytmusic":
+                          return "https://music.youtube.com/search?q=" + encoded;
+                      case "zing":
+                          return "https://zingmp3.vn/tim-kiem/tat-ca?q=" + encoded;
+                      case "spotify":
+                          return "https://open.spotify.com/search/" + encoded;
+                      default:
+                          return "https://www.google.com/search?q=" + encoded;
+                  }
+              }
+
+              private void openWeb(String url) {
+                  try {
+                      Intent intent = new Intent(Intent.ACTION_VIEW, Uri.parse(url));
+                      startActivity(intent);
+                  } catch (RuntimeException e) {
+                      action.setText("Không mở được liên kết: "
+                              + e.getClass().getSimpleName());
+                  }
+              }
+
+              private void fallbackForMissing(String target, String url) {
+                  int choice = fallbackSpinner == null
+                          ? 0 : fallbackSpinner.getSelectedItemPosition();
+
+                  if (choice == 1) {
+                      action.setText("Ứng dụng chưa mở được. Đang dùng trình duyệt.");
+                      openWeb(url);
+                  } else if (choice == 2) {
+                      action.setText("Không mở được " + target
+                              + ". Đã chọn không chuyển sang trình duyệt.");
+                  } else {
+                      new AlertDialog.Builder(this)
+                              .setTitle("Không mở được " + target)
+                              .setMessage("Bạn có muốn mở nội dung bằng trình duyệt không?")
+                              .setPositiveButton("Mở trình duyệt",
+                                      (dialog, which) -> openWeb(url))
+                              .setNegativeButton("Hủy", (dialog, which) ->
+                                      action.setText("Đã hủy, không chuyển ứng dụng."))
+                              .show();
+                  }
+              }
+
+              private void openTarget(String target, String url) {
+                  if ("browser".equals(target)) {
+                      openWeb(url);
+                      return;
+                  }
+
+                  String packageName = packageFor(target);
+                  if (packageName == null) {
+                      fallbackForMissing(target, url);
+                      return;
+                  }
+
+                  try {
+                      if (getPackageManager().getLaunchIntentForPackage(packageName)
+                              == null) {
+                          fallbackForMissing(target, url);
+                          return;
+                      }
+
+                      Intent intent = new Intent(Intent.ACTION_VIEW, Uri.parse(url));
+                      intent.setPackage(packageName);
+                      startActivity(intent);
+                      action.setText("Đã gửi yêu cầu mở tìm kiếm trong " + target
+                              + ". Nếu ứng dụng chỉ hiện trang tìm kiếm, hãy chọn nội dung.");
+                  } catch (RuntimeException e) {
+                      fallbackForMissing(target, url);
+                  }
+              }
+
+              private void parseCommand(String spoken) {
+                  String normalized = normalize(spoken);
+                  String target = detectDestination(normalized);
+                  boolean explicitTarget = target != null;
+
+                  if (target == null) {
+                      int selected = destinationSpinner == null
+                              ? 0 : destinationSpinner.getSelectedItemPosition();
+                      switch (selected) {
+                          case 1: target = "ytmusic"; break;
+                          case 2: target = "zing"; break;
+                          case 3: target = "spotify"; break;
+                          case 4: target = "browser"; break;
+                          default: target = "youtube"; break;
+                      }
+                  }
+
+                  boolean hasMediaIntent =
+                          normalized.startsWith("phat ")
+                          || normalized.startsWith("tim ")
+                          || normalized.startsWith("tim kiem ")
+                          || normalized.contains("nhac")
+                          || normalized.contains("video")
+                          || normalized.contains("bai hat")
+                          || normalized.contains("bai nay")
+                          || normalized.contains("ca si")
+                          || normalized.contains("album")
+                          || normalized.contains("phim")
+                          || normalized.contains("music")
+                          || normalized.contains("song");
+
+                  boolean openOnly = normalized.startsWith("mo ")
+                          && explicitTarget && !hasMediaIntent;
+
+                  if (openOnly) {
+                      action.setText("Đang mở " + target + "...");
+                      openTarget(target, homeUrl(target));
+                      return;
+                  }
+
+                  boolean commandVerb =
+                          normalized.startsWith("mo ")
+                          || normalized.startsWith("phat ")
+                          || normalized.startsWith("tim ")
+                          || normalized.startsWith("tim kiem ")
+                          || normalized.startsWith("hay ")
+                          || normalized.startsWith("carassistant ");
+
+                  if (!commandVerb || (!hasMediaIntent && !explicitTarget)) {
+                      action.setText("ACTION: UNKNOWN\nTEXT: " + spoken
+                              + "\n\nCâu lệnh chưa được hỗ trợ. Không mở ứng dụng khác.");
+                      return;
+                  }
+
+                  String query = spoken.trim()
+                          .replaceFirst("(?i)^(carassistant\\s+|hãy\\s+|mở\\s+|"
+                                  + "phát\\s+|tìm kiếm\\s+|tìm\\s+)", "")
+                          .replaceFirst("(?i)\\s+(trên\\s+youtube\\s+music|"
+                                  + "trên\\s+youtube|trên\\s+zing\\s*mp3|"
+                                  + "trên\\s+spotify|trên\\s+trình\\s+duyệt|"
+                                  + "trên\\s+chrome|bằng\\s+youtube\\s+music|"
+                                  + "bằng\\s+youtube|bằng\\s+zing\\s*mp3|"
+                                  + "bằng\\s+spotify)\\s*$", "")
+                          .replaceFirst("(?i)\\s+(giúp\\s+tôi|nhé|nha|đi)\\s*$", "")
+                          .trim();
+
+                  query = query.replaceFirst("(?i)^(nhạc|video|bài hát|bài|music|song)\\s+", "")
+                          .trim();
+
+                  if (query.isEmpty()) {
+                      action.setText("Bạn hãy nói rõ tên bài hát, video hoặc nội dung cần tìm.");
+                      return;
+                  }
+
+                  String url = searchUrl(target, query);
+                  action.setText("Đích: " + target + "\nNội dung: " + query
+                          + "\nĐang gửi yêu cầu mở tìm kiếm. "
+                          + "Ứng dụng có thể hiển thị kết quả thay vì tự phát.");
+                  openTarget(target, url);
+              }
+
+              private String errorMessage(int error)'''
+
+          java, count = parser_pattern.subn(new_parser, java, count=1)
+          if count != 1:
+              raise SystemExit("FAIL: could not safely replace the V3 parser.")
+
+          main_file.write_text(java, encoding="utf-8")
+          print("PASS: generated V5 in carassistant-voice only")
+          print("PASS: V3/V4 workflow files were read-only")
+          PY
+
+      - name: Validate V5 sources and required features
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          python3 - <<'PY'
+          from pathlib import Path
+          import xml.etree.ElementTree as ET
+
+          root = Path("carassistant-voice")
+          main = root / "app/src/main/java/com/carassistant/voice/MainActivity.java"
+          overlay = root / "app/src/main/java/com/carassistant/voice/FloatingMicService.java"
+          manifest = root / "app/src/main/AndroidManifest.xml"
+          gradle = root / "app/build.gradle"
+
+          ET.parse(manifest)
+          java = main.read_text(encoding="utf-8")
+          service = overlay.read_text(encoding="utf-8")
+          build = gradle.read_text(encoding="utf-8")
+
+          assert "versionCode 5" in build
+          assert "versionName '0.5.0'" in build
+
+          checks = {
+              "V5 title": "CarAssistant Voice V5" in java,
+              "Default destination picker": "destinationSpinner" in java,
+              "Saved settings": "voice_v5_settings" in java,
+              "Fallback selector": "fallbackSpinner" in java,
+              "Ask before browser fallback": "Mở trình duyệt" in java,
+              "YouTube search": "youtube.com/results?search_query=" in java,
+              "YouTube Music search": "music.youtube.com/search?q=" in java,
+              "Zing MP3 search": "zingmp3.vn/tim-kiem" in java,
+              "Spotify search": "open.spotify.com/search/" in java,
+              "Unknown command does not launch unrelated apps":
+                  "Câu lệnh chưa được hỗ trợ" in java,
+              "Vietnamese voice recognition": '"vi-VN"' in java,
+              "4-second silence behavior": "SILENCE_MS = 4000L" in java,
+              "End beep": "TONE_PROP_ACK" in java,
+              "Auto-hide": "HIDE_MS = 2500L" in java,
+              "Floating mic retained": "TYPE_APPLICATION_OVERLAY" in service,
+          }
+
+          for label, passed in checks.items():
+              print(("PASS" if passed else "FAIL") + ": " + label)
+              assert passed, "Missing feature: " + label
+
+          for path in (main, overlay):
+              text = path.read_text(encoding="utf-8")
+              assert text.count("{") == text.count("}"), \
+                  f"Unbalanced braces in {path}"
+
+          print("PASS: AndroidManifest.xml")
+          print("PASS: source and feature checks")
+          PY
+
+      - name: Build V5 APK
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd carassistant-voice
+          gradle --no-daemon --stacktrace assembleDebug
+
+      - name: Package APK and SHA256
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          APK="carassistant-voice/app/build/outputs/apk/debug/app-debug.apk"
+          test -s "$APK"
+
+          mkdir -p dist
+          cp "$APK" dist/CarAssistant-Voice-Standalone-V5.apk
+          sha256sum dist/CarAssistant-Voice-Standalone-V5.apk \
+            > dist/CarAssistant-Voice-Standalone-V5.sha256
+
+          cat dist/CarAssistant-Voice-Standalone-V5.sha256
+
+      - name: Upload V5 APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: CarAssistant-Voice-Standalone-V5
+          path: |
+            dist/CarAssistant-Voice-Standalone-V5.apk
+            dist/CarAssistant-Voice-Standalone-V5.sha256
+          if-no-files-found: error
