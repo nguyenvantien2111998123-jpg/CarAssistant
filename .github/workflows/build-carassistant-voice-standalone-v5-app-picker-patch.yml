@@ -319,72 +319,50 @@ jobs:
                   1,
               )
 
-          # Replace fixed package names with saved user selections.
-          package_pattern = re.compile(
-              r'private String packageFor\(String target\) \{.*?\n[ \t]*\}',
-              re.DOTALL,
-          )
+          
+          # Replace packageFor() using balanced braces.
+          # This avoids matching the inner switch brace instead of the method brace.
+          package_signature = "private String packageFor(String target) {"
+          package_start = java.find(package_signature)
 
-          package_method = r'''private String packageFor(String target) {
+          if package_start < 0:
+              raise SystemExit("FAIL: packageFor method not found")
+
+          brace_start = java.find("{", package_start)
+          if brace_start < 0:
+              raise SystemExit("FAIL: packageFor opening brace not found")
+
+          depth = 0
+          package_end = -1
+
+          for index in range(brace_start, len(java)):
+              if java[index] == "{":
+                  depth += 1
+              elif java[index] == "}":
+                  depth -= 1
+                  if depth == 0:
+                      package_end = index + 1
+                      break
+
+          if package_end < 0:
+              raise SystemExit("FAIL: packageFor braces are unbalanced")
+
+          package_method = """private String packageFor(String target) {
                   if (preferences == null) {
                       preferences = getSharedPreferences(
                               "voice_v5_settings", MODE_PRIVATE);
                   }
                   return preferences.getString("app_" + target, null);
-              }'''
+              }"""
 
-          java, count = package_pattern.subn(
-              lambda _: package_method, java, count=1
-          )
-          if count != 1:
-              raise SystemExit("FAIL: packageFor replacement failed")
-
-          # Selected package opens directly; only unselected services use web.
-          open_pattern = re.compile(
-              r'private void openTarget\(String target, String url\) \{.*?'
-              r'\n[ \t]*\}\n\n[ \t]*private void parseCommand',
-              re.DOTALL,
+          java = (
+              java[:package_start]
+              + package_method
+              + java[package_end:]
           )
 
-          open_method = r'''private void openTarget(String target, String url) {
-                  if ("browser".equals(target)) {
-                      openWeb(url);
-                      return;
-                  }
+          print("PASS: packageFor replaced with balanced-brace matching")
 
-                  String pkg = packageFor(target);
-
-                  if (pkg == null || pkg.trim().isEmpty()) {
-                      action.setText(
-                              "Chưa chọn app cho " + target
-                              + ". Đang mở bằng trình duyệt.");
-                      openWeb(url);
-                      return;
-                  }
-
-                  try {
-                      Intent intent = new Intent(
-                              Intent.ACTION_VIEW, Uri.parse(url));
-                      intent.setPackage(pkg);
-                      startActivity(intent);
-
-                      action.setText(
-                              "Đã gửi liên kết đến app đã chọn: " + pkg
-                              + ". Kiểm tra app có hỗ trợ liên kết tìm kiếm.");
-                  } catch (RuntimeException e) {
-                      action.setText(
-                              "App đã chọn không mở được liên kết: " + pkg
-                              + ". Không tự chuyển sang trình duyệt.");
-                  }
-              }
-
-              private void parseCommand'''
-
-          java, count = open_pattern.subn(
-              lambda _: open_method, java, count=1
-          )
-          if count != 1:
-              raise SystemExit("FAIL: openTarget replacement failed")
 
           main.write_text(java, encoding="utf-8")
 
