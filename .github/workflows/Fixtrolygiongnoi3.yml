@@ -1,4 +1,3 @@
-
 name: Fix tro ly giong noi 3
 
 on:
@@ -95,7 +94,9 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          python3 -m pip install --user pyyaml
+          sudo apt-get update
+          sudo apt-get install -y python3-yaml
+          python3 -c "import yaml; print('PASS: PyYAML', yaml.__version__)"
 
       - name: Apply existing verified voice baseline
         shell: bash
@@ -177,7 +178,7 @@ jobs:
               java = java.replace(old, new, 1)
               print("PASS:", label)
 
-          # Add V3 fields without modifying the navigation component.
+          # Add independent microphone and status timer fields.
           replace_once(
               "    private TextView voiceStatus;\n",
               "    private TextView voiceStatus;\n"
@@ -186,7 +187,7 @@ jobs:
               "add independent mic and status timer fields"
           )
 
-          # Put the microphone in the projected-app layer.
+          # Attach the microphone to the existing projection layer.
           replace_once(
               "        createFloatingTouchKey();\n",
               "        createFloatingTouchKey();\n"
@@ -194,8 +195,7 @@ jobs:
               "attach microphone to projection layer"
           )
 
-          # Replace updateVoiceStatus using method boundaries.
-          # Do not depend on the original method's whitespace.
+          # Replace the status method without relying on whitespace.
           pattern = re.compile(
               r"(?ms)^([ \t]*)private void updateVoiceStatus"
               r"\(String value\) \{.*?"
@@ -251,21 +251,47 @@ jobs:
                   "FAIL-CLOSED: could not replace status method"
               )
 
+          print("PASS: whitespace-independent status method replacement")
+
+          # FIX: find processVoiceCommand(spoken) regardless of indentation.
+          # The status is refreshed after command processing in case the
+          # command handler cleared or replaced the recognized text.
+          spoken_pattern = re.compile(
+              r"(?m)^([ \t]*)processVoiceCommand\(spoken\);[ \t]*$"
+          )
+
+          spoken_matches = list(spoken_pattern.finditer(java))
+
+          if len(spoken_matches) != 1:
+              raise SystemExit(
+                  "FAIL-CLOSED: processVoiceCommand(spoken) anchor; "
+                  f"expected 1, found {len(spoken_matches)}"
+              )
+
+          def add_status_after_command(match):
+              indent = match.group(1)
+              return (
+                  f"{indent}processVoiceCommand(spoken);\n"
+                  f"{indent}updateVoiceStatus(spoken);\n"
+                  f"{indent}scheduleVoiceStatusHide();"
+              )
+
+          java, count = spoken_pattern.subn(
+              add_status_after_command,
+              java,
+              count=1,
+          )
+
+          if count != 1:
+              raise SystemExit(
+                  "FAIL-CLOSED: could not patch recognized voice command"
+              )
+
           print(
-              "PASS: whitespace-independent status method replacement"
+              "PASS: show recognized command and schedule status auto-hide"
           )
 
-          # Keep the spoken text visible for 2.5 seconds after
-          # command processing, even when a handler cleared it.
-          replace_once(
-              "                              processVoiceCommand(spoken);\n",
-              "                              processVoiceCommand(spoken);\n"
-              "                              updateVoiceStatus(spoken);\n"
-              "                              scheduleVoiceStatusHide();\n",
-              "show recognized command and schedule status auto-hide"
-          )
-
-          # Separate, blue microphone button; tapping again cancels.
+          # Add a separate blue microphone button to the projected app.
           mic_method = r'''
               private void createProjectionMicButton() {
                   if (projectionMicButton != null
@@ -325,7 +351,7 @@ jobs:
               "insert independent floating microphone method"
           )
 
-          # Cancel a pending status callback during Activity teardown.
+          # Cancel pending UI callbacks when the Activity is destroyed.
           replace_once(
               "    public void onDestroy() {\n"
               "        stopVoiceRecognition();\n",
@@ -378,7 +404,6 @@ jobs:
           set -euo pipefail
 
           python3 - <<'PY'
-          import re
           import xml.etree.ElementTree as ET
           from pathlib import Path
 
