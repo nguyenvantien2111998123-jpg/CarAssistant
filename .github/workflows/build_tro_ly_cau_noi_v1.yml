@@ -1,0 +1,421 @@
+name: Tro ly cau noi V1
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Setup Gradle 8.13
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.13'
+
+      - name: Verify source baseline
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          python3 - <<'PY'
+          import subprocess
+
+          expected = {
+              "v10-source/app/src/main/java/com/carassistant/v10/V10CarActivity.java":
+                  "61e82df0fd17e7851c7bf1628ac03a9391e48523",
+              "v10-source/app/src/main/java/com/carassistant/v10/V10ControlReceiver.java":
+                  "03229455403c26c97ad901af98b2b526a88cf8d4",
+              "v10-source/app/src/main/java/com/carassistant/v10/V10ProjectionSession.java":
+                  "27a9ff439fb450750d49f35a546eab3bc2745b4d",
+              "v10-source/app/build.gradle":
+                  "4d512337d46324a33a685d8cdb095e4ecacd3ceb",
+              ".github/workflows/build-carassistant-voice-speechrecognizer-fix1.yml":
+                  "c01b1021819530df42b1ebe31124530230e77f21",
+          }
+
+          for path, wanted in expected.items():
+              actual = subprocess.check_output(
+                  ["git", "hash-object", path], text=True
+              ).strip()
+              if actual != wanted:
+                  raise SystemExit(
+                      f"FAIL: source changed: {path}\n"
+                      f"Expected: {wanted}\nActual:   {actual}"
+                  )
+              print(f"PASS: {path}")
+          PY
+
+      - name: Create standalone Voice project
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          python3 - <<'PY'
+          import pathlib
+          import yaml
+
+          path = pathlib.Path(
+              ".github/workflows/build-carassistant-voice-speechrecognizer-fix1.yml"
+          )
+          data = yaml.load(
+              path.read_text(encoding="utf-8"),
+              Loader=yaml.BaseLoader
+          )
+
+          steps = data["jobs"]["build"]["steps"]
+          matches = [
+              step for step in steps
+              if step.get("name") == "Create standalone Voice project"
+          ]
+          assert len(matches) == 1, (
+              "FAIL: expected exactly one Voice project generator"
+          )
+
+          pathlib.Path("/tmp/create-voice-project.sh").write_text(
+              matches[0]["run"], encoding="utf-8"
+          )
+          print("PASS: Voice generator found")
+          PY
+
+          bash /tmp/create-voice-project.sh
+
+      - name: Patch Voice command bridge
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          python3 - <<'PY'
+          import pathlib
+          import re
+
+          path = pathlib.Path(
+              "carassistant-voice/app/src/main/java/com/carassistant/voice/MainActivity.java"
+          )
+          java = path.read_text(encoding="utf-8")
+
+          pattern = (
+              r"(?ms)^([ \t]*)private void parseCommand\(String spoken\) \{.*?"
+              r"(?=^[ \t]*private String errorMessage\(int error\))"
+          )
+
+          replacement = r'''          private void parseCommand(String spoken) {
+              String normalized =
+                      spoken.toLowerCase(Locale.ROOT).trim();
+              String query = normalized;
+
+              String[] prefixes = {
+                  "mở video nhạc ", "mở video ", "mở bài ",
+                  "tìm kiếm ", "tìm ", "phát ", "mở "
+              };
+
+              for (String prefix : prefixes) {
+                  if (query.startsWith(prefix)) {
+                      query = query.substring(prefix.length()).trim();
+                      break;
+                  }
+              }
+
+              String[] suffixes = {
+                  " trên youtube giúp tôi",
+                  " trên youtube nhé",
+                  " trên youtube"
+              };
+
+              for (String suffix : suffixes) {
+                  if (query.endsWith(suffix)) {
+                      query = query.substring(
+                              0, query.length() - suffix.length()).trim();
+                      break;
+                  }
+              }
+
+              if (normalized.contains("youtube") && !query.isEmpty()) {
+                  Intent commandIntent = new Intent(
+                          "com.carassistant.v10.CONTROL");
+                  commandIntent.setPackage("com.carassistant.v10");
+                  commandIntent.putExtra("command", "search_youtube");
+                  commandIntent.putExtra("query", query);
+                  sendBroadcast(commandIntent);
+
+                  action.setText(
+                          "Da gui lenh sang CarAssistant.\n"
+                          + "Tim YouTube: " + query
+                          + "\nKiem tra ket qua tren man hinh xe.");
+              } else {
+                  action.setText(
+                          "ACTION: UNKNOWN\nTEXT: " + spoken);
+              }
+          }
+
+          '''
+
+          java, count = re.subn(pattern, replacement, java, count=1)
+          assert count == 1, (
+              f"FAIL: parseCommand anchor count = {count}"
+          )
+
+          gradle_path = pathlib.Path("carassistant-voice/app/build.gradle")
+          gradle = gradle_path.read_text(encoding="utf-8")
+          assert "versionCode 2" in gradle
+          assert "versionName '0.2.0'" in gradle
+          gradle = gradle.replace("versionCode 2", "versionCode 4", 1)
+          gradle = gradle.replace(
+              "versionName '0.2.0'", "versionName '0.4.0'", 1
+          )
+
+          path.write_text(java, encoding="utf-8")
+          gradle_path.write_text(gradle, encoding="utf-8")
+
+          assert 'setPackage("com.carassistant.v10")' in java
+          assert '"search_youtube"' in java
+          assert 'putExtra("query", query)' in java
+
+          print("PASS: Voice sends explicit YouTube command")
+          print("PASS: Voice version advanced to 0.4.0")
+          PY
+
+      - name: Patch CarAssistant YouTube receiver
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          python3 - <<'PY'
+          import pathlib
+
+          path = pathlib.Path(
+              "v10-source/app/src/main/java/com/carassistant/v10/V10ControlReceiver.java"
+          )
+          java = path.read_text(encoding="utf-8")
+
+          old = '''    public static final String EXTRA_COMMAND =
+              "command";
+          '''
+          new = '''    public static final String EXTRA_COMMAND =
+              "command";
+
+          public static final String EXTRA_QUERY =
+            "query";
+          '''
+          assert java.count(old) == 1, "EXTRA_COMMAND anchor mismatch"
+          java = java.replace(old, new, 1)
+
+          old = '''        switch (command) {
+
+            case "back":
+          '''
+          new = '''        switch (command) {
+
+            case "search_youtube":
+                String query = intent.getStringExtra(EXTRA_QUERY);
+                if (query != null && !query.trim().isEmpty()) {
+                    activity.handleVoiceYoutubeSearch(query.trim());
+                }
+                break;
+
+            case "back":
+          '''
+          assert java.count(old) == 1, "switch anchor mismatch"
+          java = java.replace(old, new, 1)
+
+          path.write_text(java, encoding="utf-8")
+          print("PASS: receiver handles search_youtube")
+          PY
+
+      - name: Patch display-directed YouTube search
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          python3 - <<'PY'
+          import pathlib
+
+          session_path = pathlib.Path(
+              "v10-source/app/src/main/java/com/carassistant/v10/V10ProjectionSession.java"
+          )
+          session = session_path.read_text(encoding="utf-8")
+
+          anchor = '''    public void hideTask() {
+          '''
+          method = '''    public void openYoutubeSearch(String query) {
+          if (!isActive() || query == null || query.trim().isEmpty()) {
+            return;
+          }
+
+          try {
+            String encoded = java.net.URLEncoder.encode(
+                    query.trim(), java.nio.charset.StandardCharsets.UTF_8.name());
+            String url = "https://www.youtube.com/results?search_query=" + encoded;
+            String command = "/system/bin/am start --display "
+                    + displayController.getDisplayId()
+                    + " -a android.intent.action.VIEW"
+                    + " -d '" + url + "'"
+                    + " -p com.google.android.youtube";
+            execute(command, "YouTube search failed", 12);
+          } catch (Exception e) {
+            Log.w(TAG, "YouTube query encoding failed", e);
+          }
+          }
+
+          '''
+          assert session.count(anchor) == 1, "session insertion anchor mismatch"
+          session = session.replace(anchor, method + anchor, 1)
+          session_path.write_text(session, encoding="utf-8")
+
+          activity_path = pathlib.Path(
+              "v10-source/app/src/main/java/com/carassistant/v10/V10CarActivity.java"
+          )
+          activity = activity_path.read_text(encoding="utf-8")
+
+          anchor = '''    public void handleControlBack() {
+          '''
+          method = '''    public void handleVoiceYoutubeSearch(String query) {
+          if (query == null || query.trim().isEmpty()) {
+            return;
+          }
+
+          if (!resumed || session == null) {
+            android.util.Log.w(
+                    "CarAssistantVoice",
+                    "Cannot search YouTube: projection activity is not resumed");
+            return;
+          }
+
+          Intent launch = getPackageManager()
+                .getLaunchIntentForPackage("com.google.android.youtube");
+
+          if (launch == null || launch.getComponent() == null) {
+            android.util.Log.w(
+                    "CarAssistantVoice",
+                    "YouTube app is not installed");
+            return;
+          }
+
+          launchProjection(launch.getComponent());
+
+          handler.postDelayed(() -> {
+            if (resumed && session != null && session.isActive()) {
+                session.openYoutubeSearch(query);
+            } else {
+                android.util.Log.w(
+                        "CarAssistantVoice",
+                        "Projection was not ready for YouTube search");
+            }
+          }, 1800L);
+          }
+
+          '''
+          assert activity.count(anchor) == 1, "activity insertion anchor mismatch"
+          activity = activity.replace(anchor, method + anchor, 1)
+          activity_path.write_text(activity, encoding="utf-8")
+
+          print("PASS: display-directed search method added")
+          print("PASS: existing projection engine retained")
+          PY
+
+      - name: Verify patched sources and manifest
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          python3 - <<'PY'
+          import pathlib
+          import xml.etree.ElementTree as ET
+
+          root = pathlib.Path("v10-source")
+          manifest = root / "app/src/main/AndroidManifest.xml"
+          receiver = root / "app/src/main/java/com/carassistant/v10/V10ControlReceiver.java"
+          activity = root / "app/src/main/java/com/carassistant/v10/V10CarActivity.java"
+          session = root / "app/src/main/java/com/carassistant/v10/V10ProjectionSession.java"
+
+          ET.parse(manifest)
+
+          checks = {
+              receiver: [
+                  '"search_youtube"',
+                  'getStringExtra(EXTRA_QUERY)',
+                  'handleVoiceYoutubeSearch'
+              ],
+              activity: [
+                  'handleVoiceYoutubeSearch(String query)',
+                  'getLaunchIntentForPackage("com.google.android.youtube")',
+                  'session.openYoutubeSearch(query)'
+              ],
+              session: [
+                  'openYoutubeSearch(String query)',
+                  'https://www.youtube.com/results?search_query=',
+                  '--display '
+              ],
+          }
+
+          for path, required in checks.items():
+              source = path.read_text(encoding="utf-8")
+              for item in required:
+                  assert item in source, f"Missing {item} in {path}"
+              print(f"PASS: {path}")
+
+          voice = pathlib.Path(
+              "carassistant-voice/app/src/main/java/com/carassistant/voice/MainActivity.java"
+          ).read_text(encoding="utf-8")
+          assert 'sendBroadcast(commandIntent)' in voice
+          assert 'putExtra("query", query)' in voice
+          assert 'SpeechRecognizer.ERROR_CLIENT' in voice
+
+          print("PASS: manifest XML")
+          print("PASS: Voice bridge source")
+          PY
+
+      - name: Build CarAssistant APK
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd v10-source
+          gradle --no-daemon --stacktrace assembleDebug
+
+      - name: Build standalone Voice APK
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd carassistant-voice
+          gradle --no-daemon --stacktrace assembleDebug
+
+      - name: Package APKs and checksums
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          CAR="v10-source/app/build/outputs/apk/debug/app-debug.apk"
+          VOICE="carassistant-voice/app/build/outputs/apk/debug/app-debug.apk"
+
+          test -s "$CAR"
+          test -s "$VOICE"
+
+          mkdir -p dist
+          cp "$CAR" dist/CarAssistant-CauNoi-V1.apk
+          cp "$VOICE" dist/TroLyGiongNoi-V1.apk
+
+          sha256sum dist/*.apk > dist/SHA256SUMS.txt
+          cat dist/SHA256SUMS.txt
+
+      - name: Upload APKs
+        uses: actions/upload-artifact@v4
+        with:
+          name: TroLyCauNoi-V1
+          path: |
+            dist/CarAssistant-CauNoi-V1.apk
+            dist/TroLyGiongNoi-V1.apk
+            dist/SHA256SUMS.txt
+          if-no-files-found: error
