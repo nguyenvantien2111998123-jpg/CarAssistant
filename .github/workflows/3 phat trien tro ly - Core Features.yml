@@ -560,7 +560,278 @@ jobs:
           print("PASS: generic YouTube opens Video default")
           print("PASS: search/open intent routing checks passed")
           PY
+            - name: Fix voice search launch on projection
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          import re
 
+          base = Path(
+              "v10-source/app/src/main/java/com/carassistant/v10"
+          )
+          activity_path = base / "V10CarActivity.java"
+          session_path = base / "V10ProjectionSession.java"
+          controller_path = base / "V10DisplayController.java"
+
+          for path in (activity_path, session_path, controller_path):
+              if not path.is_file():
+                  raise SystemExit(
+                      "FAIL-CLOSED: missing source: " + str(path)
+                  )
+
+          activity = activity_path.read_text(encoding="utf-8")
+          session = session_path.read_text(encoding="utf-8")
+          controller = controller_path.read_text(encoding="utf-8")
+
+          def replace_once(text, old, new, label):
+              count = text.count(old)
+              if count != 1:
+                  raise SystemExit(
+                      "FAIL-CLOSED: " + label
+                      + "; expected 1 anchor, got " + str(count)
+                  )
+              print("PASS anchor:", label)
+              return text.replace(old, new, 1)
+
+          # 1. Add a single-intent launcher to the existing display controller.
+          controller = replace_once(
+              controller,
+              "    private void execute(String command, String message) {",
+              r'''    public synchronized void launchNewTaskWithUri(
+                  ComponentName component, String uri, String packageName) {
+                  if (!isReady() || component == null
+                          || uri == null || uri.trim().isEmpty()) {
+                      return;
+                  }
+
+                  target = component;
+                  launched = true;
+
+                  final int displayId = display.getDisplayId();
+                  final int userId = Process.myUid() / 100000;
+
+                  String command = "/system/bin/am start"
+                          + " --user " + userId
+                          + " --display " + displayId
+                          + " --windowingMode 1"
+                          + " -a android.intent.action.VIEW"
+                          + " -d " + shellQuote(uri)
+                          + " -f 0x10000000";
+
+                  if (packageName != null && !packageName.trim().isEmpty()) {
+                      command += " -p " + shellQuote(packageName);
+                  }
+
+                  execute(command, "Projected URI launch failed");
+              }
+
+              private void execute(String command, String message) {''',
+              "controller URI launcher"
+          )
+
+          if controller.count("private static String shellQuote(") != 1:
+              raise SystemExit(
+                  "FAIL-CLOSED: expected existing shellQuote helper"
+              )
+          if controller.count("public synchronized void openViewUri(") != 1:
+              raise SystemExit(
+                  "FAIL-CLOSED: expected existing openViewUri helper"
+              )
+
+          # 2. Let the projection session queue the URI before launching
+          #    a newly selected target. Reuse openViewUri for an already
+          #    active matching target.
+          session = replace_once(
+              session,
+              "    private ComponentName target;\n",
+              "    private ComponentName target;\n"
+              "    private String pendingLaunchUri;\n"
+              "    private String pendingLaunchPackage;\n",
+              "session pending URI fields"
+          )
+
+          session = replace_once(
+              session,
+              "    public boolean isActive() {",
+              r'''    public void setTargetAndOpenUri(
+              ComponentName component, String uri, String packageName) {
+          if (destroyed || component == null
+                  || uri == null || uri.trim().isEmpty()) {
+              return;
+          }
+
+          if (target != null && target.equals(component)
+                  && displayController.isReady()
+                  && displayController.isLaunched()
+                  && component.equals(displayController.getTarget())) {
+              pendingLaunchUri = null;
+              pendingLaunchPackage = null;
+              displayController.openViewUri(uri, packageName);
+              taskSession.active();
+              return;
+          }
+
+          boolean changed = target == null || !component.equals(target);
+          target = component;
+          pendingLaunchUri = uri;
+          pendingLaunchPackage = packageName;
+
+          if (changed) {
+              taskSession.setTarget(component);
+              if (displayController.isLaunched()) {
+                  displayController.markNotLaunched();
+              }
+          }
+
+          attachCurrentSurface();
+      }
+
+      public boolean isActive() {''',
+              "session URI entry point"
+          )
+
+          session = replace_once(
+              session,
+              "    private void attachCurrentSurface() {",
+              r'''    private boolean launchPendingUriIfAny() {
+          if (pendingLaunchUri == null || pendingLaunchUri.trim().isEmpty()) {
+              return false;
+          }
+
+          String uri = pendingLaunchUri;
+          String packageName = pendingLaunchPackage;
+          pendingLaunchUri = null;
+          pendingLaunchPackage = null;
+
+          displayController.launchNewTaskWithUri(target, uri, packageName);
+          return true;
+      }
+
+      private void attachCurrentSurface() {''',
+              "session pending URI launcher"
+          )
+
+          # Launch directly with the URI in all branches that start or
+          # replace the projected task. Keep normal app launches unchanged.
+          session = replace_once(
+              session,
+              "            displayController.launchNewTask(target);",
+              "            if (!launchPendingUriIfAny()) {\n"
+              "                displayController.launchNewTask(target);\n"
+              "            }",
+              "initial display launch"
+          )
+          session = replace_once(
+              session,
+              "            displayController.launchNewTask(target);",
+              "            if (!launchPendingUriIfAny()) {\n"
+              "                displayController.launchNewTask(target);\n"
+              "            }",
+              "new target display launch"
+          )
+          session = replace_once(
+              session,
+              "            displayController.resumeExistingTask(target);",
+              "            if (!launchPendingUriIfAny()) {\n"
+              "                displayController.resumeExistingTask(target);\n"
+              "            }",
+              "existing target resume"
+          )
+
+          # 3. Add an Activity entry point that preserves the current UI
+          #    and session persistence, but sends the URI to the session
+          #    before the target task is launched.
+          anchor = re.compile(
+              r"(?m)^([ \t]*)private void launchMediaSearchOnProjection\("
+          )
+          matches = list(anchor.finditer(activity))
+          if len(matches) != 1:
+              raise SystemExit(
+                  "FAIL-CLOSED: media launch method anchor mismatch"
+              )
+
+          indent = matches[0].group(1)
+          helper = r'''
+          private void launchProjectionWithUri(
+                  ComponentName component, String uri, String packageName) {
+              if (component == null || session == null) return;
+
+              if (activeTarget != null && !activeTarget.equals(component)) {
+                  session.release();
+              }
+
+              activeTarget = component;
+              V10SessionStore.setTarget(this, component);
+
+              launcherLayer.setVisibility(View.GONE);
+              appPanel.setVisibility(View.GONE);
+              dashboard.setVisibility(View.GONE);
+              projectionLayer.setVisibility(View.VISIBLE);
+
+              session.setTargetAndOpenUri(component, uri, packageName);
+          }
+
+          '''
+          helper = "\n".join(
+              indent + line if line else ""
+              for line in helper.strip("\n").splitlines()
+          ) + "\n\n"
+
+          activity = (
+              activity[:matches[0].start()]
+              + helper
+              + activity[matches[0].start():]
+          )
+
+          # Replace the old two-stage sequence with the single entry point.
+          old_launch = re.compile(
+              r"launchProjection\(target\.component\);"
+              r"\s*handler\.postDelayed\("
+              r"\s*\(\) -> openUriWhenReady\(url, requestedPackage, 8\),"
+              r"\s*250L\);"
+          )
+          matches = list(old_launch.finditer(activity))
+          if len(matches) != 1:
+              raise SystemExit(
+                  "FAIL-CLOSED: old two-stage launch sequence mismatch"
+              )
+
+          activity = old_launch.sub(
+              "launchProjectionWithUri("
+              "target.component, url, requestedPackage);",
+              activity,
+              count=1,
+          )
+
+          # 4. Verify all critical paths before writing any source file.
+          checks = [
+              (controller, "launchNewTaskWithUri(", "controller direct URI"),
+              (session, "setTargetAndOpenUri(", "session URI entry point"),
+              (session, "launchPendingUriIfAny()", "pending URI dispatch"),
+              (activity, "launchProjectionWithUri(", "activity URI entry point"),
+              (
+                  activity,
+                  "target.component, url, requestedPackage",
+                  "voice media call site",
+              ),
+          ]
+          for source, needle, label in checks:
+              if needle not in source:
+                  raise SystemExit(
+                      "FAIL-CLOSED: verification failed: " + label
+                  )
+
+          # Save only after every anchor and verification succeeds.
+          controller_path.write_text(controller, encoding="utf-8")
+          session_path.write_text(session, encoding="utf-8")
+          activity_path.write_text(activity, encoding="utf-8")
+
+          print("PASS: projected voice search uses one launch intent")
+          print("PASS: normal tap-selected app launch path is preserved")
+          print("PASS: keyboard workflow and unrelated source files untouched")
+          PY
       - name: Validate, build and package APK
         shell: bash
         run: |
