@@ -322,6 +322,244 @@ jobs:
           print("PASS: navigation/media intent patch applied")
           print("PASS: voice, mic, timeout and keyboard code left untouched")
           PY
+      
+      - name: Fix media defaults and category routing
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          import re
+
+          path = Path(
+              "v10-source/app/src/main/java/com/carassistant/v10/"
+              "V10CarActivity.java"
+          )
+          if not path.is_file():
+              raise SystemExit("FAIL-CLOSED: Activity source missing")
+
+          source = path.read_text(encoding="utf-8")
+
+          def replace_once(text, pattern, replacement, label):
+              matches = list(pattern.finditer(text))
+              if len(matches) != 1:
+                  raise SystemExit(
+                      "FAIL-CLOSED: " + label
+                      + "; expected 1 match, got "
+                      + str(len(matches))
+                  )
+              return pattern.sub(lambda _: replacement, text, count=1)
+
+          # 1. Remove the unwanted Music ReVanced entry from the picker.
+          revanced_picker = re.compile(
+              r'(?m)^[ \t]*addPickerPackage\(choices, '
+              r'"YouTube Music ReVanced",\n'
+              r'[ \t]*"app\.revanced\.android\.apps\.youtube\.music"\);\n'
+          )
+          source = replace_once(
+              source, revanced_picker, "", "Music ReVanced picker entry"
+          )
+
+          # 2. Replace the picker row method with separate defaults,
+          #    visible package names, and a check mark for the selection.
+          picker_pattern = re.compile(
+              r"(?ms)^([ \t]*)private void addPickerPackage\(.*?"
+              r"(?=^[ \t]*private void closeDefaultAppPicker\()"
+          )
+          matches = list(picker_pattern.finditer(source))
+          if len(matches) != 1:
+              raise SystemExit(
+                  "FAIL-CLOSED: addPickerPackage boundary mismatch"
+              )
+
+          indent = matches[0].group(1)
+          picker_method = r'''
+          private void addPickerPackage(
+                  LinearLayout choices, String label, String packageName) {
+              boolean isVideoPackage =
+                      packageName.equals("com.google.android.youtube")
+                      || packageName.equals("app.revanced.android.youtube")
+                      || packageName.equals("app.morphe.android.youtube");
+
+              String category = isVideoPackage ? "video" : "music";
+              String selectedPackage = getSharedPreferences(
+                      "carassistant_command_dispatch", MODE_PRIVATE)
+                      .getString("default_" + category + "_package", "");
+
+              boolean selected = packageName.equals(selectedPackage);
+              AppInfo app = findAppByPackage(packageName);
+
+              String shownLabel = (selected ? "✓ " : "○ ") + label
+                      + "\n" + packageName;
+              if (app == null) shownLabel += "\n(chưa cài hoặc không khả dụng)";
+
+              TextView option = sidebarButton(shownLabel);
+              option.setGravity(Gravity.CENTER_VERTICAL | Gravity.START);
+              option.setMaxLines(3);
+
+              LinearLayout.LayoutParams params =
+                      new LinearLayout.LayoutParams(-1, dp(60));
+              params.setMargins(0, dp(2), 0, dp(2));
+              choices.addView(option, params);
+
+              if (app == null) {
+                  option.setEnabled(false);
+                  option.setAlpha(0.55f);
+                  return;
+              }
+
+              option.setOnClickListener(v -> {
+                  SharedPreferences prefs = getSharedPreferences(
+                          "carassistant_command_dispatch", MODE_PRIVATE);
+
+                  prefs.edit()
+                          .putString("default_" + category + "_component",
+                                  app.component.flattenToString())
+                          .putString("default_" + category + "_package",
+                                  packageName)
+                          .putString("default_" + category + "_label", label)
+                          // Keep legacy values for unrelated older code.
+                          .putString("default_component",
+                                  app.component.flattenToString())
+                          .putString("default_package", packageName)
+                          .putString("default_label", label)
+                          .apply();
+
+                  chooseDefaultMediaApp();
+                  Toast.makeText(this,
+                          "Đã lưu mặc định " + category.toUpperCase()
+                                  + ": " + label,
+                          Toast.LENGTH_SHORT).show();
+              });
+          }
+          '''
+          picker_method = "\n".join(
+              indent + line if line else ""
+              for line in picker_method.strip("\n").splitlines()
+          ) + "\n\n"
+
+          source = (
+              source[:matches[0].start()]
+              + picker_method
+              + source[matches[0].end():]
+          )
+
+          # 3. Treat "Mở YouTube" as the Video default, not as an
+          #    instruction to force the official YouTube package.
+          video_pattern = re.compile(
+              r'boolean video\s*=\s*command\.contains\("video"\)'
+              r'\s*\|\|\s*command\.contains\("phim"\);'
+          )
+          source = replace_once(
+              source,
+              video_pattern,
+              r'boolean video = command.contains("video")'
+              r' || command.contains("phim")'
+              r' || command.matches("^mo\\s+youtube$");',
+              "video command classification"
+          )
+
+          # Explicit services/mods override defaults; plain YouTube does
+          # so only when it is named as the provider of a search.
+          mentions_pattern = re.compile(
+              r"(?ms)^([ \t]*)boolean mentionsApp =.*?;"
+          )
+          matches = list(mentions_pattern.finditer(source))
+          if len(matches) != 1:
+              raise SystemExit(
+                  "FAIL-CLOSED: mentionsApp boundary mismatch"
+              )
+
+          indent = matches[0].group(1)
+          mentions = r'''
+          boolean mentionsApp =
+                  command.contains("youtube music")
+                  || command.contains("revanced")
+                  || command.contains("morphe")
+                  || command.contains("spotify")
+                  || command.contains("zing mp3")
+                  || command.contains("zingmp3")
+                  || (command.contains("tren youtube")
+                      && !command.matches("^mo\\s+youtube$"));
+          '''
+          mentions = "\n".join(
+              indent + line if line else ""
+              for line in mentions.strip("\n").splitlines()
+          )
+          source = mentions_pattern.sub(
+              lambda _: mentions, source, count=1
+          )
+
+          # 4. Never use the old global default if the category default
+          #    is missing. Video and Music must remain independent.
+          legacy_fallback = re.compile(
+              r"(?ms)^[ \t]*// Compatibility with the old "
+              r"single-default preference\.\n"
+              r"[ \t]*if \(target == null\) \{\n"
+              r".*?\n[ \t]*\}\n"
+          )
+          source = replace_once(
+              source,
+              legacy_fallback,
+              "",
+              "legacy cross-category default fallback"
+          )
+
+          # 5. A bare "Mở nhạc/video" opens the chosen app; adding a title
+          #    such as "Sơn Tùng" or "Anh Sai Rồi" triggers a search.
+          search_assignment = re.compile(
+              r'boolean searchRequested = explicitSearch \|\| contentSearch;'
+          )
+          source = replace_once(
+              source,
+              search_assignment,
+              r'boolean searchRequested = explicitSearch'
+              r' || (contentSearch && !command.matches('
+              r'"^mo\\s+(nhac|video|phim|bai hat)$"));',
+              "search/open intent decision"
+          )
+
+          # Final fail-closed checks before saving the patched source.
+          for item in [
+              'addPickerSection(choices, "VIDEO")',
+              'addPickerSection(choices, "NHẠC")',
+              '"com.google.android.youtube"',
+              '"app.revanced.android.youtube"',
+              '"app.morphe.android.youtube"',
+              '"com.google.android.apps.youtube.music"',
+              '"app.morphe.android.apps.youtube.music"',
+              '"com.zing.mp3"',
+              '"com.spotify.music"',
+              'private boolean handleVoiceMediaSearch(',
+              'private String extractMediaQuery(',
+              'launchMediaSearchOnProjection(target, url, pkg)',
+          ]:
+              if item not in source:
+                  raise SystemExit(
+                      "FAIL-CLOSED: missing expected feature: " + item
+                  )
+
+          if 'addPickerPackage(choices, "YouTube Music ReVanced"' in source:
+              raise SystemExit(
+                  "FAIL-CLOSED: unwanted Music ReVanced picker remains"
+              )
+
+          if "Compatibility with the old single-default preference." in source:
+              raise SystemExit(
+                  "FAIL-CLOSED: cross-category fallback remains"
+              )
+
+          if source.count("private boolean handleVoiceMediaSearch(") != 1:
+              raise SystemExit(
+                  "FAIL-CLOSED: duplicate/missing media handler"
+              )
+
+          path.write_text(source, encoding="utf-8")
+          print("PASS: Video/Music defaults are independent")
+          print("PASS: picker displays package names and selected marker")
+          print("PASS: generic YouTube opens Video default")
+          print("PASS: search/open intent routing checks passed")
+          PY
 
       - name: Validate, build and package APK
         shell: bash
