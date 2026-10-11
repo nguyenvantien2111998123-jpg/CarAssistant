@@ -1,0 +1,361 @@
+
+name: 3 phat trien tro ly - Core Features
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    steps:
+      - name: Checkout verified source
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 1
+
+      - name: Setup Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Setup Gradle 8.13
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.13'
+
+      - name: Verify workflow 2 source
+        shell: bash
+        run: |
+          set -euo pipefail
+          FILE=".github/workflows/2phattrientroly.yml"
+          EXPECTED="94788a14b175df66cdb96c41b4cbbae4e05dedf2"
+          test -s "$FILE"
+          ACTUAL="$(git hash-object "$FILE")"
+          if [ "$ACTUAL" != "$EXPECTED" ]; then
+            echo "::error::Workflow 2 SHA mismatch"
+            echo "Expected: $EXPECTED"
+            echo "Actual: $ACTUAL"
+            exit 1
+          fi
+          echo "PASS: workflow 2 source verified"
+
+      - name: Install YAML parser
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y python3-yaml
+
+      - name: Run verified workflow 2 preparation
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          import subprocess
+          import yaml
+
+          path = Path(".github/workflows/2phattrientroly.yml")
+          workflow = yaml.safe_load(path.read_text(encoding="utf-8"))
+          steps = workflow["jobs"]["build"]["steps"]
+
+          start = "Verify original workflow and required steps"
+          stop = "Validate, build and package APK"
+          names = [step.get("name") for step in steps]
+
+          if names.count(start) != 1 or names.count(stop) != 1:
+              raise SystemExit("FAIL-CLOSED: workflow 2 anchors mismatch")
+
+          first = names.index(start)
+          last = names.index(stop)
+          if first >= last:
+              raise SystemExit("FAIL-CLOSED: invalid workflow step order")
+
+          for step in steps[first:last]:
+              script = step.get("run")
+              if not script:
+                  continue
+              name = step.get("name", "(unnamed)")
+              print("RUN:", name, flush=True)
+              subprocess.run(
+                  ["bash", "-e", "-u", "-o", "pipefail", "-c", script],
+                  check=True,
+              )
+
+          print("PASS: workflow 2 preparation completed")
+          PY
+
+      - name: Apply isolated navigation and media intent patch
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          import re
+
+          path = Path(
+              "v10-source/app/src/main/java/com/carassistant/v10/"
+              "V10CarActivity.java"
+          )
+          if not path.is_file():
+              raise SystemExit("FAIL-CLOSED: Activity source missing")
+
+          activity = path.read_text(encoding="utf-8")
+          original = activity
+
+          # Add navigation handling before media command handling.
+          anchor = re.compile(
+              r"(?m)^([ \t]*)if \(isMediaCommand\(original, command\)\) \{"
+          )
+          matches = list(anchor.finditer(activity))
+          if len(matches) != 1:
+              raise SystemExit(
+                  "FAIL-CLOSED: media dispatch anchor mismatch"
+              )
+
+          indent = matches[0].group(1)
+          replacement = (
+              indent
+              + "if (handleNavigationVoiceCommand(original, command)) return;\n"
+              + matches[0].group(0)
+          )
+          activity = anchor.sub(lambda _: replacement, activity, count=1)
+
+          # Install a navigation handler before the media classifier.
+          classifier_anchor = re.compile(
+              r"(?m)^([ \t]*)private boolean isMediaCommand\("
+          )
+          matches = list(classifier_anchor.finditer(activity))
+          if len(matches) != 1:
+              raise SystemExit(
+                  "FAIL-CLOSED: media classifier anchor mismatch"
+              )
+
+          indent = matches[0].group(1)
+          nav_method = r'''
+          private boolean handleNavigationVoiceCommand(
+                  String original, String normalized) {
+              String command = normalizeVoiceText(original);
+
+              boolean navigation =
+                      command.contains("chi duong")
+                      || command.contains("duong di")
+                      || command.contains("tim duong");
+
+              if (!navigation) return false;
+
+              if (command.contains("ve nha")
+                      || command.contains("den nha")
+                      || command.contains("toi nha")
+                      || command.contains("den co quan")
+                      || command.contains("toi co quan")) {
+                  Toast.makeText(this,
+                          "Bạn cần cấu hình địa chỉ nhà/cơ quan trước.",
+                          Toast.LENGTH_LONG).show();
+                  return true;
+              }
+
+              String destination = original == null ? "" : original.trim();
+              destination = destination.replaceFirst(
+                      "(?i)^\\\\s*(chỉ đường đến|chi duong den|"
+                      + "chỉ đường tới|chi duong toi|"
+                      + "đường đi đến|duong di den|"
+                      + "đường đi tới|duong di toi|"
+                      + "tìm đường đến|tim duong den|"
+                      + "tìm đường tới|tim duong toi)\\\\s*", "");
+              destination = destination.replaceFirst(
+                      "(?i)\\\\s+(trên|tren|bằng|bang)\\\\s+"
+                      + "(google maps|maps).*$", "");
+              destination = destination.trim();
+
+              if (destination.isEmpty()) {
+                  Toast.makeText(this,
+                          "Bạn hãy nói rõ địa điểm cần đến.",
+                          Toast.LENGTH_LONG).show();
+                  return true;
+              }
+
+              AppInfo maps = findAppByPackage(
+                      "com.google.android.apps.maps");
+              if (maps == null) {
+                  Toast.makeText(this,
+                          "Chưa tìm thấy Google Maps trên điện thoại.",
+                          Toast.LENGTH_LONG).show();
+                  return true;
+              }
+
+              String url = "https://www.google.com/maps/dir/?api=1"
+                      + "&destination=" + Uri.encode(destination);
+
+              updateVoiceStatus(null);
+              launchMediaSearchOnProjection(
+                      maps, url, "com.google.android.apps.maps");
+              Toast.makeText(this,
+                      "Đang mở chỉ đường đến " + destination,
+                      Toast.LENGTH_SHORT).show();
+              return true;
+          }
+
+          '''
+          nav_method = "\n".join(
+              indent + line if line else ""
+              for line in nav_method.strip("\n").splitlines()
+          ) + "\n\n"
+
+          activity = (
+              activity[:matches[0].start()]
+              + nav_method
+              + activity[matches[0].start():]
+          )
+
+          # Broaden media intent detection while preserving ordinary app launch.
+          classifier = re.compile(
+              r"(?ms)^([ \t]*)private boolean isMediaCommand\(.*?"
+              r"(?=^[ \t]*private boolean handleVoiceMediaSearch\()"
+          )
+          matches = list(classifier.finditer(activity))
+          if len(matches) != 1:
+              raise SystemExit(
+                  "FAIL-CLOSED: classifier method boundary mismatch"
+              )
+
+          indent = matches[0].group(1)
+          new_classifier = r'''
+          private boolean isMediaCommand(String original, String normalized) {
+              String c = normalizeVoiceText(original);
+
+              boolean media =
+                      c.contains("video") || c.contains("clip")
+                      || c.contains("phim") || c.contains("playlist")
+                      || c.contains("nhac") || c.contains("bai hat")
+                      || c.contains("youtube") || c.contains("spotify")
+                      || c.contains("zing mp3") || c.contains("zingmp3")
+                      || c.contains("revanced") || c.contains("morphe");
+
+              boolean action =
+                      c.matches(".*\\\\b(tim|search|xem)\\\\b.*")
+                      || c.contains("mo ")
+                      || c.startsWith("phat ")
+                      || c.startsWith("play ");
+
+              return media && action;
+          }
+
+          '''
+          new_classifier = "\n".join(
+              indent + line if line else ""
+              for line in new_classifier.strip("\n").splitlines()
+          ) + "\n\n"
+
+          activity = classifier.sub(
+              lambda _: new_classifier
+              + indent + "private boolean handleVoiceMediaSearch(",
+              activity,
+              count=1,
+          )
+
+          # Let "mở nhạc/video/playlist ..." trigger a search.
+          old_search = (
+              'boolean searchRequested =\n'
+              '                      command.matches(".*\\\\b(tim|search)\\\\b.*");'
+          )
+          new_search = (
+              'boolean explicitSearch =\n'
+              '                      command.matches(".*\\\\b(tim|search)\\\\b.*");\n'
+              '              boolean contentSearch =\n'
+              '                      (command.contains("nhac")\n'
+              '                      || command.contains("bai hat")\n'
+              '                      || command.contains("playlist")\n'
+              '                      || command.contains("video")\n'
+              '                      || command.contains("clip")\n'
+              '                      || command.contains("phim"))\n'
+              '                      && (command.contains("mo ")\n'
+              '                      || command.startsWith("phat ")\n'
+              '                      || command.startsWith("play ")\n'
+              '                      || command.startsWith("xem "));\n'
+              '              boolean searchRequested = explicitSearch || contentSearch;'
+          )
+          if activity.count(old_search) != 1:
+              raise SystemExit(
+                  "FAIL-CLOSED: search intent anchor mismatch"
+              )
+          activity = activity.replace(old_search, new_search, 1)
+
+          # Teach the existing query extractor to remove playlist/clip labels.
+          activity = activity.replace(
+              "bài hát|bai hat|bài|bai|video|phim)",
+              "bài hát|bai hat|bài|bai|video|phim|playlist|clip)",
+          )
+
+          required = [
+              "private boolean handleNavigationVoiceCommand(",
+              "com.google.android.apps.maps",
+              "boolean explicitSearch",
+              "boolean contentSearch",
+              "launchMediaSearchOnProjection(target, url, pkg)",
+          ]
+          for item in required:
+              if item not in activity:
+                  raise SystemExit(
+                      "FAIL-CLOSED: patch verification missing: " + item
+                  )
+
+          if activity.count("private boolean handleNavigationVoiceCommand(") != 1:
+              raise SystemExit("FAIL-CLOSED: duplicate navigation handler")
+
+          if activity == original:
+              raise SystemExit("FAIL-CLOSED: no source changes applied")
+
+          path.write_text(activity, encoding="utf-8")
+          print("PASS: navigation/media intent patch applied")
+          print("PASS: voice, mic, timeout and keyboard code left untouched")
+          PY
+
+      - name: Validate, build and package APK
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          import subprocess
+          import yaml
+
+          path = Path(".github/workflows/2phattrientroly.yml")
+          workflow = yaml.safe_load(path.read_text(encoding="utf-8"))
+          steps = workflow["jobs"]["build"]["steps"]
+          wanted = "Validate, build and package APK"
+
+          matches = [
+              step for step in steps
+              if step.get("name") == wanted and step.get("run")
+          ]
+          if len(matches) != 1:
+              raise SystemExit(
+                  "FAIL-CLOSED: original build step not found exactly once"
+              )
+
+          subprocess.run(
+              [
+                  "bash", "-e", "-u", "-o", "pipefail", "-c",
+                  matches[0]["run"],
+              ],
+              check=True,
+          )
+          print("PASS: original validation/build/package step completed")
+          PY
+
+      - name: Upload Core Features APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: CarAssistant-3-CoreFeatures
+          path: |
+            dist/CarAssistant-1-PhatTrienTroLy.apk
+            dist/CarAssistant-1-PhatTrienTroLy.sha256
+          if-no-files-found: error
