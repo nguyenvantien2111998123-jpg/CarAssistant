@@ -695,8 +695,7 @@ jobs:
           controller_path.write_text(controller, encoding="utf-8")
           print("PASS: command dispatcher patch applied")
           PY
-      
-      - name: Fix app settings picker and YouTube routing
+      - name: Fix app picker and strict projected media routing
         shell: bash
         run: |
           set -euo pipefail
@@ -709,31 +708,39 @@ jobs:
           )
           source = path.read_text(encoding="utf-8")
 
-          # Add a field for the in-app picker overlay.
-          field_anchor = "    private FrameLayout root;\n"
-          if source.count(field_anchor) != 1:
-              raise SystemExit("FAIL-CLOSED: root field anchor mismatch")
+          def replace_method(text, method_name, next_method, replacement):
+              pattern = re.compile(
+                  r"(?ms)^([ \t]*)private (?:void|boolean|String|AppInfo) "
+                  + re.escape(method_name)
+                  + r"\b.*?(?=^[ \t]*private (?:void|boolean|String|AppInfo) "
+                  + re.escape(next_method) + r"\b)"
+              )
+              matches = list(pattern.finditer(text))
+              if len(matches) != 1:
+                  raise SystemExit(
+                      "FAIL-CLOSED: method boundary "
+                      + method_name + " -> " + next_method
+                      + "; found " + str(len(matches))
+                  )
+              indent = matches[0].group(1)
+              body = "\n".join(
+                  indent + line if line else ""
+                  for line in replacement.strip("\n").splitlines()
+              ) + "\n\n"
+              return text[:matches[0].start()] + body + text[matches[0].end():]
 
+          # Ensure the picker overlay field exists exactly once.
+          field = "    private FrameLayout root;\n"
           if "private View defaultAppPickerOverlay;" not in source:
+              if source.count(field) != 1:
+                  raise SystemExit("FAIL-CLOSED: root field anchor mismatch")
               source = source.replace(
-                  field_anchor,
-                  field_anchor + "    private View defaultAppPickerOverlay;\n",
-                  1,
+                  field, field + "    private View defaultAppPickerOverlay;\n", 1
               )
+          elif source.count("private View defaultAppPickerOverlay;") != 1:
+              raise SystemExit("FAIL-CLOSED: duplicate picker field")
 
-          # Replace only the existing settings method.
-          pattern = re.compile(
-              r"(?ms)^([ \t]*)private void chooseDefaultMediaApp\(\) \{.*?"
-              r"(?=^[ \t]*private AppInfo findAppByPackage\()"
-          )
-          matches = list(pattern.finditer(source))
-          if len(matches) != 1:
-              raise SystemExit(
-                  "FAIL-CLOSED: app picker method count: " + str(len(matches))
-              )
-
-          indent = matches[0].group(1)
-          body = r'''
+          picker = r"""
           private void chooseDefaultMediaApp() {
               if (apps.isEmpty()) loadApps();
               if (root == null) return;
@@ -747,16 +754,15 @@ jobs:
               panel.setPadding(dp(14), dp(12), dp(14), dp(12));
               panel.setBackgroundColor(0xFF202833);
 
-              FrameLayout.LayoutParams panelParams =
+              FrameLayout.LayoutParams pp =
                       new FrameLayout.LayoutParams(-1, dp(500), Gravity.CENTER);
-              panelParams.setMargins(dp(24), dp(20), dp(24), dp(20));
-              overlay.addView(panel, panelParams);
+              pp.setMargins(dp(24), dp(20), dp(24), dp(20));
+              overlay.addView(panel, pp);
 
               LinearLayout header = new LinearLayout(this);
               header.setGravity(Gravity.CENTER_VERTICAL);
-              TextView title = text("ỨNG DỤNG TÌM KIẾM MẶC ĐỊNH", 16, Color.WHITE);
+              TextView title = text("CHỌN ỨNG DỤNG", 16, Color.WHITE);
               header.addView(title, new LinearLayout.LayoutParams(0, dp(48), 1f));
-
               TextView close = sidebarButton("ĐÓNG");
               close.setOnClickListener(v -> closeDefaultAppPicker());
               header.addView(close, new LinearLayout.LayoutParams(dp(82), dp(44)));
@@ -768,53 +774,58 @@ jobs:
               scroll.addView(choices);
               panel.addView(scroll, new LinearLayout.LayoutParams(-1, 0, 1f));
 
-              addDefaultAppChoice(choices, "Trình duyệt mặc định", null);
-              for (AppInfo app : new ArrayList<>(apps)) {
-                  addDefaultAppChoice(
-                          choices,
-                          app.name + " (" + app.component.getPackageName() + ")",
-                          app);
-              }
+              addPickerSection(choices, "VIDEO");
+              addPickerPackage(choices, "YouTube", "com.google.android.youtube");
+              addPickerPackage(choices, "YouTube ReVanced",
+                      "app.revanced.android.youtube");
+              addPickerPackage(choices, "YouTube Morphe",
+                      "app.morphe.android.youtube");
+
+              addPickerSection(choices, "NHẠC");
+              addPickerPackage(choices, "YouTube Music",
+                      "com.google.android.apps.youtube.music");
+              addPickerPackage(choices, "YouTube Music ReVanced",
+                      "app.revanced.android.apps.youtube.music");
+              addPickerPackage(choices, "YouTube Music Morphe",
+                      "app.morphe.android.apps.youtube.music");
+              addPickerPackage(choices, "Zing MP3", "com.zing.mp3");
+              addPickerPackage(choices, "Spotify", "com.spotify.music");
 
               defaultAppPickerOverlay = overlay;
               root.addView(overlay, new FrameLayout.LayoutParams(-1, -1));
               overlay.bringToFront();
           }
 
-          private void addDefaultAppChoice(
-                  LinearLayout choices, String label, AppInfo chosen) {
+          private void addPickerSection(LinearLayout choices, String label) {
+              TextView heading = text(label, 14, Color.rgb(80, 170, 255));
+              heading.setGravity(Gravity.CENTER_VERTICAL);
+              choices.addView(heading,
+                      new LinearLayout.LayoutParams(-1, dp(40)));
+          }
+
+          private void addPickerPackage(
+                  LinearLayout choices, String label, String packageName) {
+              AppInfo app = findAppByPackage(packageName);
+              if (app == null) return;
+
               TextView option = sidebarButton(label);
               option.setGravity(Gravity.CENTER_VERTICAL | Gravity.START);
               option.setMaxLines(2);
-
               LinearLayout.LayoutParams params =
-                      new LinearLayout.LayoutParams(-1, dp(52));
-              params.setMargins(0, dp(3), 0, dp(3));
+                      new LinearLayout.LayoutParams(-1, dp(48));
+              params.setMargins(0, dp(2), 0, dp(2));
               choices.addView(option, params);
 
               option.setOnClickListener(v -> {
-                  SharedPreferences prefs = getSharedPreferences(
-                          "carassistant_command_dispatch", MODE_PRIVATE);
-                  SharedPreferences.Editor editor = prefs.edit();
-
-                  if (chosen == null) {
-                      editor.remove("default_component");
-                      editor.remove("default_package");
-                      editor.putString("default_label", "Trình duyệt mặc định");
-                  } else {
-                      editor.putString(
-                              "default_component",
-                              chosen.component.flattenToString());
-                      editor.putString(
-                              "default_package",
-                              chosen.component.getPackageName());
-                      editor.putString("default_label", chosen.name);
-                  }
-
-                  editor.apply();
+                  getSharedPreferences("carassistant_command_dispatch", MODE_PRIVATE)
+                          .edit()
+                          .putString("default_component",
+                                  app.component.flattenToString())
+                          .putString("default_package", packageName)
+                          .putString("default_label", label)
+                          .apply();
                   closeDefaultAppPicker();
-                  Toast.makeText(
-                          this, "Đã lưu ứng dụng mặc định",
+                  Toast.makeText(this, "Đã chọn " + label,
                           Toast.LENGTH_SHORT).show();
               });
           }
@@ -825,100 +836,219 @@ jobs:
               }
               defaultAppPickerOverlay = null;
           }
-          '''
-          replacement = "\n".join(
-              indent + line if line else ""
-              for line in body.strip("\n").splitlines()
-          ) + "\n"
-
-          source = (
-              source[:matches[0].start()]
-              + replacement
-              + source[matches[0].end():]
+          """
+          source = replace_method(
+              source, "chooseDefaultMediaApp", "findAppByPackage", picker
           )
 
-          # This dialog is no longer used by app settings.
-          source = source.replace("import android.app.AlertDialog;\n", "")
-          if "new AlertDialog.Builder(this)" in source:
-              raise SystemExit("FAIL-CLOSED: old AlertDialog remains")
+          resolver = r"""
+          private AppInfo findExplicitMediaApp(String normalized) {
+              String pkg = null;
 
-          # Resolve ordinary YouTube only after modded variants and Music.
-                    # Resolve ordinary YouTube after modded variants and YouTube Music.
-          # Match the actual Java branch without relying on indentation.
-          youtube_anchor = re.compile(
-              r'(?m)^[ \t]*if\s*\(\s*'
-              r'normalized\.contains\("zing mp3"\)\s*'
-              r'\|\|\s*normalized\.contains\("zingmp3"\)\s*'
-              r'\)\s*\{'
+              if (normalized.contains("youtube music morphe")) {
+                  pkg = "app.morphe.android.apps.youtube.music";
+              } else if (normalized.contains("youtube music revanced")) {
+                  pkg = "app.revanced.android.apps.youtube.music";
+              } else if (normalized.contains("youtube music")) {
+                  pkg = "com.google.android.apps.youtube.music";
+              } else if (normalized.contains("youtube morphe")
+                      || normalized.contains("morphe youtube")) {
+                  pkg = "app.morphe.android.youtube";
+              } else if (normalized.contains("youtube revanced")
+                      || normalized.contains("revanced youtube")) {
+                  pkg = "app.revanced.android.youtube";
+              } else if (normalized.contains("youtube")) {
+                  pkg = "com.google.android.youtube";
+              } else if (normalized.contains("zing mp3")
+                      || normalized.contains("zingmp3")) {
+                  pkg = "com.zing.mp3";
+              } else if (normalized.contains("spotify")) {
+                  pkg = "com.spotify.music";
+              }
+
+              return pkg == null ? null : findAppByPackage(pkg);
+          }
+          """
+          source = replace_method(
+              source, "findExplicitMediaApp", "openUriWhenReady", resolver
           )
 
-          matches = list(youtube_anchor.finditer(source))
+          # Route explicit open-app commands and searches through one strict handler.
+          handler = r"""
+          private boolean isMediaCommand(String original, String normalized) {
+              String c = normalizeVoiceText(original);
+              boolean search = c.matches(".*\\b(tim|search|phat|play)\\b.*")
+                      || c.contains("tren youtube")
+                      || c.contains("tren zing mp3")
+                      || c.contains("tren spotify")
+                      || c.contains("mo nhac")
+                      || c.contains("mo bai ")
+                      || c.contains("mo video")
+                      || c.contains("mo phim");
+
+              boolean openExact = c.matches(
+                      "^mo\\s+(youtube|youtube morphe|youtube revanced|"
+                      + "youtube music|youtube music morphe|"
+                      + "youtube music revanced|morphe youtube|"
+                      + "revanced youtube|spotify|zing\\s*mp3)$");
+              return search || openExact;
+          }
+
+          private boolean handleVoiceMediaSearch(
+                  String original, String normalized) {
+              String command = normalizeVoiceText(original);
+
+              boolean openExact = command.matches(
+                      "^mo\\s+(youtube|youtube morphe|youtube revanced|"
+                      + "youtube music|youtube music morphe|"
+                      + "youtube music revanced|morphe youtube|"
+                      + "revanced youtube|spotify|zing\\s*mp3)$");
+
+              boolean explicitApp = command.contains("youtube")
+                      || command.contains("morphe youtube")
+                      || command.contains("revanced youtube")
+                      || command.contains("zing mp3")
+                      || command.contains("zingmp3")
+                      || command.contains("spotify");
+
+              if (openExact) {
+                  AppInfo target = findExplicitMediaApp(command);
+                  if (target == null) {
+                      Toast.makeText(this,
+                              "Ứng dụng được yêu cầu chưa cài đặt hoặc không khả dụng.",
+                              Toast.LENGTH_LONG).show();
+                      return true;
+                  }
+                  launchProjection(target.component);
+                  return true;
+              }
+
+              String query = extractMediaQuery(original);
+              if (query.isEmpty()) {
+                  Toast.makeText(this, "Bạn hãy nói nội dung cần tìm.",
+                          Toast.LENGTH_SHORT).show();
+                  return true;
+              }
+
+              AppInfo target;
+              if (explicitApp) {
+                  target = findExplicitMediaApp(command);
+                  if (target == null) {
+                      Toast.makeText(this,
+                              "Ứng dụng được yêu cầu chưa cài đặt hoặc không khả dụng.",
+                              Toast.LENGTH_LONG).show();
+                      return true;
+                  }
+              } else {
+                  SharedPreferences prefs = getSharedPreferences(
+                          "carassistant_command_dispatch", MODE_PRIVATE);
+                  target = findAppByComponent(
+                          prefs.getString("default_component", ""));
+                  if (target == null) {
+                      Toast.makeText(this,
+                              "Hãy chọn ứng dụng tìm kiếm trong mục ⚙ APP trước.",
+                              Toast.LENGTH_LONG).show();
+                      return true;
+                  }
+              }
+
+              String pkg = target.component.getPackageName();
+              String url;
+              if (pkg.equals("com.google.android.youtube")
+                      || pkg.equals("app.revanced.android.youtube")
+                      || pkg.equals("app.morphe.android.youtube")) {
+                  url = "https://www.youtube.com/results?search_query="
+                          + Uri.encode(query);
+              } else if (pkg.equals("com.google.android.apps.youtube.music")
+                      || pkg.equals("app.revanced.android.apps.youtube.music")
+                      || pkg.equals("app.morphe.android.apps.youtube.music")) {
+                  url = "https://music.youtube.com/search?q=" + Uri.encode(query);
+              } else if (pkg.equals("com.zing.mp3")) {
+                  url = "https://zingmp3.vn/tim-kiem/tat-ca?q=" + Uri.encode(query);
+              } else if (pkg.equals("com.spotify.music")) {
+                  url = "https://open.spotify.com/search/" + Uri.encode(query);
+              } else {
+                  Toast.makeText(this,
+                          "Ứng dụng đã chọn không được hỗ trợ tìm kiếm.",
+                          Toast.LENGTH_LONG).show();
+                  return true;
+              }
+
+              Intent probe = new Intent(Intent.ACTION_VIEW, Uri.parse(url));
+              probe.setPackage(pkg);
+              if (probe.resolveActivity(getPackageManager()) == null) {
+                  Toast.makeText(this,
+                          "Ứng dụng được chọn không nhận liên kết tìm kiếm; không tự chuyển sang trình duyệt.",
+                          Toast.LENGTH_LONG).show();
+                  return true;
+              }
+
+              updateVoiceStatus(null);
+              launchMediaSearchOnProjection(target, url, pkg);
+              Toast.makeText(this, "Đang tìm kiếm trong ứng dụng được chọn.",
+                      Toast.LENGTH_SHORT).show();
+              return true;
+          }
+          """
+          source = replace_method(
+              source, "handleVoiceMediaSearch", "findAppPackage", handler
+          )
+
+          # Replace only the dispatcher condition installed by the prior step.
+          dispatch = re.compile(
+              r'(?ms)^([ \t]*)if \(command\.matches\("\.\*\\\\b'
+              r'\(tim\|phat\|search\|play\)\\\\b\.\*"\).*?'
+              r'^[ \t]*if \(handleVoiceMediaSearch\(original, command\)\) return;'
+              r'[ \t]*\n[ \t]*\}'
+          )
+          matches = list(dispatch.finditer(source))
           if len(matches) != 1:
               raise SystemExit(
-                  "FAIL-CLOSED: expected one Zing MP3 branch, found "
-                  + str(len(matches))
+                  "FAIL-CLOSED: dispatcher anchor count " + str(len(matches))
               )
-
-          youtube_block = '''                  if (normalized.contains("youtube")) {
-                      for (AppInfo app : apps) {
-                          String label = normalizeVoiceText(app.name);
-                          String pkg = normalizeVoiceText(
-                                  app.component.getPackageName());
-                          boolean youtube =
-                                  label.contains("youtube") || pkg.contains("youtube");
-                          boolean variant =
-                                  label.contains("music") || pkg.contains("music")
-                                  || label.contains("vanced") || pkg.contains("vanced")
-                                  || label.contains("morphe") || pkg.contains("morphe")
-                                  || label.contains("revanced") || pkg.contains("revanced");
-                          if (youtube && !variant) return app;
-                      }
-                      return null;
-                  }
-
-          '''
-
-          match = matches[0]
-          source = (
-              source[:match.start()]
-              + youtube_block
-              + source[match.start():]
+          indent = matches[0].group(1)
+          replacement = (
+              indent + "if (isMediaCommand(original, command)) {\n"
+              + indent + "    if (handleVoiceMediaSearch(original, command)) return;\n"
+              + indent + "}"
           )
+          source = dispatch.sub(lambda _: replacement, source, count=1)
 
-          named_anchor = re.compile(
-              r'(?m)^[ \t]*\|\|\s*command\.contains\("youtube music"\)'
-              r'[ \t]*\n[ \t]*\|\|\s*command\.contains\("zing mp3"\)'
-          )
-
-          named_matches = list(named_anchor.finditer(source))
-          if len(named_matches) != 1:
-              raise SystemExit(
-                  "FAIL-CLOSED: expected one explicit YouTube command branch, found "
-                  + str(len(named_matches))
-              )
-
-          source = named_anchor.sub(
-              '                          || command.contains("youtube")\n'
-              '                          || command.contains("zing mp3")',
-              source,
-              count=1,
-          )
+          required = [
+              'addPickerSection(choices, "VIDEO")',
+              'addPickerSection(choices, "NHẠC")',
+              '"com.google.android.youtube"',
+              '"app.revanced.android.youtube"',
+              '"app.morphe.android.youtube"',
+              '"com.google.android.apps.youtube.music"',
+              '"app.revanced.android.apps.youtube.music"',
+              '"app.morphe.android.apps.youtube.music"',
+              '"com.zing.mp3"',
+              '"com.spotify.music"',
+              "private boolean isMediaCommand(",
+              "private boolean handleVoiceMediaSearch(",
+              "launchMediaSearchOnProjection(target, url, pkg)",
+              "không tự chuyển sang trình duyệt",
+          ]
+          for item in required:
+              if item not in source:
+                  raise SystemExit("FAIL-CLOSED: missing feature: " + item)
 
           for method in [
-              "private void chooseDefaultMediaApp()",
-              "private void addDefaultAppChoice(",
-              "private void closeDefaultAppPicker()",
+              "private void chooseDefaultMediaApp(",
+              "private void addPickerPackage(",
+              "private void closeDefaultAppPicker(",
               "private AppInfo findExplicitMediaApp(",
+              "private boolean isMediaCommand(",
               "private boolean handleVoiceMediaSearch(",
           ]:
               if source.count(method) != 1:
-                  raise SystemExit("FAIL-CLOSED: method count mismatch: " + method)
-
-          if source.count('if (normalized.contains("youtube")) {') != 1:
-              raise SystemExit("FAIL-CLOSED: YouTube resolver duplicate/missing")
+                  raise SystemExit(
+                      "FAIL-CLOSED: duplicate/missing method: " + method
+                  )
 
           path.write_text(source, encoding="utf-8")
-          print("PASS: in-app app picker and explicit YouTube routing patched")
+          print("PASS: grouped picker and strict routing patch applied")
           PY
       - name: Restore known-good keyboard V2A-V2C integration
         shell: bash
