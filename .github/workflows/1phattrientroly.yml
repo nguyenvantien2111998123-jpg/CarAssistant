@@ -1,0 +1,770 @@
+name: 1 phattrientroly
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+
+    steps:
+      - name: Checkout verified source
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 1
+
+      - name: Setup Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Setup Gradle 8.13
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.13'
+
+      - name: Verify source SHA, manifest and dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          verify_sha() {
+            local file="$1"
+            local expected="$2"
+            local actual
+            actual="$(git hash-object "$file")"
+            if [ "$actual" != "$expected" ]; then
+              echo "FAIL-CLOSED: SHA mismatch: $file"
+              echo "Expected: $expected"
+              echo "Actual:   $actual"
+              exit 1
+            fi
+            echo "PASS: $file"
+          }
+
+          verify_sha "v10-source/app/src/main/java/com/carassistant/v10/V10CarActivity.java" "61e82df0fd17e7851c7bf1628ac03a9391e48523"
+          verify_sha "v10-source/app/src/main/java/com/carassistant/v10/V10ProjectionSession.java" "27a9ff439fb450750d49f35a546eab3bc2745b4d"
+          verify_sha "v10-source/app/src/main/java/com/carassistant/v10/V10DisplayController.java" "1a35bcaa7db0a5f892e56006f740b4ebf727be8a"
+          verify_sha "v10-source/app/src/main/java/com/carassistant/v10/NavigationMapView.java" "1600edf884196a146ce5f4233f8de0a8ea282a4e"
+          verify_sha "v10-source/app/src/main/AndroidManifest.xml" "e6ffd5005ff0d0f8610c5950f20e17acba5410df"
+          verify_sha "v10-source/app/build.gradle" "4d512337d46324a33a685d8cdb095e4ecacd3ceb"
+          verify_sha ".github/workflows/build-carassistant-voice-commands-v2.yml" "4ee7f307c2a106a384a33c7b4386f1864c621ff3"
+
+          python3 - <<'PY'
+          from pathlib import Path
+          import xml.etree.ElementTree as ET
+
+          manifest_path = Path("v10-source/app/src/main/AndroidManifest.xml")
+          ET.parse(manifest_path)
+          root = ET.parse(manifest_path).getroot()
+          android_ns = "{http://schemas.android.com/apk/res/android}"
+          permissions = {node.get(android_ns + "name") for node in root.findall("uses-permission")}
+          if "android.permission.RECORD_AUDIO" not in permissions:
+              raise SystemExit("FAIL-CLOSED: RECORD_AUDIO permission missing")
+
+          gradle = Path("v10-source/app/build.gradle").read_text(encoding="utf-8")
+          if "org.maplibre.gl:android-sdk:11.11.0" not in gradle:
+              raise SystemExit("FAIL-CLOSED: MapLibre baseline mismatch")
+          print("PASS: Manifest XML, RECORD_AUDIO and MapLibre 11.11.0")
+          PY
+
+      - name: Install workflow parser
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y python3-yaml
+          python3 -c "import yaml; print('PASS: PyYAML', yaml.__version__)"
+
+      - name: Apply existing verified voice baseline
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import subprocess
+          import yaml
+          from pathlib import Path
+
+          path = Path(".github/workflows/build-carassistant-voice-commands-v2.yml")
+          workflow = yaml.safe_load(path.read_text(encoding="utf-8"))
+          steps = workflow["jobs"]["build"]["steps"]
+          matches = [
+              step for step in steps
+              if step.get("name") == "Verify baseline and patch voice recognition"
+              and step.get("run")
+          ]
+          if len(matches) != 1:
+              raise SystemExit("FAIL-CLOSED: expected exactly one verified voice patch step")
+          subprocess.run(
+              ["bash", "-e", "-u", "-o", "pipefail", "-c", matches[0]["run"]],
+              check=True,
+          )
+          print("PASS: verified voice baseline applied")
+          PY
+
+      - name: Apply proven V3 floating mic and status auto-hide
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import re
+          from pathlib import Path
+
+          path = Path(
+              "v10-source/app/src/main/java/com/carassistant/v10/V10CarActivity.java"
+          )
+          java = path.read_text(encoding="utf-8")
+
+          def replace_once(old, new, label):
+              global java
+              count = java.count(old)
+              if count != 1:
+                  raise SystemExit(
+                      f"FAIL-CLOSED: {label}; expected 1 anchor, found {count}"
+                  )
+              java = java.replace(old, new, 1)
+              print("PASS:", label)
+
+          replace_once(
+              "    private TextView voiceStatus;\n",
+              "    private TextView voiceStatus;\n"
+              "    private TextView projectionMicButton;\n"
+              "    private Runnable voiceStatusHideRunnable;\n",
+              "add floating mic and status timer fields"
+          )
+          replace_once(
+              "        createFloatingTouchKey();\n",
+              "        createFloatingTouchKey();\n"
+              "        createProjectionMicButton();\n",
+              "attach mic to projection layer"
+          )
+
+          pattern = re.compile(
+              r"(?ms)^([ \t]*)private void updateVoiceStatus"
+              r"\(String value\) \{.*?"
+              r"(?=^[ \t]*private void playVoiceTone\(\))"
+          )
+          matches = list(pattern.finditer(java))
+          if len(matches) != 1:
+              raise SystemExit("FAIL-CLOSED: updateVoiceStatus method boundary")
+          indent = matches[0].group(1)
+          replacement = (
+              f"{indent}private void updateVoiceStatus(String value) {{\n"
+              f"{indent}    Runnable old = voiceStatusHideRunnable;\n"
+              f"{indent}    voiceStatusHideRunnable = null;\n"
+              f"{indent}    if (old != null) voiceHandler.removeCallbacks(old);\n"
+              f"{indent}    if (voiceStatus == null) return;\n"
+              f"{indent}    voiceStatus.setText(value == null ? \"\" : value);\n"
+              f"{indent}    voiceStatus.setVisibility(\n"
+              f"{indent}            value == null || value.trim().isEmpty()\n"
+              f"{indent}                    ? View.GONE : View.VISIBLE);\n"
+              f"{indent}}}\n\n"
+              f"{indent}private void scheduleVoiceStatusHide() {{\n"
+              f"{indent}    if (voiceStatus == null) return;\n"
+              f"{indent}    Runnable old = voiceStatusHideRunnable;\n"
+              f"{indent}    voiceStatusHideRunnable = null;\n"
+              f"{indent}    if (old != null) voiceHandler.removeCallbacks(old);\n"
+              f"{indent}    final Runnable[] holder = new Runnable[1];\n"
+              f"{indent}    Runnable pending = () -> {{\n"
+              f"{indent}        if (voiceStatusHideRunnable != holder[0]) return;\n"
+              f"{indent}        voiceStatusHideRunnable = null;\n"
+              f"{indent}        updateVoiceStatus(null);\n"
+              f"{indent}    }};\n"
+              f"{indent}    holder[0] = pending;\n"
+              f"{indent}    voiceStatusHideRunnable = pending;\n"
+              f"{indent}    voiceHandler.postDelayed(pending, 2500L);\n"
+              f"{indent}}}\n\n"
+          )
+          java, count = pattern.subn(lambda _: replacement, java, count=1)
+          if count != 1:
+              raise SystemExit("FAIL-CLOSED: status methods replacement failed")
+          print("PASS: status auto-hide methods")
+
+          spoken_pattern = re.compile(
+              r"(?m)^([ \t]*)processVoiceCommand\(spoken\);[ \t]*$"
+          )
+          if len(list(spoken_pattern.finditer(java))) != 1:
+              raise SystemExit("FAIL-CLOSED: expected one processVoiceCommand(spoken) call")
+          java, count = spoken_pattern.subn(
+              lambda m: m.group(1) + "processVoiceCommand(spoken);\n"
+              + m.group(1) + "updateVoiceStatus(spoken);\n"
+              + m.group(1) + "scheduleVoiceStatusHide();",
+              java,
+              count=1,
+          )
+          if count != 1:
+              raise SystemExit("FAIL-CLOSED: status trigger insertion failed")
+          print("PASS: status display and auto-hide trigger")
+
+          mic_method = r'''
+              private void createProjectionMicButton() {
+                  if (projectionMicButton != null || projectionLayer == null) return;
+                  projectionMicButton = new TextView(this);
+                  projectionMicButton.setText("🎙");
+                  projectionMicButton.setTextColor(Color.WHITE);
+                  projectionMicButton.setTextSize(24);
+                  projectionMicButton.setGravity(Gravity.CENTER);
+                  projectionMicButton.setContentDescription("CarAssistant voice input");
+                  GradientDrawable background = new GradientDrawable();
+                  background.setShape(GradientDrawable.OVAL);
+                  background.setColor(Color.rgb(66, 133, 244));
+                  background.setStroke(dp(2), Color.WHITE);
+                  projectionMicButton.setBackground(background);
+                  projectionMicButton.setElevation(dp(16));
+                  FrameLayout.LayoutParams params = new FrameLayout.LayoutParams(
+                          dp(58), dp(58), Gravity.BOTTOM | Gravity.END);
+                  params.setMargins(0, 0, dp(18), dp(88));
+                  projectionLayer.addView(projectionMicButton, params);
+                  projectionMicButton.setOnClickListener(v -> {
+                      if (voiceRecognizer != null) {
+                          stopVoiceRecognition();
+                          projectionMicButton.setText("🎙");
+                      } else {
+                          projectionMicButton.setText("■");
+                          startVoiceRecognition();
+                          if (voiceRecognizer == null) projectionMicButton.setText("🎙");
+                      }
+                  });
+              }
+
+          '''
+          replace_once(
+              "    private String normalizeVoiceText(",
+              mic_method + "    private String normalizeVoiceText(",
+              "insert floating microphone button"
+          )
+          replace_once(
+              "    public void onDestroy() {\n"
+              "        stopVoiceRecognition();\n",
+              "    public void onDestroy() {\n"
+              "        if (voiceStatusHideRunnable != null) {\n"
+              "            voiceHandler.removeCallbacks(voiceStatusHideRunnable);\n"
+              "            voiceStatusHideRunnable = null;\n"
+              "        }\n"
+              "        stopVoiceRecognition();\n",
+              "cancel status timer on destroy"
+          )
+
+          required = [
+              "private void createProjectionMicButton()",
+              "private void scheduleVoiceStatusHide()",
+              "voiceHandler.postDelayed(pending, 2500L)",
+              "projectionLayer.addView(projectionMicButton, params)",
+              "updateVoiceStatus(spoken);",
+              "scheduleVoiceStatusHide();",
+              "private void startVoiceRecognition()",
+              "private void processVoiceCommand(String spoken)",
+          ]
+          for item in required:
+              if item not in java:
+                  raise SystemExit("FAIL-CLOSED: missing V3 feature: " + item)
+          path.write_text(java, encoding="utf-8")
+          print("PASS: V3 floating mic and auto-hide patch applied")
+          PY
+
+      - name: Apply command dispatcher, app settings and projected search
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          import re
+
+          base = Path("v10-source/app/src/main/java/com/carassistant/v10")
+          activity_path = base / "V10CarActivity.java"
+          session_path = base / "V10ProjectionSession.java"
+          controller_path = base / "V10DisplayController.java"
+          activity = activity_path.read_text(encoding="utf-8")
+          session = session_path.read_text(encoding="utf-8")
+          controller = controller_path.read_text(encoding="utf-8")
+
+          def replace_once(text, old, new, label):
+              count = text.count(old)
+              if count != 1:
+                  raise SystemExit(
+                      f"FAIL-CLOSED: {label}; expected one anchor, found {count}"
+                  )
+              print("PASS:", label)
+              return text.replace(old, new, 1)
+
+          # Keep URL launching inside the existing Android Auto virtual display.
+          controller = replace_once(
+              controller,
+              "    private void execute(String command, String message) {",
+              r'''    private static String shellQuote(String value) {
+                  return "'" + value.replace("'", "'\\''") + "'";
+              }
+
+              public synchronized void openViewUri(String uri, String packageName) {
+                  if (!isReady() || uri == null || uri.trim().isEmpty()) return;
+                  final int displayId = display.getDisplayId();
+                  final int userId = Process.myUid() / 100000;
+                  String command = "/system/bin/am start --user " + userId
+                          + " --display " + displayId
+                          + " --windowingMode 1"
+                          + " -a android.intent.action.VIEW"
+                          + " -d " + shellQuote(uri);
+                  if (packageName != null && !packageName.trim().isEmpty()) {
+                      command += " -p " + shellQuote(packageName);
+                  }
+                  execute(command, "Open projected URL failed");
+              }
+
+              private void execute(String command, String message) {''',
+              "add virtual-display URL launcher"
+          )
+
+          session = replace_once(
+              session,
+              "    public void back() {",
+              '''    public void openViewUri(String uri, String packageName) {
+                  if (!isActive()) return;
+                  displayController.openViewUri(uri, packageName);
+              }
+
+              public void back() {''',
+              "add projection-session URL bridge"
+          )
+
+          activity = replace_once(
+              activity,
+              "package com.carassistant.v10;\n",
+              "package com.carassistant.v10;\n\nimport android.app.AlertDialog;",
+              "add settings dialog import"
+          )
+
+          activity = replace_once(
+              activity,
+              '        sidebar.addView(voice,sidebarFixedButtonParams());\n',
+              '        sidebar.addView(voice,sidebarFixedButtonParams());\n'
+              '        TextView mediaSettings=sidebarButton("⚙ APP");\n'
+              '        mediaSettings.setOnClickListener(v -> chooseDefaultMediaApp());\n'
+              '        sidebar.addView(mediaSettings,sidebarFixedButtonParams());\n',
+              "add default-app settings button"
+          )
+
+          settings_methods = r'''
+              private void chooseDefaultMediaApp() {
+                  if (apps.isEmpty()) loadApps();
+                  final ArrayList<AppInfo> choices = new ArrayList<>(apps);
+                  String[] labels = new String[choices.size() + 1];
+                  labels[0] = "Trình duyệt mặc định";
+                  for (int i = 0; i < choices.size(); i++) {
+                      AppInfo app = choices.get(i);
+                      labels[i + 1] = app.name + " (" + app.component.getPackageName() + ")";
+                  }
+
+                  SharedPreferences prefs = getSharedPreferences(
+                          "carassistant_command_dispatch", MODE_PRIVATE);
+                  String current = prefs.getString("default_component", "");
+                  int checked = 0;
+                  for (int i = 0; i < choices.size(); i++) {
+                      if (choices.get(i).component.flattenToString().equals(current)) {
+                          checked = i + 1;
+                          break;
+                      }
+                  }
+
+                  new AlertDialog.Builder(this)
+                          .setTitle("Ứng dụng tìm kiếm mặc định")
+                          .setSingleChoiceItems(labels, checked, (dialog, which) -> {
+                              SharedPreferences.Editor editor = prefs.edit();
+                              if (which == 0) {
+                                  editor.remove("default_component");
+                                  editor.remove("default_package");
+                                  editor.putString("default_label", "Trình duyệt mặc định");
+                              } else {
+                                  AppInfo chosen = choices.get(which - 1);
+                                  editor.putString("default_component",
+                                          chosen.component.flattenToString());
+                                  editor.putString("default_package",
+                                          chosen.component.getPackageName());
+                                  editor.putString("default_label", chosen.name);
+                              }
+                              editor.apply();
+                              dialog.dismiss();
+                              Toast.makeText(this, "Đã lưu ứng dụng mặc định",
+                                      Toast.LENGTH_SHORT).show();
+                          })
+                          .setNegativeButton("Đóng", null)
+                          .show();
+              }
+
+              private AppInfo findAppByPackage(String packageName) {
+                  if (packageName == null || packageName.trim().isEmpty()) return null;
+                  for (AppInfo app : apps) {
+                      if (packageName.equals(app.component.getPackageName())) return app;
+                  }
+                  return null;
+              }
+
+              private AppInfo findAppByComponent(String flattened) {
+                  if (flattened == null || flattened.trim().isEmpty()) return null;
+                  for (AppInfo app : apps) {
+                      if (flattened.equals(app.component.flattenToString())) return app;
+                  }
+                  return null;
+              }
+
+              private AppInfo findBrowserApp() {
+                  String[] hints = {"chrome", "firefox", "brave", "edge", "browser",
+                          "opera", "vivaldi", "trinh duyet"};
+                  for (String hint : hints) {
+                      for (AppInfo app : apps) {
+                          String label = normalizeVoiceText(app.name);
+                          String pkg = normalizeVoiceText(app.component.getPackageName());
+                          if (label.contains(hint) || pkg.contains(hint)) return app;
+                      }
+                  }
+                  return null;
+              }
+
+              private AppInfo findExplicitMediaApp(String normalized) {
+                  String required = "";
+                  if (normalized.contains("youtube morphe")
+                          || normalized.contains("morphe youtube")) {
+                      required = "morphe";
+                  } else if (normalized.contains("youtube vanced")
+                          || normalized.contains("vanced youtube")) {
+                      required = "vanced";
+                  } else if (normalized.contains("youtube revanced")
+                          || normalized.contains("revanced youtube")) {
+                      required = "revanced";
+                  }
+
+                  if (!required.isEmpty()) {
+                      for (AppInfo app : apps) {
+                          String label = normalizeVoiceText(app.name);
+                          String pkg = normalizeVoiceText(app.component.getPackageName());
+                          if ((label.contains("youtube") || pkg.contains("youtube"))
+                                  && (label.contains(required) || pkg.contains(required))) {
+                              return app;
+                          }
+                      }
+                      return null;
+                  }
+
+                  if (normalized.contains("youtube music")) {
+                      for (AppInfo app : apps) {
+                          String label = normalizeVoiceText(app.name);
+                          String pkg = normalizeVoiceText(app.component.getPackageName());
+                          if (label.contains("youtube music")
+                                  || pkg.contains("youtube") && pkg.contains("music")) return app;
+                      }
+                      return null;
+                  }
+                  if (normalized.contains("zing mp3") || normalized.contains("zingmp3")) {
+                      for (AppInfo app : apps) {
+                          String label = normalizeVoiceText(app.name);
+                          String pkg = normalizeVoiceText(app.component.getPackageName());
+                          if ((label.contains("zing") && label.contains("mp3"))
+                                  || (pkg.contains("zing") && pkg.contains("mp3"))) return app;
+                      }
+                      return null;
+                  }
+                  if (normalized.contains("spotify")) {
+                      for (AppInfo app : apps) {
+                          if (normalizeVoiceText(app.name).contains("spotify")
+                                  || normalizeVoiceText(app.component.getPackageName()).contains("spotify")) {
+                              return app;
+                          }
+                      }
+                      return null;
+                  }
+                  if (normalized.contains("trinh duyet") || normalized.contains("browser")
+                          || normalized.contains("chrome") || normalized.contains("firefox")
+                          || normalized.contains("brave")) {
+                      return findBrowserApp();
+                  }
+                  return null;
+              }
+
+              private void openUriWhenReady(String uri, String packageName, int attempts) {
+                  if (session != null && session.isActive()) {
+                      session.openViewUri(uri, packageName);
+                      return;
+                  }
+                  if (attempts > 0) {
+                      handler.postDelayed(
+                              () -> openUriWhenReady(uri, packageName, attempts - 1), 250L);
+                  } else {
+                      Toast.makeText(this,
+                              "Không mở được màn hình chiếu để tìm kiếm.",
+                              Toast.LENGTH_LONG).show();
+                  }
+              }
+
+              private void launchMediaSearchOnProjection(
+                      AppInfo target, String url, String requestedPackage) {
+                  if (target != null) {
+                      launchProjection(target.component);
+                      handler.postDelayed(
+                              () -> openUriWhenReady(url, requestedPackage, 8), 250L);
+                      return;
+                  }
+                  if (session != null && session.isActive()) {
+                      openUriWhenReady(url, requestedPackage, 0);
+                      return;
+                  }
+                  Toast.makeText(this,
+                          "Không tìm thấy ứng dụng đích hoặc trình duyệt đã cài.",
+                          Toast.LENGTH_LONG).show();
+              }
+
+              private String extractMediaQuery(String original) {
+                  String query = original == null ? "" : original.trim();
+                  query = query.replaceFirst(
+                          "(?i)^\\s*(hay\\s+)?(mở|mo|phát|phat|tìm|tim|play|search)\\s+", "");
+                  query = query.replaceFirst(
+                          "(?i)^\\s*(youtube\\s+(morphe|vanced|revanced)|morphe\\s+youtube|vanced\\s+youtube|revanced\\s+youtube|youtube\\s+music|youtube|zing\\s*mp3|spotify|trình duyệt|trinh duyet|browser|chrome|firefox|brave|edge|opera)\\s+", "");
+                  query = query.replaceFirst(
+                          "(?i)^\\s*(tìm|tim|phát|phat|mở|mo|play|search)\\s+", "");
+                  query = query.replaceFirst(
+                          "(?i)^\\s*(nhạc|nhac|bài hát|bai hat|bài|bai|video|phim)\\s+", "");
+                  query = query.replaceFirst("(?i)\\s+(trên|tren|using|with)\\s+.*$", "");
+                  query = query.replaceFirst(
+                          "(?i)^\\s*(tìm|tim|phát|phat|mở|mo|play|search)\\s+", "");
+                  query = query.replaceFirst(
+                          "(?i)^\\s*(nhạc|nhac|bài hát|bai hat|bài|bai|video|phim)\\s+", "");
+                  return query.trim();
+              }
+
+          '''
+          activity = replace_once(
+              activity,
+              "    private void buildAppPanel() {",
+              settings_methods + "    private void buildAppPanel() {",
+              "add app picker, resolver and projected URI helpers"
+          )
+
+          # Make prefixed search phrases such as 'Mở YouTube tìm nhạc...' reach the parser.
+          old_condition = '''                  if (command.contains("mo nhac")
+                          || command.contains("mo bai ")
+                          || command.contains("mo video")
+                          || command.contains("mo phim")
+                          || command.startsWith("phat ")
+                          || command.startsWith("tim ")) {
+                      if (handleVoiceMediaSearch(original, command)) return;
+                  }'''
+          new_condition = r'''                  if (command.matches(".*\\b(tim|phat|search|play)\\b.*")
+                          || command.contains("mo nhac")
+                          || command.contains("mo bai ")
+                          || command.contains("mo video")
+                          || command.contains("mo phim")) {
+                      if (handleVoiceMediaSearch(original, command)) return;
+                  }'''
+          activity = replace_once(
+              activity, old_condition, new_condition,
+              "route media commands with app prefixes"
+          )
+
+          # Replace the old hard-coded YouTube handler; preserve adjacent helpers.
+          method_pattern = re.compile(
+              r"(?ms)^([ \t]*)private boolean handleVoiceMediaSearch\("
+              r"String original, String normalized\) \{.*?"
+              r"(?=^[ \t]*private String findAppPackage\()"
+          )
+          matches = list(method_pattern.finditer(activity))
+          if len(matches) != 1:
+              raise SystemExit(
+                  "FAIL-CLOSED: expected one existing media handler, found "
+                  + str(len(matches))
+              )
+
+          media_method = r'''              private boolean handleVoiceMediaSearch(
+                      String original, String normalized) {
+                  String command = normalizeVoiceText(original);
+                  boolean explicitMod = command.contains("youtube morphe")
+                          || command.contains("morphe youtube")
+                          || command.contains("youtube vanced")
+                          || command.contains("vanced youtube")
+                          || command.contains("youtube revanced")
+                          || command.contains("revanced youtube");
+                  boolean explicitBrowser = command.contains("trinh duyet")
+                          || command.contains("browser") || command.contains("chrome")
+                          || command.contains("firefox") || command.contains("brave");
+                  boolean explicitNamedApp = explicitMod || explicitBrowser
+                          || command.contains("youtube music")
+                          || command.contains("zing mp3") || command.contains("zingmp3")
+                          || command.contains("spotify");
+
+                  String query = extractMediaQuery(original);
+                  if (query.isEmpty()) {
+                      Toast.makeText(this, "Bạn hãy nói nội dung cần tìm.",
+                              Toast.LENGTH_SHORT).show();
+                      return true;
+                  }
+
+                  SharedPreferences prefs = getSharedPreferences(
+                          "carassistant_command_dispatch", MODE_PRIVATE);
+                  AppInfo target = null;
+                  if (explicitNamedApp) {
+                      target = findExplicitMediaApp(command);
+                      // Explicitly named app missing: go to a browser, not another mod.
+                      if (target == null) target = findBrowserApp();
+                  } else {
+                      target = findAppByComponent(
+                              prefs.getString("default_component", ""));
+                      if (target == null) target = findBrowserApp();
+                  }
+
+                  String targetPackage = target == null ? ""
+                          : target.component.getPackageName();
+                  String normalizedPackage = normalizeVoiceText(targetPackage);
+                  String url;
+                  if (normalizedPackage.contains("zing")) {
+                      url = "https://zingmp3.vn/tim-kiem/tat-ca?q=" + Uri.encode(query);
+                  } else if (normalizedPackage.contains("spotify")) {
+                      url = "https://open.spotify.com/search/" + Uri.encode(query);
+                  } else if (normalizedPackage.contains("youtube")
+                          && normalizedPackage.contains("music")) {
+                      url = "https://music.youtube.com/search?q=" + Uri.encode(query);
+                  } else if (normalizedPackage.contains("youtube")
+                          || normalizedPackage.contains("vanced")
+                          || normalizedPackage.contains("morphe")
+                          || normalizedPackage.contains("revanced")) {
+                      url = "https://www.youtube.com/results?search_query=" + Uri.encode(query);
+                  } else {
+                      url = "https://www.google.com/search?q=" + Uri.encode(query);
+                  }
+
+                  if (target != null) {
+                      Intent probe = new Intent(Intent.ACTION_VIEW, Uri.parse(url));
+                      probe.setPackage(targetPackage);
+                      if (probe.resolveActivity(getPackageManager()) == null) {
+                          // A selected app that cannot handle the URL falls back to browser.
+                          target = findBrowserApp();
+                          targetPackage = target == null ? "" : target.component.getPackageName();
+                          url = "https://www.google.com/search?q=" + Uri.encode(query);
+                      }
+                  }
+
+                  updateVoiceStatus(null);
+                  launchMediaSearchOnProjection(
+                          target, url, targetPackage.isEmpty() ? null : targetPackage);
+                  boolean playRequested = command.matches(
+                          ".*\\b(phat|play)\\b.*") || command.contains("mo nhac")
+                          || command.contains("mo bai ") || command.contains("mo video")
+                          || command.contains("mo phim");
+                  Toast.makeText(this,
+                          playRequested
+                                  ? "Đã mở tìm kiếm; tự phát còn tùy ứng dụng."
+                                  : "Đang mở kết quả tìm kiếm.",
+                          Toast.LENGTH_LONG).show();
+                  return true;
+              }
+
+          '''
+          activity, count = method_pattern.subn(lambda _: media_method + "\n", activity, count=1)
+          if count != 1:
+              raise SystemExit("FAIL-CLOSED: failed to replace media handler")
+
+          required_activity = [
+              'sidebarButton("⚙ APP")',
+              "private void chooseDefaultMediaApp()",
+              "private AppInfo findExplicitMediaApp(",
+              "private AppInfo findBrowserApp()",
+              "private String extractMediaQuery(",
+              "private boolean handleVoiceMediaSearch(",
+              "session.openViewUri(uri, packageName)",
+              "carassistant_command_dispatch",
+          ]
+          for item in required_activity:
+              if item not in activity:
+                  raise SystemExit("FAIL-CLOSED: missing Activity feature: " + item)
+          if activity.count("private boolean handleVoiceMediaSearch(") != 1:
+              raise SystemExit("FAIL-CLOSED: duplicate media handler")
+          if controller.count("public synchronized void openViewUri(") != 1:
+              raise SystemExit("FAIL-CLOSED: duplicate/missing controller URL method")
+          if session.count("public void openViewUri(") != 1:
+              raise SystemExit("FAIL-CLOSED: duplicate/missing session URL bridge")
+
+          activity_path.write_text(activity, encoding="utf-8")
+          session_path.write_text(session, encoding="utf-8")
+          controller_path.write_text(controller, encoding="utf-8")
+          print("PASS: command dispatcher patch applied")
+          PY
+
+      - name: Validate patch and protect passing files
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          import xml.etree.ElementTree as ET
+
+          base = Path("v10-source/app/src/main/java/com/carassistant/v10")
+          activity = (base / "V10CarActivity.java").read_text(encoding="utf-8")
+          session = (base / "V10ProjectionSession.java").read_text(encoding="utf-8")
+          controller = (base / "V10DisplayController.java").read_text(encoding="utf-8")
+          ET.parse(Path("v10-source/app/src/main/AndroidManifest.xml"))
+
+          required = [
+              "private void startVoiceRecognition()",
+              "private void processVoiceCommand(String spoken)",
+              "private boolean handleVoiceMediaSearch(",
+              "private void chooseDefaultMediaApp()",
+              "private AppInfo findExplicitMediaApp(",
+              "private AppInfo findBrowserApp()",
+              "private String extractMediaQuery(",
+              "public void openViewUri(String uri, String packageName)",
+              "public synchronized void openViewUri(String uri, String packageName)",
+              "EXTRA_PARTIAL_RESULTS, true",
+          ]
+          combined = activity + "\n" + session + "\n" + controller
+          for item in required:
+              if item not in combined:
+                  raise SystemExit("FAIL: missing feature: " + item)
+          for method in [
+              "private boolean handleVoiceMediaSearch(",
+              "private void chooseDefaultMediaApp()",
+              "private AppInfo findBrowserApp()",
+              "private String extractMediaQuery(",
+          ]:
+              if activity.count(method) != 1:
+                  raise SystemExit("FAIL: duplicate or missing method: " + method)
+          if "package com.carassistant.v10;" not in activity:
+              raise SystemExit("FAIL: unexpected Java package")
+          print("PASS: voice, settings, app routing and projected URL checks")
+          PY
+
+          git diff --check
+          git diff --exit-code -- \
+            v10-source/app/src/main/java/com/carassistant/v10/NavigationMapView.java \
+            v10-source/app/src/main/AndroidManifest.xml \
+            v10-source/app/build.gradle
+          echo "PASS: NavigationMapView, Manifest and Gradle unchanged"
+
+      - name: Build APK
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd v10-source
+          gradle --no-daemon --stacktrace assembleDebug
+
+      - name: Package APK and SHA-256
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          APK="v10-source/app/build/outputs/apk/debug/app-debug.apk"
+          test -s "$APK"
+          cp "$APK" "dist/CarAssistant-1-PhatTrienTroLy.apk"
+          sha256sum "dist/CarAssistant-1-PhatTrienTroLy.apk" \
+            > "dist/CarAssistant-1-PhatTrienTroLy.sha256"
+          cat "dist/CarAssistant-1-PhatTrienTroLy.sha256"
+
+      - name: Upload APK and checksum
+        uses: actions/upload-artifact@v4
+        with:
+          name: CarAssistant-1-PhatTrienTroLy
+          path: |
+            dist/CarAssistant-1-PhatTrienTroLy.apk
+            dist/CarAssistant-1-PhatTrienTroLy.sha256
+          if-no-files-found: error
