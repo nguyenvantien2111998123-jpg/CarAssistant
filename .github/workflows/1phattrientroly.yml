@@ -1050,6 +1050,385 @@ jobs:
           path.write_text(source, encoding="utf-8")
           print("PASS: grouped picker and strict routing patch applied")
           PY
+      - name: Fix voice command routing and Android Auto display launch
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          import re
+
+          base = Path("v10-source/app/src/main/java/com/carassistant/v10")
+          activity_path = base / "V10CarActivity.java"
+          controller_path = base / "V10DisplayController.java"
+
+          activity = activity_path.read_text(encoding="utf-8")
+          controller = controller_path.read_text(encoding="utf-8")
+
+          def replace_method(source, name, next_name, replacement):
+              pattern = re.compile(
+                  r"(?ms)^([ \t]*)private (?:void|boolean|String|AppInfo) "
+                  + re.escape(name)
+                  + r"\b.*?(?=^[ \t]*private (?:void|boolean|String|AppInfo) "
+                  + re.escape(next_name) + r"\b)"
+              )
+              matches = list(pattern.finditer(source))
+              if len(matches) != 1:
+                  raise SystemExit(
+                      "FAIL-CLOSED: method boundary "
+                      + name + " -> " + next_name
+                      + "; found " + str(len(matches))
+                  )
+              indent = matches[0].group(1)
+              body = "\n".join(
+                  indent + line if line else ""
+                  for line in replacement.strip("\n").splitlines()
+              ) + "\n\n"
+              return (
+                  source[:matches[0].start()]
+                  + body
+                  + source[matches[0].end():]
+              )
+
+          # 1. Resolve packages even when they are not already in the
+          #    launcher's cached list. Never substitute another app.
+          find_package = r"""
+          private AppInfo findAppByPackage(String packageName) {
+              if (packageName == null || packageName.trim().isEmpty()) {
+                  return null;
+              }
+
+              for (AppInfo app : apps) {
+                  if (packageName.equals(app.component.getPackageName())) {
+                      return app;
+                  }
+              }
+
+              Intent launch =
+                      getPackageManager().getLaunchIntentForPackage(packageName);
+              if (launch == null || launch.getComponent() == null) {
+                  return null;
+              }
+
+              String label = packageName;
+              try {
+                  CharSequence appLabel = getPackageManager().getApplicationLabel(
+                          getPackageManager().getApplicationInfo(packageName, 0));
+                  if (appLabel != null) label = appLabel.toString();
+              } catch (PackageManager.NameNotFoundException ignored) {
+              }
+
+              return new AppInfo(launch.getComponent(), label);
+          }
+          """
+          activity = replace_method(
+              activity, "findAppByPackage", "findAppByComponent", find_package
+          )
+
+          # 2. Save independent defaults for VIDEO and MUSIC.
+          #    Keep legacy keys for compatibility with older code.
+          picker = r"""
+          private void addPickerPackage(
+                  LinearLayout choices, String label, String packageName) {
+              AppInfo app = findAppByPackage(packageName);
+              if (app == null) {
+                  TextView unavailable = text(
+                          label + " — chưa cài hoặc không khả dụng",
+                          13, Color.LTGRAY);
+                  choices.addView(unavailable,
+                          new LinearLayout.LayoutParams(-1, dp(44)));
+                  return;
+              }
+
+              TextView option = sidebarButton(label);
+              option.setGravity(Gravity.CENTER_VERTICAL | Gravity.START);
+              option.setMaxLines(2);
+
+              LinearLayout.LayoutParams params =
+                      new LinearLayout.LayoutParams(-1, dp(48));
+              params.setMargins(0, dp(2), 0, dp(2));
+              choices.addView(option, params);
+
+              option.setOnClickListener(v -> {
+                  boolean video =
+                          packageName.equals("com.google.android.youtube")
+                          || packageName.equals("app.revanced.android.youtube")
+                          || packageName.equals("app.morphe.android.youtube");
+
+                  String category = video ? "video" : "music";
+                  String componentKey = "default_" + category + "_component";
+                  String packageKey = "default_" + category + "_package";
+                  String labelKey = "default_" + category + "_label";
+
+                  SharedPreferences prefs = getSharedPreferences(
+                          "carassistant_command_dispatch", MODE_PRIVATE);
+
+                  prefs.edit()
+                          .putString(componentKey,
+                                  app.component.flattenToString())
+                          .putString(packageKey, packageName)
+                          .putString(labelKey, label)
+                          .putString("default_component",
+                                  app.component.flattenToString())
+                          .putString("default_package", packageName)
+                          .putString("default_label", label)
+                          .apply();
+
+                  Toast.makeText(this,
+                          "Đã lưu mặc định " + (video ? "VIDEO: " : "NHẠC: ")
+                                  + label,
+                          Toast.LENGTH_SHORT).show();
+              });
+          }
+          """
+          activity = replace_method(
+              activity, "addPickerPackage", "closeDefaultAppPicker", picker
+          )
+
+          # 3. Classify media commands. Search only when the user explicitly
+          #    says "tìm" or "search". "Mở video/nhạc" launches an app only.
+          classifier = r"""
+          private boolean isMediaCommand(String original, String normalized) {
+              String c = normalizeVoiceText(original);
+
+              boolean media =
+                      c.contains("video") || c.contains("phim")
+                      || c.contains("nhac") || c.contains("bai hat")
+                      || c.contains("youtube") || c.contains("spotify")
+                      || c.contains("zing mp3") || c.contains("zingmp3")
+                      || c.contains("revanced") || c.contains("morphe");
+
+              boolean action =
+                      c.matches(".*\\b(tim|search)\\b.*")
+                      || c.contains("mo ")
+                      || c.startsWith("phat ")
+                      || c.startsWith("play ");
+
+              return media && action;
+          }
+          """
+          activity = replace_method(
+              activity, "isMediaCommand", "handleVoiceMediaSearch", classifier
+          )
+
+          handler = r"""
+          private boolean handleVoiceMediaSearch(
+                  String original, String normalized) {
+              String command = normalizeVoiceText(original);
+
+              boolean searchRequested =
+                      command.matches(".*\\b(tim|search)\\b.*");
+
+              boolean video =
+                      command.contains("video") || command.contains("phim");
+
+              boolean music =
+                      command.contains("nhac") || command.contains("bai hat")
+                      || command.contains("youtube music")
+                      || command.contains("spotify")
+                      || command.contains("zing mp3")
+                      || command.contains("zingmp3");
+
+              boolean mentionsApp =
+                      command.contains("youtube")
+                      || command.contains("revanced")
+                      || command.contains("morphe")
+                      || command.contains("spotify")
+                      || command.contains("zing mp3")
+                      || command.contains("zingmp3");
+
+              AppInfo target = null;
+
+              if (mentionsApp) {
+                  target = findExplicitMediaApp(command);
+                  if (target == null) {
+                      Toast.makeText(this,
+                              "Ứng dụng được yêu cầu chưa cài đặt "
+                                      + "hoặc không có Activity khởi chạy.",
+                              Toast.LENGTH_LONG).show();
+                      return true;
+                  }
+              } else {
+                  String category;
+                  if (video) {
+                      category = "video";
+                  } else if (music) {
+                      category = "music";
+                  } else {
+                      Toast.makeText(this,
+                              "Hãy nói rõ mở video, mở nhạc hoặc tên ứng dụng.",
+                              Toast.LENGTH_LONG).show();
+                      return true;
+                  }
+
+                  SharedPreferences prefs = getSharedPreferences(
+                          "carassistant_command_dispatch", MODE_PRIVATE);
+
+                  target = findAppByComponent(prefs.getString(
+                          "default_" + category + "_component", ""));
+
+                  if (target == null) {
+                      target = findAppByPackage(prefs.getString(
+                              "default_" + category + "_package", ""));
+                  }
+
+                  // Compatibility with the old single-default preference.
+                  if (target == null) {
+                      target = findAppByComponent(
+                              prefs.getString("default_component", ""));
+                  }
+
+                  if (target == null) {
+                      Toast.makeText(this,
+                              "Chưa chọn ứng dụng mặc định cho "
+                                      + (video ? "VIDEO" : "NHẠC")
+                                      + ". Mở ⚙ APP để chọn.",
+                              Toast.LENGTH_LONG).show();
+                      return true;
+                  }
+              }
+
+              // No explicit search request: open the selected app on the
+              // existing Android Auto projection display. Do not search.
+              if (!searchRequested) {
+                  updateVoiceStatus(null);
+                  launchProjection(target.component);
+                  Toast.makeText(this,
+                          "Đang mở " + target.name + " trên màn hình chiếu.",
+                          Toast.LENGTH_SHORT).show();
+                  return true;
+              }
+
+              String query = extractMediaQuery(original);
+              if (query.isEmpty()) {
+                  Toast.makeText(this,
+                          "Bạn hãy nói nội dung cần tìm.",
+                          Toast.LENGTH_SHORT).show();
+                  return true;
+              }
+
+              String pkg = target.component.getPackageName();
+              String url;
+
+              if (pkg.equals("com.google.android.youtube")
+                      || pkg.equals("app.revanced.android.youtube")
+                      || pkg.equals("app.morphe.android.youtube")) {
+                  url = "https://www.youtube.com/results?search_query="
+                          + Uri.encode(query);
+              } else if (pkg.equals("com.google.android.apps.youtube.music")
+                      || pkg.equals("app.revanced.android.apps.youtube.music")
+                      || pkg.equals("app.morphe.android.apps.youtube.music")) {
+                  url = "https://music.youtube.com/search?q="
+                          + Uri.encode(query);
+              } else if (pkg.equals("com.zing.mp3")) {
+                  url = "https://zingmp3.vn/tim-kiem/tat-ca?q="
+                          + Uri.encode(query);
+              } else if (pkg.equals("com.spotify.music")) {
+                  url = "https://open.spotify.com/search/"
+                          + Uri.encode(query);
+              } else {
+                  Toast.makeText(this,
+                          "Ứng dụng này chưa được hỗ trợ tìm kiếm.",
+                          Toast.LENGTH_LONG).show();
+                  return true;
+              }
+
+              updateVoiceStatus(null);
+              launchMediaSearchOnProjection(target, url, pkg);
+              Toast.makeText(this,
+                      "Đang gửi tìm kiếm đến " + target.name
+                              + " trên màn hình chiếu.",
+                      Toast.LENGTH_SHORT).show();
+              return true;
+          }
+          """
+          activity = replace_method(
+              activity, "handleVoiceMediaSearch", "findAppPackage", handler
+          )
+
+          # 4. Force URL intents to use the exact virtual display and package.
+          #    MULTIPLE_TASK avoids reusing the same app task on the phone.
+          controller_pattern = re.compile(
+              r"(?ms)^([ \t]*)public synchronized void openViewUri\("
+              r".*?(?=^[ \t]*private void execute\()"
+          )
+          matches = list(controller_pattern.finditer(controller))
+          if len(matches) != 1:
+              raise SystemExit(
+                  "FAIL-CLOSED: expected one openViewUri before execute; found "
+                  + str(len(matches))
+              )
+
+          controller_method = r"""
+          public synchronized void openViewUri(String uri, String packageName) {
+              if (!isReady()
+                      || uri == null || uri.trim().isEmpty()
+                      || packageName == null || packageName.trim().isEmpty()) {
+                  Log.w(TAG, "Reject projected URI: display or package unavailable");
+                  return;
+              }
+
+              final int displayId = display.getDisplayId();
+              final int userId = Process.myUid() / 100000;
+
+              String command = "/system/bin/am start"
+                      + " --user " + userId
+                      + " --display " + displayId
+                      + " --windowingMode 1"
+                      + " -f 0x18000000"
+                      + " -a android.intent.action.VIEW"
+                      + " -d " + shellQuote(uri)
+                      + " -p " + shellQuote(packageName);
+
+              Log.i(TAG, "Projected URI launch: display=" + displayId
+                      + ", package=" + packageName);
+              execute(command, "Projected URL launch failed");
+          }
+
+          """
+          indent = matches[0].group(1)
+          body = "\n".join(
+              indent + line if line else ""
+              for line in controller_method.strip("\n").splitlines()
+          ) + "\n\n"
+          controller = (
+              controller[:matches[0].start()]
+              + body
+              + controller[matches[0].end():]
+          )
+
+          # 5. Fail closed if expected methods or strict-routing safeguards
+          #    are missing. Do not touch keyboard code in this step.
+          required_activity = [
+              "private AppInfo findAppByPackage(",
+              'getLaunchIntentForPackage(packageName)',
+              'default_video_component',
+              'default_music_component',
+              "private boolean isMediaCommand(",
+              "private boolean handleVoiceMediaSearch(",
+              "if (!searchRequested)",
+              "launchMediaSearchOnProjection(target, url, pkg)",
+          ]
+          for item in required_activity:
+              if item not in activity:
+                  raise SystemExit("FAIL-CLOSED: missing Activity feature: " + item)
+
+          if activity.count("private boolean handleVoiceMediaSearch(") != 1:
+              raise SystemExit("FAIL-CLOSED: duplicate media handler")
+
+          if controller.count("public synchronized void openViewUri(") != 1:
+              raise SystemExit("FAIL-CLOSED: duplicate/missing openViewUri")
+
+          if "-f 0x18000000" not in controller:
+              raise SystemExit("FAIL-CLOSED: missing MULTIPLE_TASK launch flag")
+
+          if " --display " not in controller:
+              raise SystemExit("FAIL-CLOSED: missing explicit display routing")
+
+          activity_path.write_text(activity, encoding="utf-8")
+          controller_path.write_text(controller, encoding="utf-8")
+          print("PASS: voice classifier and display routing patched")
+          PY
       - name: Restore known-good keyboard V2A-V2C integration
         shell: bash
         run: |
