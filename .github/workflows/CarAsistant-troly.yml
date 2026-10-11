@@ -1,4 +1,3 @@
-
 name: CarAsistant tich hop tro ly
 
 run-name: CarAsistant tich hop tro ly
@@ -33,6 +32,8 @@ jobs:
                   "e6ffd5005ff0d0f8610c5950f20e17acba5410df",
               "v10-source/app/build.gradle":
                   "4d512337d46324a33a685d8cdb095e4ecacd3ceb",
+              "v10-source/app/src/main/java/com/carassistant/v10/V10ProjectionSession.java":
+                  "27a9ff439fb450750d49f35f546eab3bc2745b4d",
           }
 
           for name, wanted in expected.items():
@@ -90,7 +91,6 @@ jobs:
                   )
               return source.replace(old, new, 1)
 
-          # Imports
           java = replace_once(
               java,
               "import android.os.Bundle;\n",
@@ -105,7 +105,6 @@ jobs:
               "imports"
           )
 
-          # Independent state: do not reuse the existing floating touch key.
           java = replace_once(
               java,
               "    private TextView floatingTouchKey;\n",
@@ -120,7 +119,6 @@ jobs:
               "voice fields"
           )
 
-          # Wire the existing Home microphone to the integrated recognizer.
           java = replace_once(
               java,
               '        voice.setOnClickListener(v->{});',
@@ -129,7 +127,6 @@ jobs:
               "Home mic listener"
           )
 
-          # Create the second, independent floating mic above the projection.
           java = replace_once(
               java,
               "        createFloatingTouchKey();\n",
@@ -140,7 +137,9 @@ jobs:
 
           method_anchor = "private void showFloatingMenu() {"
           if java.count(method_anchor) != 1:
-              raise SystemExit("FAIL-CLOSED: floating menu method anchor mismatch")
+              raise SystemExit(
+                  "FAIL-CLOSED: floating menu method anchor mismatch"
+              )
 
           methods = r'''
           private void createFloatingMicButton() {
@@ -414,13 +413,8 @@ jobs:
 
           '''
 
-          java = java.replace(
-              method_anchor,
-              methods + method_anchor,
-              1
-          )
+          java = java.replace(method_anchor, methods + method_anchor, 1)
 
-          # Release speech resources without touching projection teardown.
           destroy_anchor = "        if (navigationMap != null) { navigationMap.onHostDestroy(); navigationMap = null; }"
           java = replace_once(
               java,
@@ -449,6 +443,56 @@ jobs:
           print("PASS: integrated Home and projected mic patch applied")
           PY
 
+      - name: Add safe URL launch to projected display
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          python3 - <<'PY'
+          from pathlib import Path
+
+          path = Path(
+              "v10-source/app/src/main/java/com/carassistant/v10/V10ProjectionSession.java"
+          )
+          java = path.read_text(encoding="utf-8")
+          anchor = "    public void hideTask() {"
+
+          if java.count(anchor) != 1:
+              raise SystemExit(
+                  "FAIL-CLOSED: V10ProjectionSession hideTask anchor mismatch"
+              )
+
+          method = r'''
+              /**
+               * Open a validated web URL on the currently projected display.
+               * Uses the existing root-shell executor and preserves session state.
+               */
+              public void openUrlOnDisplay(String url) {
+                  if (!isActive() || url == null || url.length() > 4096) return;
+
+                  String lower = url.toLowerCase(java.util.Locale.ROOT);
+                  if (!(lower.startsWith("https://") || lower.startsWith("http://"))
+                          || url.contains("\n") || url.contains("\r")) {
+                      Log.w(TAG, "Rejected invalid URL for projected display");
+                      return;
+                  }
+
+                  String quotedUrl = "'" + url.replace("'", "'\\''") + "'";
+                  String command = "/system/bin/am start --display "
+                          + displayController.getDisplayId()
+                          + " -a android.intent.action.VIEW -d " + quotedUrl;
+                  execute(command, "Open URL on projected display failed", 8);
+              }
+
+          '''
+          java = java.replace(anchor, method + anchor, 1)
+          if java.count("public void openUrlOnDisplay(String url)") != 1:
+              raise SystemExit("FAIL: URL launch method count mismatch")
+
+          path.write_text(java, encoding="utf-8")
+          print("PASS: safe URL launch method added to temporary build source")
+          PY
+
       - name: Validate patch and build V10 APK
         shell: bash
         run: |
@@ -463,10 +507,15 @@ jobs:
               "v10-source/app/src/main/java/com/carassistant/v10/V10CarActivity.java"
           ).read_text(encoding="utf-8")
 
+          session = Path(
+              "v10-source/app/src/main/java/com/carassistant/v10/V10ProjectionSession.java"
+          ).read_text(encoding="utf-8")
+
           required = [
               "private void createFloatingMicButton()",
               "private void startVoiceAssistant()",
               "private void handleVoiceResult(String spoken)",
+              "session.openUrlOnDisplay(url)",
               "SpeechRecognizer.createSpeechRecognizer(this)",
               "voice.setOnClickListener(v -> startVoiceAssistant())",
               "createFloatingMicButton();",
@@ -477,12 +526,18 @@ jobs:
 
           for item in required:
               if item not in source:
-                  raise SystemExit(f"FAIL: missing Java verification anchor: {item}")
+                  raise SystemExit(
+                      f"FAIL: missing Java verification anchor: {item}"
+                  )
+
+          if session.count("public void openUrlOnDisplay(String url)") != 1:
+              raise SystemExit("FAIL: URL launch method missing or duplicated")
 
           if source.count("private void createFloatingMicButton()") != 1:
               raise SystemExit("FAIL: duplicate mic implementation")
 
           print("PASS: source verification")
+
           PY
 
           cd v10-source
