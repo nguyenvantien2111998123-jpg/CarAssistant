@@ -753,6 +753,209 @@ jobs:
           controller_path.write_text(controller, encoding="utf-8")
           print("PASS: command dispatcher patch applied")
           PY
+      
+      - name: Fix app settings picker and YouTube routing
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          import re
+
+          path = Path(
+              "v10-source/app/src/main/java/com/carassistant/v10/V10CarActivity.java"
+          )
+          source = path.read_text(encoding="utf-8")
+
+          # Add a field for the in-app picker overlay.
+          field_anchor = "    private FrameLayout root;\n"
+          if source.count(field_anchor) != 1:
+              raise SystemExit("FAIL-CLOSED: root field anchor mismatch")
+
+          if "private View defaultAppPickerOverlay;" not in source:
+              source = source.replace(
+                  field_anchor,
+                  field_anchor + "    private View defaultAppPickerOverlay;\n",
+                  1,
+              )
+
+          # Replace only the existing settings method.
+          pattern = re.compile(
+              r"(?ms)^([ \t]*)private void chooseDefaultMediaApp\(\) \{.*?"
+              r"(?=^[ \t]*private AppInfo findAppByPackage\()"
+          )
+          matches = list(pattern.finditer(source))
+          if len(matches) != 1:
+              raise SystemExit(
+                  "FAIL-CLOSED: app picker method count: " + str(len(matches))
+              )
+
+          indent = matches[0].group(1)
+          body = r'''
+          private void chooseDefaultMediaApp() {
+              if (apps.isEmpty()) loadApps();
+              if (root == null) return;
+              closeDefaultAppPicker();
+
+              FrameLayout overlay = new FrameLayout(this);
+              overlay.setBackgroundColor(0xB8000000);
+
+              LinearLayout panel = new LinearLayout(this);
+              panel.setOrientation(LinearLayout.VERTICAL);
+              panel.setPadding(dp(14), dp(12), dp(14), dp(12));
+              panel.setBackgroundColor(0xFF202833);
+
+              FrameLayout.LayoutParams panelParams =
+                      new FrameLayout.LayoutParams(-1, dp(500), Gravity.CENTER);
+              panelParams.setMargins(dp(24), dp(20), dp(24), dp(20));
+              overlay.addView(panel, panelParams);
+
+              LinearLayout header = new LinearLayout(this);
+              header.setGravity(Gravity.CENTER_VERTICAL);
+              TextView title = text("ỨNG DỤNG TÌM KIẾM MẶC ĐỊNH", 16, Color.WHITE);
+              header.addView(title, new LinearLayout.LayoutParams(0, dp(48), 1f));
+
+              TextView close = sidebarButton("ĐÓNG");
+              close.setOnClickListener(v -> closeDefaultAppPicker());
+              header.addView(close, new LinearLayout.LayoutParams(dp(82), dp(44)));
+              panel.addView(header);
+
+              ScrollView scroll = new ScrollView(this);
+              LinearLayout choices = new LinearLayout(this);
+              choices.setOrientation(LinearLayout.VERTICAL);
+              scroll.addView(choices);
+              panel.addView(scroll, new LinearLayout.LayoutParams(-1, 0, 1f));
+
+              addDefaultAppChoice(choices, "Trình duyệt mặc định", null);
+              for (AppInfo app : new ArrayList<>(apps)) {
+                  addDefaultAppChoice(
+                          choices,
+                          app.name + " (" + app.component.getPackageName() + ")",
+                          app);
+              }
+
+              defaultAppPickerOverlay = overlay;
+              root.addView(overlay, new FrameLayout.LayoutParams(-1, -1));
+              overlay.bringToFront();
+          }
+
+          private void addDefaultAppChoice(
+                  LinearLayout choices, String label, AppInfo chosen) {
+              TextView option = sidebarButton(label);
+              option.setGravity(Gravity.CENTER_VERTICAL | Gravity.START);
+              option.setMaxLines(2);
+
+              LinearLayout.LayoutParams params =
+                      new LinearLayout.LayoutParams(-1, dp(52));
+              params.setMargins(0, dp(3), 0, dp(3));
+              choices.addView(option, params);
+
+              option.setOnClickListener(v -> {
+                  SharedPreferences prefs = getSharedPreferences(
+                          "carassistant_command_dispatch", MODE_PRIVATE);
+                  SharedPreferences.Editor editor = prefs.edit();
+
+                  if (chosen == null) {
+                      editor.remove("default_component");
+                      editor.remove("default_package");
+                      editor.putString("default_label", "Trình duyệt mặc định");
+                  } else {
+                      editor.putString(
+                              "default_component",
+                              chosen.component.flattenToString());
+                      editor.putString(
+                              "default_package",
+                              chosen.component.getPackageName());
+                      editor.putString("default_label", chosen.name);
+                  }
+
+                  editor.apply();
+                  closeDefaultAppPicker();
+                  Toast.makeText(
+                          this, "Đã lưu ứng dụng mặc định",
+                          Toast.LENGTH_SHORT).show();
+              });
+          }
+
+          private void closeDefaultAppPicker() {
+              if (root != null && defaultAppPickerOverlay != null) {
+                  root.removeView(defaultAppPickerOverlay);
+              }
+              defaultAppPickerOverlay = null;
+          }
+          '''
+          replacement = "\n".join(
+              indent + line if line else ""
+              for line in body.strip("\n").splitlines()
+          ) + "\n"
+
+          source = (
+              source[:matches[0].start()]
+              + replacement
+              + source[matches[0].end():]
+          )
+
+          # This dialog is no longer used by app settings.
+          source = source.replace("import android.app.AlertDialog;\n", "")
+          if "new AlertDialog.Builder(this)" in source:
+              raise SystemExit("FAIL-CLOSED: old AlertDialog remains")
+
+          # Resolve ordinary YouTube only after modded variants and Music.
+          anchor = (
+              '                  if (normalized.contains("zing mp3") '
+              '|| normalized.contains("zingmp3")) {'
+          )
+          if source.count(anchor) != 1:
+              raise SystemExit("FAIL-CLOSED: YouTube resolver anchor mismatch")
+
+          youtube_block = '''                  if (normalized.contains("youtube")) {
+                      for (AppInfo app : apps) {
+                          String label = normalizeVoiceText(app.name);
+                          String pkg = normalizeVoiceText(
+                                  app.component.getPackageName());
+                          boolean youtube =
+                                  label.contains("youtube") || pkg.contains("youtube");
+                          boolean variant =
+                                  label.contains("music") || pkg.contains("music")
+                                  || label.contains("vanced") || pkg.contains("vanced")
+                                  || label.contains("morphe") || pkg.contains("morphe")
+                                  || label.contains("revanced") || pkg.contains("revanced");
+                          if (youtube && !variant) return app;
+                      }
+                      return null;
+                  }
+
+          '''
+          source = source.replace(anchor, youtube_block + anchor, 1)
+
+          named_anchor = (
+              '                          || command.contains("youtube music")\n'
+              '                          || command.contains("zing mp3")'
+          )
+          named_replacement = (
+              '                          || command.contains("youtube")\n'
+              '                          || command.contains("zing mp3")'
+          )
+          if source.count(named_anchor) != 1:
+              raise SystemExit("FAIL-CLOSED: explicit YouTube anchor mismatch")
+          source = source.replace(named_anchor, named_replacement, 1)
+
+          for method in [
+              "private void chooseDefaultMediaApp()",
+              "private void addDefaultAppChoice(",
+              "private void closeDefaultAppPicker()",
+              "private AppInfo findExplicitMediaApp(",
+              "private boolean handleVoiceMediaSearch(",
+          ]:
+              if source.count(method) != 1:
+                  raise SystemExit("FAIL-CLOSED: method count mismatch: " + method)
+
+          if source.count('if (normalized.contains("youtube")) {') != 1:
+              raise SystemExit("FAIL-CLOSED: YouTube resolver duplicate/missing")
+
+          path.write_text(source, encoding="utf-8")
+          print("PASS: in-app app picker and explicit YouTube routing patched")
+          PY
 
       - name: Validate patch and protect passing files
         shell: bash
