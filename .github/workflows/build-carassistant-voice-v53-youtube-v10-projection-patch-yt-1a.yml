@@ -297,7 +297,346 @@ jobs:
           ET.parse("carassistant-voice/app/src/main/AndroidManifest.xml")
           print("PASS: XML manifests parse")
           PY
+      - name: Fix current YT-1A dashboard mic and projection
+        shell: bash
+        run: |
+          set -euo pipefail
 
+          python3 - <<'PY'
+          from pathlib import Path
+          import re
+
+          base = Path("v10-source/app/src/main/java/com/carassistant/v10")
+          activity_path = base / "V10CarActivity.java"
+          session_path = base / "V10ProjectionSession.java"
+
+          activity = activity_path.read_text(encoding="utf-8")
+          session = session_path.read_text(encoding="utf-8")
+
+          def once(text, old, new, label):
+              count = text.count(old)
+              if count != 1:
+                  raise SystemExit(
+                      f"FAIL-CLOSED: {label}; expected 1, got {count}"
+                  )
+              return text.replace(old, new, 1)
+
+          # 1. Wire the dashboard microphone button.
+          activity = once(
+              activity,
+              '        voice.setOnClickListener(v->{});',
+              '        voice.setOnClickListener(v -> startDashboardVoiceRecognition());',
+              "dashboard microphone listener",
+          )
+
+          # 2. Add only the imports not already present.
+          package_line = "package com.carassistant.v10;\n"
+          imports = [
+              "import android.Manifest;",
+              "import android.speech.RecognitionListener;",
+              "import android.speech.RecognizerIntent;",
+              "import android.speech.SpeechRecognizer;",
+              "import android.widget.Toast;",
+          ]
+
+          if activity.count(package_line) != 1:
+              raise SystemExit("FAIL-CLOSED: package anchor mismatch")
+
+          missing = [x for x in imports if x not in activity]
+          if missing:
+              activity = once(
+                  activity,
+                  package_line,
+                  package_line + "\n" + "\n".join(missing) + "\n",
+                  "speech imports",
+              )
+
+          field = "    private V10ProjectionSession session;\n"
+          activity = once(
+              activity,
+              field,
+              field + "    private SpeechRecognizer dashboardVoiceRecognizer;\n",
+              "recognizer field",
+          )
+
+          # 3. Replace the YT-1A handler with a handler that can also
+          # start YouTube projection when the dashboard is currently shown.
+          start = "    public void handleControlYoutubeSearch(String query) {"
+          end = "    public void handleControlBack() {"
+
+          if activity.count(start) != 1 or activity.count(end) != 1:
+              raise SystemExit("FAIL-CLOSED: YouTube handler anchors")
+
+          i = activity.index(start)
+          j = activity.index(end, i)
+
+          if j <= i:
+              raise SystemExit("FAIL-CLOSED: handler order")
+
+          methods = r'''    public void handleControlYoutubeSearch(String query) {
+              if (query == null) return;
+              query = query.trim();
+              if (query.isEmpty() || query.length() > 180) return;
+
+              String url = "https://www.youtube.com/results?search_query="
+                      + android.net.Uri.encode(query);
+
+              V10ProjectionSession current = session;
+              if (current != null && current.isActive()) {
+                  current.openUrlOnDisplay(url);
+                  return;
+              }
+
+              Intent launch = getPackageManager()
+                      .getLaunchIntentForPackage("com.google.android.youtube");
+
+              if (launch == null || launch.getComponent() == null) {
+                  Toast.makeText(
+                          this, "Không tìm thấy ứng dụng YouTube.",
+                          Toast.LENGTH_LONG).show();
+                  return;
+              }
+
+              launchProjection(launch.getComponent());
+              handler.postDelayed(
+                      () -> openYoutubeSearchWhenReady(url, 0), 500L);
+          }
+
+          private void openYoutubeSearchWhenReady(String url, int attempt) {
+              V10ProjectionSession current = session;
+
+              if (current != null && current.isActive()) {
+                  current.openUrlOnDisplay(url);
+                  return;
+              }
+
+              if (attempt >= 10) {
+                  Toast.makeText(
+                          this, "Màn hình chiếu chưa sẵn sàng; hãy thử lại.",
+                          Toast.LENGTH_SHORT).show();
+                  return;
+              }
+
+              handler.postDelayed(
+                      () -> openYoutubeSearchWhenReady(url, attempt + 1),
+                      500L);
+          }
+
+          private void startDashboardVoiceRecognition() {
+              if (checkSelfPermission(Manifest.permission.RECORD_AUDIO)
+                      != PackageManager.PERMISSION_GRANTED) {
+                  requestPermissions(
+                          new String[]{Manifest.permission.RECORD_AUDIO}, 814);
+                  Toast.makeText(
+                          this,
+                          "Cấp quyền Microphone rồi chạm nút mic lần nữa.",
+                          Toast.LENGTH_LONG).show();
+                  return;
+              }
+
+              if (!SpeechRecognizer.isRecognitionAvailable(this)) {
+                  Toast.makeText(
+                          this, "Không có dịch vụ nhận dạng giọng nói.",
+                          Toast.LENGTH_LONG).show();
+                  return;
+              }
+
+              stopDashboardVoiceRecognition();
+
+              try {
+                  final SpeechRecognizer recognizer =
+                          SpeechRecognizer.createSpeechRecognizer(this);
+                  dashboardVoiceRecognizer = recognizer;
+
+                  recognizer.setRecognitionListener(new RecognitionListener() {
+                      @Override public void onReadyForSpeech(Bundle params) {}
+                      @Override public void onBeginningOfSpeech() {}
+                      @Override public void onRmsChanged(float rmsdB) {}
+                      @Override public void onBufferReceived(byte[] buffer) {}
+                      @Override public void onEndOfSpeech() {}
+                      @Override public void onPartialResults(Bundle results) {}
+                      @Override public void onEvent(int eventType, Bundle params) {}
+
+                      @Override
+                      public void onError(int error) {
+                          if (dashboardVoiceRecognizer != recognizer) return;
+                          destroyDashboardVoiceRecognizer(recognizer);
+                          Toast.makeText(
+                                  V10CarActivity.this,
+                                  "Không nhận được giọng nói. Hãy thử lại.",
+                                  Toast.LENGTH_SHORT).show();
+                      }
+
+                      @Override
+                      public void onResults(Bundle results) {
+                          if (dashboardVoiceRecognizer != recognizer) return;
+
+                          ArrayList<String> matches = results == null ? null
+                                  : results.getStringArrayList(
+                                          SpeechRecognizer.RESULTS_RECOGNITION);
+
+                          destroyDashboardVoiceRecognizer(recognizer);
+
+                          if (matches == null || matches.isEmpty()
+                                  || matches.get(0) == null
+                                  || matches.get(0).trim().isEmpty()) {
+                              Toast.makeText(
+                                      V10CarActivity.this,
+                                      "Chưa nhận được câu nói.",
+                                      Toast.LENGTH_SHORT).show();
+                              return;
+                          }
+
+                          handleControlYoutubeSearch(matches.get(0).trim());
+                      }
+                  });
+
+                  Intent intent =
+                          new Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH);
+                  intent.putExtra(
+                          RecognizerIntent.EXTRA_LANGUAGE_MODEL,
+                          RecognizerIntent.LANGUAGE_MODEL_FREE_FORM);
+                  intent.putExtra(RecognizerIntent.EXTRA_LANGUAGE, "vi-VN");
+                  intent.putExtra(RecognizerIntent.EXTRA_LANGUAGE_PREFERENCE, "vi-VN");
+                  intent.putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true);
+                  intent.putExtra(
+                          RecognizerIntent.EXTRA_SPEECH_INPUT_COMPLETE_SILENCE_LENGTH_MILLIS,
+                          4000L);
+                  intent.putExtra(
+                          RecognizerIntent.EXTRA_SPEECH_INPUT_POSSIBLY_COMPLETE_SILENCE_LENGTH_MILLIS,
+                          4000L);
+
+                  recognizer.startListening(intent);
+              } catch (RuntimeException error) {
+                  stopDashboardVoiceRecognition();
+                  Toast.makeText(
+                          this, "Không thể khởi động microphone.",
+                          Toast.LENGTH_SHORT).show();
+              }
+          }
+
+          private void destroyDashboardVoiceRecognizer(
+                  SpeechRecognizer recognizer) {
+              if (dashboardVoiceRecognizer == recognizer) {
+                  dashboardVoiceRecognizer = null;
+              }
+              try {
+                  recognizer.destroy();
+              } catch (RuntimeException ignored) {}
+          }
+
+          private void stopDashboardVoiceRecognition() {
+              SpeechRecognizer recognizer = dashboardVoiceRecognizer;
+              dashboardVoiceRecognizer = null;
+
+              if (recognizer != null) {
+                  try {
+                      recognizer.cancel();
+                  } catch (RuntimeException ignored) {}
+                  try {
+                      recognizer.destroy();
+                  } catch (RuntimeException ignored) {}
+              }
+          }
+
+          '''
+
+          activity = activity[:i] + methods + activity[j:]
+
+          # 4. Release microphone resources when the activity is destroyed.
+          destroy_anchor = "    public void onDestroy() {\n"
+          activity = once(
+              activity,
+              destroy_anchor,
+              destroy_anchor + "        stopDashboardVoiceRecognition();\n\n",
+              "microphone cleanup",
+          )
+
+          # 5. Raise the floating key above the projection content.
+          visible_anchor = (
+              "    projectionLayer\n"
+              "            .setVisibility(\n"
+              "                    View.VISIBLE);\n"
+          )
+
+          overlay = (
+              visible_anchor
+              + "\n"
+              + "    projectionLayer.bringToFront();\n"
+              + "    projectionLayer.post(() -> {\n"
+              + "        if (floatingTouchKey != null) {\n"
+              + "            floatingTouchKey.setVisibility(View.VISIBLE);\n"
+              + "            floatingTouchKey.bringToFront();\n"
+              + "        }\n"
+              + "        if (floatingMenu != null) floatingMenu.bringToFront();\n"
+              + "    });\n"
+          )
+
+          activity = once(
+              activity, visible_anchor, overlay, "floating overlay z-order"
+          )
+
+          # 6. Explicitly target YouTube on the projection display.
+          pattern = re.compile(
+              r'(?m)^(?P<indent>\s*)String command = '
+              r'"am start --display " \+ displayId\n'
+              r'(?P=indent)        \+ " -a android\.intent\.action\.VIEW '
+              r'-d \x27" \+ url \+ "\x27";$'
+          )
+
+          replacement = (
+              r'\g<indent>String command = "am start --display " + displayId'
+              "\n"
+              r'\g<indent>        + " -a android.intent.action.VIEW -d \x27" + url'
+              "\n"
+              r'\g<indent>        + "\x27 -p com.google.android.youtube";'
+          )
+
+          session, count = pattern.subn(replacement, session, count=1)
+          if count != 1:
+              raise SystemExit(
+                  "FAIL-CLOSED: YouTube display command anchor mismatch"
+              )
+
+          activity_path.write_text(activity, encoding="utf-8")
+          session_path.write_text(session, encoding="utf-8")
+
+          print("PASS: dashboard microphone and projection patches applied")
+          PY
+
+      - name: Verify runtime patch
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          import xml.etree.ElementTree as ET
+
+          base = Path("v10-source/app/src/main/java/com/carassistant/v10")
+          activity = (base / "V10CarActivity.java").read_text(encoding="utf-8")
+          session = (base / "V10ProjectionSession.java").read_text(encoding="utf-8")
+          manifest = Path("v10-source/app/src/main/AndroidManifest.xml")
+
+          ET.parse(manifest)
+
+          checks = {
+              "Dashboard mic wired": "startDashboardVoiceRecognition()" in activity,
+              "Vietnamese speech recognition": 'EXTRA_LANGUAGE, "vi-VN"' in activity,
+              "Four-second silence timeout": "4000L" in activity,
+              "Microphone cleanup": "stopDashboardVoiceRecognition();" in activity,
+              "Runtime microphone permission": "android.permission.RECORD_AUDIO" in manifest.read_text(encoding="utf-8"),
+              "Floating key brought to front": "floatingTouchKey.bringToFront();" in activity,
+              "YouTube explicitly targeted": "-p com.google.android.youtube" in session,
+              "Search waits for projection readiness": "openYoutubeSearchWhenReady" in activity,
+          }
+
+          for label, passed in checks.items():
+              print(("PASS" if passed else "FAIL") + ": " + label)
+              if not passed:
+                  raise SystemExit("FAIL-CLOSED: " + label)
+          PY
+
+          git diff --check
       - name: Validate patch scope and preserved features
         shell: bash
         run: |
