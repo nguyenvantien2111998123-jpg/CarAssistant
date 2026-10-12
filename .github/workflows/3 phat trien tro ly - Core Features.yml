@@ -594,8 +594,8 @@ jobs:
                   )
               print("PASS anchor:", label)
               return text.replace(old, new, 1)
-          
-          # Preserve the projection surface during normal target switching.
+
+          # Preserve the projection surface during target switching.
           activity = replace_once(
               activity,
               "        session.release();",
@@ -606,11 +606,11 @@ jobs:
               "preserve surface during normal target switch"
           )
 
-          # 1. Add a single-intent launcher to the existing display controller.
+          # 1. Add a URI launcher with an explicit secondary-display target.
           controller = replace_once(
-          controller,
-          "    private void execute(String command, String message) {",
-          r'''    public synchronized void launchNewTaskWithUri(
+              controller,
+              "    private void execute(String command, String message) {",
+              r'''    public synchronized void launchNewTaskWithUri(
               ComponentName component, String uri, String packageName) {
               if (!isReady() || component == null
                       || uri == null || uri.trim().isEmpty()) {
@@ -643,32 +643,27 @@ jobs:
           }
 
           private void execute(String command, String message) {''',
-          "controller URI launcher"
+              "controller URI launcher"
           )
 
-          # Verify the URI launcher and shell-quoting helper.
-          if controller.count("private static String shellQuote(") != 1:
-              raise SystemExit(
-                 "FAIL-CLOSED: shellQuote helper missing or duplicated"
-          )
-          # Verify the URI launcher and shell-quoting helper.
           if controller.count("private static String shellQuote(") != 1:
               raise SystemExit(
                   "FAIL-CLOSED: shellQuote helper missing or duplicated"
-          )
+              )
 
-          if controller.count("public synchronized void launchNewTaskWithUri(") != 1:
+          if controller.count(
+                  "public synchronized void launchNewTaskWithUri("
+          ) != 1:
               raise SystemExit(
                   "FAIL-CLOSED: direct URI launcher missing or duplicated"
-          )
+              )
 
           if '" --display " + displayId' not in controller:
               raise SystemExit(
                   "FAIL-CLOSED: URI launcher has no explicit display target"
-          )
-          # 2. Let the projection session queue the URI before launching
-          #    a newly selected target. Reuse openViewUri for an already
-          #    active matching target.
+              )
+
+          # 2. Queue the URI before starting a newly selected target.
           session = replace_once(
               session,
               "    private ComponentName target;\n",
@@ -693,11 +688,11 @@ jobs:
                   && displayController.isLaunched()
                   && component.equals(displayController.getTarget())) {
               pendingLaunchUri = null;
-          pendingLaunchPackage = null;
-          displayController.launchNewTaskWithUri(
-                  component, uri, packageName);
-          taskSession.active();
-          return;
+              pendingLaunchPackage = null;
+              displayController.launchNewTaskWithUri(
+                      component, uri, packageName);
+              taskSession.active();
+              return;
           }
 
           boolean changed = target == null || !component.equals(target);
@@ -740,29 +735,28 @@ jobs:
               "session pending URI launcher"
           )
 
-          # Launch directly with the URI in all branches that start or
-          # replace the projected task. Keep normal app launches unchanged.
           session = replace_once(
-          session,
-          "        if (!wasReady) {\n"
-          "            displayController.launchNewTask(target);",
-          "        if (!wasReady) {\n"
-          "            if (!launchPendingUriIfAny()) {\n"
-          "                displayController.launchNewTask(target);\n"
-          "            }",
-          "initial display launch"
+              session,
+              "        if (!wasReady) {\n"
+              "            displayController.launchNewTask(target);",
+              "        if (!wasReady) {\n"
+              "            if (!launchPendingUriIfAny()) {\n"
+              "                displayController.launchNewTask(target);\n"
+              "            }",
+              "initial display launch"
           )
 
           session = replace_once(
-          session,
-          "        } else if (!wasLaunched) {\n"
-          "            displayController.launchNewTask(target);",
-          "        } else if (!wasLaunched) {\n"
-          "            if (!launchPendingUriIfAny()) {\n"
-          "                displayController.launchNewTask(target);\n"
-          "            }",
-          "new target display launch"
+              session,
+              "        } else if (!wasLaunched) {\n"
+              "            displayController.launchNewTask(target);",
+              "        } else if (!wasLaunched) {\n"
+              "            if (!launchPendingUriIfAny()) {\n"
+              "                displayController.launchNewTask(target);\n"
+              "            }",
+              "new target display launch"
           )
+
           session = replace_once(
               session,
               "            displayController.resumeExistingTask(target);",
@@ -772,9 +766,7 @@ jobs:
               "existing target resume"
           )
 
-          # 3. Add an Activity entry point that preserves the current UI
-          #    and session persistence, but sends the URI to the session
-          #    before the target task is launched.
+          # 3. Add the Activity entry point for a projected URI launch.
           anchor = re.compile(
               r"(?m)^([ \t]*)private void launchMediaSearchOnProjection\("
           )
@@ -789,14 +781,14 @@ jobs:
           private void launchProjectionWithUri(
                   ComponentName component, String uri, String packageName) {
               if (component == null || session == null) return;
-            
-              if (activeTarget != null && !activeTarget.equals(component)) {
-              android.util.Log.i("CarAssistantV10Projection",
-            "[TARGET_SWITCH] from=" + activeTarget.flattenToString()
-                    + " to=" + component.flattenToString()
-                    + " surface=KEEP_ATTACHED");
-          }
 
+              if (activeTarget != null && !activeTarget.equals(component)) {
+                  android.util.Log.i("CarAssistantV10Projection",
+                          "[TARGET_SWITCH] from="
+                                  + activeTarget.flattenToString()
+                                  + " to=" + component.flattenToString()
+                                  + " surface=KEEP_ATTACHED");
+              }
 
               activeTarget = component;
               V10SessionStore.setTarget(this, component);
@@ -821,7 +813,7 @@ jobs:
               + activity[matches[0].start():]
           )
 
-          # Replace the old two-stage sequence with the single entry point.
+          # Replace the old two-stage launch with one URI launch.
           old_launch = re.compile(
               r"launchProjection\(target\.component\);"
               r"\s*handler\.postDelayed\("
@@ -841,54 +833,60 @@ jobs:
               count=1,
           )
 
-          # 4. Verify all critical paths before writing any source file.
+          # 4. Verify every critical path before writing any source file.
           checks = [
-          (controller, "launchNewTaskWithUri(", "controller direct URI"),
-          (session, "setTargetAndOpenUri(", "session URI entry point"),
-          (session, "launchPendingUriIfAny()", "pending URI dispatch"),
-          (activity, "launchProjectionWithUri(", "activity URI entry point"),
-          (
-              activity,
-              "target.component, url, requestedPackage",
-              "voice media call site",
-          ),
-          (
-              controller,
-              "private static String shellQuote(",
-              "shell URI quoting helper",
-          ),
-          (
-              controller,
-              '" --display " + displayId',
-              "URI launch display target",
-          ),
-          (
-              session,
-              "displayController.launchNewTaskWithUri(",
-              "same-target URI launch",
-          ),
+              (
+                  controller,
+                  "launchNewTaskWithUri(",
+                  "controller direct URI",
+              ),
+              (
+                  session,
+                  "setTargetAndOpenUri(",
+                  "session URI entry point",
+              ),
+              (
+                  session,
+                  "launchPendingUriIfAny()",
+                  "pending URI dispatch",
+              ),
+              (
+                  activity,
+                  "launchProjectionWithUri(",
+                  "activity URI entry point",
+              ),
+              (
+                  activity,
+                  "target.component, url, requestedPackage",
+                  "voice media call site",
+              ),
+              (
+                  controller,
+                  "private static String shellQuote(",
+                  "shell URI quoting helper",
+              ),
+              (
+                  controller,
+                  '" --display " + displayId',
+                  "URI launch display target",
+              ),
+              (
+                  session,
+                  "displayController.launchNewTaskWithUri(",
+                  "same-target URI launch",
+              ),
           ]
 
-          for source, needle, label in checks:
-          if needle not in source:
-              raise SystemExit(
-                  "FAIL-CLOSED: verification failed: " + label
-              )
-
-          if "displayController.openViewUri(" in session:
-          raise SystemExit(
-              "FAIL-CLOSED: obsolete openViewUri call remains"
-          )
-
-          # Save only after every anchor and verification succeeds.
-          controller_path.write_text(controller, encoding="utf-8")
-          session_path.write_text(session, encoding="utf-8")
-          activity_path.write_text(activity, encoding="utf-8")
           for source, needle, label in checks:
               if needle not in source:
                   raise SystemExit(
                       "FAIL-CLOSED: verification failed: " + label
                   )
+
+          if "displayController.openViewUri(" in session:
+              raise SystemExit(
+                  "FAIL-CLOSED: obsolete openViewUri call remains"
+              )
 
           # Save only after every anchor and verification succeeds.
           controller_path.write_text(controller, encoding="utf-8")
