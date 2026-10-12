@@ -1,0 +1,1677 @@
+
+name: 3 phat trien tro ly - Core Features
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    steps:
+      - name: Checkout verified source
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 1
+
+      - name: Setup Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Setup Gradle 8.13
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.13'
+
+      - name: Verify workflow 2 source
+        shell: bash
+        run: |
+          set -euo pipefail
+          FILE=".github/workflows/2phattrientroly.yml"
+          EXPECTED="94788a14b175df66cdb96c41b4cbbae4e05dedf2"
+          test -s "$FILE"
+          ACTUAL="$(git hash-object "$FILE")"
+          if [ "$ACTUAL" != "$EXPECTED" ]; then
+            echo "::error::Workflow 2 SHA mismatch"
+            echo "Expected: $EXPECTED"
+            echo "Actual: $ACTUAL"
+            exit 1
+          fi
+          echo "PASS: workflow 2 source verified"
+
+      - name: Verify original display controller source
+        shell: bash
+        run: |
+          set -euo pipefail
+          FILE="v10-source/app/src/main/java/com/carassistant/v10/V10DisplayController.java"
+          EXPECTED="1a35bcaa7db0a5f892e56006f740b4ebf727be8a"
+          test -s "$FILE"
+          ACTUAL="$(git hash-object "$FILE")"
+          if [ "$ACTUAL" != "$EXPECTED" ]; then
+            echo "::error::V10DisplayController source SHA mismatch"
+            echo "Expected: $EXPECTED"
+            echo "Actual: $ACTUAL"
+            exit 1
+          fi
+          echo "PASS: original display controller source verified"
+
+      - name: Install YAML parser
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y python3-yaml
+
+      - name: Run verified workflow 2 preparation
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          import subprocess
+          import yaml
+
+          path = Path(".github/workflows/2phattrientroly.yml")
+          workflow = yaml.safe_load(path.read_text(encoding="utf-8"))
+          steps = workflow["jobs"]["build"]["steps"]
+
+          start = "Verify original workflow and required steps"
+          stop = "Validate, build and package APK"
+          names = [step.get("name") for step in steps]
+
+          if names.count(start) != 1 or names.count(stop) != 1:
+              raise SystemExit("FAIL-CLOSED: workflow 2 anchors mismatch")
+
+          first = names.index(start)
+          last = names.index(stop)
+          if first >= last:
+              raise SystemExit("FAIL-CLOSED: invalid workflow step order")
+
+          for step in steps[first:last]:
+              script = step.get("run")
+              if not script:
+                  continue
+              name = step.get("name", "(unnamed)")
+              print("RUN:", name, flush=True)
+              subprocess.run(
+                  ["bash", "-e", "-u", "-o", "pipefail", "-c", script],
+                  check=True,
+              )
+
+          print("PASS: workflow 2 preparation completed")
+          PY
+
+      - name: Apply isolated navigation and media intent patch
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          import re
+
+          path = Path(
+              "v10-source/app/src/main/java/com/carassistant/v10/"
+              "V10CarActivity.java"
+          )
+          if not path.is_file():
+              raise SystemExit("FAIL-CLOSED: Activity source missing")
+
+          activity = path.read_text(encoding="utf-8")
+          original = activity
+
+          # Add navigation handling before media command handling.
+          anchor = re.compile(
+              r"(?m)^([ \t]*)if \(isMediaCommand\(original, command\)\) \{"
+          )
+          matches = list(anchor.finditer(activity))
+          if len(matches) != 1:
+              raise SystemExit(
+                  "FAIL-CLOSED: media dispatch anchor mismatch"
+              )
+
+          indent = matches[0].group(1)
+          replacement = (
+              indent
+              + "if (handleNavigationVoiceCommand(original, command)) return;\n"
+              + matches[0].group(0)
+          )
+          activity = anchor.sub(lambda _: replacement, activity, count=1)
+
+          # Install a navigation handler before the media classifier.
+          classifier_anchor = re.compile(
+              r"(?m)^([ \t]*)private boolean isMediaCommand\("
+          )
+          matches = list(classifier_anchor.finditer(activity))
+          if len(matches) != 1:
+              raise SystemExit(
+                  "FAIL-CLOSED: media classifier anchor mismatch"
+              )
+
+          indent = matches[0].group(1)
+          nav_method = r'''
+          private boolean handleNavigationVoiceCommand(
+                  String original, String normalized) {
+              String command = normalizeVoiceText(original);
+
+              boolean navigation =
+                      command.contains("chi duong")
+                      || command.contains("duong di")
+                      || command.contains("tim duong");
+
+              if (!navigation) return false;
+
+              if (command.contains("ve nha")
+                      || command.contains("den nha")
+                      || command.contains("toi nha")
+                      || command.contains("den co quan")
+                      || command.contains("toi co quan")) {
+                  Toast.makeText(this,
+                          "Bạn cần cấu hình địa chỉ nhà/cơ quan trước.",
+                          Toast.LENGTH_LONG).show();
+                  return true;
+              }
+
+              String destination = original == null ? "" : original.trim();
+              destination = destination.replaceFirst(
+                      "(?i)^\\s*(chỉ đường đến|chi duong den|"
+                      + "chỉ đường tới|chi duong toi|"
+                      + "đường đi đến|duong di den|"
+                      + "đường đi tới|duong di toi|"
+                      + "tìm đường đến|tim duong den|"
+                      + "tìm đường tới|tim duong toi)\\s*", "");
+              destination = destination.replaceFirst(
+                      "(?i)\\s+(trên|tren|bằng|bang)\\s+"
+                      + "(google maps|maps).*$", "");
+              destination = destination.trim();
+
+              if (destination.isEmpty()) {
+                  Toast.makeText(this,
+                          "Bạn hãy nói rõ địa điểm cần đến.",
+                          Toast.LENGTH_LONG).show();
+                  return true;
+              }
+
+              AppInfo maps = findAppByPackage(
+                      "com.google.android.apps.maps");
+              if (maps == null) {
+                  Toast.makeText(this,
+                          "Chưa tìm thấy Google Maps trên điện thoại.",
+                          Toast.LENGTH_LONG).show();
+                  return true;
+              }
+
+              String url = "https://www.google.com/maps/dir/?api=1"
+                      + "&destination=" + Uri.encode(destination);
+
+              updateVoiceStatus(null);
+              launchMediaSearchOnProjection(
+                      maps, url, "com.google.android.apps.maps");
+              Toast.makeText(this,
+                      "Đang mở chỉ đường đến " + destination,
+                      Toast.LENGTH_SHORT).show();
+              return true;
+          }
+
+          '''
+          nav_method = "\n".join(
+              indent + line if line else ""
+              for line in nav_method.strip("\n").splitlines()
+          ) + "\n\n"
+
+          activity = (
+              activity[:matches[0].start()]
+              + nav_method
+              + activity[matches[0].start():]
+          )
+
+          # Broaden media intent detection while preserving ordinary app launch.
+          classifier = re.compile(
+              r"(?ms)^([ \t]*)private boolean isMediaCommand\(.*?"
+              r"(?=^[ \t]*private boolean handleVoiceMediaSearch\()"
+          )
+          matches = list(classifier.finditer(activity))
+          if len(matches) != 1:
+              raise SystemExit(
+                  "FAIL-CLOSED: classifier method boundary mismatch"
+              )
+
+          indent = matches[0].group(1)
+          new_classifier = r'''
+          private boolean isMediaCommand(String original, String normalized) {
+              String c = normalizeVoiceText(original);
+
+              boolean media =
+                      c.contains("video") || c.contains("clip")
+                      || c.contains("phim") || c.contains("playlist")
+                      || c.contains("nhac") || c.contains("bai hat")
+                      || c.contains("youtube") || c.contains("spotify")
+                      || c.contains("zing mp3") || c.contains("zingmp3")
+                      || c.contains("revanced") || c.contains("morphe");
+
+              boolean action =
+                      c.matches(".*\\\\b(tim|search|xem)\\\\b.*")
+                      || c.contains("mo ")
+                      || c.startsWith("phat ")
+                      || c.startsWith("play ");
+
+              return media && action;
+          }
+
+          '''
+          new_classifier = "\n".join(
+              indent + line if line else ""
+              for line in new_classifier.strip("\n").splitlines()
+          ) + "\n\n"
+
+          activity = classifier.sub(
+              lambda _: new_classifier,
+              activity,
+              count=1,
+          )
+
+          # Let "mở nhạc/video/playlist ..." trigger a search.
+          search_pattern = re.compile(
+              r'boolean searchRequested\s*=\s*'
+              r'command\.matches\("[^"\n]*"\);'
+          )
+
+          matches = list(search_pattern.finditer(activity))
+          if len(matches) != 1:
+              raise SystemExit(
+                  "FAIL-CLOSED: search intent pattern mismatch"
+              )
+
+          new_search = (
+              'boolean explicitSearch =\n'
+              '                      command.matches(".*\\\\b(tim|search)\\\\b.*");\n'
+              '              boolean contentSearch =\n'
+              '                      (command.contains("nhac")\n'
+              '                      || command.contains("bai hat")\n'
+              '                      || command.contains("playlist")\n'
+              '                      || command.contains("video")\n'
+              '                      || command.contains("clip")\n'
+              '                      || command.contains("phim"))\n'
+              '                      && (command.contains("mo ")\n'
+              '                      || command.startsWith("phat ")\n'
+              '                      || command.startsWith("play ")\n'
+              '                      || command.startsWith("xem "));\n'
+              '              boolean searchRequested = explicitSearch || contentSearch;'
+          )
+
+          activity = search_pattern.sub(
+              lambda _: new_search, activity, count=1
+          )
+
+          # Teach the existing query extractor to remove playlist/clip labels.
+          activity = activity.replace(
+              "bài hát|bai hat|bài|bai|video|phim)",
+              "bài hát|bai hat|bài|bai|video|phim|playlist|clip)",
+          )
+
+          required = [
+              "private boolean handleNavigationVoiceCommand(",
+              "com.google.android.apps.maps",
+              "boolean explicitSearch",
+              "boolean contentSearch",
+              "launchMediaSearchOnProjection(target, url, pkg)",
+          ]
+          for item in required:
+              if item not in activity:
+                  raise SystemExit(
+                      "FAIL-CLOSED: patch verification missing: " + item
+                  )
+
+          if activity.count("private boolean handleNavigationVoiceCommand(") != 1:
+              raise SystemExit("FAIL-CLOSED: duplicate navigation handler")
+
+          if activity == original:
+              raise SystemExit("FAIL-CLOSED: no source changes applied")
+
+          path.write_text(activity, encoding="utf-8")
+          print("PASS: navigation/media intent patch applied")
+          print("PASS: voice, mic, timeout and keyboard code left untouched")
+          PY
+
+      - name: Fix media defaults and category routing
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          import re
+
+          path = Path(
+              "v10-source/app/src/main/java/com/carassistant/v10/"
+              "V10CarActivity.java"
+          )
+          if not path.is_file():
+              raise SystemExit("FAIL-CLOSED: Activity source missing")
+
+          source = path.read_text(encoding="utf-8")
+
+          def replace_once(text, pattern, replacement, label):
+              matches = list(pattern.finditer(text))
+              if len(matches) != 1:
+                  raise SystemExit(
+                      "FAIL-CLOSED: " + label
+                      + "; expected 1 match, got "
+                      + str(len(matches))
+                  )
+              return pattern.sub(lambda _: replacement, text, count=1)
+
+          # 1. Remove the unwanted Music ReVanced entry from the picker.
+          revanced_picker = re.compile(
+              r'(?m)^[ \t]*addPickerPackage\(choices, '
+              r'"YouTube Music ReVanced",\n'
+              r'[ \t]*"app\.revanced\.android\.apps\.youtube\.music"\);\n'
+          )
+          source = replace_once(
+              source, revanced_picker, "", "Music ReVanced picker entry"
+          )
+
+          # 2. Replace the picker row method with separate defaults,
+          #    visible package names, and a check mark for the selection.
+          picker_pattern = re.compile(
+              r"(?ms)^([ \t]*)private void addPickerPackage\(.*?"
+              r"(?=^[ \t]*private void closeDefaultAppPicker\()"
+          )
+          matches = list(picker_pattern.finditer(source))
+          if len(matches) != 1:
+              raise SystemExit(
+                  "FAIL-CLOSED: addPickerPackage boundary mismatch"
+              )
+
+          indent = matches[0].group(1)
+          picker_method = r'''
+          private void addPickerPackage(
+                  LinearLayout choices, String label, String packageName) {
+              boolean isVideoPackage =
+                      packageName.equals("com.google.android.youtube")
+                      || packageName.equals("app.revanced.android.youtube")
+                      || packageName.equals("app.morphe.android.youtube");
+
+              String category = isVideoPackage ? "video" : "music";
+              String selectedPackage = getSharedPreferences(
+                      "carassistant_command_dispatch", MODE_PRIVATE)
+                      .getString("default_" + category + "_package", "");
+
+              boolean selected = packageName.equals(selectedPackage);
+              AppInfo app = findAppByPackage(packageName);
+
+              String shownLabel = (selected ? "✓ " : "○ ") + label
+                      + "\n" + packageName;
+              if (app == null) shownLabel += "\n(chưa cài hoặc không khả dụng)";
+
+              TextView option = sidebarButton(shownLabel);
+              option.setGravity(Gravity.CENTER_VERTICAL | Gravity.START);
+              option.setMaxLines(3);
+
+              LinearLayout.LayoutParams params =
+                      new LinearLayout.LayoutParams(-1, dp(60));
+              params.setMargins(0, dp(2), 0, dp(2));
+              choices.addView(option, params);
+
+              if (app == null) {
+                  option.setEnabled(false);
+                  option.setAlpha(0.55f);
+                  return;
+              }
+
+              option.setOnClickListener(v -> {
+                  SharedPreferences prefs = getSharedPreferences(
+                          "carassistant_command_dispatch", MODE_PRIVATE);
+
+                  prefs.edit()
+                          .putString("default_" + category + "_component",
+                                  app.component.flattenToString())
+                          .putString("default_" + category + "_package",
+                                  packageName)
+                          .putString("default_" + category + "_label", label)
+                          // Keep legacy values for unrelated older code.
+                          .putString("default_component",
+                                  app.component.flattenToString())
+                          .putString("default_package", packageName)
+                          .putString("default_label", label)
+                          .apply();
+
+                  chooseDefaultMediaApp();
+                  Toast.makeText(this,
+                          "Đã lưu mặc định " + category.toUpperCase()
+                                  + ": " + label,
+                          Toast.LENGTH_SHORT).show();
+              });
+          }
+          '''
+          picker_method = "\n".join(
+              indent + line if line else ""
+              for line in picker_method.strip("\n").splitlines()
+          ) + "\n\n"
+
+          source = (
+              source[:matches[0].start()]
+              + picker_method
+              + source[matches[0].end():]
+          )
+
+          # 3. Treat "Mở YouTube" as the Video default, not as an
+          #    instruction to force the official YouTube package.
+          video_pattern = re.compile(
+              r'boolean video\s*=\s*command\.contains\("video"\)'
+              r'\s*\|\|\s*command\.contains\("phim"\);'
+          )
+          source = replace_once(
+              source,
+              video_pattern,
+              r'boolean video = command.contains("video")'
+              r' || command.contains("phim")'
+              r' || command.matches("^mo\\s+youtube$");',
+              "video command classification"
+          )
+
+          # Explicit services/mods override defaults; plain YouTube does
+          # so only when it is named as the provider of a search.
+          mentions_pattern = re.compile(
+              r"(?ms)^([ \t]*)boolean mentionsApp =.*?;"
+          )
+          matches = list(mentions_pattern.finditer(source))
+          if len(matches) != 1:
+              raise SystemExit(
+                  "FAIL-CLOSED: mentionsApp boundary mismatch"
+              )
+
+          indent = matches[0].group(1)
+          mentions = r'''
+          boolean mentionsApp =
+                  command.contains("youtube music")
+                  || command.contains("revanced")
+                  || command.contains("morphe")
+                  || command.contains("spotify")
+                  || command.contains("zing mp3")
+                  || command.contains("zingmp3")
+                  || (command.contains("tren youtube")
+                      && !command.matches("^mo\\s+youtube$"));
+          '''
+          mentions = "\n".join(
+              indent + line if line else ""
+              for line in mentions.strip("\n").splitlines()
+          )
+          source = mentions_pattern.sub(
+              lambda _: mentions, source, count=1
+          )
+
+          # 4. Never use the old global default if the category default
+          #    is missing. Video and Music must remain independent.
+          legacy_fallback = re.compile(
+              r"(?ms)^[ \t]*// Compatibility with the old "
+              r"single-default preference\.\n"
+              r"[ \t]*if \(target == null\) \{\n"
+              r".*?\n[ \t]*\}\n"
+          )
+          source = replace_once(
+              source,
+              legacy_fallback,
+              "",
+              "legacy cross-category default fallback"
+          )
+
+          # 5. A bare "Mở nhạc/video" opens the chosen app; adding a title
+          #    such as "Sơn Tùng" or "Anh Sai Rồi" triggers a search.
+          search_assignment = re.compile(
+              r'boolean searchRequested = explicitSearch \|\| contentSearch;'
+          )
+          source = replace_once(
+              source,
+              search_assignment,
+              r'boolean searchRequested = explicitSearch'
+              r' || (contentSearch && !command.matches('
+              r'"^mo\\s+(nhac|video|phim|bai hat)$"));',
+              "search/open intent decision"
+          )
+
+          # Final fail-closed checks before saving the patched source.
+          for item in [
+              'addPickerSection(choices, "VIDEO")',
+              'addPickerSection(choices, "NHẠC")',
+              '"com.google.android.youtube"',
+              '"app.revanced.android.youtube"',
+              '"app.morphe.android.youtube"',
+              '"com.google.android.apps.youtube.music"',
+              '"app.morphe.android.apps.youtube.music"',
+              '"com.zing.mp3"',
+              '"com.spotify.music"',
+              'private boolean handleVoiceMediaSearch(',
+              'private String extractMediaQuery(',
+              'launchMediaSearchOnProjection(target, url, pkg)',
+          ]:
+              if item not in source:
+                  raise SystemExit(
+                      "FAIL-CLOSED: missing expected feature: " + item
+                  )
+
+          if 'addPickerPackage(choices, "YouTube Music ReVanced"' in source:
+              raise SystemExit(
+                  "FAIL-CLOSED: unwanted Music ReVanced picker remains"
+              )
+
+          if "Compatibility with the old single-default preference." in source:
+              raise SystemExit(
+                  "FAIL-CLOSED: cross-category fallback remains"
+              )
+
+          if source.count("private boolean handleVoiceMediaSearch(") != 1:
+              raise SystemExit(
+                  "FAIL-CLOSED: duplicate/missing media handler"
+              )
+
+          path.write_text(source, encoding="utf-8")
+          print("PASS: Video/Music defaults are independent")
+          print("PASS: picker displays package names and selected marker")
+          print("PASS: generic YouTube opens Video default")
+          print("PASS: search/open intent routing checks passed")
+          PY
+
+      - name: Fix voice search launch on projection
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          import re
+
+          base = Path(
+              "v10-source/app/src/main/java/com/carassistant/v10"
+          )
+          activity_path = base / "V10CarActivity.java"
+          session_path = base / "V10ProjectionSession.java"
+          controller_path = base / "V10DisplayController.java"
+
+          for path in (activity_path, session_path, controller_path):
+              if not path.is_file():
+                  raise SystemExit(
+                      "FAIL-CLOSED: missing source: " + str(path)
+                  )
+
+          activity = activity_path.read_text(encoding="utf-8")
+          session = session_path.read_text(encoding="utf-8")
+          controller = controller_path.read_text(encoding="utf-8")
+
+          def replace_once(text, old, new, label):
+              count = text.count(old)
+              if count != 1:
+                  raise SystemExit(
+                      "FAIL-CLOSED: " + label
+                      + "; expected 1 anchor, got " + str(count)
+                  )
+              print("PASS anchor:", label)
+              return text.replace(old, new, 1)
+
+          # Preserve the projection surface during target switching.
+          activity = replace_once(
+              activity,
+              "        session.release();",
+              (
+                  '        android.util.Log.i("CarAssistantV10Projection", '
+                  '"[TARGET_SWITCH] surface=KEEP_ATTACHED");'
+              ),
+              "preserve surface during normal target switch"
+          )
+
+          # 1. Add a URI launcher with an explicit secondary-display target.
+          controller = replace_once(
+              controller,
+              "    private void execute(String command, String message) {",
+              r'''    public synchronized void launchNewTaskWithUri(
+              ComponentName component, String uri, String packageName) {
+              if (!isReady() || component == null
+                      || uri == null || uri.trim().isEmpty()) {
+                  return;
+              }
+
+              target = component;
+              launched = true;
+
+              final int displayId = display.getDisplayId();
+              final int userId = Process.myUid() / 100000;
+
+              String command = "/system/bin/am start"
+                      + " --user " + userId
+                      + " --display " + displayId
+                      + " --windowingMode 1"
+                      + " -a android.intent.action.VIEW"
+                      + " -d " + shellQuote(uri)
+                      + " -f 0x10000000";
+
+              if (packageName != null && !packageName.trim().isEmpty()) {
+                  command += " -p " + shellQuote(packageName);
+              }
+
+              execute(command, "Projected URI launch failed");
+          }
+
+          private void execute(String command, String message) {''',
+              "controller URI launcher"
+          )
+
+          if controller.count("private static String shellQuote(") != 1:
+              raise SystemExit(
+                  "FAIL-CLOSED: shellQuote helper missing or duplicated"
+              )
+
+          if controller.count(
+                  "public synchronized void launchNewTaskWithUri("
+          ) != 1:
+              raise SystemExit(
+                  "FAIL-CLOSED: direct URI launcher missing or duplicated"
+              )
+
+          if '" --display " + displayId' not in controller:
+              raise SystemExit(
+                  "FAIL-CLOSED: URI launcher has no explicit display target"
+              )
+
+          # 2. Queue the URI before starting a newly selected target.
+          session = replace_once(
+              session,
+              "    private ComponentName target;\n",
+              "    private ComponentName target;\n"
+              "    private String pendingLaunchUri;\n"
+              "    private String pendingLaunchPackage;\n",
+              "session pending URI fields"
+          )
+
+          session = replace_once(
+              session,
+              "    public boolean isActive() {",
+              r'''    public void setTargetAndOpenUri(
+              ComponentName component, String uri, String packageName) {
+          if (destroyed || component == null
+                  || uri == null || uri.trim().isEmpty()) {
+              return;
+          }
+
+          if (target != null && target.equals(component)
+                  && displayController.isReady()
+                  && displayController.isLaunched()
+                  && component.equals(displayController.getTarget())) {
+              pendingLaunchUri = null;
+              pendingLaunchPackage = null;
+              displayController.launchNewTaskWithUri(
+                      component, uri, packageName);
+              taskSession.active();
+              return;
+          }
+
+          boolean changed = target == null || !component.equals(target);
+          target = component;
+          pendingLaunchUri = uri;
+          pendingLaunchPackage = packageName;
+
+          if (changed) {
+              taskSession.setTarget(component);
+              if (displayController.isLaunched()) {
+                  displayController.markNotLaunched();
+              }
+          }
+
+          attachCurrentSurface();
+          }
+
+          public boolean isActive() {''',
+              "session URI entry point"
+          )
+
+          session = replace_once(
+              session,
+              "    private void attachCurrentSurface() {",
+              r'''    private boolean launchPendingUriIfAny() {
+          if (pendingLaunchUri == null || pendingLaunchUri.trim().isEmpty()) {
+              return false;
+          }
+
+          String uri = pendingLaunchUri;
+          String packageName = pendingLaunchPackage;
+          pendingLaunchUri = null;
+          pendingLaunchPackage = null;
+
+          displayController.launchNewTaskWithUri(target, uri, packageName);
+          return true;
+          }
+
+          private void attachCurrentSurface() {''',
+              "session pending URI launcher"
+          )
+
+          session = replace_once(
+              session,
+              "        if (!wasReady) {\n"
+              "            displayController.launchNewTask(target);",
+              "        if (!wasReady) {\n"
+              "            if (!launchPendingUriIfAny()) {\n"
+              "                displayController.launchNewTask(target);\n"
+              "            }",
+              "initial display launch"
+          )
+
+          session = replace_once(
+              session,
+              "        } else if (!wasLaunched) {\n"
+              "            displayController.launchNewTask(target);",
+              "        } else if (!wasLaunched) {\n"
+              "            if (!launchPendingUriIfAny()) {\n"
+              "                displayController.launchNewTask(target);\n"
+              "            }",
+              "new target display launch"
+          )
+
+          session = replace_once(
+              session,
+              "            displayController.resumeExistingTask(target);",
+              "            if (!launchPendingUriIfAny()) {\n"
+              "                displayController.resumeExistingTask(target);\n"
+              "            }",
+              "existing target resume"
+          )
+
+          # 3. Add the Activity entry point for a projected URI launch.
+          anchor = re.compile(
+              r"(?m)^([ \t]*)private void launchMediaSearchOnProjection\("
+          )
+          matches = list(anchor.finditer(activity))
+          if len(matches) != 1:
+              raise SystemExit(
+                  "FAIL-CLOSED: media launch method anchor mismatch"
+              )
+
+          indent = matches[0].group(1)
+          helper = r'''
+          private void launchProjectionWithUri(
+                  ComponentName component, String uri, String packageName) {
+              if (component == null || session == null) return;
+
+              if (activeTarget != null && !activeTarget.equals(component)) {
+                  android.util.Log.i("CarAssistantV10Projection",
+                          "[TARGET_SWITCH] from="
+                                  + activeTarget.flattenToString()
+                                  + " to=" + component.flattenToString()
+                                  + " surface=KEEP_ATTACHED");
+              }
+
+              activeTarget = component;
+              V10SessionStore.setTarget(this, component);
+
+              launcherLayer.setVisibility(View.GONE);
+              appPanel.setVisibility(View.GONE);
+              dashboard.setVisibility(View.GONE);
+              projectionLayer.setVisibility(View.VISIBLE);
+
+              session.setTargetAndOpenUri(component, uri, packageName);
+          }
+
+          '''
+          helper = "\n".join(
+              indent + line if line else ""
+              for line in helper.strip("\n").splitlines()
+          ) + "\n\n"
+
+          activity = (
+              activity[:matches[0].start()]
+              + helper
+              + activity[matches[0].start():]
+          )
+
+          # Replace the old two-stage launch with one URI launch.
+          old_launch = re.compile(
+              r"launchProjection\(target\.component\);"
+              r"\s*handler\.postDelayed\("
+              r"\s*\(\) -> openUriWhenReady\(url, requestedPackage, 8\),"
+              r"\s*250L\);"
+          )
+          matches = list(old_launch.finditer(activity))
+          if len(matches) != 1:
+              raise SystemExit(
+                  "FAIL-CLOSED: old two-stage launch sequence mismatch"
+              )
+
+          activity = old_launch.sub(
+              "launchProjectionWithUri("
+              "target.component, url, requestedPackage);",
+              activity,
+              count=1,
+          )
+
+          # 4. Verify active call sites without rejecting the legacy
+          #    compatibility bridge that must remain in the session.
+          if old_launch.search(activity):
+              raise SystemExit(
+                  "FAIL-CLOSED: old two-stage launch sequence remains active"
+              )
+
+          if "openUriWhenReady(url, requestedPackage, 8)" in activity:
+              raise SystemExit(
+                  "FAIL-CLOSED: old URI opener remains active in Activity"
+              )
+
+          if "displayController.openViewUri(" in activity:
+              raise SystemExit(
+                  "FAIL-CLOSED: Activity calls the legacy URI bridge directly"
+              )
+
+          if activity.count("launchProjectionWithUri(") != 2:
+              raise SystemExit(
+                  "FAIL-CLOSED: expected helper and one URI launch call"
+              )
+
+          checks = [
+              (
+                  controller,
+                  "launchNewTaskWithUri(",
+                  "controller direct URI",
+              ),
+              (
+                  session,
+                  "setTargetAndOpenUri(",
+                  "session URI entry point",
+              ),
+              (
+                  session,
+                  "launchPendingUriIfAny()",
+                  "pending URI dispatch",
+              ),
+              (
+                  activity,
+                  "target.component, url, requestedPackage",
+                  "voice media call site",
+              ),
+              (
+                  controller,
+                  "private static String shellQuote(",
+                  "shell URI quoting helper",
+              ),
+              (
+                  controller,
+                  '" --display " + displayId',
+                  "URI launch display target",
+              ),
+              (
+                  session,
+                  "displayController.launchNewTaskWithUri(",
+                  "same-target URI launch",
+              ),
+          ]
+
+          for source, needle, label in checks:
+              if needle not in source:
+                  raise SystemExit(
+                      "FAIL-CLOSED: verification failed: " + label
+                  )
+
+          # Save only after every anchor and verification succeeds.
+          controller_path.write_text(controller, encoding="utf-8")
+          session_path.write_text(session, encoding="utf-8")
+          activity_path.write_text(activity, encoding="utf-8")
+
+          print("PASS: projected voice search uses one launch intent")
+          print("PASS: legacy compatibility bridge remains untouched")
+          print("PASS: normal tap-selected app launch path is preserved")
+          print("PASS: keyboard workflow and unrelated source files untouched")
+          PY
+
+      - name: Implement native projected media search V1
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          import re
+          import hashlib
+
+          base = Path("v10-source/app/src/main/java/com/carassistant/v10")
+          activity_path = base / "V10CarActivity.java"
+          bridge_path = base / "CarAssistantInputBridge.java"
+          keyboard_path = base / "CarAssistantKeyboard.java"
+
+          for path in (activity_path, bridge_path, keyboard_path):
+              if not path.is_file():
+                  raise SystemExit("FAIL-CLOSED: missing " + str(path))
+
+          def sha(path):
+              return hashlib.sha256(path.read_bytes()).hexdigest()
+
+          bridge_sha = sha(bridge_path)
+          keyboard_sha = sha(keyboard_path)
+          source = activity_path.read_text(encoding="utf-8")
+
+          pattern = re.compile(
+              r"(?ms)^([ \t]*)private void launchMediaSearchOnProjection\(.*?"
+              r"\).*?\{.*?(?=^[ \t]*private String extractMediaQuery\()"
+          )
+          matches = list(pattern.finditer(source))
+          if len(matches) != 1:
+              raise SystemExit(
+                  "FAIL-CLOSED: media launch method boundary; found "
+                  + str(len(matches))
+              )
+
+          indent = matches[0].group(1)
+          replacement = r'''
+          private String extractQueryFromSearchUri(
+                  String url, String packageName) {
+              if (url == null || url.trim().isEmpty()) return "";
+              try {
+                  Uri parsed = Uri.parse(url);
+                  String query = parsed.getQueryParameter("search_query");
+                  if (query == null || query.trim().isEmpty()) {
+                      query = parsed.getQueryParameter("q");
+                  }
+                  if ((query == null || query.trim().isEmpty())
+                          && "com.spotify.music".equals(packageName)) {
+                      String path = parsed.getEncodedPath();
+                      if (path != null && path.startsWith("/search/")) {
+                          query = Uri.decode(path.substring(8));
+                      }
+                  }
+                  return query == null ? "" : query.trim();
+              } catch (RuntimeException ignored) {
+                  return "";
+              }
+          }
+
+          private boolean isNativeSearchPackage(String pkg) {
+              return "com.google.android.youtube".equals(pkg)
+                      || "app.revanced.android.youtube".equals(pkg)
+                      || "app.morphe.android.youtube".equals(pkg)
+                      || "com.google.android.apps.youtube.music".equals(pkg)
+                      || "app.revanced.android.apps.youtube.music".equals(pkg)
+                      || "app.morphe.android.apps.youtube.music".equals(pkg)
+                      || "com.zing.mp3".equals(pkg)
+                      || "com.spotify.music".equals(pkg);
+          }
+
+          private void launchMediaSearchOnProjection(
+                  AppInfo target, String url, String requestedPackage) {
+              if (target == null) {
+                  if (session != null && session.isActive()) {
+                      openUriWhenReady(url, requestedPackage, 0);
+                  } else {
+                      Toast.makeText(this,
+                              "Màn hình chiếu chưa sẵn sàng.",
+                              Toast.LENGTH_LONG).show();
+                  }
+                  return;
+              }
+
+              final String pkg = target.component.getPackageName();
+
+              // Keep navigation and other non-media URI flows unchanged.
+              if (!isNativeSearchPackage(pkg)) {
+                  launchProjectionWithUri(
+                          target.component, url, requestedPackage);
+                  return;
+              }
+
+              final String query = extractQueryFromSearchUri(url, pkg);
+              if (query.isEmpty()) {
+                  Toast.makeText(this,
+                          "Không lấy được nội dung tìm kiếm.",
+                          Toast.LENGTH_LONG).show();
+                  return;
+              }
+
+              // Launch the real app home screen, not a search URL.
+              launchProjection(target.component);
+              final ComponentName expected = target.component;
+
+              handler.postDelayed(() -> {
+                  if (session == null || !session.isActive()
+                          || activeTarget == null
+                          || !expected.equals(activeTarget)) {
+                      Toast.makeText(this,
+                              "Ứng dụng chiếu chưa sẵn sàng.",
+                              Toast.LENGTH_LONG).show();
+                      return;
+                  }
+
+                  if (textureView == null
+                          || textureView.getWidth() < 2
+                          || textureView.getHeight() < 2) {
+                      Toast.makeText(this,
+                              "Kích thước màn hình chiếu không hợp lệ.",
+                              Toast.LENGTH_LONG).show();
+                      return;
+                  }
+
+                  float w = textureView.getWidth();
+                  float h = textureView.getHeight();
+                  float x;
+                  float y;
+
+                  if (pkg.equals("com.google.android.youtube")
+                          || pkg.equals("app.revanced.android.youtube")
+                          || pkg.equals("app.morphe.android.youtube")) {
+                      x = w * 0.94f;
+                      y = h * 0.09f;
+                  } else if (pkg.equals(
+                          "com.google.android.apps.youtube.music")
+                          || pkg.equals(
+                          "app.revanced.android.apps.youtube.music")
+                          || pkg.equals(
+                          "app.morphe.android.apps.youtube.music")) {
+                      x = w * 0.20f;
+                      y = h * 0.91f;
+                  } else if (pkg.equals("com.spotify.music")) {
+                      x = w * 0.31f;
+                      y = h * 0.91f;
+                  } else {
+                      // Zing MP3: search field near the top.
+                      x = w * 0.50f;
+                      y = h * 0.09f;
+                  }
+
+                  android.util.Log.i("CarAssistantNativeSearch",
+                          "search tap: " + pkg + " x=" + x + " y=" + y);
+                  session.tap(x, y);
+
+                  // Allow the app's native search keyboard to appear.
+                  handler.postDelayed(() -> {
+                      if (session == null || !session.isActive()
+                              || activeTarget == null
+                              || !expected.equals(activeTarget)) return;
+
+                      CarAssistantInputBridge input =
+                              new CarAssistantInputBridge(session);
+                      input.text(query);
+
+                      // Send Enter once, after the text command is queued.
+                      handler.postDelayed(() -> {
+                          if (session != null && session.isActive()
+                                  && expected.equals(activeTarget)) {
+                              input.key(66);
+                              Toast.makeText(this,
+                                      "Đã gửi tìm kiếm: " + target.name,
+                                      Toast.LENGTH_SHORT).show();
+                          }
+                      }, 700L);
+                  }, 1000L);
+              }, 2200L);
+          }
+          '''
+          replacement = "\n".join(
+              indent + line if line else ""
+              for line in replacement.strip("\n").splitlines()
+          ) + "\n\n"
+
+          source = (
+              source[:matches[0].start()]
+              + replacement
+              + source[matches[0].end():]
+          )
+          required_literals = [
+          "extractQueryFromSearchUri(",
+          "isNativeSearchPackage(",
+          "new CarAssistantInputBridge(session)",
+          "input.text(query)",
+          "input.key(66)",
+          "launchProjection(target.component)",
+          ]
+
+          for required in required_literals:
+          if required not in source:
+              raise SystemExit("FAIL-CLOSED: missing " + required)
+
+          # Accept URI launcher calls with line breaks/whitespace.
+          if not re.search(
+          r"launchProjectionWithUri\s*\(\s*"
+          r"target\.component\s*,\s*url\s*,\s*requestedPackage\s*\)",
+          source,
+          ):
+          raise SystemExit(
+              "FAIL-CLOSED: missing projected URI launch call"
+          )
+          if source.count("private void launchMediaSearchOnProjection(") != 1:
+              raise SystemExit("FAIL-CLOSED: duplicate media handler")
+
+          activity_path.write_text(source, encoding="utf-8")
+
+          if sha(bridge_path) != bridge_sha:
+              raise SystemExit("FAIL-CLOSED: input bridge was changed")
+          if sha(keyboard_path) != keyboard_sha:
+              raise SystemExit("FAIL-CLOSED: keyboard source was changed")
+
+          print("PASS: native media search flow installed")
+          print("PASS: existing keyboard bridge remains unchanged")
+          print("PASS: non-media URI flow preserved")
+          PY
+
+      - name: Fix Surface replacement lifecycle V1
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          import re
+
+          path = Path(
+              "v10-source/app/src/main/java/com/carassistant/v10/V10DisplayController.java"
+          )
+          if not path.is_file():
+              raise SystemExit("FAIL-CLOSED: display controller missing")
+
+          source = path.read_text(encoding="utf-8")
+          pattern = re.compile(
+              r"(?ms)^    public synchronized void attachSurface\(SurfaceTexture texture, int width, int height\) \{.*?^    \}\n[ \t]*\n(?=    public synchronized void detachSurface\(\))"
+          )
+          matches = list(pattern.finditer(source))
+          if len(matches) != 1:
+              raise SystemExit(
+                  "FAIL-CLOSED: attachSurface anchor mismatch: "
+                  + str(len(matches))
+              )
+
+          old_method = matches[0].group(0)
+          if ("replaceSurface(newSurface);" not in old_method
+                  or "virtualDisplay.setSurface(newSurface);" not in old_method):
+              raise SystemExit(
+                  "FAIL-CLOSED: unexpected attachSurface implementation"
+              )
+
+          new_method = """    public synchronized void attachSurface(SurfaceTexture texture, int width, int height) {
+          if (destroyed || virtualDisplay == null || texture == null
+                  || width < 1 || height < 1) return;
+          texture.setDefaultBufferSize(width, height);
+          Surface newSurface = new Surface(texture);
+          Surface oldSurface = surface;
+          try {
+              virtualDisplay.setSurface(newSurface);
+              surface = newSurface;
+              if (oldSurface != null && oldSurface != newSurface) {
+                  try { oldSurface.release(); }
+                  catch (Throwable ignored) { }
+              }
+          } catch (RuntimeException e) {
+              try { newSurface.release(); }
+              catch (Throwable ignored) { }
+              Log.w(TAG, "Display surface attach failed", e);
+          }
+          }"""
+
+          source = (
+              source[:matches[0].start()]
+              + new_method + "\n"
+              + source[matches[0].end():]
+          )
+
+          check = re.search(
+              r"(?ms)^    public synchronized void attachSurface\(.*?(?=^    public synchronized void detachSurface\(\))",
+              source,
+          )
+          if not check:
+              raise SystemExit("FAIL-CLOSED: patched method missing")
+
+          method = check.group(0)
+          attach = method.find("virtualDisplay.setSurface(newSurface);")
+          assign = method.find("surface = newSurface;")
+          release = method.find("oldSurface.release()")
+          if min(attach, assign, release) < 0 or not (
+                  attach < assign < release):
+              raise SystemExit(
+                  "FAIL-CLOSED: Surface operation order incorrect"
+              )
+
+          for signature in (
+              "public synchronized void launchNewTask(",
+              "public synchronized void resumeExistingTask(",
+              "public synchronized void detachSurface(",
+          ):
+              if source.count(signature) != 1:
+                  raise SystemExit(
+                      "FAIL-CLOSED: unrelated method changed: " + signature
+                  )
+
+          path.write_text(source, encoding="utf-8")
+          print("PASS: replacement Surface attached before old Surface release")
+          print("PASS: launch/resume/detach methods retained")
+          PY
+
+      - name: Fix default routing, pending URI and launch state V1
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          import hashlib
+          import re
+
+          base = Path("v10-source/app/src/main/java/com/carassistant/v10")
+          activity_path = base / "V10CarActivity.java"
+          session_path = base / "V10ProjectionSession.java"
+          controller_path = base / "V10DisplayController.java"
+          bridge_path = base / "CarAssistantInputBridge.java"
+          keyboard_path = base / "CarAssistantKeyboard.java"
+
+          required_files = (
+              activity_path, session_path, controller_path,
+              bridge_path, keyboard_path,
+          )
+          for path in required_files:
+              if not path.is_file():
+                  raise SystemExit(
+                      "FAIL-CLOSED: required source missing: " + str(path)
+                  )
+
+          def digest(path):
+              return hashlib.sha256(path.read_bytes()).hexdigest()
+
+          bridge_sha = digest(bridge_path)
+          keyboard_sha = digest(keyboard_path)
+
+          activity = activity_path.read_text(encoding="utf-8")
+          session = session_path.read_text(encoding="utf-8")
+          controller = controller_path.read_text(encoding="utf-8")
+
+          def replace_one(text, pattern, replacement, label):
+              matches = list(pattern.finditer(text))
+              if len(matches) != 1:
+                  raise SystemExit(
+                      "FAIL-CLOSED: " + label
+                      + "; expected exactly 1 anchor, got "
+                      + str(len(matches))
+                  )
+              return (
+                  text[:matches[0].start()]
+                  + replacement
+                  + text[matches[0].end():]
+              )
+
+          # 1. Verify media-routing changes from the earlier workflow step.
+          routing_checks = (
+              (r'command.matches("^mo\\s+youtube$")',
+               "generic YouTube classified as video"),
+              ('"default_" + category + "_component"',
+               "independent category defaults"),
+              ('command.contains("spotify")',
+               "explicit app routing"),
+              (r'"^mo\\s+(nhac|video|phim|bai hat)$"',
+               "open-default versus content-search decision"),
+              ('private void launchMediaSearchOnProjection(',
+               "native projected media handler"),
+          )
+          for needle, label in routing_checks:
+              if needle not in activity:
+                  raise SystemExit(
+                      "FAIL-CLOSED: routing check failed: " + label
+                  )
+
+          if "Compatibility with the old single-default preference." in activity:
+              raise SystemExit(
+                  "FAIL-CLOSED: legacy cross-category fallback remains"
+              )
+
+          if activity.count("private void launchMediaSearchOnProjection(") != 1:
+              raise SystemExit(
+                  "FAIL-CLOSED: media handler missing or duplicated"
+              )
+
+          # 2. Add the pending target identity beside the URI fields.
+          field_anchor = "    private String pendingLaunchPackage;\n"
+          if session.count(field_anchor) != 1:
+              raise SystemExit(
+                  "FAIL-CLOSED: pending URI field anchor mismatch"
+              )
+          if "private ComponentName pendingLaunchComponent;" in session:
+              raise SystemExit(
+                  "FAIL-CLOSED: pending target field already exists"
+              )
+
+          session = session.replace(
+              field_anchor,
+              field_anchor
+              + "    private ComponentName pendingLaunchComponent;\n",
+              1,
+          )
+
+          # 3. Normal target changes must discard a URI queued for another app.
+          set_target_pattern = re.compile(
+              r"(?ms)^    public void setTarget\(ComponentName component\) \{"
+              r".*?^    \}\n\n(?=    public boolean isActive\(\))"
+          )
+          set_target_method = r'''    public void setTarget(ComponentName component) {
+              if (destroyed) return;
+
+              if (pendingLaunchUri != null
+                      && (component == null
+                      || pendingLaunchComponent == null
+                      || !pendingLaunchComponent.equals(component))) {
+                  pendingLaunchUri = null;
+                  pendingLaunchPackage = null;
+                  pendingLaunchComponent = null;
+              }
+
+              if (component == null) {
+                  target = null;
+                  taskSession.clear();
+                  return;
+              }
+
+              boolean changed = target == null || !component.equals(target);
+              target = component;
+              if (changed) {
+                  taskSession.setTarget(component);
+                  if (displayController.isLaunched()) {
+                      displayController.markNotLaunched();
+                  }
+              }
+              attachCurrentSurface();
+          }
+
+          '''
+          session = replace_one(
+              session, set_target_pattern, set_target_method,
+              "setTarget method boundary",
+          )
+
+          # 4. Queue the URI together with its intended ComponentName.
+          uri_method_pattern = re.compile(
+              r"(?ms)^    public void setTargetAndOpenUri\(.*?"
+              r"^    \}\n\n(?=    public boolean isActive\(\))"
+          )
+          uri_method = r'''    public void setTargetAndOpenUri(
+                  ComponentName component, String uri, String packageName) {
+              if (destroyed || component == null
+                      || uri == null || uri.trim().isEmpty()) {
+                  return;
+              }
+
+              if (target != null && target.equals(component)
+                      && displayController.isReady()
+                      && displayController.isLaunched()
+                      && component.equals(displayController.getTarget())) {
+                  pendingLaunchUri = null;
+                  pendingLaunchPackage = null;
+                  pendingLaunchComponent = null;
+                  displayController.launchNewTaskWithUri(
+                          component, uri, packageName);
+                  taskSession.active();
+                  return;
+              }
+
+              boolean changed = target == null || !component.equals(target);
+              target = component;
+              pendingLaunchUri = uri;
+              pendingLaunchPackage = packageName;
+              pendingLaunchComponent = component;
+
+              if (changed) {
+                  taskSession.setTarget(component);
+                  if (displayController.isLaunched()) {
+                      displayController.markNotLaunched();
+                  }
+              }
+
+              attachCurrentSurface();
+          }
+
+          '''
+          session = replace_one(
+              session, uri_method_pattern, uri_method,
+              "setTargetAndOpenUri method boundary",
+          )
+
+          # 5. Never dispatch a pending URI if its target is stale.
+          pending_pattern = re.compile(
+              r"(?ms)^    private boolean launchPendingUriIfAny\(\) \{"
+              r".*?^    \}\n\n(?=    private void attachCurrentSurface\(\))"
+          )
+          pending_method = r'''    private boolean launchPendingUriIfAny() {
+              if (pendingLaunchUri == null
+                      || pendingLaunchUri.trim().isEmpty()) {
+                  pendingLaunchUri = null;
+                  pendingLaunchPackage = null;
+                  pendingLaunchComponent = null;
+                  return false;
+              }
+
+              if (target == null || pendingLaunchComponent == null
+                      || !pendingLaunchComponent.equals(target)) {
+                  pendingLaunchUri = null;
+                  pendingLaunchPackage = null;
+                  pendingLaunchComponent = null;
+                  Log.w(TAG, "Discarded stale pending URI");
+                  return false;
+              }
+
+              String uri = pendingLaunchUri;
+              String packageName = pendingLaunchPackage;
+              ComponentName expected = pendingLaunchComponent;
+
+              pendingLaunchUri = null;
+              pendingLaunchPackage = null;
+              pendingLaunchComponent = null;
+
+              if (!expected.equals(target)) {
+                  Log.w(TAG, "Discarded pending URI after target change");
+                  return false;
+              }
+
+              displayController.launchNewTaskWithUri(
+                      expected, uri, packageName);
+              return true;
+          }
+
+          '''
+          session = replace_one(
+              session, pending_pattern, pending_method,
+              "launchPendingUriIfAny method boundary",
+          )
+
+          # 6. Replace only the URI launcher. Do not alter normal launch,
+          #    resume, surface, or keyboard/input methods.
+          launch_pattern = re.compile(
+              r"(?ms)^    public synchronized void launchNewTaskWithUri\(.*?"
+              r"^    \}\n\n(?=    private void execute\()"
+          )
+          launch_method = r'''    public synchronized void launchNewTaskWithUri(
+                  ComponentName component, String uri, String packageName) {
+              if (!isReady() || component == null
+                      || uri == null || uri.trim().isEmpty()) {
+                  return;
+              }
+
+              target = component;
+              launched = false;
+
+              final ComponentName expected = component;
+              final int displayId = display.getDisplayId();
+              final int userId = Process.myUid() / 100000;
+
+              String command = "/system/bin/am start"
+                      + " --user " + userId
+                      + " --display " + displayId
+                      + " --windowingMode 1"
+                      + " -a android.intent.action.VIEW"
+                      + " -d " + shellQuote(uri)
+                      + " -f 0x10000000";
+
+              if (packageName != null && !packageName.trim().isEmpty()) {
+                  command += " -p " + shellQuote(packageName);
+              }
+
+              final String launchCommand = command;
+              RootShellSession.EXEC.execute(() -> {
+                  try {
+                      rootShell.run(10, launchCommand);
+                      synchronized (V10DisplayController.this) {
+                          if (!destroyed && expected.equals(target)) {
+                              launched = true;
+                          }
+                      }
+                  } catch (Throwable t) {
+                      synchronized (V10DisplayController.this) {
+                          if (expected.equals(target)) {
+                              launched = false;
+                          }
+                      }
+                      Log.w(TAG, "Projected URI launch failed", t);
+                  }
+              });
+          }
+
+          '''
+          controller = replace_one(
+              controller, launch_pattern, launch_method,
+              "launchNewTaskWithUri method boundary",
+          )
+
+          # 7. Fail-closed structural and ordering checks before any write.
+          if session.count("private String pendingLaunchUri;") != 1:
+              raise SystemExit("FAIL-CLOSED: pending URI field mismatch")
+          if session.count("private String pendingLaunchPackage;") != 1:
+              raise SystemExit("FAIL-CLOSED: pending package field mismatch")
+          if session.count("private ComponentName pendingLaunchComponent;") != 1:
+              raise SystemExit("FAIL-CLOSED: pending target field mismatch")
+          for signature in (
+              "public void setTarget(ComponentName component)",
+              "public void setTargetAndOpenUri(",
+              "private boolean launchPendingUriIfAny()",
+              "private void attachCurrentSurface()",
+          ):
+              if session.count(signature) != 1:
+                  raise SystemExit(
+                      "FAIL-CLOSED: session method mismatch: " + signature
+                  )
+
+          if controller.count("public synchronized void launchNewTaskWithUri(") != 1:
+              raise SystemExit(
+                  "FAIL-CLOSED: URI launch method missing or duplicated"
+              )
+          if controller.count("private static String shellQuote(") != 1:
+              raise SystemExit(
+                  "FAIL-CLOSED: shellQuote missing or duplicated"
+              )
+
+          launch_match = launch_pattern.search(controller)
+          if launch_match:
+              raise SystemExit(
+                  "FAIL-CLOSED: URI launcher boundary remained after replacement"
+              )
+
+          method_start = controller.find(
+              "public synchronized void launchNewTaskWithUri("
+          )
+          method_end = controller.find(
+              "    private void execute(", method_start
+          )
+          if method_start < 0 or method_end < 0:
+              raise SystemExit(
+                  "FAIL-CLOSED: cannot isolate final URI launcher"
+              )
+          final_launch = controller[method_start:method_end]
+          run_pos = final_launch.find("rootShell.run(10, launchCommand)")
+          success_pos = final_launch.find("launched = true;")
+          failure_pos = final_launch.find("launched = false;")
+          if min(run_pos, success_pos, failure_pos) < 0:
+              raise SystemExit(
+                  "FAIL-CLOSED: launch success/failure state missing"
+              )
+          if not (run_pos < success_pos):
+              raise SystemExit(
+                  "FAIL-CLOSED: launch success set before shell result"
+              )
+          if "execute(command, \"Projected URI launch failed\")" in final_launch:
+              raise SystemExit(
+                  "FAIL-CLOSED: URI launcher still uses fire-and-forget helper"
+              )
+
+          # Ensure Surface replacement fix remains intact.
+          attach_start = controller.find(
+              "public synchronized void attachSurface("
+          )
+          detach_start = controller.find(
+              "public synchronized void detachSurface()", attach_start
+          )
+          if attach_start < 0 or detach_start < 0:
+              raise SystemExit(
+                  "FAIL-CLOSED: Surface lifecycle methods missing"
+              )
+          attach_method = controller[attach_start:detach_start]
+          attach_pos = attach_method.find("virtualDisplay.setSurface(newSurface);")
+          assign_pos = attach_method.find("surface = newSurface;")
+          release_pos = attach_method.find("oldSurface.release()")
+          if min(attach_pos, assign_pos, release_pos) < 0 or not (
+                  attach_pos < assign_pos < release_pos):
+              raise SystemExit(
+                  "FAIL-CLOSED: Surface replacement ordering regressed"
+              )
+
+          if "displayController.launchNewTaskWithUri(" not in session:
+              raise SystemExit(
+                  "FAIL-CLOSED: pending URI dispatch call missing"
+              )
+
+          # Save only after every anchor and validation has passed.
+          session_path.write_text(session, encoding="utf-8")
+          controller_path.write_text(controller, encoding="utf-8")
+
+          if digest(bridge_path) != bridge_sha:
+              raise SystemExit(
+                  "FAIL-CLOSED: CarAssistantInputBridge changed"
+              )
+          if digest(keyboard_path) != keyboard_sha:
+              raise SystemExit(
+                  "FAIL-CLOSED: CarAssistantKeyboard changed"
+              )
+
+          print("PASS: category routing verified; no legacy fallback")
+          print("PASS: stale pending URI cannot cross target switches")
+          print("PASS: URI launch state changes only after shell success")
+          print("PASS: Surface lifecycle ordering preserved")
+          print("PASS: keyboard and input bridge unchanged")
+          PY
+
+      - name: Validate, build and package APK
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          import subprocess
+          import yaml
+
+          path = Path(".github/workflows/2phattrientroly.yml")
+          workflow = yaml.safe_load(path.read_text(encoding="utf-8"))
+          steps = workflow["jobs"]["build"]["steps"]
+          wanted = "Validate, build and package APK"
+
+          matches = [
+              step for step in steps
+              if step.get("name") == wanted and step.get("run")
+          ]
+          if len(matches) != 1:
+              raise SystemExit(
+                  "FAIL-CLOSED: original build step not found exactly once"
+              )
+
+          subprocess.run(
+              [
+                  "bash", "-e", "-u", "-o", "pipefail", "-c",
+                  matches[0]["run"],
+              ],
+              check=True,
+          )
+          print("PASS: original validation/build/package step completed")
+          PY
+
+      - name: Upload Core Features APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: CarAssistant-3-CoreFeatures
+          path: |
+            dist/CarAssistant-1-PhatTrienTroLy.apk
+            dist/CarAssistant-1-PhatTrienTroLy.sha256
+          if-no-files-found: error
