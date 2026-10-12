@@ -923,6 +923,223 @@ jobs:
           print("PASS: keyboard workflow and unrelated source files untouched")
           PY
       
+      - name: Implement native projected media search V1
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          import re
+          import hashlib
+
+          base = Path("v10-source/app/src/main/java/com/carassistant/v10")
+          activity_path = base / "V10CarActivity.java"
+          bridge_path = base / "CarAssistantInputBridge.java"
+          keyboard_path = base / "CarAssistantKeyboard.java"
+
+          for path in (activity_path, bridge_path, keyboard_path):
+              if not path.is_file():
+                  raise SystemExit("FAIL-CLOSED: missing " + str(path))
+
+          def sha(path):
+              return hashlib.sha256(path.read_bytes()).hexdigest()
+
+          bridge_sha = sha(bridge_path)
+          keyboard_sha = sha(keyboard_path)
+          source = activity_path.read_text(encoding="utf-8")
+
+          pattern = re.compile(
+              r"(?ms)^([ \t]*)private void launchMediaSearchOnProjection\(.*?"
+              r"\).*?\{.*?(?=^[ \t]*private String extractMediaQuery\()"
+          )
+          matches = list(pattern.finditer(source))
+          if len(matches) != 1:
+              raise SystemExit(
+                  "FAIL-CLOSED: media launch method boundary; found "
+                  + str(len(matches))
+              )
+
+          indent = matches[0].group(1)
+          replacement = r'''
+          private String extractQueryFromSearchUri(
+                  String url, String packageName) {
+              if (url == null || url.trim().isEmpty()) return "";
+              try {
+                  Uri parsed = Uri.parse(url);
+                  String query = parsed.getQueryParameter("search_query");
+                  if (query == null || query.trim().isEmpty()) {
+                      query = parsed.getQueryParameter("q");
+                  }
+                  if ((query == null || query.trim().isEmpty())
+                          && "com.spotify.music".equals(packageName)) {
+                      String path = parsed.getEncodedPath();
+                      if (path != null && path.startsWith("/search/")) {
+                          query = Uri.decode(path.substring(8));
+                      }
+                  }
+                  return query == null ? "" : query.trim();
+              } catch (RuntimeException ignored) {
+                  return "";
+              }
+          }
+
+          private boolean isNativeSearchPackage(String pkg) {
+              return "com.google.android.youtube".equals(pkg)
+                      || "app.revanced.android.youtube".equals(pkg)
+                      || "app.morphe.android.youtube".equals(pkg)
+                      || "com.google.android.apps.youtube.music".equals(pkg)
+                      || "app.revanced.android.apps.youtube.music".equals(pkg)
+                      || "app.morphe.android.apps.youtube.music".equals(pkg)
+                      || "com.zing.mp3".equals(pkg)
+                      || "com.spotify.music".equals(pkg);
+          }
+
+          private void launchMediaSearchOnProjection(
+                  AppInfo target, String url, String requestedPackage) {
+              if (target == null) {
+                  if (session != null && session.isActive()) {
+                      openUriWhenReady(url, requestedPackage, 0);
+                  } else {
+                      Toast.makeText(this,
+                              "Màn hình chiếu chưa sẵn sàng.",
+                              Toast.LENGTH_LONG).show();
+                  }
+                  return;
+              }
+
+              final String pkg = target.component.getPackageName();
+
+              // Keep navigation and other non-media URI flows unchanged.
+              if (!isNativeSearchPackage(pkg)) {
+                  launchProjectionWithUri(
+                          target.component, url, requestedPackage);
+                  return;
+              }
+
+              final String query = extractQueryFromSearchUri(url, pkg);
+              if (query.isEmpty()) {
+                  Toast.makeText(this,
+                          "Không lấy được nội dung tìm kiếm.",
+                          Toast.LENGTH_LONG).show();
+                  return;
+              }
+
+              // Launch the real app home screen, not a search URL.
+              launchProjection(target.component);
+              final ComponentName expected = target.component;
+
+              handler.postDelayed(() -> {
+                  if (session == null || !session.isActive()
+                          || activeTarget == null
+                          || !expected.equals(activeTarget)) {
+                      Toast.makeText(this,
+                              "Ứng dụng chiếu chưa sẵn sàng.",
+                              Toast.LENGTH_LONG).show();
+                      return;
+                  }
+
+                  if (textureView == null
+                          || textureView.getWidth() < 2
+                          || textureView.getHeight() < 2) {
+                      Toast.makeText(this,
+                              "Kích thước màn hình chiếu không hợp lệ.",
+                              Toast.LENGTH_LONG).show();
+                      return;
+                  }
+
+                  float w = textureView.getWidth();
+                  float h = textureView.getHeight();
+                  float x;
+                  float y;
+
+                  if (pkg.equals("com.google.android.youtube")
+                          || pkg.equals("app.revanced.android.youtube")
+                          || pkg.equals("app.morphe.android.youtube")) {
+                      x = w * 0.94f;
+                      y = h * 0.09f;
+                  } else if (pkg.equals(
+                          "com.google.android.apps.youtube.music")
+                          || pkg.equals(
+                          "app.revanced.android.apps.youtube.music")
+                          || pkg.equals(
+                          "app.morphe.android.apps.youtube.music")) {
+                      x = w * 0.20f;
+                      y = h * 0.91f;
+                  } else if (pkg.equals("com.spotify.music")) {
+                      x = w * 0.31f;
+                      y = h * 0.91f;
+                  } else {
+                      // Zing MP3: search field near the top.
+                      x = w * 0.50f;
+                      y = h * 0.09f;
+                  }
+
+                  android.util.Log.i("CarAssistantNativeSearch",
+                          "search tap: " + pkg + " x=" + x + " y=" + y);
+                  session.tap(x, y);
+
+                  // Allow the app's native search keyboard to appear.
+                  handler.postDelayed(() -> {
+                      if (session == null || !session.isActive()
+                              || activeTarget == null
+                              || !expected.equals(activeTarget)) return;
+
+                      CarAssistantInputBridge input =
+                              new CarAssistantInputBridge(session);
+                      input.text(query);
+
+                      // Send Enter once, after the text command is queued.
+                      handler.postDelayed(() -> {
+                          if (session != null && session.isActive()
+                                  && expected.equals(activeTarget)) {
+                              input.key(66);
+                              Toast.makeText(this,
+                                      "Đã gửi tìm kiếm: " + target.name,
+                                      Toast.LENGTH_SHORT).show();
+                          }
+                      }, 700L);
+                  }, 1000L);
+              }, 2200L);
+          }
+          '''
+          replacement = "\n".join(
+              indent + line if line else ""
+              for line in replacement.strip("\n").splitlines()
+          ) + "\n\n"
+
+          source = (
+              source[:matches[0].start()]
+              + replacement
+              + source[matches[0].end():]
+          )
+
+          for required in [
+              "extractQueryFromSearchUri(",
+              "isNativeSearchPackage(",
+              "new CarAssistantInputBridge(session)",
+              "input.text(query)",
+              "input.key(66)",
+              "launchProjection(target.component)",
+              "launchProjectionWithUri(target.component, url, requestedPackage)",
+          ]:
+              if required not in source:
+                  raise SystemExit("FAIL-CLOSED: missing " + required)
+
+          if source.count("private void launchMediaSearchOnProjection(") != 1:
+              raise SystemExit("FAIL-CLOSED: duplicate media handler")
+
+          activity_path.write_text(source, encoding="utf-8")
+
+          if sha(bridge_path) != bridge_sha:
+              raise SystemExit("FAIL-CLOSED: input bridge was changed")
+          if sha(keyboard_path) != keyboard_sha:
+              raise SystemExit("FAIL-CLOSED: keyboard source was changed")
+
+          print("PASS: native media search flow installed")
+          print("PASS: existing keyboard bridge remains unchanged")
+          print("PASS: non-media URI flow preserved")
+          PY
+
       - name: Fix Surface replacement lifecycle V1
         shell: bash
         run: |
