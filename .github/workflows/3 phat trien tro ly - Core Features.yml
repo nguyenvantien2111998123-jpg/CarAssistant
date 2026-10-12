@@ -1229,6 +1229,401 @@ jobs:
           print("PASS: replacement Surface attached before old Surface release")
           print("PASS: launch/resume/detach methods retained")
           PY
+      
+      - name: Fix default routing, pending URI and launch state V1
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          import hashlib
+          import re
+
+          base = Path("v10-source/app/src/main/java/com/carassistant/v10")
+          activity_path = base / "V10CarActivity.java"
+          session_path = base / "V10ProjectionSession.java"
+          controller_path = base / "V10DisplayController.java"
+          bridge_path = base / "CarAssistantInputBridge.java"
+          keyboard_path = base / "CarAssistantKeyboard.java"
+
+          required_files = (
+              activity_path, session_path, controller_path,
+              bridge_path, keyboard_path,
+          )
+          for path in required_files:
+              if not path.is_file():
+                  raise SystemExit(
+                      "FAIL-CLOSED: required source missing: " + str(path)
+                  )
+
+          def digest(path):
+              return hashlib.sha256(path.read_bytes()).hexdigest()
+
+          bridge_sha = digest(bridge_path)
+          keyboard_sha = digest(keyboard_path)
+
+          activity = activity_path.read_text(encoding="utf-8")
+          session = session_path.read_text(encoding="utf-8")
+          controller = controller_path.read_text(encoding="utf-8")
+
+          def replace_one(text, pattern, replacement, label):
+              matches = list(pattern.finditer(text))
+              if len(matches) != 1:
+                  raise SystemExit(
+                      "FAIL-CLOSED: " + label
+                      + "; expected exactly 1 anchor, got "
+                      + str(len(matches))
+                  )
+              return (
+                  text[:matches[0].start()]
+                  + replacement
+                  + text[matches[0].end():]
+              )
+
+          # 1. Verify media-routing changes from the earlier workflow step.
+          routing_checks = (
+              (r'command.matches("^mo\\s+youtube$")',
+               "generic YouTube classified as video"),
+              ('"default_" + category + "_component"',
+               "independent category defaults"),
+              ('command.contains("spotify")',
+               "explicit app routing"),
+              (r'"^mo\\s+(nhac|video|phim|bai hat)$"',
+               "open-default versus content-search decision"),
+              ('private void launchMediaSearchOnProjection(',
+               "native projected media handler"),
+          )
+          for needle, label in routing_checks:
+              if needle not in activity:
+                  raise SystemExit(
+                      "FAIL-CLOSED: routing check failed: " + label
+                  )
+
+          if "Compatibility with the old single-default preference." in activity:
+              raise SystemExit(
+                  "FAIL-CLOSED: legacy cross-category fallback remains"
+              )
+
+          if activity.count("private void launchMediaSearchOnProjection(") != 1:
+              raise SystemExit(
+                  "FAIL-CLOSED: media handler missing or duplicated"
+              )
+
+          # 2. Add the pending target identity beside the URI fields.
+          field_anchor = "    private String pendingLaunchPackage;\n"
+          if session.count(field_anchor) != 1:
+              raise SystemExit(
+                  "FAIL-CLOSED: pending URI field anchor mismatch"
+              )
+          if "private ComponentName pendingLaunchComponent;" in session:
+              raise SystemExit(
+                  "FAIL-CLOSED: pending target field already exists"
+              )
+
+          session = session.replace(
+              field_anchor,
+              field_anchor
+              + "    private ComponentName pendingLaunchComponent;\n",
+              1,
+          )
+
+          # 3. Normal target changes must discard a URI queued for another app.
+          set_target_pattern = re.compile(
+              r"(?ms)^    public void setTarget\(ComponentName component\) \{"
+              r".*?^    \}\n\n(?=    public boolean isActive\(\))"
+          )
+          set_target_method = r'''    public void setTarget(ComponentName component) {
+              if (destroyed) return;
+
+              if (pendingLaunchUri != null
+                      && (component == null
+                      || pendingLaunchComponent == null
+                      || !pendingLaunchComponent.equals(component))) {
+                  pendingLaunchUri = null;
+                  pendingLaunchPackage = null;
+                  pendingLaunchComponent = null;
+              }
+
+              if (component == null) {
+                  target = null;
+                  taskSession.clear();
+                  return;
+              }
+
+              boolean changed = target == null || !component.equals(target);
+              target = component;
+              if (changed) {
+                  taskSession.setTarget(component);
+                  if (displayController.isLaunched()) {
+                      displayController.markNotLaunched();
+                  }
+              }
+              attachCurrentSurface();
+          }
+
+          '''
+          session = replace_one(
+              session, set_target_pattern, set_target_method,
+              "setTarget method boundary",
+          )
+
+          # 4. Queue the URI together with its intended ComponentName.
+          uri_method_pattern = re.compile(
+              r"(?ms)^    public void setTargetAndOpenUri\(.*?"
+              r"^    \}\n\n(?=    public boolean isActive\(\))"
+          )
+          uri_method = r'''    public void setTargetAndOpenUri(
+                  ComponentName component, String uri, String packageName) {
+              if (destroyed || component == null
+                      || uri == null || uri.trim().isEmpty()) {
+                  return;
+              }
+
+              if (target != null && target.equals(component)
+                      && displayController.isReady()
+                      && displayController.isLaunched()
+                      && component.equals(displayController.getTarget())) {
+                  pendingLaunchUri = null;
+                  pendingLaunchPackage = null;
+                  pendingLaunchComponent = null;
+                  displayController.launchNewTaskWithUri(
+                          component, uri, packageName);
+                  taskSession.active();
+                  return;
+              }
+
+              boolean changed = target == null || !component.equals(target);
+              target = component;
+              pendingLaunchUri = uri;
+              pendingLaunchPackage = packageName;
+              pendingLaunchComponent = component;
+
+              if (changed) {
+                  taskSession.setTarget(component);
+                  if (displayController.isLaunched()) {
+                      displayController.markNotLaunched();
+                  }
+              }
+
+              attachCurrentSurface();
+          }
+
+          '''
+          session = replace_one(
+              session, uri_method_pattern, uri_method,
+              "setTargetAndOpenUri method boundary",
+          )
+
+          # 5. Never dispatch a pending URI if its target is stale.
+          pending_pattern = re.compile(
+              r"(?ms)^    private boolean launchPendingUriIfAny\(\) \{"
+              r".*?^    \}\n\n(?=    private void attachCurrentSurface\(\))"
+          )
+          pending_method = r'''    private boolean launchPendingUriIfAny() {
+              if (pendingLaunchUri == null
+                      || pendingLaunchUri.trim().isEmpty()) {
+                  pendingLaunchUri = null;
+                  pendingLaunchPackage = null;
+                  pendingLaunchComponent = null;
+                  return false;
+              }
+
+              if (target == null || pendingLaunchComponent == null
+                      || !pendingLaunchComponent.equals(target)) {
+                  pendingLaunchUri = null;
+                  pendingLaunchPackage = null;
+                  pendingLaunchComponent = null;
+                  Log.w(TAG, "Discarded stale pending URI");
+                  return false;
+              }
+
+              String uri = pendingLaunchUri;
+              String packageName = pendingLaunchPackage;
+              ComponentName expected = pendingLaunchComponent;
+
+              pendingLaunchUri = null;
+              pendingLaunchPackage = null;
+              pendingLaunchComponent = null;
+
+              if (!expected.equals(target)) {
+                  Log.w(TAG, "Discarded pending URI after target change");
+                  return false;
+              }
+
+              displayController.launchNewTaskWithUri(
+                      expected, uri, packageName);
+              return true;
+          }
+
+          '''
+          session = replace_one(
+              session, pending_pattern, pending_method,
+              "launchPendingUriIfAny method boundary",
+          )
+
+          # 6. Replace only the URI launcher. Do not alter normal launch,
+          #    resume, surface, or keyboard/input methods.
+          launch_pattern = re.compile(
+              r"(?ms)^    public synchronized void launchNewTaskWithUri\(.*?"
+              r"^    \}\n\n(?=    private void execute\()"
+          )
+          launch_method = r'''    public synchronized void launchNewTaskWithUri(
+                  ComponentName component, String uri, String packageName) {
+              if (!isReady() || component == null
+                      || uri == null || uri.trim().isEmpty()) {
+                  return;
+              }
+
+              target = component;
+              launched = false;
+
+              final ComponentName expected = component;
+              final int displayId = display.getDisplayId();
+              final int userId = Process.myUid() / 100000;
+
+              String command = "/system/bin/am start"
+                      + " --user " + userId
+                      + " --display " + displayId
+                      + " --windowingMode 1"
+                      + " -a android.intent.action.VIEW"
+                      + " -d " + shellQuote(uri)
+                      + " -f 0x10000000";
+
+              if (packageName != null && !packageName.trim().isEmpty()) {
+                  command += " -p " + shellQuote(packageName);
+              }
+
+              final String launchCommand = command;
+              RootShellSession.EXEC.execute(() -> {
+                  try {
+                      rootShell.run(10, launchCommand);
+                      synchronized (V10DisplayController.this) {
+                          if (!destroyed && expected.equals(target)) {
+                              launched = true;
+                          }
+                      }
+                  } catch (Throwable t) {
+                      synchronized (V10DisplayController.this) {
+                          if (expected.equals(target)) {
+                              launched = false;
+                          }
+                      }
+                      Log.w(TAG, "Projected URI launch failed", t);
+                  }
+              });
+          }
+
+          '''
+          controller = replace_one(
+              controller, launch_pattern, launch_method,
+              "launchNewTaskWithUri method boundary",
+          )
+
+          # 7. Fail-closed structural and ordering checks before any write.
+          if session.count("private String pendingLaunchUri;") != 1:
+              raise SystemExit("FAIL-CLOSED: pending URI field mismatch")
+          if session.count("private String pendingLaunchPackage;") != 1:
+              raise SystemExit("FAIL-CLOSED: pending package field mismatch")
+          if session.count("private ComponentName pendingLaunchComponent;") != 1:
+              raise SystemExit("FAIL-CLOSED: pending target field mismatch")
+          for signature in (
+              "public void setTarget(ComponentName component)",
+              "public void setTargetAndOpenUri(",
+              "private boolean launchPendingUriIfAny()",
+              "private void attachCurrentSurface()",
+          ):
+              if session.count(signature) != 1:
+                  raise SystemExit(
+                      "FAIL-CLOSED: session method mismatch: " + signature
+                  )
+
+          if controller.count("public synchronized void launchNewTaskWithUri(") != 1:
+              raise SystemExit(
+                  "FAIL-CLOSED: URI launch method missing or duplicated"
+              )
+          if controller.count("private static String shellQuote(") != 1:
+              raise SystemExit(
+                  "FAIL-CLOSED: shellQuote missing or duplicated"
+              )
+
+          launch_match = launch_pattern.search(controller)
+          if launch_match:
+              raise SystemExit(
+                  "FAIL-CLOSED: URI launcher boundary remained after replacement"
+              )
+
+          method_start = controller.find(
+              "public synchronized void launchNewTaskWithUri("
+          )
+          method_end = controller.find(
+              "    private void execute(", method_start
+          )
+          if method_start < 0 or method_end < 0:
+              raise SystemExit(
+                  "FAIL-CLOSED: cannot isolate final URI launcher"
+              )
+          final_launch = controller[method_start:method_end]
+          run_pos = final_launch.find("rootShell.run(10, launchCommand)")
+          success_pos = final_launch.find("launched = true;")
+          failure_pos = final_launch.find("launched = false;")
+          if min(run_pos, success_pos, failure_pos) < 0:
+              raise SystemExit(
+                  "FAIL-CLOSED: launch success/failure state missing"
+              )
+          if not (run_pos < success_pos):
+              raise SystemExit(
+                  "FAIL-CLOSED: launch success set before shell result"
+              )
+          if "execute(command, \"Projected URI launch failed\")" in final_launch:
+              raise SystemExit(
+                  "FAIL-CLOSED: URI launcher still uses fire-and-forget helper"
+              )
+
+          # Ensure Surface replacement fix remains intact.
+          attach_start = controller.find(
+              "public synchronized void attachSurface("
+          )
+          detach_start = controller.find(
+              "public synchronized void detachSurface()", attach_start
+          )
+          if attach_start < 0 or detach_start < 0:
+              raise SystemExit(
+                  "FAIL-CLOSED: Surface lifecycle methods missing"
+              )
+          attach_method = controller[attach_start:detach_start]
+          attach_pos = attach_method.find("virtualDisplay.setSurface(newSurface);")
+          assign_pos = attach_method.find("surface = newSurface;")
+          release_pos = attach_method.find("oldSurface.release()")
+          if min(attach_pos, assign_pos, release_pos) < 0 or not (
+                  attach_pos < assign_pos < release_pos):
+              raise SystemExit(
+                  "FAIL-CLOSED: Surface replacement ordering regressed"
+              )
+
+          if "displayController.launchNewTaskWithUri(" not in session:
+              raise SystemExit(
+                  "FAIL-CLOSED: pending URI dispatch call missing"
+              )
+
+          # Save only after every anchor and validation has passed.
+          session_path.write_text(session, encoding="utf-8")
+          controller_path.write_text(controller, encoding="utf-8")
+
+          if digest(bridge_path) != bridge_sha:
+              raise SystemExit(
+                  "FAIL-CLOSED: CarAssistantInputBridge changed"
+              )
+          if digest(keyboard_path) != keyboard_sha:
+              raise SystemExit(
+                  "FAIL-CLOSED: CarAssistantKeyboard changed"
+              )
+
+          print("PASS: category routing verified; no legacy fallback")
+          print("PASS: stale pending URI cannot cross target switches")
+          print("PASS: URI launch state changes only after shell success")
+          print("PASS: Surface lifecycle ordering preserved")
+          print("PASS: keyboard and input bridge unchanged")
+          PY
 
       - name: Validate, build and package APK
         shell: bash
