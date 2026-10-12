@@ -922,6 +922,96 @@ jobs:
           print("PASS: normal tap-selected app launch path is preserved")
           print("PASS: keyboard workflow and unrelated source files untouched")
           PY
+      
+      - name: Fix Surface replacement lifecycle V1
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          import re
+
+          path = Path(
+              "v10-source/app/src/main/java/com/carassistant/v10/V10DisplayController.java"
+          )
+          if not path.is_file():
+              raise SystemExit("FAIL-CLOSED: display controller missing")
+
+          source = path.read_text(encoding="utf-8")
+          pattern = re.compile(
+              r"(?ms)^    public synchronized void attachSurface\(SurfaceTexture texture, int width, int height\) \{.*?^    \}\n(?=    public synchronized void detachSurface\(\))"
+          )
+          matches = list(pattern.finditer(source))
+          if len(matches) != 1:
+              raise SystemExit(
+                  "FAIL-CLOSED: attachSurface anchor mismatch: "
+                  + str(len(matches))
+              )
+
+          old_method = matches[0].group(0)
+          if ("replaceSurface(newSurface);" not in old_method
+                  or "virtualDisplay.setSurface(newSurface);" not in old_method):
+              raise SystemExit(
+                  "FAIL-CLOSED: unexpected attachSurface implementation"
+              )
+
+          new_method = """    public synchronized void attachSurface(SurfaceTexture texture, int width, int height) {
+          if (destroyed || virtualDisplay == null || texture == null
+                  || width < 1 || height < 1) return;
+          texture.setDefaultBufferSize(width, height);
+          Surface newSurface = new Surface(texture);
+          Surface oldSurface = surface;
+          try {
+              virtualDisplay.setSurface(newSurface);
+              surface = newSurface;
+              if (oldSurface != null && oldSurface != newSurface) {
+                  try { oldSurface.release(); }
+                  catch (Throwable ignored) { }
+              }
+          } catch (RuntimeException e) {
+              try { newSurface.release(); }
+              catch (Throwable ignored) { }
+              Log.w(TAG, "Display surface attach failed", e);
+          }
+          }"""
+
+          source = (
+              source[:matches[0].start()]
+              + new_method + "\n"
+              + source[matches[0].end():]
+          )
+
+          check = re.search(
+              r"(?ms)^    public synchronized void attachSurface\(.*?^    \}\n(?=    public synchronized void detachSurface\(\))",
+              source,
+          )
+          if not check:
+              raise SystemExit("FAIL-CLOSED: patched method missing")
+
+          method = check.group(0)
+          attach = method.find("virtualDisplay.setSurface(newSurface);")
+          assign = method.find("surface = newSurface;")
+          release = method.find("oldSurface.release()")
+          if min(attach, assign, release) < 0 or not (
+                  attach < assign < release):
+              raise SystemExit(
+                  "FAIL-CLOSED: Surface operation order incorrect"
+              )
+
+          for signature in (
+              "public synchronized void launchNewTask(",
+              "public synchronized void resumeExistingTask(",
+              "public synchronized void detachSurface(",
+          ):
+              if source.count(signature) != 1:
+                  raise SystemExit(
+                      "FAIL-CLOSED: unrelated method changed: " + signature
+                  )
+
+          path.write_text(source, encoding="utf-8")
+          print("PASS: replacement Surface attached before old Surface release")
+          print("PASS: launch/resume/detach methods retained")
+          PY
 
       - name: Validate, build and package APK
         shell: bash
