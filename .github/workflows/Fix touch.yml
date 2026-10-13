@@ -491,6 +491,205 @@ jobs:
           path.write_text(source, encoding="utf-8")
           print("PASS: system input hook patched")
           PY
+      
+      - name: Add app-origin injection hook
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          python3 <<'PY'
+          from pathlib import Path
+
+          path = Path(
+              "v10-source/app/src/main/java/com/carassistant/v10/hook/InputHooks.java"
+          )
+          source = path.read_text(encoding="utf-8")
+
+          call_anchor = (
+              'XposedBridge.log(TAG_INPUT + " Root pane injection hook installed");'
+          )
+          helper_anchor = '    /** Clone event và gán displayId. */'
+
+          if source.count(call_anchor) != 1:
+              raise SystemExit("FAIL: install anchor mismatch")
+          if source.count(helper_anchor) != 1:
+              raise SystemExit("FAIL: clone helper anchor mismatch")
+
+          source = source.replace(
+              call_anchor,
+              'installAppMultiTouchHook(classLoader);\n            '
+              + call_anchor,
+              1
+          )
+
+          helper = r'''
+              private static void installAppMultiTouchHook(
+                      ClassLoader classLoader) {
+                  try {
+                      XposedHelpers.findAndHookMethod(
+                              XposedHelpers.findClass(
+                                      "com.android.server.input.InputManagerService",
+                                      classLoader),
+                              "injectInputEvent",
+                              InputEvent.class,
+                              int.class,
+                              new XC_MethodHook() {
+                                  @Override
+                                  protected void beforeHookedMethod(
+                                          MethodHookParam param) {
+                                      if (!(param.args[0] instanceof MotionEvent)) {
+                                          return;
+                                      }
+
+                                      int mode = (Integer) param.args[1];
+                                      if (mode < 0 || mode > 2) {
+                                          return;
+                                      }
+
+                                      int callerUid = Binder.getCallingUid();
+                                      if (callerUid == 0) {
+                                          return;
+                                      }
+
+                                      MotionEvent event =
+                                              (MotionEvent) param.args[0];
+                                      MotionEvent copy = null;
+
+                                      try {
+                                          android.content.Context context =
+                                                  (android.content.Context)
+                                                  XposedHelpers.getObjectField(
+                                                          param.thisObject,
+                                                          "mContext");
+
+                                          DisplayManager dm = (DisplayManager)
+                                                  context.getSystemService(
+                                                          android.content.Context
+                                                                  .DISPLAY_SERVICE);
+                                          if (dm == null) {
+                                              return;
+                                          }
+
+                                          int requestedId = event.getDisplayId();
+                                          Display display = requestedId > 0
+                                                  ? dm.getDisplay(requestedId)
+                                                  : null;
+
+                                          if (requestedId <= 0) {
+                                              for (Display candidate
+                                                      : dm.getDisplays()) {
+                                                  if (candidate == null
+                                                          || candidate.getState()
+                                                          != Display.STATE_ON
+                                                          || !V10Display.matches(
+                                                                  DisplayReflect
+                                                                          .ownerPackage(candidate),
+                                                                  candidate.getName(),
+                                                                  DisplayReflect
+                                                                          .type(candidate),
+                                                                  DisplayReflect
+                                                                          .ownerUid(candidate))) {
+                                                      continue;
+                                                  }
+
+                                                  if (display != null) {
+                                                      XposedBridge.log(TAG_INPUT
+                                                              + " Ambiguous display");
+                                                      return;
+                                                  }
+                                                  display = candidate;
+                                              }
+                                          }
+
+                                          if (display == null
+                                                  || display.getState()
+                                                  != Display.STATE_ON
+                                                  || !V10Display.matches(
+                                                          DisplayReflect
+                                                                  .ownerPackage(display),
+                                                          display.getName(),
+                                                          DisplayReflect.type(display),
+                                                          DisplayReflect
+                                                                  .ownerUid(display))) {
+                                              return;
+                                          }
+
+                                          int displayId = display.getDisplayId();
+                                          int ownerUid =
+                                                  DisplayReflect.ownerUid(display);
+
+                                          if (callerUid != ownerUid) {
+                                              XposedBridge.log(TAG_INPUT
+                                                      + " Rejected caller="
+                                                      + callerUid
+                                                      + " owner=" + ownerUid);
+                                              return;
+                                          }
+
+                                          copy = cloneWithDisplay(event, displayId);
+
+                                          Object nativeManager =
+                                                  XposedHelpers.getObjectField(
+                                                          param.thisObject,
+                                                          "mNative");
+
+                                          long token = Binder.clearCallingIdentity();
+                                          try {
+                                              int result = (Integer)
+                                                      XposedHelpers.callMethod(
+                                                              nativeManager,
+                                                              "injectInputEvent",
+                                                              copy,
+                                                              Boolean.FALSE,
+                                                              -1,
+                                                              mode,
+                                                              INJECT_TIMEOUT,
+                                                              POLICY_FLAGS);
+
+                                              param.setResult(result == 0);
+
+                                              XposedBridge.log(TAG_INPUT
+                                                      + " app-inject display="
+                                                      + displayId
+                                                      + " action="
+                                                      + copy.getActionMasked()
+                                                      + " pointers="
+                                                      + copy.getPointerCount()
+                                                      + " result=" + result);
+                                          } finally {
+                                              Binder.restoreCallingIdentity(token);
+                                          }
+                                      } catch (Throwable t) {
+                                          XposedBridge.log(TAG_INPUT
+                                                  + " app-inject failed: " + t);
+                                      } finally {
+                                          if (copy != null) {
+                                              copy.recycle();
+                                          }
+                                      }
+                                  }
+                              });
+
+                      XposedBridge.log(TAG_INPUT
+                              + " App-origin multi-touch hook installed");
+                  } catch (Throwable t) {
+                      XposedBridge.log(TAG_INPUT
+                              + " App-origin hook unavailable: " + t);
+                  }
+              }
+
+          '''
+
+          source = source.replace(
+              helper_anchor,
+              helper + helper_anchor,
+              1
+          )
+
+          path.write_text(source, encoding="utf-8")
+          print("PASS: app-origin injection hook added")
+          PY
+
       - name: Verify patch scope
         shell: bash
         run: |
