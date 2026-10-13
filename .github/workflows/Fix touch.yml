@@ -1,7 +1,6 @@
 
-
 name: fix touch
-run-name: fix touch
+run-name: fix touch V2 - multi-touch forwarding
 
 on:
   workflow_dispatch:
@@ -15,7 +14,7 @@ jobs:
     timeout-minutes: 40
 
     steps:
-      - name: Checkout selected immutable baseline
+      - name: Checkout immutable baseline
         uses: actions/checkout@v4
         with:
           ref: b3528959d71cc33024db0ba0cc4fc65d1aa7d631
@@ -27,7 +26,7 @@ jobs:
           distribution: temurin
           java-version: '17'
 
-      - name: Verify baseline files and SHA
+      - name: Verify baseline SHA
         shell: bash
         run: |
           set -euo pipefail
@@ -35,13 +34,9 @@ jobs:
           verify_sha() {
             local file="$1"
             local expected="$2"
-
-            if [ ! -f "$file" ]; then
-              echo "FAIL: missing file: $file"
-              exit 1
-            fi
-
             local actual
+
+            test -f "$file"
             actual="$(git hash-object "$file")"
 
             echo "$file"
@@ -49,11 +44,9 @@ jobs:
             echo "Actual:   $actual"
 
             if [ "$actual" != "$expected" ]; then
-              echo "FAIL: source SHA mismatch. Refusing to patch."
+              echo "FAIL: baseline SHA mismatch; refusing to patch"
               exit 1
             fi
-
-            echo "PASS: exact source verified"
           }
 
           verify_sha \
@@ -82,7 +75,7 @@ jobs:
 
           echo "PASS: immutable baseline verified"
 
-      - name: Apply isolated multi-touch patch
+      - name: Patch multi-touch controller and session
         shell: bash
         run: |
           set -euo pipefail
@@ -188,37 +181,26 @@ jobs:
 
                               float upX = event.getX(0);
                               float upY = event.getY(0);
-
-                              long duration =
-                                  event.getEventTime() - downTime;
+                              long duration = event.getEventTime() - downTime;
 
                               if (!moved) {
                                   session.tap(upX, upY);
                               } else {
                                   duration = Math.max(
                                       SWIPE_MIN_DURATION,
-                                      Math.min(
-                                          SWIPE_MAX_DURATION,
-                                          duration
-                                      )
+                                      Math.min(SWIPE_MAX_DURATION, duration)
                                   );
 
                                   session.swipe(
-                                      downX,
-                                      downY,
-                                      upX,
-                                      upY,
-                                      duration
+                                      downX, downY, upX, upY, duration
                                   );
                               }
-
                               return true;
 
                           case MotionEvent.ACTION_CANCEL:
                               if (multiTouch) {
                                   session.injectTouchEvent(event);
                               }
-
                               multiTouch = false;
                               moved = false;
                               return true;
@@ -245,15 +227,15 @@ jobs:
           )
 
           if source.count(import_anchor) != 1:
-              raise SystemExit(
-                  "FAIL: Context import anchor is not unique"
-              )
+              raise SystemExit("FAIL: Context import anchor mismatch")
 
-          source = source.replace(
-              import_anchor,
-              import_anchor + import_addition,
-              1
-          )
+          for line in import_addition.splitlines():
+              if line not in source:
+                  source = source.replace(
+                      import_anchor,
+                      import_anchor + line + "\n",
+                      1
+                  )
 
           method_anchor = (
               "    public int getDisplayId() "
@@ -262,8 +244,9 @@ jobs:
 
           method_addition = r'''
               /**
-               * Inject a complete MotionEvent, retaining all pointers.
-               * Coordinates are mapped to the projection content size.
+               * Forward all pointers to the projected virtual display.
+               * InputHooks resolves the target display when event displayId
+               * is zero, then validates and injects a cloned event.
                */
               public void injectTouchEvent(MotionEvent source) {
                   if (!isActive() || source == null || textureView == null) {
@@ -309,10 +292,6 @@ jobs:
                           source.getFlags()
                       );
 
-                      InputEvent.class
-                          .getDeclaredMethod("setDisplayId", int.class)
-                          .invoke(mapped, displayController.getDisplayId());
-
                       InputManager manager = (InputManager)
                           textureView.getContext().getSystemService(
                               Context.INPUT_SERVICE
@@ -331,10 +310,19 @@ jobs:
                       );
 
                       inject.setAccessible(true);
-                      inject.invoke(manager, mapped, 0);
+                      Object result = inject.invoke(manager, mapped, 0);
+
+                      Log.d(
+                          TAG,
+                          "[MULTITOUCH] action="
+                              + source.getActionMasked()
+                              + " pointers=" + count
+                              + " display=" + displayController.getDisplayId()
+                              + " result=" + result
+                      );
 
                   } catch (Throwable t) {
-                      Log.w(TAG, "Multi-touch injection failed", t);
+                      Log.w(TAG, "[MULTITOUCH] Injection failed", t);
                   } finally {
                       if (mapped != null) {
                           mapped.recycle();
@@ -345,9 +333,7 @@ jobs:
           '''
 
           if source.count(method_anchor) != 1:
-              raise SystemExit(
-                  "FAIL: getDisplayId anchor is not unique"
-              )
+              raise SystemExit("FAIL: getDisplayId anchor mismatch")
 
           source = source.replace(
               method_anchor,
@@ -356,67 +342,141 @@ jobs:
           )
 
           session.write_text(source, encoding="utf-8")
+          print("PASS: controller and session patched")
+          PY
 
-          hooks = base / "hook" / "InputHooks.java"
-          source = hooks.read_text(encoding="utf-8")
+      - name: Patch system input hook
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          python3 <<'PY'
+          from pathlib import Path
+
+          path = Path(
+              "v10-source/app/src/main/java/com/carassistant/v10/hook/InputHooks.java"
+          )
+          source = path.read_text(encoding="utf-8")
 
           old_guard = (
               "if (Binder.getCallingUid() != 0 || mode < 0 "
               "|| mode > 2 || targetUid != -1) {"
           )
-
           new_guard = (
               "if (mode < 0 || mode > 2 || targetUid != -1) {"
           )
 
           if source.count(old_guard) != 1:
-              raise SystemExit(
-                  "FAIL: InputHooks caller guard is not unique"
-              )
+              raise SystemExit("FAIL: caller guard anchor mismatch")
 
           source = source.replace(old_guard, new_guard, 1)
 
-          display_anchor = (
-              "                                        display.getName(), "
-              "DisplayReflect.type(display),\n"
-              "                                        DisplayReflect.ownerUid(display))) {\n"
-              "                                    return;\n"
-              "                                }\n"
-          )
+          old_display_block = '''                            int displayId = (Integer) XposedHelpers.callMethod(event, "getDisplayId");
+                            if (displayId <= 0) {
+                                return;
+                            }
+                            try {
+                                android.content.Context context = (android.content.Context)
+                                        XposedHelpers.getObjectField(param.thisObject, "mContext");
+                                DisplayManager displayManager = (DisplayManager)
+                                        context.getSystemService(android.content.Context.DISPLAY_SERVICE);
+                                Display display = displayManager == null ? null : displayManager.getDisplay(displayId);
+                                if (display == null || display.getState() != Display.STATE_ON
+                                        || !V10Display.matches(DisplayReflect.ownerPackage(display),
+                                        display.getName(), DisplayReflect.type(display),
+                                        DisplayReflect.ownerUid(display))) {
+                                    return;
+                                }
+'''
 
-          display_addition = (
-              "                                int callerUid = Binder.getCallingUid();\n"
-              "                                int ownerUid = DisplayReflect.ownerUid(display);\n"
-              "                                if (callerUid != 0 && callerUid != ownerUid) {\n"
-              "                                    return;\n"
-              "                                }\n"
-          )
+          new_display_block = '''                            int requestedDisplayId = (Integer)
+                                    XposedHelpers.callMethod(event, "getDisplayId");
+                            try {
+                                android.content.Context context = (android.content.Context)
+                                        XposedHelpers.getObjectField(param.thisObject, "mContext");
+                                DisplayManager displayManager = (DisplayManager)
+                                        context.getSystemService(android.content.Context.DISPLAY_SERVICE);
 
-          if source.count(display_anchor) != 1:
+                                if (displayManager == null) {
+                                    return;
+                                }
+
+                                Display display = requestedDisplayId > 0
+                                        ? displayManager.getDisplay(requestedDisplayId)
+                                        : null;
+
+                                if (requestedDisplayId <= 0) {
+                                    for (Display candidate : displayManager.getDisplays()) {
+                                        if (candidate == null
+                                                || candidate.getState() != Display.STATE_ON) {
+                                            continue;
+                                        }
+
+                                        if (V10Display.matches(
+                                                DisplayReflect.ownerPackage(candidate),
+                                                candidate.getName(),
+                                                DisplayReflect.type(candidate),
+                                                DisplayReflect.ownerUid(candidate))) {
+                                            if (display != null) {
+                                                XposedBridge.log(TAG_INPUT
+                                                        + " Ambiguous CarAssistant display");
+                                                return;
+                                            }
+                                            display = candidate;
+                                        }
+                                    }
+                                }
+
+                                if (display == null
+                                        || display.getState() != Display.STATE_ON
+                                        || !V10Display.matches(
+                                                DisplayReflect.ownerPackage(display),
+                                                display.getName(),
+                                                DisplayReflect.type(display),
+                                                DisplayReflect.ownerUid(display))) {
+                                    return;
+                                }
+
+                                int displayId = display.getDisplayId();
+                                int callerUid = Binder.getCallingUid();
+                                int ownerUid = DisplayReflect.ownerUid(display);
+
+                                if (callerUid != 0 && callerUid != ownerUid) {
+                                    XposedBridge.log(TAG_INPUT
+                                            + " Rejected caller uid=" + callerUid
+                                            + " ownerUid=" + ownerUid);
+                                    return;
+                                }
+'''
+
+          if source.count(old_display_block) != 1:
               raise SystemExit(
-                  "FAIL: InputHooks display-validation anchor is not unique"
+                  "FAIL: display resolution block mismatch; refusing patch"
               )
 
-          source = source.replace(
-              display_anchor,
-              display_anchor + display_addition,
-              1
-          )
+          source = source.replace(old_display_block, new_display_block, 1)
 
-          hooks.write_text(source, encoding="utf-8")
+          old_log = '''                                        XposedBridge.log(TAG_INPUT + " display=" + displayId
+                                                + " nativeResult=" + result);'''
+          new_log = '''                                        XposedBridge.log(TAG_INPUT + " display=" + displayId
+                                                + " action=" + copy.getActionMasked()
+                                                + " pointers=" + copy.getPointerCount()
+                                                + " nativeResult=" + result);'''
 
-          print("PASS: isolated touch patch applied")
+          if source.count(old_log) != 1:
+              raise SystemExit("FAIL: injection log anchor mismatch")
+
+          source = source.replace(old_log, new_log, 1)
+          path.write_text(source, encoding="utf-8")
+          print("PASS: system input hook patched")
           PY
 
-      - name: Verify patch scope and whitespace
+      - name: Verify patch scope
         shell: bash
         run: |
           set -euo pipefail
 
           git diff --check
-
-          echo "Changed files:"
-          git diff --name-only
 
           python3 <<'PY'
           import subprocess
@@ -427,24 +487,28 @@ jobs:
               "v10-source/app/src/main/java/com/carassistant/v10/hook/InputHooks.java",
           }
 
-          changed = set(
-              subprocess.check_output(
-                  ["git", "diff", "--name-only"],
-                  text=True
-              ).splitlines()
-          )
+          actual = set(subprocess.check_output(
+              ["git", "diff", "--name-only"],
+              text=True
+          ).splitlines())
 
-          if changed != expected:
+          print("Changed files:")
+          for name in sorted(actual):
+              print(name)
+
+          if actual != expected:
               raise SystemExit(
-                  "FAIL: unexpected patch scope\n"
+                  "FAIL: unexpected changed files\n"
                   f"Expected: {sorted(expected)}\n"
-                  f"Actual: {sorted(changed)}"
+                  f"Actual: {sorted(actual)}"
               )
 
-          print("PASS: only the three touch-path files changed")
+          print("PASS: only the three touch files changed")
           PY
 
-          git diff -- \
+          echo "=== Multi-touch symbols ==="
+          grep -nE \
+            'ACTION_POINTER_DOWN|ACTION_POINTER_UP|injectTouchEvent|MULTITOUCH|requestedDisplayId|ownerUid' \
             v10-source/app/src/main/java/com/carassistant/v10/V10InputController.java \
             v10-source/app/src/main/java/com/carassistant/v10/V10ProjectionSession.java \
             v10-source/app/src/main/java/com/carassistant/v10/hook/InputHooks.java
@@ -453,27 +517,17 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-
           cd v10-source
           chmod +x gradlew
+          ./gradlew --no-daemon --stacktrace compileDebugJavaWithJavac
 
-          ./gradlew \
-            --no-daemon \
-            --stacktrace \
-            compileDebugJavaWithJavac
-
-      - name: Build installable debug APK
+      - name: Build debug APK
         shell: bash
         run: |
           set -euo pipefail
-
           cd v10-source
           chmod +x gradlew
-
-          ./gradlew \
-            --no-daemon \
-            --stacktrace \
-            assembleDebug
+          ./gradlew --no-daemon --stacktrace assembleDebug
 
       - name: Package APK and SHA256
         shell: bash
@@ -481,24 +535,22 @@ jobs:
           set -euo pipefail
 
           APK="v10-source/app/build/outputs/apk/debug/app-debug.apk"
-
           test -s "$APK"
-          mkdir -p dist
 
-          cp "$APK" "dist/CarAssistant-Fix-Touch.apk"
+          mkdir -p dist
+          cp "$APK" "dist/CarAssistant-Fix-Touch-V2.apk"
 
           sha256sum \
-            "dist/CarAssistant-Fix-Touch.apk" \
-            > "dist/CarAssistant-Fix-Touch.sha256"
+            "dist/CarAssistant-Fix-Touch-V2.apk" \
+            > "dist/CarAssistant-Fix-Touch-V2.sha256"
 
-          echo "APK SHA256:"
-          cat "dist/CarAssistant-Fix-Touch.sha256"
+          cat "dist/CarAssistant-Fix-Touch-V2.sha256"
 
-      - name: Upload Fix Touch artifact
+      - name: Upload Fix Touch V2 artifact
         uses: actions/upload-artifact@v4
         with:
-          name: CarAssistant-Fix-Touch
+          name: CarAssistant-Fix-Touch-V2
           path: |
-            dist/CarAssistant-Fix-Touch.apk
-            dist/CarAssistant-Fix-Touch.sha256
+            dist/CarAssistant-Fix-Touch-V2.apk
+            dist/CarAssistant-Fix-Touch-V2.sha256
           if-no-files-found: error
