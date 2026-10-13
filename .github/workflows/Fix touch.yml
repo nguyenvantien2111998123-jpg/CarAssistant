@@ -344,7 +344,6 @@ jobs:
           session.write_text(source, encoding="utf-8")
           print("PASS: controller and session patched")
           PY
-
       - name: Patch system input hook
         shell: bash
         run: |
@@ -352,6 +351,8 @@ jobs:
 
           python3 <<'PY'
           from pathlib import Path
+          import re
+          import textwrap
 
           path = Path(
               "v10-source/app/src/main/java/com/carassistant/v10/hook/InputHooks.java"
@@ -367,110 +368,129 @@ jobs:
           )
 
           if source.count(old_guard) != 1:
-              raise SystemExit("FAIL: caller guard anchor mismatch")
+              raise SystemExit(
+                  "FAIL: caller guard anchor mismatch; refusing patch"
+              )
 
           source = source.replace(old_guard, new_guard, 1)
 
-          old_display_block = '''                            int displayId = (Integer) XposedHelpers.callMethod(event, "getDisplayId");
-                            if (displayId <= 0) {
-                                return;
-                            }
-                            try {
-                                android.content.Context context = (android.content.Context)
-                                        XposedHelpers.getObjectField(param.thisObject, "mContext");
-                                DisplayManager displayManager = (DisplayManager)
-                                        context.getSystemService(android.content.Context.DISPLAY_SERVICE);
-                                Display display = displayManager == null ? null : displayManager.getDisplay(displayId);
-                                if (display == null || display.getState() != Display.STATE_ON
-                                        || !V10Display.matches(DisplayReflect.ownerPackage(display),
-                                        display.getName(), DisplayReflect.type(display),
-                                        DisplayReflect.ownerUid(display))) {
-                                    return;
-                                }
-          '''
+          pattern = re.compile(
+              r'(?m)^(?P<indent>[ \t]*)'
+              r'int displayId = \(Integer\) '
+              r'XposedHelpers\.callMethod\(event, "getDisplayId"\);'
+              r'\s*if \(displayId <= 0\) \{\s*return;\s*\}'
+              r'\s*try \{'
+              r'\s*android\.content\.Context context = '
+              r'\(android\.content\.Context\)'
+              r'\s*XposedHelpers\.getObjectField\(param\.thisObject, "mContext"\);'
+              r'\s*DisplayManager displayManager = \(DisplayManager\)'
+              r'\s*context\.getSystemService\(android\.content\.Context\.DISPLAY_SERVICE\);'
+              r'\s*Display display = displayManager == null \? null : '
+              r'displayManager\.getDisplay\(displayId\);'
+              r'\s*if \(display == null \|\| '
+              r'display\.getState\(\) != Display\.STATE_ON'
+              r'\s*\|\| !V10Display\.matches\(DisplayReflect\.ownerPackage\(display\),'
+              r'\s*display\.getName\(\), DisplayReflect\.type\(display\),'
+              r'\s*DisplayReflect\.ownerUid\(display\)\)\) \{\s*return;\s*\}'
+          )
 
-          new_display_block = '''                            int requestedDisplayId = (Integer)
-                                    XposedHelpers.callMethod(event, "getDisplayId");
-                            try {
-                                android.content.Context context = (android.content.Context)
-                                        XposedHelpers.getObjectField(param.thisObject, "mContext");
-                                DisplayManager displayManager = (DisplayManager)
-                                        context.getSystemService(android.content.Context.DISPLAY_SERVICE);
+          replacement_body = textwrap.dedent("""
+              int requestedDisplayId = (Integer)
+                      XposedHelpers.callMethod(event, "getDisplayId");
+              try {
+                  android.content.Context context = (android.content.Context)
+                          XposedHelpers.getObjectField(param.thisObject, "mContext");
+                  DisplayManager displayManager = (DisplayManager)
+                          context.getSystemService(android.content.Context.DISPLAY_SERVICE);
 
-                                if (displayManager == null) {
-                                    return;
-                                }
+                  if (displayManager == null) {
+                      return;
+                  }
 
-                                Display display = requestedDisplayId > 0
-                                        ? displayManager.getDisplay(requestedDisplayId)
-                                        : null;
+                  Display display = requestedDisplayId > 0
+                          ? displayManager.getDisplay(requestedDisplayId)
+                          : null;
 
-                                if (requestedDisplayId <= 0) {
-                                    for (Display candidate : displayManager.getDisplays()) {
-                                        if (candidate == null
-                                                || candidate.getState() != Display.STATE_ON) {
-                                            continue;
-                                        }
+                  if (requestedDisplayId <= 0) {
+                      for (Display candidate : displayManager.getDisplays()) {
+                          if (candidate == null
+                                  || candidate.getState() != Display.STATE_ON) {
+                              continue;
+                          }
 
-                                        if (V10Display.matches(
-                                                DisplayReflect.ownerPackage(candidate),
-                                                candidate.getName(),
-                                                DisplayReflect.type(candidate),
-                                                DisplayReflect.ownerUid(candidate))) {
-                                            if (display != null) {
-                                                XposedBridge.log(TAG_INPUT
-                                                        + " Ambiguous CarAssistant display");
-                                                return;
-                                            }
-                                            display = candidate;
-                                        }
-                                    }
-                                }
+                          if (V10Display.matches(
+                                  DisplayReflect.ownerPackage(candidate),
+                                  candidate.getName(),
+                                  DisplayReflect.type(candidate),
+                                  DisplayReflect.ownerUid(candidate))) {
+                              if (display != null) {
+                                  XposedBridge.log(TAG_INPUT
+                                          + " Ambiguous CarAssistant display");
+                                  return;
+                              }
+                              display = candidate;
+                          }
+                      }
+                  }
 
-                                if (display == null
-                                        || display.getState() != Display.STATE_ON
-                                        || !V10Display.matches(
-                                                DisplayReflect.ownerPackage(display),
-                                                display.getName(),
-                                                DisplayReflect.type(display),
-                                                DisplayReflect.ownerUid(display))) {
-                                    return;
-                                }
+                  if (display == null
+                          || display.getState() != Display.STATE_ON
+                          || !V10Display.matches(
+                                  DisplayReflect.ownerPackage(display),
+                                  display.getName(),
+                                  DisplayReflect.type(display),
+                                  DisplayReflect.ownerUid(display))) {
+                      return;
+                  }
 
-                                int displayId = display.getDisplayId();
-                                int callerUid = Binder.getCallingUid();
-                                int ownerUid = DisplayReflect.ownerUid(display);
+                  int displayId = display.getDisplayId();
+                  int callerUid = Binder.getCallingUid();
+                  int ownerUid = DisplayReflect.ownerUid(display);
 
-                                if (callerUid != 0 && callerUid != ownerUid) {
-                                    XposedBridge.log(TAG_INPUT
-                                            + " Rejected caller uid=" + callerUid
-                                            + " ownerUid=" + ownerUid);
-                                    return;
-                                }
-          '''
+                  if (callerUid != 0 && callerUid != ownerUid) {
+                      XposedBridge.log(TAG_INPUT
+                              + " Rejected caller uid=" + callerUid
+                              + " ownerUid=" + ownerUid);
+                      return;
+                  }
+          """).strip("\n")
 
-          if source.count(old_display_block) != 1:
+          match = pattern.search(source)
+          if not match:
               raise SystemExit(
-                  "FAIL: display resolution block mismatch; refusing patch"
+                  "FAIL: display block not found; source unchanged"
               )
 
-          source = source.replace(old_display_block, new_display_block, 1)
+          if len(pattern.findall(source)) != 1:
+              raise SystemExit(
+                  "FAIL: expected exactly one display block; source unchanged"
+              )
 
-          old_log = '''                                        XposedBridge.log(TAG_INPUT + " display=" + displayId
-                                                + " nativeResult=" + result);'''
-          new_log = '''                                        XposedBridge.log(TAG_INPUT + " display=" + displayId
-                                                + " action=" + copy.getActionMasked()
-                                                + " pointers=" + copy.getPointerCount()
-                                                + " nativeResult=" + result);'''
+          indent = match.group("indent")
+          replacement = textwrap.indent(replacement_body, indent)
+
+          source = source[:match.start()] + replacement + source[match.end():]
+
+          old_log = (
+              'XposedBridge.log(TAG_INPUT + " display=" + displayId\n'
+              '                                                + " nativeResult=" + result);'
+          )
+          new_log = (
+              'XposedBridge.log(TAG_INPUT + " display=" + displayId\n'
+              '                                                + " action=" + copy.getActionMasked()\n'
+              '                                                + " pointers=" + copy.getPointerCount()\n'
+              '                                                + " nativeResult=" + result);'
+          )
 
           if source.count(old_log) != 1:
-              raise SystemExit("FAIL: injection log anchor mismatch")
+              raise SystemExit(
+                  "FAIL: injection log anchor mismatch; source unchanged"
+              )
 
           source = source.replace(old_log, new_log, 1)
           path.write_text(source, encoding="utf-8")
           print("PASS: system input hook patched")
           PY
-
       - name: Verify patch scope
         shell: bash
         run: |
