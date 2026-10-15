@@ -17,9 +17,12 @@ import de.robv.android.xposed.XposedBridge;
 import de.robv.android.xposed.XposedHelpers;
 
 /**
- * Keeps the existing secondary-display surface behind the CarAssistant Home UI.
- * The protected V10CarActivity remains unchanged; this hook only changes layer
- * visibility after its normal lifecycle/navigation methods have completed.
+ * Home layout policy:
+ *  - hide the legacy embedded MapLibre navigation view;
+ *  - run the chosen/default phone map in the existing projection TextureView;
+ *  - keep the existing transparent CarAssistant dashboard above that projection.
+ *
+ * V10CarActivity is a protected keyboard PASS baseline and is not modified.
  */
 public final class HomeMapProjectionHook {
     private static final String TAG = "[CarAssistant HomeMap]";
@@ -30,18 +33,19 @@ public final class HomeMapProjectionHook {
         try {
             Class<?> activityClass = XposedHelpers.findClass(
                     "com.carassistant.v10.V10CarActivity", classLoader);
-            XposedHelpers.findAndHookMethod(activityClass, "onResume",
-                    new XC_MethodHook() {
-                        @Override protected void afterHookedMethod(MethodHookParam param) {
-                            keepMapBehindHome(param.thisObject);
-                        }
-                    });
-            XposedHelpers.findAndHookMethod(activityClass, "returnToLauncher",
-                    new XC_MethodHook() {
-                        @Override protected void afterHookedMethod(MethodHookParam param) {
-                            keepMapBehindHome(param.thisObject);
-                        }
-                    });
+
+            XposedBridge.hookAllMethods(activityClass, "onResume", new XC_MethodHook() {
+                @Override protected void afterHookedMethod(MethodHookParam param) {
+                    keepMapBehindHome(param.thisObject);
+                }
+            });
+
+            XposedBridge.hookAllMethods(activityClass, "returnToLauncher", new XC_MethodHook() {
+                @Override protected void afterHookedMethod(MethodHookParam param) {
+                    keepMapBehindHome(param.thisObject);
+                }
+            });
+
             XposedHelpers.findAndHookMethod(activityClass, "launchProjection",
                     ComponentName.class, new XC_MethodHook() {
                         @Override protected void beforeHookedMethod(MethodHookParam param) {
@@ -51,12 +55,12 @@ public final class HomeMapProjectionHook {
                                 Object dashboard = XposedHelpers.getObjectField(activityObject, "dashboard");
                                 Object launcher = XposedHelpers.getObjectField(activityObject, "launcherLayer");
                                 ComponentName selected = V10SessionStore.getTarget(activity);
-                                boolean homeWasVisible = dashboard instanceof View
+                                boolean homeMode = dashboard instanceof View
                                         && launcher instanceof View
                                         && ((View) dashboard).getVisibility() == View.VISIBLE
                                         && ((View) launcher).getVisibility() == View.VISIBLE
                                         && selected != null && selected.equals(param.args[0]);
-                                param.setObjectExtra("carassistant_home_map_mode", homeWasVisible);
+                                param.setObjectExtra("carassistant_home_map_mode", homeMode);
                             } catch (Throwable ignored) {
                                 param.setObjectExtra("carassistant_home_map_mode", false);
                             }
@@ -68,7 +72,8 @@ public final class HomeMapProjectionHook {
                             }
                         }
                     });
-            XposedBridge.log(TAG + " lifecycle hooks installed");
+
+            XposedBridge.log(TAG + " Home projection hooks installed");
         } catch (Throwable t) {
             XposedBridge.log(TAG + " hook unavailable: " + Log.getStackTraceString(t));
         }
@@ -77,6 +82,8 @@ public final class HomeMapProjectionHook {
     private static void keepMapBehindHome(Object activityObject) {
         try {
             final android.app.Activity activity = (android.app.Activity) activityObject;
+            final View legacyNavigation = (View)
+                    XposedHelpers.getObjectField(activityObject, "navigationMap");
             final FrameLayout projectionLayer = (FrameLayout)
                     XposedHelpers.getObjectField(activityObject, "projectionLayer");
             final LinearLayout launcherLayer = (LinearLayout)
@@ -93,29 +100,44 @@ public final class HomeMapProjectionHook {
             ComponentName target = V10SessionStore.getTarget(activity);
             if (target == null) target = resolveDefaultMapApp(activity);
             if (target == null) {
-                XposedBridge.log(TAG + " no selected/default geo handler; keeping MapLibre fallback");
+                XposedBridge.log(TAG + " no selected/default geo handler; cannot start map projection");
                 return;
             }
 
             final ComponentName mapTarget = target;
+
+            // Permanently remove the old in-app MapLibre view from the Home composition.
+            if (legacyNavigation != null && legacyNavigation.getVisibility() != View.GONE) {
+                legacyNavigation.setVisibility(View.GONE);
+            }
+
+            // Preserve Home controls as a transparent foreground above the map TextureView.
             projectionLayer.setVisibility(View.VISIBLE);
             launcherLayer.setVisibility(View.VISIBLE);
             dashboard.setVisibility(View.VISIBLE);
             if (appPanel != null) appPanel.setVisibility(View.GONE);
+            projectionLayer.bringToFront();
+            launcherLayer.bringToFront();
 
-            // Post until the TextureView has a surface, then reuse the existing
-            // V10ProjectionSession / VirtualDisplay / root input pipeline.
+            // Keep the activity's target poller from calling launchProjection() every 500ms,
+            // which would hide the Home UI again.
+            XposedHelpers.setObjectField(activityObject, "activeTarget", mapTarget);
+            V10SessionStore.setTarget(activity, mapTarget);
+
+            // The TextureView may not have a surface until the layout pass finishes.
             projectionLayer.post(() -> {
                 try {
                     XposedHelpers.callMethod(session, "setTarget", mapTarget);
-                    XposedBridge.log(TAG + " Home map on secondary display: "
+                    XposedBridge.log(TAG + " map projected behind Home: "
                             + mapTarget.flattenToString());
                 } catch (Throwable t) {
-                    XposedBridge.log(TAG + " could not start map surface: " + t);
+                    XposedBridge.log(TAG + " failed to start map projection: "
+                            + Log.getStackTraceString(t));
                 }
             });
         } catch (Throwable t) {
-            XposedBridge.log(TAG + " could not restore Home layers: " + t);
+            XposedBridge.log(TAG + " failed to compose Home layers: "
+                    + Log.getStackTraceString(t));
         }
     }
 
