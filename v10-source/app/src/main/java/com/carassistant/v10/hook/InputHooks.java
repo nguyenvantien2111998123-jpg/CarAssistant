@@ -15,8 +15,8 @@ import de.robv.android.xposed.XposedHelpers;
 /**
  * Hook InputManagerService.injectInputEventToTarget trên system_server:
  * khi uid 0 (su) gửi sự kiện tới display ảo của app, clone event với displayId
- * rồi gọi lại đường native với policyFlags tin cậy — nhờ đó `su input -d <id>`
- * thực sự tới được app con.
+ * rồi gọi lại đường native với policyFlags tin cậy — nhờ đó cả MotionEvent
+ * một pointer và nhiều pointer đều tới được app trên display phụ.
  */
 public final class InputHooks {
 
@@ -35,6 +35,7 @@ public final class InputHooks {
                     "injectInputEventToTarget", InputEvent.class, int.class, int.class,
                     new XC_MethodHook() {
                         private boolean logged;
+                        private boolean loggedMultiTouch;
 
                         @Override
                         protected void beforeHookedMethod(MethodHookParam param) {
@@ -76,6 +77,12 @@ public final class InputHooks {
                                         XposedBridge.log(TAG_INPUT + " display=" + displayId
                                                 + " nativeResult=" + result);
                                     }
+                                    if (result == 0 && event.getPointerCount() >= 2 && !loggedMultiTouch) {
+                                        loggedMultiTouch = true;
+                                        XposedBridge.log(TAG_INPUT + " multi-pointer event reached display="
+                                                + displayId + " action=" + event.getAction()
+                                                + " pointers=" + event.getPointerCount());
+                                    }
                                 } finally {
                                     Binder.restoreCallingIdentity(token);
                                     copy.recycle();
@@ -94,7 +101,7 @@ public final class InputHooks {
         }
     }
 
-    /** Clone event và gán displayId. */
+    /** Clone event, preserving pointer IDs, coordinates, action index and pointer count. */
     private static MotionEvent cloneWithDisplay(MotionEvent source, int displayId) {
         int pointerCount = source.getPointerCount();
         MotionEvent.PointerProperties[] properties = new MotionEvent.PointerProperties[pointerCount];
