@@ -15,19 +15,21 @@ import java.util.Arrays;
 import java.util.Comparator;
 
 /**
- * Root-only helper launched with app_process. It reads atomic event files written
- * by V10ProjectionSession and reconstructs the original MotionEvent stream.
+ * Root-only input helper. Follows scrcpy's input-routing model:
+ * create a MotionEvent, explicitly assign its target display through
+ * InputEvent.setDisplayId(), then inject it through InputManagerGlobal.
  */
 public final class RootMultiTouchInjector {
     private static final String TAG = "CarAssistantPinchInjector";
     private static final long IDLE_TIMEOUT_MS = 120_000L;
+    private static final int INJECT_MODE_ASYNC = 0;
 
     private static File eventDirectory;
     private static File statusFile;
     private static File pidFile;
     private static Object inputManager;
     private static Method injectMethod;
-
+    private static Method setDisplayIdMethod;
 
     private RootMultiTouchInjector() { }
 
@@ -42,7 +44,7 @@ public final class RootMultiTouchInjector {
             initializeInputManager();
             writeFile(pidFile, Integer.toString(Process.myPid()));
             writeFile(statusFile, "READY");
-            Log.i(TAG, "Root multi-touch injector ready pid=" + Process.myPid());
+            Log.i(TAG, "Input injector ready pid=" + Process.myPid());
 
             long lastActivity = SystemClock.uptimeMillis();
             while (true) {
@@ -58,20 +60,19 @@ public final class RootMultiTouchInjector {
                             handle(line.trim());
                             lastActivity = SystemClock.uptimeMillis();
                         } catch (Throwable t) {
-                            Log.e(TAG, "Event failed: " + line, t);
+                            Log.e(TAG, "Input event injection failed", t);
                         }
                     }
                 } else {
-                    if (SystemClock.uptimeMillis() - lastActivity > IDLE_TIMEOUT_MS) {
-                        break;
-                    }
-                    Thread.sleep(4L);
+                    if (SystemClock.uptimeMillis() - lastActivity > IDLE_TIMEOUT_MS) break;
+                    Thread.sleep(2L);
                 }
             }
         } catch (Throwable t) {
-            Log.e(TAG, "Injector stopped", t);
+            Log.e(TAG, "Input injector stopped", t);
             try {
-                writeFile(statusFile, "ERROR:" + t.getClass().getSimpleName());
+                writeFile(statusFile, "ERROR:" + t.getClass().getSimpleName()
+                        + ":" + String.valueOf(t.getMessage()));
             } catch (Throwable ignored) { }
         } finally {
             removeIfOwned(pidFile);
@@ -84,17 +85,24 @@ public final class RootMultiTouchInjector {
         Method getInstance = globalClass.getDeclaredMethod("getInstance");
         getInstance.setAccessible(true);
         inputManager = getInstance.invoke(null);
+
         injectMethod = globalClass.getDeclaredMethod("injectInputEvent", InputEvent.class, int.class);
         injectMethod.setAccessible(true);
+
+        // Match scrcpy: set the display on the InputEvent before injection,
+        // instead of relying on a MotionEvent.obtain() overload to route it.
+        setDisplayIdMethod = InputEvent.class.getMethod("setDisplayId", int.class);
+        setDisplayIdMethod.setAccessible(true);
     }
 
     private static void handle(String line) throws Exception {
         String[] p = line.split("\\|", -1);
         if (p.length < 14 || !"EV".equals(p[0])) {
-            throw new IllegalArgumentException("Invalid real-touch event record");
+            throw new IllegalArgumentException("Invalid touch event record");
         }
+
         int displayId = Integer.parseInt(p[1]);
-        long eventDownTime = Long.parseLong(p[2]);
+        long downTime = Long.parseLong(p[2]);
         long eventTime = Long.parseLong(p[3]);
         int action = Integer.parseInt(p[4]);
         int metaState = Integer.parseInt(p[5]);
@@ -106,6 +114,8 @@ public final class RootMultiTouchInjector {
         int source = Integer.parseInt(p[11]);
         int flags = Integer.parseInt(p[12]);
         int count = Integer.parseInt(p[13]);
+
+        if (displayId < 0) throw new IllegalArgumentException("Invalid target display id " + displayId);
         if (count < 1 || count > 10 || p.length != 14 + count) {
             throw new IllegalArgumentException("Invalid pointer count");
         }
@@ -114,12 +124,12 @@ public final class RootMultiTouchInjector {
         MotionEvent.PointerCoords[] coords = new MotionEvent.PointerCoords[count];
         for (int n = 0; n < count; n++) {
             String[] fields = p[14 + n].split(",", -1);
-            if (fields.length != 11) {
-                throw new IllegalArgumentException("Invalid pointer data");
-            }
+            if (fields.length != 11) throw new IllegalArgumentException("Invalid pointer data");
+
             properties[n] = new MotionEvent.PointerProperties();
             properties[n].id = Integer.parseInt(fields[0]);
             properties[n].toolType = Integer.parseInt(fields[1]);
+
             coords[n] = new MotionEvent.PointerCoords();
             coords[n].x = Float.parseFloat(fields[2]);
             coords[n].y = Float.parseFloat(fields[3]);
@@ -132,15 +142,17 @@ public final class RootMultiTouchInjector {
             coords[n].orientation = Float.parseFloat(fields[10]);
         }
 
-        MotionEvent event = MotionEvent.obtain(eventDownTime, eventTime, action,
+        MotionEvent event = MotionEvent.obtain(downTime, eventTime, action,
                 count, properties, coords, metaState, buttonState,
-                xPrecision, yPrecision, deviceId, edgeFlags, source, flags,
-                displayId, 0);
+                xPrecision, yPrecision, deviceId, edgeFlags, source, flags);
         try {
-            Object result = injectMethod.invoke(inputManager, event, 0 /* ASYNC */);
-            if (result instanceof Boolean && !((Boolean) result)) {
-                throw new IllegalStateException("InputManager rejected real touch event");
+            setDisplayIdMethod.invoke(event, displayId);
+            Object result = injectMethod.invoke(inputManager, event, INJECT_MODE_ASYNC);
+            if (!(result instanceof Boolean) || !((Boolean) result)) {
+                throw new IllegalStateException("InputManager rejected event for display " + displayId);
             }
+            Log.v(TAG, "Injected action=" + action + " pointers=" + count
+                    + " display=" + displayId + " eventTime=" + eventTime);
         } finally {
             event.recycle();
         }
@@ -166,9 +178,7 @@ public final class RootMultiTouchInjector {
             if (file != null && file.isFile()) {
                 String value = readLine(file);
                 if (file.equals(pidFile) && value != null
-                        && !Integer.toString(Process.myPid()).equals(value.trim())) {
-                    return;
-                }
+                        && !Integer.toString(Process.myPid()).equals(value.trim())) return;
                 file.delete();
             }
         } catch (Throwable ignored) { }
