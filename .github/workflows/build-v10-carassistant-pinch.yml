@@ -1,0 +1,81 @@
+name: CarAssistant V10 Pinch-to-Zoom Test
+
+on:
+  push:
+    branches:
+      - pinch-to-zoom-v1
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build-pinch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+
+    steps:
+      - name: Checkout pinch branch
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.ref }}
+          fetch-depth: 0
+
+      - name: Verify keyboard PASS baseline is untouched
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch origin main
+          git diff --exit-code origin/main...HEAD -- \
+            .github/workflows/build-v10-carassistant-keyboard-pass.yml \
+            v10-source/app/src/main/java/com/carassistant/v10/V10CarActivity.java \
+            v10-source/app/src/main/AndroidManifest.xml \
+            v10-source/app/build.gradle
+          echo "PASS: keyboard workflow and protected baseline files are unchanged."
+
+      - name: Verify pinch source files
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -s v10-source/app/src/main/java/com/carassistant/v10/V10InputController.java
+          test -s v10-source/app/src/main/java/com/carassistant/v10/V10ProjectionSession.java
+          test -s v10-source/app/src/main/java/com/carassistant/v10/RootMultiTouchInjector.java
+          test -s v10-source/app/src/main/java/com/carassistant/v10/hook/InputHooks.java
+          grep -Fq 'ACTION_POINTER_DOWN' v10-source/app/src/main/java/com/carassistant/v10/V10InputController.java
+          grep -Fq 'ACTION_POINTER_UP' v10-source/app/src/main/java/com/carassistant/v10/RootMultiTouchInjector.java
+          echo "PASS: multi-pointer source anchors exist."
+
+      - name: Setup Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Compile Java and build debug APK
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd v10-source
+          chmod +x gradlew
+          ./gradlew --no-daemon --stacktrace compileDebugJavaWithJavac
+          ./gradlew --no-daemon --stacktrace assembleDebug
+
+      - name: Package test APK
+        shell: bash
+        run: |
+          set -euo pipefail
+          APK="v10-source/app/build/outputs/apk/debug/app-debug.apk"
+          test -s "$APK"
+          mkdir -p dist
+          cp "$APK" dist/CarAssistant-V10-Pinch-Zoom-TEST.apk
+          sha256sum dist/CarAssistant-V10-Pinch-Zoom-TEST.apk > dist/CarAssistant-V10-Pinch-Zoom-TEST.sha256
+          cat dist/CarAssistant-V10-Pinch-Zoom-TEST.sha256
+
+      - name: Upload pinch test APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: CarAssistant-V10-Pinch-Zoom-TEST
+          path: |
+            dist/CarAssistant-V10-Pinch-Zoom-TEST.apk
+            dist/CarAssistant-V10-Pinch-Zoom-TEST.sha256
+          if-no-files-found: error
