@@ -98,6 +98,10 @@ public final class V10InputController {
 
                 case MotionEvent.ACTION_POINTER_UP:
                     if (pinching) {
+                        int liftedPointerId = event.getPointerId(event.getActionIndex());
+                        if (liftedPointerId != firstPointerId && liftedPointerId != secondPointerId) {
+                            return true;
+                        }
                         int index0 = event.findPointerIndex(firstPointerId);
                         int index1 = event.findPointerIndex(secondPointerId);
                         if (index0 >= 0 && index1 >= 0) {
