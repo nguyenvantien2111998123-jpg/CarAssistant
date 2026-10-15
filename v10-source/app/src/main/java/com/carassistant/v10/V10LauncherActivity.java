@@ -213,6 +213,14 @@ public final class V10LauncherActivity extends Activity {
         shortcuts2.addView(actionCard("Chẩn đoán", "Kiểm tra root, Android Auto và nhật ký", "⚙", v -> { refreshDeviceStatus(); showPanel(diagnosticsPanel); }), new LinearLayout.LayoutParams(0, dp(112), 1f));
         content.addView(shortcuts2, marginParams(-1, dp(112), 0, 0, 0, 10));
 
+        TextView quickTitle = text("MỞ NHANH", 10, MUTED);
+        quickTitle.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
+        content.addView(quickTitle, marginParams(-1, dp(26), 0, 0, 0, 2));
+        dock = new LinearLayout(this);
+        dock.setOrientation(LinearLayout.HORIZONTAL);
+        dock.setGravity(Gravity.CENTER_VERTICAL);
+        content.addView(dock, marginParams(-1, dp(58), 0, 0, 0, 10));
+
         TextView footer = text("CarAssistant V10 · Pinch-to-Zoom test base", 10, MUTED);
         footer.setGravity(Gravity.CENTER);
         content.addView(footer, marginParams(-1, dp(28), 0, 0, 0, 0));
