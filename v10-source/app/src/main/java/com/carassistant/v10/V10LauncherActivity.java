@@ -192,12 +192,12 @@ public final class V10LauncherActivity extends Activity {
         content.addView(statusCards, marginParams(-1, dp(90), 0, 0, 0, 10));
 
         LinearLayout targetCard = card();
-        targetCard.addView(text("ỨNG DỤNG ĐÍCH ĐÃ CHỌN", 10, MUTED));
+        targetCard.addView(text("ỨNG DỤNG BẢN ĐỒ / CHIẾU ĐÃ CHỌN", 10, MUTED));
         targetValue = text(getTargetLabel(), 16, TEXT);
         targetValue.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
         targetValue.setPadding(0, dp(6), 0, dp(6));
         targetCard.addView(targetValue);
-        TextView targetHint = text("Chọn ứng dụng trong mục Ứng dụng để lưu làm mục tiêu chiếu. Việc này chưa tự khởi chạy phiên chiếu.", 11, MUTED);
+        TextView targetHint = text("Chọn ứng dụng bản đồ trong mục Ứng dụng. Khi mở Home trên Android Auto, ứng dụng này sẽ chạy trên màn hình phụ phía sau các lớp giao diện.", 11, MUTED);
         targetCard.addView(targetHint);
         content.addView(targetCard, marginParams(-1, -2, 0, 0, 0, 10));
 
@@ -489,11 +489,11 @@ public final class V10LauncherActivity extends Activity {
         TextView open = buttonText("Mở trên điện thoại");
         open.setOnClickListener(v -> { openLocalApp(app); });
         dialog.addView(open, marginParams(-1, dp(48), 0, 0, 0, 6));
-        TextView target = buttonText("Đặt làm ứng dụng chiếu");
+        TextView target = buttonText("Đặt làm ứng dụng bản đồ / chiếu");
         target.setOnClickListener(v -> {
             V10SessionStore.setTarget(this, app.component);
             updateDeviceCards();
-            Toast.makeText(this, "Đã lưu mục tiêu: " + app.name, Toast.LENGTH_SHORT).show();
+            Toast.makeText(this, "Đã lưu ứng dụng bản đồ / chiếu: " + app.name, Toast.LENGTH_SHORT).show();
             showPanel(dashboard);
         });
         dialog.addView(target, marginParams(-1, dp(48), 0, 0, 0, 6));
