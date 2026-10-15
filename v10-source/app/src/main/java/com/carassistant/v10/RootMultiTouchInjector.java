@@ -57,7 +57,7 @@ public final class RootMultiTouchInjector {
                     Arrays.sort(events, Comparator.comparing(File::getName));
                     for (File file : events) {
                         String line = readLine(file);
-                        if (!file.delete()) file.deleteOnExit();
+                        file.delete();
                         if (line == null || line.trim().isEmpty()) continue;
                         try {
                             handle(line.trim());
