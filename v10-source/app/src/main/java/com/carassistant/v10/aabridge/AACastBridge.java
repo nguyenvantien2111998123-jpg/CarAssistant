@@ -7,6 +7,7 @@ import com.carassistant.v10.hook.DisplayHooks;
 import com.carassistant.v10.hook.GearheadAllow;
 import com.carassistant.v10.hook.GearheadDockPatcher;
 import com.carassistant.v10.hook.InputHooks;
+import com.carassistant.v10.hook.HomeMapProjectionHook;
 import com.carassistant.v10.hook.InstallerSpoof;
 
 import de.robv.android.xposed.IXposedHookLoadPackage;
@@ -40,6 +41,9 @@ public final class AACastBridge implements IXposedHookLoadPackage {
 
         // ---- Android Auto (và chính app, để mọi code path nhất quán) ----
         if (GEARHEAD.equals(packageName) || SELF.equals(packageName)) {
+            if (SELF.equals(packageName)) {
+                HomeMapProjectionHook.install(param.classLoader);
+            }
             InstallerSpoof.hookLegacy(param.classLoader, PLAY);
 
             if (GEARHEAD.equals(packageName)) {
