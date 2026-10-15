@@ -6,8 +6,16 @@ import android.graphics.SurfaceTexture;
 import android.util.Log;
 import android.view.TextureView;
 
+import java.util.Locale;
+import java.util.concurrent.atomic.AtomicLong;
+
 public final class V10ProjectionSession implements TextureView.SurfaceTextureListener {
     private static final String TAG = "CarAssistantV10Projection";
+    private static final String TOUCH_DIR = "/data/local/tmp/carassistant-v10-touch";
+    private static final String TOUCH_STATUS = TOUCH_DIR + "/status";
+    private static final String TOUCH_PID = TOUCH_DIR + "/pid";
+    private static final AtomicLong TOUCH_SEQUENCE =
+            new AtomicLong(System.currentTimeMillis() * 1000L);
 
     private final V10DisplayController displayController;
     private final V10SurfaceManager surfaceManager;
@@ -67,6 +75,64 @@ public final class V10ProjectionSession implements TextureView.SurfaceTextureLis
                         + " swipe " + Math.round(mapX(startX)) + " " + Math.round(mapY(startY))
                         + " " + Math.round(mapX(endX)) + " " + Math.round(mapY(endY)) + " " + safe,
                 "Swipe failed", 5);
+    }
+
+    /**
+     * Starts a real two-pointer stream in the root injector. The injector sends
+     * ACTION_DOWN + ACTION_POINTER_DOWN to the same virtual display.
+     */
+    public void multiTouchStart(float x0, float y0, float x1, float y1) {
+        queueMultiTouch("START", x0, y0, x1, y1, true);
+    }
+
+    public void multiTouchMove(float x0, float y0, float x1, float y1) {
+        queueMultiTouch("MOVE", x0, y0, x1, y1, false);
+    }
+
+    public void multiTouchEnd(float x0, float y0, float x1, float y1) {
+        queueMultiTouch("END", x0, y0, x1, y1, false);
+    }
+
+    public void multiTouchCancel(float x0, float y0, float x1, float y1) {
+        queueMultiTouch("CANCEL", x0, y0, x1, y1, false);
+    }
+
+    private void queueMultiTouch(String action, float x0, float y0, float x1, float y1,
+                                 boolean ensureInjector) {
+        if (!isActive()) return;
+        final int displayId = displayController.getDisplayId();
+        final String line = action + "|" + displayId + "|"
+                + Math.round(mapX(x0)) + "|" + Math.round(mapY(y0)) + "|"
+                + Math.round(mapX(x1)) + "|" + Math.round(mapY(y1));
+        final String fileName = TOUCH_DIR + "/evt_"
+                + String.format(Locale.US, "%020d", TOUCH_SEQUENCE.incrementAndGet());
+        final String writeCommand = "printf '%s\\n' '" + line + "' > '" + fileName + "'";
+
+        RootShellSession.EXEC.execute(() -> {
+            try {
+                if (ensureInjector) {
+                    String setup = "mkdir -p '" + TOUCH_DIR + "'; "
+                            + "if [ -f '" + TOUCH_PID + "' ] "
+                            + "&& kill -0 \"$(cat '" + TOUCH_PID + "')\" 2>/dev/null "
+                            + "&& [ -f '" + TOUCH_STATUS + "' ]; then :; else "
+                            + "rm -f '" + TOUCH_DIR + "'/evt_* '" + TOUCH_STATUS + "' '" + TOUCH_PID + "'; "
+                            + "APK=\"$(pm path com.carassistant.v10 | head -n 1 | cut -d: -f2)\"; "
+                            + "test -n \"$APK\" || exit 1; "
+                            + "CLASSPATH=\"$APK\" app_process /system/bin "
+                            + "com.carassistant.v10.RootMultiTouchInjector "
+                            + "'" + TOUCH_DIR + "' '" + TOUCH_STATUS + "' '" + TOUCH_PID + "' "
+                            + ">/dev/null 2>&1 </dev/null & "
+                            + "echo $! > '" + TOUCH_PID + "'; "
+                            + "for i in 1 2 3 4 5 6 7 8 9 10; do "
+                            + "[ -f '" + TOUCH_STATUS + "' ] && break; sleep 0.05; done; "
+                            + "test -f '" + TOUCH_STATUS + "'";
+                    rootShell.run(5, setup);
+                }
+                rootShell.run(3, writeCommand);
+            } catch (Throwable t) {
+                Log.w(TAG, "Multi-touch injection failed (" + action + ")", t);
+            }
+        });
     }
 
     public void back() {
