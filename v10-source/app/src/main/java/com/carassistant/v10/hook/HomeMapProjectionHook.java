@@ -42,6 +42,32 @@ public final class HomeMapProjectionHook {
                             keepMapBehindHome(param.thisObject);
                         }
                     });
+            XposedHelpers.findAndHookMethod(activityClass, "launchProjection",
+                    ComponentName.class, new XC_MethodHook() {
+                        @Override protected void beforeHookedMethod(MethodHookParam param) {
+                            try {
+                                Object activityObject = param.thisObject;
+                                android.app.Activity activity = (android.app.Activity) activityObject;
+                                Object dashboard = XposedHelpers.getObjectField(activityObject, "dashboard");
+                                Object launcher = XposedHelpers.getObjectField(activityObject, "launcherLayer");
+                                ComponentName selected = V10SessionStore.getTarget(activity);
+                                boolean homeWasVisible = dashboard instanceof View
+                                        && launcher instanceof View
+                                        && ((View) dashboard).getVisibility() == View.VISIBLE
+                                        && ((View) launcher).getVisibility() == View.VISIBLE
+                                        && selected != null && selected.equals(param.args[0]);
+                                param.setObjectExtra("carassistant_home_map_mode", homeWasVisible);
+                            } catch (Throwable ignored) {
+                                param.setObjectExtra("carassistant_home_map_mode", false);
+                            }
+                        }
+
+                        @Override protected void afterHookedMethod(MethodHookParam param) {
+                            if (Boolean.TRUE.equals(param.getObjectExtra("carassistant_home_map_mode"))) {
+                                keepMapBehindHome(param.thisObject);
+                            }
+                        }
+                    });
             XposedBridge.log(TAG + " lifecycle hooks installed");
         } catch (Throwable t) {
             XposedBridge.log(TAG + " hook unavailable: " + Log.getStackTraceString(t));
