@@ -16,7 +16,7 @@ import java.util.Comparator;
 
 /**
  * Root-only helper launched with app_process. It reads atomic event files written
- * by V10ProjectionSession and injects genuine multi-pointer MotionEvents.
+ * by V10ProjectionSession and reconstructs the original MotionEvent stream.
  */
 public final class RootMultiTouchInjector {
     private static final String TAG = "CarAssistantPinchInjector";
@@ -62,7 +62,7 @@ public final class RootMultiTouchInjector {
                         }
                     }
                 } else {
-                    if (!active && SystemClock.uptimeMillis() - lastActivity > IDLE_TIMEOUT_MS) {
+                    if (SystemClock.uptimeMillis() - lastActivity > IDLE_TIMEOUT_MS) {
                         break;
                     }
                     Thread.sleep(4L);
