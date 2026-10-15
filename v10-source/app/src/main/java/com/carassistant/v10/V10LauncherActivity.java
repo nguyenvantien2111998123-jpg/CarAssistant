@@ -57,6 +57,8 @@ public final class V10LauncherActivity extends Activity {
     private TextView date;
     private TextView rootValue;
     private TextView autoValue;
+    private TextView diagnosticRootValue;
+    private TextView diagnosticAutoValue;
     private TextView targetValue;
     private TextView keyboardValue;
     private TextView appCount;
@@ -282,12 +284,12 @@ public final class V10LauncherActivity extends Activity {
         diagnosticsPanel = panelContainer();
         diagnosticsPanel.addView(panelHeading("Chẩn đoán", "Kiểm tra những gì ứng dụng có thể xác minh an toàn."));
         LinearLayout card = card();
-        rootValue = text(rootState, 13, TEXT);
-        autoValue = text("Chưa kiểm tra", 13, TEXT);
+        diagnosticRootValue = text(rootState, 13, TEXT);
+        diagnosticAutoValue = text("Chưa kiểm tra", 13, TEXT);
         card.addView(text("Root / Magisk", 11, MUTED));
-        card.addView(rootValue);
+        card.addView(diagnosticRootValue);
         card.addView(text("Android Auto", 11, MUTED));
-        card.addView(autoValue);
+        card.addView(diagnosticAutoValue);
         card.addView(text("Ứng dụng đích đã lưu", 11, MUTED));
         TextView target = text(getTargetLabel(), 13, TEXT);
         card.addView(target);
@@ -331,10 +333,10 @@ public final class V10LauncherActivity extends Activity {
 
     private void updateDeviceCards() {
         if (rootValue != null) rootValue.setText(rootState);
-        if (autoValue != null) {
-            boolean installed = isPackageInstalled("com.google.android.projection.gearhead");
-            autoValue.setText(installed ? "Đã cài đặt" : "Không tìm thấy");
-        }
+        if (diagnosticRootValue != null) diagnosticRootValue.setText(rootState);
+        String autoStatus = isPackageInstalled("com.google.android.projection.gearhead") ? "Đã cài đặt" : "Không tìm thấy";
+        if (autoValue != null) autoValue.setText(autoStatus);
+        if (diagnosticAutoValue != null) diagnosticAutoValue.setText(autoStatus);
         if (targetValue != null) targetValue.setText(getTargetLabel());
         if (keyboardValue != null) keyboardValue.setText(getDefaultKeyboard());
     }
