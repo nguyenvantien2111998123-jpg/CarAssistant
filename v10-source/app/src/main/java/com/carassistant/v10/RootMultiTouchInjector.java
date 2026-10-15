@@ -3,7 +3,6 @@ package com.carassistant.v10;
 import android.os.Process;
 import android.os.SystemClock;
 import android.util.Log;
-import android.view.InputDevice;
 import android.view.InputEvent;
 import android.view.MotionEvent;
 
@@ -22,7 +21,6 @@ import java.util.Comparator;
 public final class RootMultiTouchInjector {
     private static final String TAG = "CarAssistantPinchInjector";
     private static final long IDLE_TIMEOUT_MS = 120_000L;
-    private static final int INJECT_WAIT_FOR_FINISH = 2;
 
     private static File eventDirectory;
     private static File statusFile;
@@ -30,9 +28,6 @@ public final class RootMultiTouchInjector {
     private static Object inputManager;
     private static Method injectMethod;
 
-    private static boolean active;
-    private static int activeDisplayId = -1;
-    private static long downTime;
 
     private RootMultiTouchInjector() { }
 
@@ -64,7 +59,6 @@ public final class RootMultiTouchInjector {
                             lastActivity = SystemClock.uptimeMillis();
                         } catch (Throwable t) {
                             Log.e(TAG, "Event failed: " + line, t);
-                            cancelActiveGesture();
                         }
                     }
                 } else {
@@ -80,7 +74,6 @@ public final class RootMultiTouchInjector {
                 writeFile(statusFile, "ERROR:" + t.getClass().getSimpleName());
             } catch (Throwable ignored) { }
         } finally {
-            cancelActiveGesture();
             removeIfOwned(pidFile);
             removeIfOwned(statusFile);
         }
@@ -96,107 +89,61 @@ public final class RootMultiTouchInjector {
     }
 
     private static void handle(String line) throws Exception {
-        String[] p = line.split("\\|");
-        if (p.length != 6) throw new IllegalArgumentException("Invalid event record");
-        String action = p[0];
-        int displayId = Integer.parseInt(p[1]);
-        float x0 = Float.parseFloat(p[2]);
-        float y0 = Float.parseFloat(p[3]);
-        float x1 = Float.parseFloat(p[4]);
-        float y1 = Float.parseFloat(p[5]);
-
-        if ("START".equals(action)) {
-            cancelActiveGesture();
-            activeDisplayId = displayId;
-            downTime = SystemClock.uptimeMillis();
-            injectOne(MotionEvent.ACTION_DOWN, x0, y0);
-            active = true;
-            injectTwo(MotionEvent.ACTION_POINTER_DOWN | (1 << 8), x0, y0, x1, y1);
-        } else if ("MOVE".equals(action)) {
-            if (active && displayId == activeDisplayId) {
-                injectTwo(MotionEvent.ACTION_MOVE, x0, y0, x1, y1);
-            }
-        } else if ("END".equals(action)) {
-            if (active && displayId == activeDisplayId) {
-                injectTwo(MotionEvent.ACTION_POINTER_UP | (1 << 8), x0, y0, x1, y1);
-                injectOne(MotionEvent.ACTION_UP, x0, y0);
-                active = false;
-                activeDisplayId = -1;
-            }
-        } else if ("CANCEL".equals(action)) {
-            if (active && displayId == activeDisplayId) {
-                injectTwo(MotionEvent.ACTION_CANCEL, x0, y0, x1, y1);
-                active = false;
-                activeDisplayId = -1;
-            }
-        } else {
-            throw new IllegalArgumentException("Unknown action " + action);
+        String[] p = line.split("\\|", -1);
+        if (p.length < 14 || !"EV".equals(p[0])) {
+            throw new IllegalArgumentException("Invalid real-touch event record");
         }
-    }
+        int displayId = Integer.parseInt(p[1]);
+        long eventDownTime = Long.parseLong(p[2]);
+        long eventTime = Long.parseLong(p[3]);
+        int action = Integer.parseInt(p[4]);
+        int metaState = Integer.parseInt(p[5]);
+        int buttonState = Integer.parseInt(p[6]);
+        float xPrecision = Float.parseFloat(p[7]);
+        float yPrecision = Float.parseFloat(p[8]);
+        int deviceId = Integer.parseInt(p[9]);
+        int edgeFlags = Integer.parseInt(p[10]);
+        int source = Integer.parseInt(p[11]);
+        int flags = Integer.parseInt(p[12]);
+        int count = Integer.parseInt(p[13]);
+        if (count < 1 || count > 10 || p.length != 14 + count) {
+            throw new IllegalArgumentException("Invalid pointer count");
+        }
 
-    private static void injectOne(int action, float x, float y) throws Exception {
-        MotionEvent.PointerProperties[] properties = new MotionEvent.PointerProperties[1];
-        MotionEvent.PointerCoords[] coords = new MotionEvent.PointerCoords[1];
-        properties[0] = pointerProperties(0);
-        coords[0] = pointerCoords(x, y);
-        inject(createEvent(action, 1, properties, coords));
-    }
+        MotionEvent.PointerProperties[] properties = new MotionEvent.PointerProperties[count];
+        MotionEvent.PointerCoords[] coords = new MotionEvent.PointerCoords[count];
+        for (int n = 0; n < count; n++) {
+            String[] fields = p[14 + n].split(",", -1);
+            if (fields.length != 11) {
+                throw new IllegalArgumentException("Invalid pointer data");
+            }
+            properties[n] = new MotionEvent.PointerProperties();
+            properties[n].id = Integer.parseInt(fields[0]);
+            properties[n].toolType = Integer.parseInt(fields[1]);
+            coords[n] = new MotionEvent.PointerCoords();
+            coords[n].x = Float.parseFloat(fields[2]);
+            coords[n].y = Float.parseFloat(fields[3]);
+            coords[n].pressure = Float.parseFloat(fields[4]);
+            coords[n].size = Float.parseFloat(fields[5]);
+            coords[n].touchMajor = Float.parseFloat(fields[6]);
+            coords[n].touchMinor = Float.parseFloat(fields[7]);
+            coords[n].toolMajor = Float.parseFloat(fields[8]);
+            coords[n].toolMinor = Float.parseFloat(fields[9]);
+            coords[n].orientation = Float.parseFloat(fields[10]);
+        }
 
-    private static void injectTwo(int action, float x0, float y0, float x1, float y1)
-            throws Exception {
-        MotionEvent.PointerProperties[] properties = new MotionEvent.PointerProperties[2];
-        MotionEvent.PointerCoords[] coords = new MotionEvent.PointerCoords[2];
-        properties[0] = pointerProperties(0);
-        properties[1] = pointerProperties(1);
-        coords[0] = pointerCoords(x0, y0);
-        coords[1] = pointerCoords(x1, y1);
-        inject(createEvent(action, 2, properties, coords));
-    }
-
-    private static MotionEvent.PointerProperties pointerProperties(int id) {
-        MotionEvent.PointerProperties properties = new MotionEvent.PointerProperties();
-        properties.id = id;
-        properties.toolType = MotionEvent.TOOL_TYPE_FINGER;
-        return properties;
-    }
-
-    private static MotionEvent.PointerCoords pointerCoords(float x, float y) {
-        MotionEvent.PointerCoords coords = new MotionEvent.PointerCoords();
-        coords.x = x;
-        coords.y = y;
-        coords.pressure = 1.0f;
-        coords.size = 1.0f;
-        return coords;
-    }
-
-    private static MotionEvent createEvent(int action, int count,
-            MotionEvent.PointerProperties[] properties, MotionEvent.PointerCoords[] coords) {
-        long now = SystemClock.uptimeMillis();
-        return MotionEvent.obtain(downTime, now, action, count, properties, coords,
-                0, 0, 1.0f, 1.0f, -1, 0, InputDevice.SOURCE_TOUCHSCREEN,
-                0, activeDisplayId, 0);
-    }
-
-    private static void inject(MotionEvent event) throws Exception {
+        MotionEvent event = MotionEvent.obtain(eventDownTime, eventTime, action,
+                count, properties, coords, metaState, buttonState,
+                xPrecision, yPrecision, deviceId, edgeFlags, source, flags,
+                displayId, 0);
         try {
-            Object result = injectMethod.invoke(inputManager, event, INJECT_WAIT_FOR_FINISH);
+            Object result = injectMethod.invoke(inputManager, event, 0 /* ASYNC */);
             if (result instanceof Boolean && !((Boolean) result)) {
-                throw new IllegalStateException("InputManager rejected MotionEvent");
+                throw new IllegalStateException("InputManager rejected real touch event");
             }
         } finally {
             event.recycle();
         }
-    }
-
-    private static void cancelActiveGesture() {
-        if (!active) return;
-        try {
-            injectTwo(MotionEvent.ACTION_CANCEL, 0, 0, 0, 0);
-        } catch (Throwable t) {
-            Log.w(TAG, "Could not cancel previous gesture", t);
-        }
-        active = false;
-        activeDisplayId = -1;
     }
 
     private static String readLine(File file) throws Exception {
