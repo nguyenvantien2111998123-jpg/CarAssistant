@@ -106,7 +106,7 @@ public final class V10ProjectionSession implements TextureView.SurfaceTextureLis
                 + Math.round(mapX(x1)) + "|" + Math.round(mapY(y1));
         final String fileName = TOUCH_DIR + "/evt_"
                 + String.format(Locale.US, "%020d", TOUCH_SEQUENCE.incrementAndGet());
-        final String writeCommand = "printf '%s\\n' '" + line + "' > '" + fileName + "'";
+        final String writeCommand = "printf '%s\\n' '" + line + "' > '" + fileName + ".tmp' && mv '" + fileName + ".tmp' '" + fileName + "'";
 
         RootShellSession.EXEC.execute(() -> {
             try {
@@ -114,7 +114,7 @@ public final class V10ProjectionSession implements TextureView.SurfaceTextureLis
                     String setup = "mkdir -p '" + TOUCH_DIR + "'; "
                             + "if [ -f '" + TOUCH_PID + "' ] "
                             + "&& kill -0 \"$(cat '" + TOUCH_PID + "')\" 2>/dev/null "
-                            + "&& [ -f '" + TOUCH_STATUS + "' ]; then :; else "
+                            + "&& grep -q '^READY$' '" + TOUCH_STATUS + "'; then :; else "
                             + "rm -f '" + TOUCH_DIR + "'/evt_* '" + TOUCH_STATUS + "' '" + TOUCH_PID + "'; "
                             + "APK=\"$(pm path com.carassistant.v10 | head -n 1 | cut -d: -f2)\"; "
                             + "test -n \"$APK\" || exit 1; "
@@ -124,7 +124,7 @@ public final class V10ProjectionSession implements TextureView.SurfaceTextureLis
                             + ">/dev/null 2>&1 </dev/null & "
                             + "echo $! > '" + TOUCH_PID + "'; "
                             + "for i in 1 2 3 4 5 6 7 8 9 10; do "
-                            + "[ -f '" + TOUCH_STATUS + "' ] && break; sleep 0.05; done; "
+                            + "grep -q '^READY$' '" + TOUCH_STATUS + "' && break; sleep 0.05; done; "
                             + "test -f '" + TOUCH_STATUS + "'";
                     rootShell.run(5, setup);
                 }
