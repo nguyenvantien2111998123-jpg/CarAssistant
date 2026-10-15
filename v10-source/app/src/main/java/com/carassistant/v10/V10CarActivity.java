@@ -11,7 +11,6 @@ import android.content.Intent;
 import android.content.pm.ResolveInfo;
 import android.content.pm.ApplicationInfo;
 import android.content.pm.PackageManager;
-import android.net.Uri;
 import android.graphics.Color;
 import android.graphics.Typeface;
 import android.graphics.drawable.GradientDrawable;
@@ -103,13 +102,11 @@ public final class V10CarActivity
                                             V10CarActivity.this);
 
                     if (target != null
-                            && !target.equals(activeTarget)) {
-                        if (projectionLayer != null
-                                && projectionLayer.getVisibility() == View.VISIBLE) {
-                            launchProjection(target);
-                        } else {
-                            launchMapBackground(target);
-                        }
+                            && !target.equals(
+                                    activeTarget)) {
+
+                        launchProjection(
+                                target);
                     }
 
                     handler.postDelayed(
@@ -177,9 +174,13 @@ public final class V10CarActivity
         handler.post(clockTicker);
         handler.post(targetPoller);
 
-        ComponentName target = V10SessionStore.getTarget(this);
-        if (target == null) target = resolveDefaultMapApp();
-        if (target != null) launchMapBackground(target);
+        ComponentName target =
+                V10SessionStore
+                        .getTarget(this);
+
+        if (target != null) {
+            launchProjection(target);
+        }
     }
 
 
@@ -569,9 +570,11 @@ public final class V10CarActivity
         textureView =
                 new TextureView(this);
 
-        // Keep the secondary-display surface behind all Home overlays.
-        // projectionLayer is reserved for floating controls in projection mode.
-        root.addView(textureView, 1, new FrameLayout.LayoutParams(-1, -1));
+        projectionLayer.addView(
+                textureView,
+                new FrameLayout.LayoutParams(
+                        -1,
+                        -1));
 
         session =
                 new V10ProjectionSession(
@@ -592,42 +595,6 @@ public final class V10CarActivity
                         inputController
                                 .createListener());
     }
-
-
-private ComponentName resolveDefaultMapApp() {
-    try {
-        Intent intent = new Intent(Intent.ACTION_VIEW, Uri.parse("geo:0,0?q="));
-        ResolveInfo resolved = getPackageManager().resolveActivity(
-                intent, PackageManager.MATCH_DEFAULT_ONLY);
-        if (resolved != null && resolved.activityInfo != null
-                && !getPackageName().equals(resolved.activityInfo.packageName)) {
-            return new ComponentName(resolved.activityInfo.packageName,
-                    resolved.activityInfo.name);
-        }
-    } catch (Exception e) {
-        android.util.Log.w("CarAssistantV10", "No default map app resolved", e);
-    }
-    return null;
-}
-
-private void launchMapBackground(ComponentName component) {
-    if (session == null) return;
-    if (component == null) {
-        if (textureView != null) textureView.setVisibility(View.GONE);
-        if (session.isActive()) session.hideTask();
-        activeTarget = null;
-        return;
-    }
-    activeTarget = component;
-    if (textureView != null) textureView.setVisibility(View.VISIBLE);
-    if (projectionLayer != null) projectionLayer.setVisibility(View.GONE);
-    if (launcherLayer != null) launcherLayer.setVisibility(View.VISIBLE);
-    if (dashboard != null) dashboard.setVisibility(View.VISIBLE);
-    if (appPanel != null) appPanel.setVisibility(View.GONE);
-    // Render the map app on the existing root-managed secondary display.
-    // Home and its controls remain in front of the map surface.
-    session.setTarget(component);
-}
 
 
 private void launchProjection(
@@ -713,10 +680,8 @@ private void launchProjection(
         appPanel
                 .setVisibility(
                         View.GONE);
-        ComponentName mapTarget = V10SessionStore.getTarget(this);
-        if (mapTarget == null) mapTarget = resolveDefaultMapApp();
-        launchMapBackground(mapTarget);
     }
+
 
 private void showApps() {
 
