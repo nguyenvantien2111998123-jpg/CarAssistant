@@ -5,6 +5,7 @@ import android.content.Context;
 import android.graphics.SurfaceTexture;
 import android.util.Log;
 import android.view.TextureView;
+import android.view.MotionEvent;
 
 import java.util.Locale;
 import java.util.concurrent.atomic.AtomicLong;
@@ -78,36 +79,50 @@ public final class V10ProjectionSession implements TextureView.SurfaceTextureLis
     }
 
     /**
-     * Starts a real two-pointer stream in the root injector. The injector sends
-     * ACTION_DOWN + ACTION_POINTER_DOWN to the same virtual display.
+     * Forwards a complete touch event to the projected display.
+     * Pointer IDs, action/index, timing and pointer geometry are preserved.
      */
-    public void multiTouchStart(float x0, float y0, float x1, float y1) {
-        queueMultiTouch("START", x0, y0, x1, y1, true);
-    }
-
-    public void multiTouchMove(float x0, float y0, float x1, float y1) {
-        queueMultiTouch("MOVE", x0, y0, x1, y1, false);
-    }
-
-    public void multiTouchEnd(float x0, float y0, float x1, float y1) {
-        queueMultiTouch("END", x0, y0, x1, y1, false);
-    }
-
-    public void multiTouchCancel(float x0, float y0, float x1, float y1) {
-        queueMultiTouch("CANCEL", x0, y0, x1, y1, false);
-    }
-
-    private void queueMultiTouch(String action, float x0, float y0, float x1, float y1,
-                                 boolean ensureInjector) {
-        if (!isActive()) return;
+    public void injectTouchEvent(MotionEvent event) {
+        if (event == null || !isActive()) return;
         final int displayId = displayController.getDisplayId();
-        final String line = action + "|" + displayId + "|"
-                + Math.round(mapX(x0)) + "|" + Math.round(mapY(y0)) + "|"
-                + Math.round(mapX(x1)) + "|" + Math.round(mapY(y1));
+        final StringBuilder line = new StringBuilder("EV|")
+                .append(displayId).append('|')
+                .append(event.getDownTime()).append('|')
+                .append(event.getEventTime()).append('|')
+                .append(event.getAction()).append('|')
+                .append(event.getMetaState()).append('|')
+                .append(event.getButtonState()).append('|')
+                .append(Float.toString(event.getXPrecision())).append('|')
+                .append(Float.toString(event.getYPrecision())).append('|')
+                .append(event.getDeviceId()).append('|')
+                .append(event.getEdgeFlags()).append('|')
+                .append(event.getSource()).append('|')
+                .append(event.getFlags()).append('|')
+                .append(event.getPointerCount());
+        for (int i = 0; i < event.getPointerCount(); i++) {
+            MotionEvent.PointerProperties properties = new MotionEvent.PointerProperties();
+            MotionEvent.PointerCoords coords = new MotionEvent.PointerCoords();
+            event.getPointerProperties(i, properties);
+            event.getPointerCoords(i, coords);
+            line.append('|')
+                    .append(properties.id).append(',')
+                    .append(properties.toolType).append(',')
+                    .append(Float.toString(mapX(coords.x))).append(',')
+                    .append(Float.toString(mapY(coords.y))).append(',')
+                    .append(Float.toString(coords.pressure)).append(',')
+                    .append(Float.toString(coords.size)).append(',')
+                    .append(Float.toString(coords.touchMajor)).append(',')
+                    .append(Float.toString(coords.touchMinor)).append(',')
+                    .append(Float.toString(coords.toolMajor)).append(',')
+                    .append(Float.toString(coords.toolMinor)).append(',')
+                    .append(Float.toString(coords.orientation));
+        }
+
         final String fileName = TOUCH_DIR + "/evt_"
                 + String.format(Locale.US, "%020d", TOUCH_SEQUENCE.incrementAndGet());
-        final String writeCommand = "printf '%s\\n' '" + line + "' > '" + fileName + ".tmp' && mv '" + fileName + ".tmp' '" + fileName + "'";
-
+        final String writeCommand = "printf '%s\\n' '" + line + "' > '" + fileName
+                + ".tmp' && mv '" + fileName + ".tmp' '" + fileName + "'";
+        final boolean ensureInjector = event.getActionMasked() == MotionEvent.ACTION_DOWN;
         RootShellSession.EXEC.execute(() -> {
             try {
                 if (ensureInjector) {
@@ -125,12 +140,12 @@ public final class V10ProjectionSession implements TextureView.SurfaceTextureLis
                             + "echo $! > '" + TOUCH_PID + "'; "
                             + "for i in 1 2 3 4 5 6 7 8 9 10; do "
                             + "grep -q '^READY$' '" + TOUCH_STATUS + "' && break; sleep 0.05; done; "
-                            + "test -f '" + TOUCH_STATUS + "'";
+                            + "grep -q '^READY$' '" + TOUCH_STATUS + "'";
                     rootShell.run(5, setup);
                 }
                 rootShell.run(3, writeCommand);
             } catch (Throwable t) {
-                Log.w(TAG, "Multi-touch injection failed (" + action + ")", t);
+                Log.w(TAG, "Real touch injection failed", t);
             }
         });
     }
