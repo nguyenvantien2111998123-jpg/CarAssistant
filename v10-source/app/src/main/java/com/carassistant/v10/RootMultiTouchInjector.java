@@ -174,7 +174,7 @@ public final class RootMultiTouchInjector {
         long now = SystemClock.uptimeMillis();
         return MotionEvent.obtain(downTime, now, action, count, properties, coords,
                 0, 0, 1.0f, 1.0f, -1, 0, InputDevice.SOURCE_TOUCHSCREEN,
-                activeDisplayId, 0);
+                0, activeDisplayId, 0);
     }
 
     private static void inject(MotionEvent event) throws Exception {
