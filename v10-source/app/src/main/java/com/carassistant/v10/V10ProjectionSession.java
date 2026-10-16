@@ -10,6 +10,7 @@ public final class V10ProjectionSession implements TextureView.SurfaceTextureLis
     private static final String TAG = "CarAssistantV10Projection";
 
     private final V10DisplayController displayController;
+    private final int displayIndex;
     private final V10SurfaceManager surfaceManager;
     private final V10TaskSession taskSession = new V10TaskSession();
     private final RootShellSession rootShell = new RootShellSession();
@@ -20,8 +21,13 @@ public final class V10ProjectionSession implements TextureView.SurfaceTextureLis
     private int contentHeight;
 
     public V10ProjectionSession(Context context) {
+        this(context, 0);
+    }
+
+    public V10ProjectionSession(Context context, int displayIndex) {
         Context app = context.getApplicationContext();
-        displayController = V10DisplayController.get(app);
+        this.displayIndex = Math.max(0, displayIndex);
+        displayController = V10DisplayController.get(app, this.displayIndex);
         surfaceManager = new V10SurfaceManager(displayController);
     }
 
@@ -124,7 +130,7 @@ public final class V10ProjectionSession implements TextureView.SurfaceTextureLis
         if (!wasReady) {
             displayController.launchNewTask(target);
             taskSession.active();
-            Log.d(TAG, "[CREATE] display=" + displayController.getDisplayId());
+            Log.d(TAG, "[CREATE] layer=" + displayIndex + " display=" + displayController.getDisplayId());
             Log.d(TAG, "[CREATE] task=" + target.flattenToString());
             Log.d(TAG, "[ACTIVE] task=" + target.flattenToString());
         } else if (!wasLaunched) {
