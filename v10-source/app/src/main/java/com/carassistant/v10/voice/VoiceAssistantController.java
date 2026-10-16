@@ -74,9 +74,29 @@ public final class VoiceAssistantController {
         mainHandler.removeCallbacks(silenceWatchdog);
     }
 
+    private final Runnable finalResultFallback = () -> {
+        if (destroyed || commandHandled) return;
+        String transcript = lastTranscript == null ? "" : lastTranscript.trim();
+        if (transcript.isEmpty()) return;
+
+        // Bound the wait for a final recognition callback after end-of-speech.
+        commandHandled = true;
+        listening = false;
+        cancelSilenceWatchdog();
+        try {
+            if (recognizer != null) recognizer.cancel();
+        } catch (RuntimeException ignored) { }
+        if (!endBeepPlayed) {
+            playBeep();
+            endBeepPlayed = true;
+        }
+        notifyState(false, "Đang xử lý lệnh…", "", false);
+        dispatchTranscript(transcript);
+    };
+
     private void scheduleFinalResultFallback() {
-        mainHandler.removeCallbacks(silenceWatchdog);
-        mainHandler.postDelayed(silenceWatchdog, 1200L);
+        mainHandler.removeCallbacks(finalResultFallback);
+        mainHandler.postDelayed(finalResultFallback, 1200L);
     }
 
     private void dispatchTranscript(String transcript) {
