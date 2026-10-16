@@ -5,7 +5,7 @@ public final class VoiceCommandRouter {
     public interface Host {
         /** Opens a matching installed app and returns its visible label, or null when not found. */
         String openApp(String spokenName);
-        void showApps();
+        void showAppPicker();
         void goHome();
     }
 
@@ -42,7 +42,7 @@ public final class VoiceCommandRouter {
                 return new Result(true, "Đang mở " + opened + ".", false);
             }
             case SHOW_APPS:
-                host.showApps();
+                host.showAppPicker();
                 return new Result(true, "Đây là danh sách ứng dụng.", false);
             case HOME:
                 host.goHome();
