@@ -224,7 +224,7 @@ public final class V10CarActivity
         sidebar.setOrientation(LinearLayout.VERTICAL);
         sidebar.setGravity(Gravity.TOP|Gravity.CENTER_HORIZONTAL);
         sidebar.setPadding(dp(3),dp(3),dp(3),dp(3));
-        dashboard.addView(sidebar,new LinearLayout.LayoutParams(dp(88),-1));
+        dashboard.addView(sidebar,new LinearLayout.LayoutParams(dp(64),-1));
 
         TextView choose=sidebarButton("APP CHỌN");
         choose.setOnClickListener(v->showApps());
@@ -474,43 +474,28 @@ public final class V10CarActivity
 
 
     private void rebuildDock() {
-        if(dock==null)return;
+        if (dock == null) return;
         dock.removeAllViews();
-        ArrayList<AppInfo> q=getQuickLaunchApps();
-        int n=Math.min(4,q.size());
-        for(int i=0;i<n;i++) {
-            dock.addView(quickLaunchTile(q.get(i)),sidebarQuickParams());
+        ArrayList<AppInfo> favorites = getQuickLaunchApps();
+        for (AppInfo app : favorites) {
+            dock.addView(quickLaunchTile(app), sidebarQuickParams());
         }
     }
 
     private ArrayList<AppInfo> getQuickLaunchApps() {
-        ArrayList<AppInfo> out=new ArrayList<>();
-        String[] p={
-                "com.google.android.apps.maps",
-                "com.google.android.youtube",
-                "com.zing.zalo",
-                "com.spotify.music"
-        };
-        for(String x:p) {
-            for(AppInfo a:apps) {
-                if(x.equals(a.component.getPackageName())) {
-                    out.add(a);
+        ArrayList<AppInfo> result = new ArrayList<>();
+        ArrayList<ComponentName> selected = V10SessionStore.getQuickLaunchApps(this);
+        for (ComponentName component : selected) {
+            if (component == null) continue;
+            for (AppInfo app : apps) {
+                if (component.getPackageName().equals(app.component.getPackageName())) {
+                    result.add(app);
                     break;
                 }
             }
-            if(out.size()==4)break;
+            if (result.size() == 3) break;
         }
-        if(out.size()<4) {
-            for(AppInfo a:apps) {
-                boolean duplicate=false;
-                for(AppInfo b:out) {
-                    if(b.component.equals(a.component)) duplicate=true;
-                }
-                if(!duplicate)out.add(a);
-                if(out.size()==4)break;
-            }
-        }
-        return out;
+        return result;
     }
 
     private LinearLayout quickLaunchTile(AppInfo app) {
@@ -525,8 +510,8 @@ public final class V10CarActivity
         Drawable d=getRealAppIcon(app.component.getPackageName());
         if(d!=null)i.setImageDrawable(d);
         i.setScaleType(ImageView.ScaleType.CENTER_INSIDE);
-        t.addView(i,new LinearLayout.LayoutParams(dp(42),dp(42)));
-        TextView n=text(app.name,8,Color.WHITE);
+        t.addView(i,new LinearLayout.LayoutParams(dp(30),dp(30)));
+        TextView n=text(app.name,7,Color.WHITE);
         n.setGravity(Gravity.CENTER);
         n.setMaxLines(1);
         t.addView(n,new LinearLayout.LayoutParams(-1,dp(18)));
@@ -1057,27 +1042,28 @@ private void hideFloatingMenu() {
 
 
     private LinearLayout.LayoutParams sidebarButtonParams() {
-        LinearLayout.LayoutParams p=new LinearLayout.LayoutParams(-1,dp(62));
+        LinearLayout.LayoutParams p=new LinearLayout.LayoutParams(-1,dp(48));
         p.setMargins(dp(1),dp(2),dp(1),dp(2));
         return p;
     }
 
     private LinearLayout.LayoutParams sidebarFixedButtonParams() {
-        LinearLayout.LayoutParams p=new LinearLayout.LayoutParams(-1,dp(62));
+        LinearLayout.LayoutParams p=new LinearLayout.LayoutParams(-1,dp(48));
         p.setMargins(dp(1),dp(2),dp(1),dp(2));
         return p;
     }
 
     private LinearLayout.LayoutParams sidebarQuickParams() {
-        LinearLayout.LayoutParams p=new LinearLayout.LayoutParams(-1,dp(66));
+        LinearLayout.LayoutParams p=new LinearLayout.LayoutParams(-1,dp(54));
         p.setMargins(dp(1),dp(2),dp(1),dp(2));
         return p;
     }
 
     private TextView sidebarButton(String value) {
         TextView v=buttonText(value);
-        v.setTextSize(11);
+        v.setTextSize(9);
         v.setGravity(Gravity.CENTER);
+        v.setPadding(dp(2),dp(2),dp(2),dp(2));
         return v;
     }
 
