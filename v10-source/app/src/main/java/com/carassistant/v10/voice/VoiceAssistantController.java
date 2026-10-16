@@ -1,0 +1,228 @@
+package com.carassistant.v10.voice;
+
+import android.Manifest;
+import android.app.Activity;
+import android.content.Intent;
+import android.content.pm.PackageManager;
+import android.os.Bundle;
+import android.os.Handler;
+import android.os.Looper;
+import android.speech.RecognitionListener;
+import android.speech.RecognizerIntent;
+import android.speech.SpeechRecognizer;
+import android.speech.tts.TextToSpeech;
+import android.speech.tts.UtteranceProgressListener;
+
+import java.util.ArrayList;
+import java.util.Locale;
+import java.util.UUID;
+
+/**
+ * Push-to-talk speech lifecycle for CarAssistant V1.
+ * Speech recognition and TTS use Android services on the phone; this controller
+ * does not create, resize, or otherwise modify any projection surface.
+ */
+public final class VoiceAssistantController {
+    public interface Listener {
+        void onStateChanged(boolean listening, String status);
+    }
+
+    private final Activity activity;
+    private final Listener listener;
+    private final VoiceCommandRouter router;
+    private final Handler mainHandler = new Handler(Looper.getMainLooper());
+
+    private SpeechRecognizer recognizer;
+    private TextToSpeech textToSpeech;
+    private boolean ttsReady;
+    private boolean listening;
+    private boolean destroyed;
+
+    public VoiceAssistantController(Activity activity, Listener listener, VoiceCommandRouter router) {
+        if (activity == null || router == null) {
+            throw new IllegalArgumentException("activity and router are required");
+        }
+        this.activity = activity;
+        this.listener = listener;
+        this.router = router;
+
+        textToSpeech = new TextToSpeech(activity.getApplicationContext(), status -> {
+            if (destroyed || textToSpeech == null) return;
+            if (status == TextToSpeech.SUCCESS) {
+                int languageStatus = textToSpeech.setLanguage(new Locale("vi", "VN"));
+                ttsReady = languageStatus != TextToSpeech.LANG_MISSING_DATA
+                        && languageStatus != TextToSpeech.LANG_NOT_SUPPORTED;
+                if (ttsReady) {
+                    textToSpeech.setSpeechRate(1.0f);
+                    textToSpeech.setPitch(1.0f);
+                }
+            }
+        });
+    }
+
+    public void startListening() {
+        runOnMain(() -> startListeningOnMain());
+    }
+
+    private void startListeningOnMain() {
+        if (destroyed || listening) return;
+
+        if (activity.checkSelfPermission(Manifest.permission.RECORD_AUDIO)
+                != PackageManager.PERMISSION_GRANTED) {
+            notifyState(false, "Cần cấp quyền micro.");
+            speak("Bạn hãy cấp quyền micro cho CarAssistant trước.");
+            return;
+        }
+
+        if (!SpeechRecognizer.isRecognitionAvailable(activity)) {
+            notifyState(false, "Không có dịch vụ nhận dạng giọng nói.");
+            speak("Điện thoại chưa có dịch vụ nhận dạng giọng nói. Hãy kiểm tra dịch vụ Google và ngôn ngữ tiếng Việt.");
+            return;
+        }
+
+        try {
+            if (recognizer == null) {
+                recognizer = SpeechRecognizer.createSpeechRecognizer(activity);
+                recognizer.setRecognitionListener(new RecognitionListener() {
+                    @Override public void onReadyForSpeech(Bundle params) {
+                        notifyState(true, "Đang nghe…");
+                    }
+
+                    @Override public void onBeginningOfSpeech() {
+                        notifyState(true, "Đang nghe…");
+                    }
+
+                    @Override public void onRmsChanged(float rmsdB) { }
+
+                    @Override public void onBufferReceived(byte[] buffer) { }
+
+                    @Override public void onEndOfSpeech() {
+                        notifyState(false, "Đang xử lý…");
+                    }
+
+                    @Override public void onError(int error) {
+                        if (!listening || destroyed) return;
+                        listening = false;
+                        notifyState(false, "Không nhận được câu lệnh.");
+                        if (error == SpeechRecognizer.ERROR_NO_MATCH
+                                || error == SpeechRecognizer.ERROR_SPEECH_TIMEOUT) {
+                            speak("Tôi chưa nghe rõ. Bạn thử lại nhé.");
+                        } else if (error == SpeechRecognizer.ERROR_INSUFFICIENT_PERMISSIONS) {
+                            speak("CarAssistant chưa được cấp quyền micro.");
+                        } else {
+                            speak("Không thể nhận dạng giọng nói lúc này. Bạn hãy thử lại.");
+                        }
+                    }
+
+                    @Override public void onResults(Bundle results) {
+                        if (!listening || destroyed) return;
+                        listening = false;
+                        notifyState(false, "Đang xử lý…");
+
+                        ArrayList<String> matches = results == null
+                                ? null
+                                : results.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION);
+                        String transcript = matches == null || matches.isEmpty()
+                                ? ""
+                                : matches.get(0);
+
+                        if (transcript.trim().isEmpty()) {
+                            notifyState(false, "Chưa nhận được câu nói.");
+                            speak("Tôi chưa nghe rõ. Bạn thử lại nhé.");
+                            return;
+                        }
+
+                        VoiceCommandRouter.Result result = router.route(transcript);
+                        notifyState(false, result.understood
+                                ? "Đã nhận: " + transcript
+                                : "Chưa hiểu: " + transcript);
+                        speak(result.response);
+                    }
+
+                    @Override public void onPartialResults(Bundle partialResults) { }
+
+                    @Override public void onEvent(int eventType, Bundle params) { }
+                });
+            }
+
+            if (textToSpeech != null) textToSpeech.stop();
+            Intent intent = new Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH);
+            intent.putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL,
+                    RecognizerIntent.LANGUAGE_MODEL_FREE_FORM);
+            intent.putExtra(RecognizerIntent.EXTRA_LANGUAGE, "vi-VN");
+            intent.putExtra(RecognizerIntent.EXTRA_LANGUAGE_PREFERENCE, "vi-VN");
+            intent.putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 3);
+            intent.putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, false);
+
+            listening = true;
+            notifyState(true, "Đang khởi động micro…");
+            recognizer.startListening(intent);
+        } catch (RuntimeException exception) {
+            listening = false;
+            notifyState(false, "Không khởi động được micro.");
+            speak("Không khởi động được nhận dạng giọng nói. Bạn hãy thử lại.");
+        }
+    }
+
+    public void cancelListening() {
+        runOnMain(() -> {
+            if (recognizer != null && listening) {
+                try {
+                    recognizer.cancel();
+                } catch (RuntimeException ignored) { }
+            }
+            listening = false;
+            notifyState(false, "Đã dừng nghe.");
+        });
+    }
+
+    public void destroy() {
+        runOnMain(() -> {
+            if (destroyed) return;
+            destroyed = true;
+            listening = false;
+
+            if (recognizer != null) {
+                try {
+                    recognizer.cancel();
+                    recognizer.destroy();
+                } catch (RuntimeException ignored) { }
+                recognizer = null;
+            }
+
+            if (textToSpeech != null) {
+                try {
+                    textToSpeech.stop();
+                    textToSpeech.shutdown();
+                } catch (RuntimeException ignored) { }
+                textToSpeech = null;
+            }
+            ttsReady = false;
+        });
+    }
+
+    private void speak(String message) {
+        if (message == null || message.trim().isEmpty()) return;
+        runOnMain(() -> {
+            if (destroyed || textToSpeech == null || !ttsReady) return;
+            try {
+                textToSpeech.speak(message, TextToSpeech.QUEUE_FLUSH, null,
+                        UUID.randomUUID().toString());
+            } catch (RuntimeException ignored) { }
+        });
+    }
+
+    private void notifyState(boolean isListening, String status) {
+        if (listener == null || destroyed) return;
+        runOnMain(() -> {
+            if (!destroyed && listener != null) {
+                listener.onStateChanged(isListening, status);
+            }
+        });
+    }
+
+    private void runOnMain(Runnable action) {
+        if (Looper.myLooper() == Looper.getMainLooper()) action.run();
+        else mainHandler.post(action);
+    }
+}
