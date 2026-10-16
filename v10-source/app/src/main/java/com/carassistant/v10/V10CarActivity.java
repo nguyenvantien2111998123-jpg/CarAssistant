@@ -45,7 +45,6 @@ public final class V10CarActivity
             new Handler(Looper.getMainLooper());
 
     private FrameLayout root;
-    private NavigationMapView navigationMap;
     private FrameLayout projectionLayer;
     private LinearLayout launcherLayer;
     private LinearLayout dashboard;
@@ -158,8 +157,6 @@ public final class V10CarActivity
         if (root == null) {
             buildUi();
             attachProjection();
-
-        if (navigationMap != null) navigationMap.onHostResume();
         }
 
         loadApps();
@@ -188,13 +185,10 @@ public final class V10CarActivity
         root=new FrameLayout(this);
         root.setBackgroundColor(Color.TRANSPARENT);
 
-        navigationMap=new NavigationMapView(this);
-        root.addView(
-                navigationMap,
-                new FrameLayout.LayoutParams(-1,-1));
-
+        // Independent app projection is the bottom layer.
+        // The existing dashboard is added after it and remains above it.
         projectionLayer=new FrameLayout(this);
-        projectionLayer.setVisibility(View.GONE);
+        projectionLayer.setVisibility(View.VISIBLE);
         root.addView(
                 projectionLayer,
                 new FrameLayout.LayoutParams(-1,-1));
@@ -631,24 +625,10 @@ private void launchProjection(
                     this,
                     component);
 
-    /*
-     * Hide the complete launcher UI.
-     */
-    launcherLayer
-            .setVisibility(
-                    View.GONE);
-
-    appPanel
-            .setVisibility(
-                    View.GONE);
-
-    dashboard
-            .setVisibility(
-                    View.GONE);
-
-    projectionLayer
-            .setVisibility(
-                    View.VISIBLE);
+    // Keep the selected app in the independent background layer.
+    // Dashboard, floating controls and keyboard remain above it.
+    projectionLayer.setVisibility(View.VISIBLE);
+    launcherLayer.setVisibility(View.VISIBLE);
 
     /*
      * Start the existing proven V10 projection
@@ -660,14 +640,8 @@ private void launchProjection(
 
     private void returnToLauncher() {
 
-        if (session != null
-                && session.isActive()) {
-            session.hideTask();
-        }
-
-        projectionLayer
-                .setVisibility(
-                        View.GONE);
+        // HOME returns to the dashboard without tearing down the background app.
+        projectionLayer.setVisibility(View.VISIBLE);
 
         launcherLayer
                 .setVisibility(
@@ -716,8 +690,8 @@ private void showApps() {
      * V10ProjectionSession.setTarget() will detect the
      * changed target and recreate the display.
      */
-    projectionLayer.setVisibility(
-            View.GONE);
+    // The app picker is a separate overlay, not the projection surface.
+    projectionLayer.setVisibility(View.VISIBLE);
 
     launcherLayer.setVisibility(
             View.VISIBLE);
@@ -750,15 +724,8 @@ private void hideApps() {
     launcherLayer.setVisibility(
             View.VISIBLE);
 
-    /*
-     * The Applications screen belongs to the
-     * V10 dashboard.
-     *
-     * Projection is hidden until an application
-     * is selected again.
-     */
-    projectionLayer.setVisibility(
-            View.GONE);
+    // Keep the selected app projected behind the app-picker overlay.
+    projectionLayer.setVisibility(View.VISIBLE);
 }
 
     private void createFloatingTouchKey() {
@@ -982,7 +949,6 @@ private void hideFloatingMenu() {
 
         super.onPause();
 
-        if (navigationMap != null) navigationMap.onHostPause();
     }
 
     @Override
@@ -1005,7 +971,6 @@ private void hideFloatingMenu() {
 
         resumed = false;
 
-        if (navigationMap != null) { navigationMap.onHostDestroy(); navigationMap = null; }
 
         handler.removeCallbacks(
                 clockTicker);
