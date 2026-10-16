@@ -29,7 +29,6 @@ public final class VoiceAssistantController {
     }
 
     private static final long COMPLETE_SILENCE_MS = 3000L;
-    private static final float SPEECH_RMS_THRESHOLD = 2.0f;
 
     private final Context context;
     private final Listener listener;
@@ -254,8 +253,13 @@ public final class VoiceAssistantController {
                         if (matches == null || matches.isEmpty()) return;
                         String partial = matches.get(0);
                         if (partial == null || partial.trim().isEmpty()) return;
-                        lastTranscript = partial.trim();
-                        scheduleSilenceWatchdog();
+                        String updatedTranscript = partial.trim();
+                        // Extend the timeout only when recognized text actually changes.
+                        // Duplicate partial callbacks must not delay command execution.
+                        if (!updatedTranscript.equals(lastTranscript)) {
+                            lastTranscript = updatedTranscript;
+                            scheduleSilenceWatchdog();
+                        }
                         notifyState(true, "Đang nghe…", lastTranscript, true);
                     }
 
