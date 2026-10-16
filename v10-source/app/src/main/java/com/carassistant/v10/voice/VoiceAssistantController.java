@@ -37,6 +37,7 @@ public final class VoiceAssistantController {
     private boolean ttsReady;
     private boolean listening;
     private boolean destroyed;
+    private String pendingSpeech;
 
     public VoiceAssistantController(Activity activity, Listener listener, VoiceCommandRouter router) {
         if (activity == null || router == null) {
@@ -57,6 +58,11 @@ public final class VoiceAssistantController {
                         if (ttsReady) {
                             textToSpeech.setSpeechRate(1.0f);
                             textToSpeech.setPitch(1.0f);
+                            if (pendingSpeech != null) {
+                                String pending = pendingSpeech;
+                                pendingSpeech = null;
+                                speak(pending);
+                            }
                         }
                     }
                 }));
@@ -206,7 +212,11 @@ public final class VoiceAssistantController {
     private void speak(String message) {
         if (message == null || message.trim().isEmpty()) return;
         runOnMain(() -> {
-            if (destroyed || textToSpeech == null || !ttsReady) return;
+            if (destroyed) return;
+            if (textToSpeech == null || !ttsReady) {
+                pendingSpeech = message;
+                return;
+            }
             try {
                 textToSpeech.speak(message, TextToSpeech.QUEUE_FLUSH, null,
                         UUID.randomUUID().toString());
