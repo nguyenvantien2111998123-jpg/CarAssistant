@@ -236,7 +236,7 @@ public final class V10CarActivity
         sidebar.addView(dock,new LinearLayout.LayoutParams(-1,0,1f));
 
         TextView voice=sidebarButton("🎙");
-        voice.setTextSize(20);
+        voice.setTextSize(18);
         voice.setOnClickListener(v->{});
         sidebar.addView(voice,sidebarFixedButtonParams());
 
@@ -483,19 +483,19 @@ public final class V10CarActivity
     }
 
     private ArrayList<AppInfo> getQuickLaunchApps() {
-        ArrayList<AppInfo> result = new ArrayList<>();
-        ArrayList<ComponentName> selected = V10SessionStore.getQuickLaunchApps(this);
-        for (ComponentName component : selected) {
+        ArrayList<AppInfo> out = new ArrayList<>();
+        ArrayList<ComponentName> configured = V10SessionStore.getQuickLaunchApps(this);
+        for (ComponentName component : configured) {
             if (component == null) continue;
             for (AppInfo app : apps) {
                 if (component.getPackageName().equals(app.component.getPackageName())) {
-                    result.add(app);
+                    out.add(app);
                     break;
                 }
             }
-            if (result.size() == 3) break;
+            if (out.size() == 3) break;
         }
-        return result;
+        return out;
     }
 
     private LinearLayout quickLaunchTile(AppInfo app) {
@@ -514,7 +514,7 @@ public final class V10CarActivity
         TextView n=text(app.name,7,Color.WHITE);
         n.setGravity(Gravity.CENTER);
         n.setMaxLines(1);
-        t.addView(n,new LinearLayout.LayoutParams(-1,dp(18)));
+        t.addView(n,new LinearLayout.LayoutParams(-1,dp(16)));
         t.setOnClickListener(v->launchProjection(app.component));
         return t;
     }
