@@ -84,7 +84,7 @@ public final class V10InputController {
                     if (twoFingerGesture && !gestureHandled
                             && isTrackedPointer(event.getPointerId(event.getActionIndex()))) {
                         long duration = clampDuration(event.getEventTime() - Math.min(downTime, secondDownTime));
-                        session.dualSwipe(
+                        session.pinch(
                                 downX, downY, lastX1, lastY1,
                                 secondDownX, secondDownY, lastX2, lastY2,
                                 duration);
