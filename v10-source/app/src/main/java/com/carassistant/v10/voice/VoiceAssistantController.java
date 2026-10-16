@@ -46,18 +46,20 @@ public final class VoiceAssistantController {
         this.listener = listener;
         this.router = router;
 
-        textToSpeech = new TextToSpeech(activity.getApplicationContext(), status -> {
-            if (destroyed || textToSpeech == null) return;
-            if (status == TextToSpeech.SUCCESS) {
-                int languageStatus = textToSpeech.setLanguage(new Locale("vi", "VN"));
-                ttsReady = languageStatus != TextToSpeech.LANG_MISSING_DATA
-                        && languageStatus != TextToSpeech.LANG_NOT_SUPPORTED;
-                if (ttsReady) {
-                    textToSpeech.setSpeechRate(1.0f);
-                    textToSpeech.setPitch(1.0f);
-                }
-            }
-        });
+        textToSpeech = new TextToSpeech(activity.getApplicationContext(), status ->
+                mainHandler.post(() -> {
+                    // Post until after the TextToSpeech constructor has assigned the field.
+                    if (destroyed || textToSpeech == null) return;
+                    if (status == TextToSpeech.SUCCESS) {
+                        int languageStatus = textToSpeech.setLanguage(new Locale("vi", "VN"));
+                        ttsReady = languageStatus != TextToSpeech.LANG_MISSING_DATA
+                                && languageStatus != TextToSpeech.LANG_NOT_SUPPORTED;
+                        if (ttsReady) {
+                            textToSpeech.setSpeechRate(1.0f);
+                            textToSpeech.setPitch(1.0f);
+                        }
+                    }
+                }));
     }
 
     public void startListening() {
