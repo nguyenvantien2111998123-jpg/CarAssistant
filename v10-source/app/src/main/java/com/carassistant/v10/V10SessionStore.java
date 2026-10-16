@@ -11,6 +11,7 @@ public final class V10SessionStore {
 
     private static final String TARGET =
             "target_component";
+    private static final String BACKGROUND_TARGET = "background_target_component";
 
     private static volatile V10CarActivity currentActivity;
 
@@ -58,6 +59,18 @@ public final class V10SessionStore {
 
         return ComponentName.unflattenFromString(
                 value);
+    }
+
+    public static void setBackgroundTarget(Context context, ComponentName component) {
+        SharedPreferences.Editor editor = prefs(context).edit();
+        if (component == null) editor.remove(BACKGROUND_TARGET);
+        else editor.putString(BACKGROUND_TARGET, component.flattenToString());
+        editor.apply();
+    }
+
+    public static ComponentName getBackgroundTarget(Context context) {
+        String value = prefs(context).getString(BACKGROUND_TARGET, null);
+        return value == null || value.isEmpty() ? null : ComponentName.unflattenFromString(value);
     }
 
     public static void clearTarget(
