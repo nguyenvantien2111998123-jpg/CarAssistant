@@ -48,11 +48,11 @@ public final class V10SettingsActivity extends Activity {
         list.addView(title, params(-1, dp(54)));
 
         TextView intro = text(
-                "Cấu hình trên điện thoại. App được chọn để chiếu được chọn riêng trong mục APPS; màn hình chiếu vẫn là lớp nền dưới dashboard.",
+                "Chọn nền Home trên điện thoại. Ứng dụng được chọn tại đây là app mặc định duy nhất chiếu ở Home, phía sau giao diện CarAssistant. Các lớp chiếu khác giữ nguyên cách hoạt động riêng.",
                 14, Color.LTGRAY);
         list.addView(intro, params(-1, dp(82)));
 
-        TextView projectionTitle = text("LỚP 1 · APP CHIẾU NỀN (CHỌN 1 APP)", 16, Color.WHITE);
+        TextView projectionTitle = text("CHỌN NỀN HOME → CHỌN APP ĐỂ CHIẾU MẶC ĐỊNH", 16, Color.WHITE);
         projectionTitle.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
         list.addView(projectionTitle, params(-1, dp(42)));
         TextView selectedBackground = text("", 14, Color.LTGRAY);
@@ -60,7 +60,7 @@ public final class V10SettingsActivity extends Activity {
         list.addView(selectedBackground, params(-1, dp(42)));
         addBackgroundAppChoices(selectedBackground);
 
-        addButton("DỪNG LỚP CHIẾU NỀN", () -> {
+        addButton("TẮT APP NỀN HOME", () -> {
             V10SessionStore.setBackgroundTarget(this, null);
             selectedBackground.setText("Đã tắt lớp chiếu nền");
         });
