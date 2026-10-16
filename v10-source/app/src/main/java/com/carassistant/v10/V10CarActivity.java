@@ -305,6 +305,10 @@ public final class V10CarActivity
         title.setGravity(Gravity.CENTER);
         header.addView(title, new LinearLayout.LayoutParams(0, dp(58), 1));
 
+        TextView stopButton = buttonText("DỪNG");
+        stopButton.setOnClickListener(v -> stopAppPickerProjection());
+        header.addView(stopButton, new LinearLayout.LayoutParams(dp(76), dp(58)));
+
         TextView projectButton = buttonText("CHIẾU");
         projectButton.setOnClickListener(v -> {
             if (selectedAppTarget != null) {
@@ -312,7 +316,7 @@ public final class V10CarActivity
                 launchProjection(selectedAppTarget);
             }
         });
-        header.addView(projectButton, new LinearLayout.LayoutParams(dp(90), dp(58)));
+        header.addView(projectButton, new LinearLayout.LayoutParams(dp(76), dp(58)));
         appPanel.addView(header);
 
         selectedAppLabel = text("Chưa chọn ứng dụng để chiếu", 13, Color.LTGRAY);
@@ -571,6 +575,7 @@ public final class V10CarActivity
         projectionLayer.addView(textureView, new FrameLayout.LayoutParams(-1, -1));
         backgroundSession = new V10ProjectionSession(this, 0);
         backgroundSession.attachTextureView(textureView);
+        textureView.setOnTouchListener(new V10InputController(backgroundSession).createListener());
 
         // Layer 2: app chosen on the car-side APP CHỌN screen.
         appTextureView = new TextureView(this);
@@ -625,6 +630,20 @@ private void launchBackgroundProjection(ComponentName component) {
     V10SessionStore.setBackgroundTarget(this, component);
     projectionLayer.setVisibility(View.VISIBLE);
     backgroundSession.setTarget(component);
+}
+
+private void stopAppPickerProjection() {
+    if (session != null) session.setTarget(null);
+    V10SessionStore.clearTarget(this);
+    activeTarget = null;
+    appProjectionLayer.setVisibility(View.GONE);
+}
+
+private void stopBackgroundProjection() {
+    if (backgroundSession != null) backgroundSession.setTarget(null);
+    V10SessionStore.setBackgroundTarget(this, null);
+    activeBackgroundTarget = null;
+    projectionLayer.setVisibility(View.GONE);
 }
 
     private void returnToLauncher() {
