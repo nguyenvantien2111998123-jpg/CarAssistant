@@ -3,6 +3,12 @@ package com.carassistant.v10;
 import android.Manifest;
 import android.app.Activity;
 import android.content.Intent;
+import android.content.ComponentName;
+import android.content.pm.ResolveInfo;
+import java.util.List;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.Comparator;
 import android.content.pm.PackageManager;
 import android.net.Uri;
 import android.os.Bundle;
@@ -46,6 +52,14 @@ public final class V10SettingsActivity extends Activity {
                 14, Color.LTGRAY);
         list.addView(intro, params(-1, dp(82)));
 
+        TextView projectionTitle = text("LỚP 1 · APP CHIẾU NỀN (CHỌN 1 APP)", 16, Color.WHITE);
+        projectionTitle.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
+        list.addView(projectionTitle, params(-1, dp(42)));
+        TextView selectedBackground = text("", 14, Color.LTGRAY);
+        selectedBackground.setTag("background_selected");
+        list.addView(selectedBackground, params(-1, dp(42)));
+        addBackgroundAppChoices(selectedBackground);
+
         addButton("CẤP QUYỀN VỊ TRÍ", () -> requestPermissions(
                 new String[]{Manifest.permission.ACCESS_FINE_LOCATION,
                         Manifest.permission.ACCESS_COARSE_LOCATION}, 4101));
@@ -63,6 +77,34 @@ public final class V10SettingsActivity extends Activity {
                 13, Color.LTGRAY);
         note.setPadding(0, dp(18), 0, dp(18));
         list.addView(note, params(-1, -2));
+    }
+
+    private void addBackgroundAppChoices(TextView selectedLabel) {
+        List<ResolveInfo> results = getPackageManager().queryIntentActivities(
+                new Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LAUNCHER), 0);
+        ArrayList<ResolveInfo> apps = new ArrayList<>();
+        for (ResolveInfo info : results) {
+            if (info.activityInfo == null || getPackageName().equals(info.activityInfo.packageName)) continue;
+            apps.add(info);
+        }
+        Collections.sort(apps, new Comparator<ResolveInfo>() {
+            @Override public int compare(ResolveInfo a, ResolveInfo b) {
+                return String.valueOf(a.loadLabel(getPackageManager()))
+                        .compareToIgnoreCase(String.valueOf(b.loadLabel(getPackageManager())));
+            }
+        });
+        ComponentName current = V10SessionStore.getBackgroundTarget(this);
+        selectedLabel.setText(current == null ? "Chưa chọn app chiếu nền" :
+                "Đang chọn: " + current.getPackageName());
+        for (ResolveInfo info : apps) {
+            ComponentName component = new ComponentName(info.activityInfo.packageName, info.activityInfo.name);
+            String label = String.valueOf(info.loadLabel(getPackageManager()));
+            addButton(label + (component.equals(current) ? "  ✓ ĐANG CHỌN" : ""), () -> {
+                V10SessionStore.setBackgroundTarget(this, component);
+                selectedLabel.setText("Đang chọn: " + label + " — lớp nền");
+                refreshStatus();
+            });
+        }
     }
 
     private void refreshStatus() {
