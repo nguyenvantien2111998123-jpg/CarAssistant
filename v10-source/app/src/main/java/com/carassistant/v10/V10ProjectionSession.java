@@ -69,6 +69,31 @@ public final class V10ProjectionSession implements TextureView.SurfaceTextureLis
                 "Swipe failed", 5);
     }
 
+    /**
+     * Experimental two-finger path: dispatches both swipe commands from
+     * the same shell invocation. Android's input CLI does not guarantee that
+     * separate swipe commands are interpreted as one native pinch gesture.
+     */
+    public void dualSwipe(
+            float startX1, float startY1, float endX1, float endY1,
+            float startX2, float startY2, float endX2, float endY2,
+            long duration) {
+        if (!isActive()) return;
+
+        long safe = Math.max(80L, Math.min(800L, duration));
+        String display = String.valueOf(displayController.getDisplayId());
+
+        String first = "/system/bin/input -d " + display + " swipe "
+                + Math.round(mapX(startX1)) + " " + Math.round(mapY(startY1)) + " "
+                + Math.round(mapX(endX1)) + " " + Math.round(mapY(endY1)) + " " + safe;
+        String second = "/system/bin/input -d " + display + " swipe "
+                + Math.round(mapX(startX2)) + " " + Math.round(mapY(startY2)) + " "
+                + Math.round(mapX(endX2)) + " " + Math.round(mapY(endY2)) + " " + safe;
+
+        execute(first + " & " + second + " & wait",
+                "Two-finger swipe failed", 5);
+    }
+
     public void back() {
         if (!isActive()) return;
         execute("/system/bin/input -d " + displayController.getDisplayId() + " keyevent 4",
