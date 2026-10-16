@@ -2,7 +2,9 @@ package com.carassistant.v10;
 
 import android.content.ComponentName;
 import android.content.Context;
-import android.content.SharedPreferences;\nimport java.util.ArrayList;\nimport java.util.List;
+import android.content.SharedPreferences;
+import java.util.ArrayList;
+import java.util.List;
 
 public final class V10SessionStore {
 
