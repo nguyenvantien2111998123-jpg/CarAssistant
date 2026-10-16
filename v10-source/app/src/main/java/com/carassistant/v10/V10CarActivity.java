@@ -604,9 +604,13 @@ private void launchProjection(
 
     activeTarget = component;
     V10SessionStore.setTarget(this, component);
-    // Layer 2 is independent; launching it must not reveal or alter Home's layer 1.
+
+    // Display 2 owns the entire surface while an app is projected:
+    // hide display 1 and the Android Auto Home chrome so neither can
+    // cover the selected app.
+    projectionLayer.setVisibility(View.GONE);
     appProjectionLayer.setVisibility(View.VISIBLE);
-    launcherLayer.setVisibility(View.VISIBLE);
+    launcherLayer.setVisibility(View.GONE);
 
     /*
      * Start the existing proven V10 projection
@@ -625,7 +629,10 @@ private void launchBackgroundProjection(ComponentName component) {
 }
 
 private void stopAppPickerProjection() {
-    if (session != null) session.setTarget(null);
+    if (session != null) {
+        session.hideTask();
+        session.setTarget(null);
+    }
     V10SessionStore.clearTarget(this);
     activeTarget = null;
     appProjectionLayer.setVisibility(View.GONE);
@@ -639,27 +646,33 @@ private void stopBackgroundProjection() {
 }
 
 private boolean isHomeScreen() {
-    return appPanel == null || appPanel.getVisibility() != View.VISIBLE;
+    return launcherLayer != null
+            && launcherLayer.getVisibility() == View.VISIBLE
+            && dashboard != null
+            && dashboard.getVisibility() == View.VISIBLE
+            && appPanel != null
+            && appPanel.getVisibility() != View.VISIBLE;
 }
 
     private void returnToLauncher() {
 
-        // HOME returns to the dashboard without tearing down the background app.
+        // Leaving display 2 returns to Home and restores display 1.
+        // Detach display 2 first so it cannot remain visible under Home chrome.
+        if (session != null) {
+            session.hideTask();
+            session.setTarget(null);
+        }
+        V10SessionStore.clearTarget(this);
+        activeTarget = null;
+        appProjectionLayer.setVisibility(View.GONE);
+
+        launcherLayer.setVisibility(View.VISIBLE);
+        dashboard.setVisibility(View.VISIBLE);
+        appPanel.setVisibility(View.GONE);
+
         projectionLayer.setVisibility(
                 V10SessionStore.getBackgroundTarget(this) != null
                         ? View.VISIBLE : View.GONE);
-
-        launcherLayer
-                .setVisibility(
-                        View.VISIBLE);
-
-        dashboard
-                .setVisibility(
-                        View.VISIBLE);
-
-        appPanel
-                .setVisibility(
-                        View.GONE);
     }
 
 
@@ -727,18 +740,9 @@ private void hideApps() {
         return;
     }
 
-    appPanel.setVisibility(View.GONE);
-    dashboard.setVisibility(View.VISIBLE);
-    launcherLayer.setVisibility(View.VISIBLE);
-
-    // Keep the selector closed until APP CHỌN is tapped again.
-    appProjectionLayer.setVisibility(
-            session != null && session.isActive() ? View.VISIBLE : View.GONE);
-
-    // Returning to Home restores only its configured default background app.
-    projectionLayer.setVisibility(
-            V10SessionStore.getBackgroundTarget(this) != null
-                    ? View.VISIBLE : View.GONE);
+    // Closing APP CHỌN returns to the single Home composition:
+    // display 1 behind the dashboard; display 2 hidden until chosen again.
+    returnToLauncher();
 }
 
     private void createFloatingTouchKey() {
