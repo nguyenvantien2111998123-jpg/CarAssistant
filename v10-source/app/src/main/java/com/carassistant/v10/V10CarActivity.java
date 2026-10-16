@@ -107,6 +107,8 @@ public final class V10CarActivity
                     ComponentName backgroundTarget = V10SessionStore.getBackgroundTarget(V10CarActivity.this);
                     if (backgroundTarget != null && !backgroundTarget.equals(activeBackgroundTarget)) {
                         launchBackgroundProjection(backgroundTarget);
+                    } else if (backgroundTarget == null && activeBackgroundTarget != null) {
+                        stopBackgroundProjection();
                     }
 
                     handler.postDelayed(
