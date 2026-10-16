@@ -2,6 +2,7 @@ package com.carassistant.v10;
 
 import android.content.ComponentName;
 import android.content.Context;
+import android.content.Intent;
 import android.content.SharedPreferences;
 import java.util.ArrayList;
 import java.util.List;
@@ -94,17 +95,31 @@ public final class V10SessionStore {
     public static ArrayList<ComponentName> getQuickLaunchApps(Context context) {
         String value = prefs(context).getString(QUICK_APPS, null);
         ArrayList<ComponentName> result = new ArrayList<>();
-        if (value == null) {
-            // Preserve familiar shortcuts as the initial defaults; they can be changed in phone SETUPS.
-            result.add(ComponentName.unflattenFromString("com.google.android.apps.maps/com.google.android.maps.MapsActivity"));
-            result.add(ComponentName.unflattenFromString("com.google.android.youtube/com.google.android.youtube.HomeActivity"));
-            result.add(ComponentName.unflattenFromString("com.zing.zalo/com.zing.zalo.ui.ZaloLauncherActivity"));
-            return result;
-        }
-        if (value.isEmpty()) return result;
-        for (String item : value.split("\n")) {
-            ComponentName component = ComponentName.unflattenFromString(item);
-            if (component != null && result.size() < 3) result.add(component);
+
+        // Start empty so stale hard-coded defaults cannot occupy slots when those apps
+        // are absent from the user's phone.
+        if (value == null || value.isEmpty()) return result;
+
+        for (String item : value.split("\\n")) {
+            ComponentName stored = ComponentName.unflattenFromString(item);
+            if (stored == null || result.size() >= 3) continue;
+
+            // Ignore removed/unlaunchable packages and normalize stale activity names
+            // to the currently installed launcher activity.
+            Intent launch = context.getPackageManager()
+                    .getLaunchIntentForPackage(stored.getPackageName());
+            if (launch == null) continue;
+            ComponentName launchComponent = launch.getComponent();
+            ComponentName usable = launchComponent != null ? launchComponent : stored;
+
+            boolean duplicate = false;
+            for (ComponentName existing : result) {
+                if (existing.getPackageName().equals(usable.getPackageName())) {
+                    duplicate = true;
+                    break;
+                }
+            }
+            if (!duplicate) result.add(usable);
         }
         return result;
     }
