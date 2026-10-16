@@ -60,6 +60,11 @@ public final class V10SettingsActivity extends Activity {
         list.addView(selectedBackground, params(-1, dp(42)));
         addBackgroundAppChoices(selectedBackground);
 
+        addButton("DỪNG LỚP CHIẾU NỀN", () -> {
+            V10SessionStore.setBackgroundTarget(this, null);
+            selectedBackground.setText("Đã tắt lớp chiếu nền");
+        });
+
         addButton("CẤP QUYỀN VỊ TRÍ", () -> requestPermissions(
                 new String[]{Manifest.permission.ACCESS_FINE_LOCATION,
                         Manifest.permission.ACCESS_COARSE_LOCATION}, 4101));
