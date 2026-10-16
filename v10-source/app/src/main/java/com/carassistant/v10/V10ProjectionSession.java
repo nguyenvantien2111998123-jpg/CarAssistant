@@ -70,28 +70,34 @@ public final class V10ProjectionSession implements TextureView.SurfaceTextureLis
     }
 
     /**
-     * Experimental two-finger path: dispatches both swipe commands from
-     * the same shell invocation. Android's input CLI does not guarantee that
-     * separate swipe commands are interpreted as one native pinch gesture.
+     * Injects a native two-pointer MotionEvent sequence on the Android Auto virtual display.
+     * This requires the existing LSPosed InputHooks in system_server.
      */
-    public void dualSwipe(
+    public void pinch(
             float startX1, float startY1, float endX1, float endY1,
             float startX2, float startY2, float endX2, float endY2,
             long duration) {
         if (!isActive()) return;
 
-        long safe = Math.max(80L, Math.min(800L, duration));
-        String display = String.valueOf(displayController.getDisplayId());
+        int displayId = displayController.getDisplayId();
+        if (displayId <= 0) {
+            Log.w(TAG, "Refusing multi-touch injection: invalid virtual display " + displayId);
+            return;
+        }
 
-        String first = "/system/bin/input -d " + display + " swipe "
+        String apkPath = "$( /system/bin/pm path com.carassistant.v10 2>/dev/null | /system/bin/sed -n 's/^package://p' | /system/bin/head -n 1 )";
+        String command = "APK_PATH=" + apkPath
+                + "; if [ -z \"$APK_PATH\" ]; then echo 'ERROR: CarAssistant APK path not found'; exit 2; fi"
+                + "; /system/bin/app_process -Djava.class.path=\"$APK_PATH\" /system/bin"
+                + " com.carassistant.v10.RootMultiTouchInjector "
+                + displayId + " "
                 + Math.round(mapX(startX1)) + " " + Math.round(mapY(startY1)) + " "
-                + Math.round(mapX(endX1)) + " " + Math.round(mapY(endY1)) + " " + safe;
-        String second = "/system/bin/input -d " + display + " swipe "
+                + Math.round(mapX(endX1)) + " " + Math.round(mapY(endY1)) + " "
                 + Math.round(mapX(startX2)) + " " + Math.round(mapY(startY2)) + " "
-                + Math.round(mapX(endX2)) + " " + Math.round(mapY(endY2)) + " " + safe;
+                + Math.round(mapX(endX2)) + " " + Math.round(mapY(endY2)) + " "
+                + Math.max(80L, Math.min(800L, duration));
 
-        execute(first + " & " + second + " & wait",
-                "Two-finger swipe failed", 5);
+        execute(command, "Native multi-touch injection failed", 8);
     }
 
     public void back() {
