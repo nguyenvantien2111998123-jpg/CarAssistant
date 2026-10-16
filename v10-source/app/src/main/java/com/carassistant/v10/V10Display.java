@@ -27,6 +27,12 @@ public final class V10Display {
             return false;
         }
 
-        return (PREFIX + "1").equals(name);
+        if (name == null || !name.startsWith(PREFIX)) return false;
+        try {
+            int index = Integer.parseInt(name.substring(PREFIX.length()));
+            return index >= 1 && index <= 2;
+        } catch (NumberFormatException ignored) {
+            return false;
+        }
     }
 }
