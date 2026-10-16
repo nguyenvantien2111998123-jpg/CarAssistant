@@ -198,6 +198,20 @@ public final class VoiceAssistantController {
                     @Override public void onError(int error) {
                         if (destroyed || commandHandled) return;
                         cancelSilenceWatchdog();
+                        mainHandler.removeCallbacks(finalResultFallback);
+
+                        // If the service errors after showing a usable partial transcript,
+                        // prefer executing that command over waiting or announcing a false retry.
+                        if (lastTranscript != null && !lastTranscript.trim().isEmpty()) {
+                            listening = false;
+                            commandHandled = true;
+                            if (!endBeepPlayed) playBeep();
+                            endBeepPlayed = true;
+                            notifyState(false, "Đang xử lý lệnh…", "", false);
+                            dispatchTranscript(lastTranscript);
+                            return;
+                        }
+
                         if (!endBeepPlayed) playBeep();
                         listening = false;
                         String status = "Không nhận được câu lệnh.";
@@ -256,6 +270,7 @@ public final class VoiceAssistantController {
             endBeepPlayed = false;
             commandHandled = false;
             cancelSilenceWatchdog();
+            mainHandler.removeCallbacks(finalResultFallback);
 
             Intent intent = new Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH);
             intent.putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL,
@@ -291,6 +306,7 @@ public final class VoiceAssistantController {
             listening = false;
             commandHandled = true;
             cancelSilenceWatchdog();
+            mainHandler.removeCallbacks(finalResultFallback);
             lastTranscript = "";
             if (!endBeepPlayed) playBeep();
             endBeepPlayed = true;
@@ -304,6 +320,7 @@ public final class VoiceAssistantController {
             destroyed = true;
             listening = false;
             cancelSilenceWatchdog();
+            mainHandler.removeCallbacks(finalResultFallback);
 
             if (recognizer != null) {
                 try {
