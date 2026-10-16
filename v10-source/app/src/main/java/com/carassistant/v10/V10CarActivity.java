@@ -52,6 +52,12 @@ public final class V10CarActivity
     private LinearLayout dock;
     private TextureView textureView;
     private V10ProjectionSession session;
+    private FrameLayout appProjectionLayer;
+    private TextureView appTextureView;
+    private V10ProjectionSession backgroundSession;
+    private ComponentName activeBackgroundTarget;
+    private ComponentName selectedAppTarget;
+    private TextView selectedAppLabel;
 
     private TextView floatingTouchKey;
     private LinearLayout floatingMenu;
@@ -95,17 +101,12 @@ public final class V10CarActivity
                         return;
                     }
 
-                    ComponentName target =
-                            V10SessionStore
-                                    .getTarget(
-                                            V10CarActivity.this);
+                    ComponentName target = V10SessionStore.getTarget(V10CarActivity.this);
+                    if (target != null && !target.equals(activeTarget)) launchProjection(target);
 
-                    if (target != null
-                            && !target.equals(
-                                    activeTarget)) {
-
-                        launchProjection(
-                                target);
+                    ComponentName backgroundTarget = V10SessionStore.getBackgroundTarget(V10CarActivity.this);
+                    if (backgroundTarget != null && !backgroundTarget.equals(activeBackgroundTarget)) {
+                        launchBackgroundProjection(backgroundTarget);
                     }
 
                     handler.postDelayed(
@@ -171,13 +172,11 @@ public final class V10CarActivity
         handler.post(clockTicker);
         handler.post(targetPoller);
 
-        ComponentName target =
-                V10SessionStore
-                        .getTarget(this);
+        ComponentName backgroundTarget = V10SessionStore.getBackgroundTarget(this);
+        if (backgroundTarget != null) launchBackgroundProjection(backgroundTarget);
 
-        if (target != null) {
-            launchProjection(target);
-        }
+        ComponentName target = V10SessionStore.getTarget(this);
+        if (target != null) launchProjection(target);
     }
 
 
@@ -189,9 +188,12 @@ public final class V10CarActivity
         // The existing dashboard is added after it and remains above it.
         projectionLayer=new FrameLayout(this);
         projectionLayer.setVisibility(View.VISIBLE);
-        root.addView(
-                projectionLayer,
-                new FrameLayout.LayoutParams(-1,-1));
+        root.addView(projectionLayer, new FrameLayout.LayoutParams(-1,-1));
+
+        // Independent second projection surface, controlled only by APP CHỌN.
+        appProjectionLayer = new FrameLayout(this);
+        appProjectionLayer.setVisibility(View.GONE);
+        root.addView(appProjectionLayer, new FrameLayout.LayoutParams(-1, -1));
 
         launcherLayer=new LinearLayout(this);
         launcherLayer.setOrientation(LinearLayout.VERTICAL);
@@ -299,23 +301,23 @@ public final class V10CarActivity
                         dp(90),
                         dp(58)));
 
-        TextView title =
-                text(
-                        "APPLICATIONS",
-                        21,
-                        Color.WHITE);
+        TextView title = text("APPLICATIONS", 18, Color.WHITE);
+        title.setGravity(Gravity.CENTER);
+        header.addView(title, new LinearLayout.LayoutParams(0, dp(58), 1));
 
-        title.setGravity(
-                Gravity.CENTER);
-
-        header.addView(
-                title,
-                new LinearLayout.LayoutParams(
-                        0,
-                        dp(58),
-                        1));
-
+        TextView projectButton = buttonText("CHIẾU");
+        projectButton.setOnClickListener(v -> {
+            if (selectedAppTarget != null) {
+                hideApps();
+                launchProjection(selectedAppTarget);
+            }
+        });
+        header.addView(projectButton, new LinearLayout.LayoutParams(dp(90), dp(58)));
         appPanel.addView(header);
+
+        selectedAppLabel = text("Chưa chọn ứng dụng để chiếu", 13, Color.LTGRAY);
+        selectedAppLabel.setPadding(dp(10), dp(4), dp(10), dp(4));
+        appPanel.addView(selectedAppLabel, new LinearLayout.LayoutParams(-1, dp(32)));
 
         ScrollView scroll =
                 new ScrollView(this);
@@ -554,40 +556,30 @@ public final class V10CarActivity
         n.setGravity(Gravity.CENTER);
         n.setMaxLines(2);
         t.addView(n,new LinearLayout.LayoutParams(-1,dp(38)));
-        t.setOnClickListener(v->{hideApps();launchProjection(app.component);});
+        t.setOnClickListener(v -> {
+            selectedAppTarget = app.component;
+            if (selectedAppLabel != null) selectedAppLabel.setText("Đã chọn: " + app.name + " — nhấn CHIẾU");
+        });
         return t;
     }
 
 
     private void attachProjection() {
 
-        textureView =
-                new TextureView(this);
+        // Layer 1: the fixed app chosen in phone SETUPS.
+        textureView = new TextureView(this);
+        projectionLayer.addView(textureView, new FrameLayout.LayoutParams(-1, -1));
+        backgroundSession = new V10ProjectionSession(this, 0);
+        backgroundSession.attachTextureView(textureView);
 
-        projectionLayer.addView(
-                textureView,
-                new FrameLayout.LayoutParams(
-                        -1,
-                        -1));
-
-        session =
-                new V10ProjectionSession(
-                        this);
-
-        session.attachTextureView(
-                textureView);
+        // Layer 2: app chosen on the car-side APP CHỌN screen.
+        appTextureView = new TextureView(this);
+        appProjectionLayer.addView(appTextureView, new FrameLayout.LayoutParams(-1, -1));
+        session = new V10ProjectionSession(this, 1);
+        session.attachTextureView(appTextureView);
+        appTextureView.setOnTouchListener(new V10InputController(session).createListener());
 
         createFloatingTouchKey();
-
-        V10InputController
-                inputController =
-                        new V10InputController(
-                                session);
-
-        textureView
-                .setOnTouchListener(
-                        inputController
-                                .createListener());
     }
 
 
@@ -614,19 +606,9 @@ private void launchProjection(
         session.release();
     }
 
-    activeTarget =
-            component;
-
-    /*
-     * Keep the existing V10 session persistence.
-     */
-    V10SessionStore
-            .setTarget(
-                    this,
-                    component);
-
-    // Keep the selected app in the independent background layer.
-    // Dashboard, floating controls and keyboard remain above it.
+    activeTarget = component;
+    V10SessionStore.setTarget(this, component);
+    appProjectionLayer.setVisibility(View.VISIBLE);
     projectionLayer.setVisibility(View.VISIBLE);
     launcherLayer.setVisibility(View.VISIBLE);
 
@@ -634,8 +616,15 @@ private void launchProjection(
      * Start the existing proven V10 projection
      * engine.
      */
-    session.setTarget(
-            component);
+    session.setTarget(component);
+}
+
+private void launchBackgroundProjection(ComponentName component) {
+    if (component == null || backgroundSession == null) return;
+    activeBackgroundTarget = component;
+    V10SessionStore.setBackgroundTarget(this, component);
+    projectionLayer.setVisibility(View.VISIBLE);
+    backgroundSession.setTarget(component);
 }
 
     private void returnToLauncher() {
@@ -978,12 +967,8 @@ private void hideFloatingMenu() {
         handler.removeCallbacks(
                 targetPoller);
 
-        if (session != null) {
-
-            session.destroy();
-
-            session = null;
-        }
+        if (session != null) { session.destroy(); session = null; }
+        if (backgroundSession != null) { backgroundSession.destroy(); backgroundSession = null; }
 
         V10SessionStore
                 .clearCurrentActivity(
@@ -991,6 +976,8 @@ private void hideFloatingMenu() {
 
         root = null;
         textureView = null;
+        appTextureView = null;
+        appProjectionLayer = null;
         projectionLayer = null;
         launcherLayer = null;
         dashboard = null;
