@@ -175,10 +175,8 @@ public final class VoiceAssistantController {
                     }
 
                     @Override public void onRmsChanged(float rmsdB) {
-                        // Reset the timer while there is meaningful acoustic activity.
-                        if (listening && !commandHandled && rmsdB > SPEECH_RMS_THRESHOLD) {
-                            scheduleSilenceWatchdog();
-                        }
+                        // RMS may stay high from background noise; partial transcript changes
+                        // are used to detect continued speech instead.
                     }
 
                     @Override public void onBufferReceived(byte[] buffer) { }
