@@ -8,10 +8,13 @@ import android.os.Process;
 import android.util.Log;
 import android.view.Display;
 import android.view.Surface;
+import java.util.HashMap;
+import java.util.Map;
 
 public final class V10DisplayController {
     private static final String TAG = "CarAssistantV10DisplayCore";
-    private static V10DisplayController instance;
+    private static final Map<Integer, V10DisplayController> INSTANCES = new HashMap<>();
+    private final int displayIndex;
 
     private final Context context;
     private final RootShellSession rootShell = new RootShellSession();
@@ -22,13 +25,23 @@ public final class V10DisplayController {
     private boolean launched;
     private boolean destroyed;
 
-    private V10DisplayController(Context context) {
+    private V10DisplayController(Context context, int displayIndex) {
         this.context = context.getApplicationContext();
+        this.displayIndex = Math.max(0, displayIndex);
     }
 
     public static synchronized V10DisplayController get(Context context) {
-        if (instance == null) instance = new V10DisplayController(context);
-        return instance;
+        return get(context, 0);
+    }
+
+    public static synchronized V10DisplayController get(Context context, int displayIndex) {
+        int index = Math.max(0, displayIndex);
+        V10DisplayController controller = INSTANCES.get(index);
+        if (controller == null || controller.destroyed) {
+            controller = new V10DisplayController(context, index);
+            INSTANCES.put(index, controller);
+        }
+        return controller;
     }
 
     public synchronized boolean ensureDisplay(SurfaceTexture texture, int width, int height) {
@@ -46,7 +59,7 @@ public final class V10DisplayController {
                 throw new IllegalStateException("DisplayManager unavailable");
             }
             android.hardware.display.VirtualDisplay created = manager.createVirtualDisplay(
-                    V10Display.nameFor(0), width, height, 160, newSurface, 10);
+                    V10Display.nameFor(displayIndex), width, height, 160, newSurface, 10);
             if (created == null) {
                 newSurface.release();
                 throw new IllegalStateException("Cannot create virtual display");
@@ -162,6 +175,8 @@ public final class V10DisplayController {
         display = null;
         releaseSurfaceOnly();
         rootShell.destroy();
-        if (instance == this) instance = null;
+        synchronized (V10DisplayController.class) {
+            if (INSTANCES.get(displayIndex) == this) INSTANCES.remove(displayIndex);
+        }
     }
 }
