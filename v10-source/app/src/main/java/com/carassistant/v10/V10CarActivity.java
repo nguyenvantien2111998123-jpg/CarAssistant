@@ -275,7 +275,10 @@ public final class V10CarActivity
         appPanel.setOrientation(
                 LinearLayout.VERTICAL);
 
-        appPanel.setBackgroundColor(Color.TRANSPARENT);
+        // Opaque selector surface prevents the projected app texture from visually
+        // swallowing the app list while APP CHỌN is open.
+        appPanel.setBackgroundColor(Color.rgb(7, 9, 12));
+        appPanel.setElevation(dp(24));
 
         appPanel.setVisibility(
                 View.GONE);
@@ -693,17 +696,23 @@ private void showApps() {
      * V10ProjectionSession.setTarget() will detect the
      * changed target and recreate the display.
      */
-    // Layer 1 belongs only to Home. Keep it hidden while APP CHỌN is open.
+    // Both projection surfaces must stay behind the selector. TextureView content can
+    // otherwise visually compete with the transparent launcher hierarchy on some devices.
     projectionLayer.setVisibility(View.GONE);
+    appProjectionLayer.setVisibility(View.GONE);
 
-    launcherLayer.setVisibility(
-            View.VISIBLE);
+    launcherLayer.setVisibility(View.VISIBLE);
+    dashboard.setVisibility(View.GONE);
+    appPanel.setVisibility(View.VISIBLE);
 
-    dashboard.setVisibility(
-            View.GONE);
-
-    appPanel.setVisibility(
-            View.VISIBLE);
+    // Force a deterministic foreground order whenever the selector opens.
+    launcherLayer.bringToFront();
+    appPanel.bringToFront();
+    appPanel.setElevation(dp(24));
+    appPanel.invalidate();
+    launcherLayer.invalidate();
+    if (floatingMenu != null) floatingMenu.bringToFront();
+    if (floatingTouchKey != null) floatingTouchKey.bringToFront();
 
     loadApps();
 }
@@ -718,14 +727,13 @@ private void hideApps() {
         return;
     }
 
-    appPanel.setVisibility(
-            View.GONE);
+    appPanel.setVisibility(View.GONE);
+    dashboard.setVisibility(View.VISIBLE);
+    launcherLayer.setVisibility(View.VISIBLE);
 
-    dashboard.setVisibility(
-            View.VISIBLE);
-
-    launcherLayer.setVisibility(
-            View.VISIBLE);
+    // Keep the selector closed until APP CHỌN is tapped again.
+    appProjectionLayer.setVisibility(
+            session != null && session.isActive() ? View.VISIBLE : View.GONE);
 
     // Returning to Home restores only its configured default background app.
     projectionLayer.setVisibility(
