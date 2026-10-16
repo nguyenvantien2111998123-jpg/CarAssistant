@@ -1,6 +1,7 @@
 
 package com.carassistant.v10;
 
+import android.Manifest;
 import android.content.ComponentName;
 import android.content.SharedPreferences;
 import android.os.SystemClock;
@@ -19,6 +20,7 @@ import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
 import android.view.Gravity;
+import android.view.KeyEvent;
 import android.view.TextureView;
 import android.view.View;
 import android.widget.FrameLayout;
@@ -27,6 +29,11 @@ import android.widget.ImageView;
 import android.widget.LinearLayout;
 import android.widget.ScrollView;
 import android.widget.TextView;
+import android.widget.Toast;
+
+import com.carassistant.v10.voice.VoiceAssistantController;
+import com.carassistant.v10.voice.VoiceCommandRouter;
+import com.carassistant.v10.voice.VoiceCommandParser;
 
 import com.google.android.apps.auto.sdk.CarActivity;
 
@@ -58,6 +65,9 @@ public final class V10CarActivity
     private ComponentName activeBackgroundTarget;
     private ComponentName selectedAppTarget;
     private TextView selectedAppLabel;
+    private TextView dashboardVoiceButton;
+    private TextView floatingVoiceButton;
+    private VoiceAssistantController voiceAssistantController;
 
     private TextView floatingTouchKey;
     private LinearLayout floatingMenu;
@@ -162,6 +172,38 @@ public final class V10CarActivity
             attachProjection();
         }
 
+        if (voiceAssistantController == null) {
+            voiceAssistantController = new VoiceAssistantController(
+                    this,
+                    (listening, status) -> {
+                        String icon = listening ? "◉" : "🎙";
+                        if (dashboardVoiceButton != null) {
+                            dashboardVoiceButton.setText(icon);
+                            dashboardVoiceButton.setContentDescription(status);
+                        }
+                        if (floatingVoiceButton != null) {
+                            floatingVoiceButton.setText(icon);
+                            floatingVoiceButton.setContentDescription(status);
+                        }
+                    },
+                    new VoiceCommandRouter(new VoiceCommandRouter.Host() {
+                        @Override
+                        public String openApp(String spokenName) {
+                            return openAppByVoice(spokenName);
+                        }
+
+                        @Override
+                        public void showApps() {
+                            V10CarActivity.this.showApps();
+                        }
+
+                        @Override
+                        public void goHome() {
+                            V10CarActivity.this.returnToLauncher();
+                        }
+                    }));
+        }
+
         loadApps();
         rebuildDock();
 
@@ -237,7 +279,9 @@ public final class V10CarActivity
 
         TextView voice=sidebarButton("🎙");
         voice.setTextSize(18);
-        voice.setOnClickListener(v->{});
+        voice.setContentDescription("Kích hoạt trợ lý giọng nói");
+        voice.setOnClickListener(v -> activateVoiceAssistant());
+        dashboardVoiceButton = voice;
         sidebar.addView(voice,sidebarFixedButtonParams());
 
         TextView tasks=sidebarButton("TASKS");
@@ -578,6 +622,11 @@ private void launchProjection(
     activeTarget = component;
     V10SessionStore.setTarget(this, component);
 
+    if (floatingVoiceButton != null) {
+        floatingVoiceButton.setVisibility(View.VISIBLE);
+        floatingVoiceButton.bringToFront();
+    }
+
     // Display 2 owns the entire surface while an app is projected:
     // hide display 1 and the Android Auto Home chrome so neither can
     // cover the selected app.
@@ -642,6 +691,7 @@ private boolean isHomeScreen() {
         launcherLayer.setVisibility(View.VISIBLE);
         dashboard.setVisibility(View.VISIBLE);
         appPanel.setVisibility(View.GONE);
+        if (floatingVoiceButton != null) floatingVoiceButton.setVisibility(View.GONE);
 
         projectionLayer.setVisibility(
                 V10SessionStore.getBackgroundTarget(this) != null
@@ -650,6 +700,8 @@ private boolean isHomeScreen() {
 
 
 private void showApps() {
+
+    if (floatingVoiceButton != null) floatingVoiceButton.setVisibility(View.GONE);
 
     /*
      * V10.4 V4
@@ -807,6 +859,25 @@ private void hideApps() {
                     }
                 });;
     floatingTouchKey.bringToFront();
+
+    floatingVoiceButton = new TextView(this);
+    floatingVoiceButton.setText("🎙");
+    floatingVoiceButton.setTextColor(Color.WHITE);
+    floatingVoiceButton.setTextSize(22);
+    floatingVoiceButton.setGravity(Gravity.CENTER);
+    floatingVoiceButton.setContentDescription("Kích hoạt trợ lý giọng nói");
+    GradientDrawable voiceBg = new GradientDrawable();
+    voiceBg.setShape(GradientDrawable.OVAL);
+    voiceBg.setColor(Color.rgb(25, 35, 45));
+    voiceBg.setStroke(dp(2), Color.rgb(80, 190, 150));
+    floatingVoiceButton.setBackground(voiceBg);
+    floatingVoiceButton.setElevation(dp(12));
+    FrameLayout.LayoutParams voiceParams = new FrameLayout.LayoutParams(
+            dp(58), dp(58), Gravity.BOTTOM | Gravity.START);
+    voiceParams.setMargins(dp(18), 0, 0, dp(18));
+    root.addView(floatingVoiceButton, voiceParams);
+    floatingVoiceButton.setVisibility(View.GONE);
+    floatingVoiceButton.setOnClickListener(v -> activateVoiceAssistant());
 }
 
 private void showFloatingMenu() {
@@ -926,9 +997,78 @@ private void hideFloatingMenu() {
         super.onBackPressed();
     }
 
+    private void activateVoiceAssistant() {
+        if (voiceAssistantController == null) {
+            Toast.makeText(this, "Trợ lý giọng nói chưa sẵn sàng.", Toast.LENGTH_SHORT).show();
+            return;
+        }
+        if (checkSelfPermission(Manifest.permission.RECORD_AUDIO)
+                != PackageManager.PERMISSION_GRANTED) {
+            requestPermissions(new String[]{Manifest.permission.RECORD_AUDIO}, 5101);
+            return;
+        }
+        voiceAssistantController.startListening();
+    }
+
+    private String openAppByVoice(String spokenName) {
+        String query = VoiceCommandParser.normalize(spokenName);
+        if (query.isEmpty()) return null;
+
+        AppInfo best = null;
+        int bestScore = 0;
+        for (AppInfo app : apps) {
+            String label = VoiceCommandParser.normalize(app.name);
+            String pkg = app.component.getPackageName().toLowerCase(Locale.ROOT);
+            int score = 0;
+
+            if (label.equals(query)) score = 100;
+            else if (label.length() >= 4 && query.contains(label)) score = 80;
+            else if (query.length() >= 4 && label.contains(query)) score = 70;
+
+            if (query.contains("youtube") && pkg.contains("youtube")) score = Math.max(score, 95);
+            if ((query.equals("maps") || query.equals("google maps"))
+                    && (pkg.equals("com.google.android.apps.maps") || label.contains("maps"))) {
+                score = Math.max(score, 95);
+            }
+            if (query.contains("spotify") && pkg.contains("spotify")) score = Math.max(score, 95);
+
+            if (score > bestScore) {
+                bestScore = score;
+                best = app;
+            }
+        }
+
+        if (best == null || bestScore < 60) return null;
+        launchProjection(best.component);
+        return best.name;
+    }
+
+    @Override
+    public void onRequestPermissionsResult(int requestCode, String[] permissions, int[] grantResults) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults);
+        if (requestCode != 5101) return;
+        if (grantResults.length > 0 && grantResults[0] == PackageManager.PERMISSION_GRANTED) {
+            if (voiceAssistantController != null) voiceAssistantController.startListening();
+        } else {
+            Toast.makeText(this, "Cần cấp quyền micro để dùng trợ lý giọng nói.", Toast.LENGTH_LONG).show();
+        }
+    }
+
+    @Override
+    public boolean dispatchKeyEvent(KeyEvent event) {
+        if (event.getKeyCode() == KeyEvent.KEYCODE_VOICE_ASSIST) {
+            if (event.getAction() == KeyEvent.ACTION_DOWN && event.getRepeatCount() == 0) {
+                activateVoiceAssistant();
+            }
+            return true;
+        }
+        return super.dispatchKeyEvent(event);
+    }
+
     @Override
     public void onPause() {
 
+        if (voiceAssistantController != null) voiceAssistantController.cancelListening();
         resumed = false;
 
         handler.removeCallbacks(
@@ -968,6 +1108,10 @@ private void hideFloatingMenu() {
         handler.removeCallbacks(
                 targetPoller);
 
+        if (voiceAssistantController != null) {
+            voiceAssistantController.destroy();
+            voiceAssistantController = null;
+        }
         if (session != null) { session.destroy(); session = null; }
         if (backgroundSession != null) { backgroundSession.destroy(); backgroundSession = null; }
 
