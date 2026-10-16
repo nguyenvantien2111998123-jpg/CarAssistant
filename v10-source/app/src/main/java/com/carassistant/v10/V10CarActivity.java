@@ -746,7 +746,7 @@ private void hideApps() {
     int savedX = prefs.getInt("x", dp(18));
     int savedY = prefs.getInt("y", dp(120));
     params.setMargins(0, savedY, savedX, 0);
-    projectionLayer.addView(floatingTouchKey, params);
+    root.addView(floatingTouchKey, params);
     floatingTouchKey.setOnTouchListener(
                 (view, event) -> {
                     switch (event.getActionMasked()) {
@@ -850,7 +850,7 @@ private void showFloatingMenu() {
                 new FrameLayout.LayoutParams(dp(170), -2,
                         Gravity.TOP | Gravity.END);
         params.setMargins(0, dp(70), dp(18), 0);
-        projectionLayer.addView(floatingMenu, params);
+        root.addView(floatingMenu, params);
         floatingMenu.bringToFront();
         floatingTouchKey.bringToFront();
     }
@@ -874,7 +874,7 @@ private void addFloatingMenuButton(String label, Runnable action) {
 
 private void hideFloatingMenu() {
     if (floatingMenu == null) return;
-    projectionLayer.removeView(floatingMenu);
+    root.removeView(floatingMenu);
     floatingMenu = null;
 }
 
