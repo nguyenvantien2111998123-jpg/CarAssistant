@@ -83,7 +83,7 @@ public final class V10SessionStore {
             int count = 0;
             for (ComponentName component : components) {
                 if (component == null || count >= 3) continue;
-                if (count > 0) value.append("\\n");
+                if (count > 0) value.append("\n");
                 value.append(component.flattenToString());
                 count++;
             }
@@ -102,7 +102,7 @@ public final class V10SessionStore {
             return result;
         }
         if (value.isEmpty()) return result;
-        for (String item : value.split("\\n")) {
+        for (String item : value.split("\n")) {
             ComponentName component = ComponentName.unflattenFromString(item);
             if (component != null && result.size() < 3) result.add(component);
         }
