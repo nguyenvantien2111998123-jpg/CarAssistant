@@ -20,7 +20,6 @@ import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
 import android.view.Gravity;
-import android.view.KeyEvent;
 import android.view.TextureView;
 import android.view.View;
 import android.widget.FrameLayout;
@@ -1004,7 +1003,10 @@ private void hideFloatingMenu() {
         }
         if (checkSelfPermission(Manifest.permission.RECORD_AUDIO)
                 != PackageManager.PERMISSION_GRANTED) {
-            requestPermissions(new String[]{Manifest.permission.RECORD_AUDIO}, 5101);
+            Intent permissionIntent = new Intent(this, V10SettingsActivity.class);
+            permissionIntent.putExtra(V10SettingsActivity.EXTRA_REQUEST_MICROPHONE, true);
+            permissionIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+            startActivity(permissionIntent);
             return;
         }
         voiceAssistantController.startListening();
@@ -1041,28 +1043,6 @@ private void hideFloatingMenu() {
         if (best == null || bestScore < 60) return null;
         launchProjection(best.component);
         return best.name;
-    }
-
-    @Override
-    public void onRequestPermissionsResult(int requestCode, String[] permissions, int[] grantResults) {
-        super.onRequestPermissionsResult(requestCode, permissions, grantResults);
-        if (requestCode != 5101) return;
-        if (grantResults.length > 0 && grantResults[0] == PackageManager.PERMISSION_GRANTED) {
-            if (voiceAssistantController != null) voiceAssistantController.startListening();
-        } else {
-            Toast.makeText(this, "Cần cấp quyền micro để dùng trợ lý giọng nói.", Toast.LENGTH_LONG).show();
-        }
-    }
-
-    @Override
-    public boolean dispatchKeyEvent(KeyEvent event) {
-        if (event.getKeyCode() == KeyEvent.KEYCODE_VOICE_ASSIST) {
-            if (event.getAction() == KeyEvent.ACTION_DOWN && event.getRepeatCount() == 0) {
-                activateVoiceAssistant();
-            }
-            return true;
-        }
-        return super.dispatchKeyEvent(event);
     }
 
     @Override
