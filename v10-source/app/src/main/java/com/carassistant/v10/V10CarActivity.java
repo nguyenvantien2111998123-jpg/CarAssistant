@@ -66,6 +66,7 @@ public final class V10CarActivity
     private TextView selectedAppLabel;
     private TextView dashboardVoiceButton;
     private TextView floatingVoiceButton;
+    private TextView voiceTranscriptView;
     private VoiceAssistantController voiceAssistantController;
 
     private TextView floatingTouchKey;
@@ -174,15 +175,32 @@ public final class V10CarActivity
         if (voiceAssistantController == null) {
             voiceAssistantController = new VoiceAssistantController(
                     this,
-                    (listening, status) -> {
-                        String icon = listening ? "◉" : "🎙";
+                    (listening, status, transcript, showTranscript) -> {
+                        String icon = listening ? "🔴" : "🎙";
+                        float scale = listening ? 1.10f : 1.0f;
                         if (dashboardVoiceButton != null) {
                             dashboardVoiceButton.setText(icon);
                             dashboardVoiceButton.setContentDescription(status);
+                            dashboardVoiceButton.setScaleX(scale);
+                            dashboardVoiceButton.setScaleY(scale);
+                            dashboardVoiceButton.setAlpha(listening ? 0.82f : 1.0f);
                         }
                         if (floatingVoiceButton != null) {
                             floatingVoiceButton.setText(icon);
                             floatingVoiceButton.setContentDescription(status);
+                            floatingVoiceButton.setScaleX(scale);
+                            floatingVoiceButton.setScaleY(scale);
+                            floatingVoiceButton.setAlpha(listening ? 0.82f : 1.0f);
+                        }
+                        if (voiceTranscriptView != null) {
+                            String words = transcript == null ? "" : transcript.trim();
+                            voiceTranscriptView.setText(words);
+                            voiceTranscriptView.setVisibility(showTranscript && !words.isEmpty()
+                                    ? View.VISIBLE : View.GONE);
+                            if (showTranscript && !words.isEmpty()) {
+                                voiceTranscriptView.setSelected(true);
+                                voiceTranscriptView.bringToFront();
+                            }
                         }
                     },
                     new VoiceCommandRouter(new VoiceCommandRouter.Host() {
@@ -249,6 +267,31 @@ public final class V10CarActivity
 
         buildDashboard();
         buildAppPanel();
+
+        // Transcript overlay sits above the existing UI but does not intercept touch.
+        voiceTranscriptView = new TextView(this);
+        voiceTranscriptView.setTextColor(Color.WHITE);
+        voiceTranscriptView.setTextSize(19);
+        voiceTranscriptView.setGravity(Gravity.CENTER);
+        voiceTranscriptView.setSingleLine(true);
+        voiceTranscriptView.setEllipsize(android.text.TextUtils.TruncateAt.MARQUEE);
+        voiceTranscriptView.setMarqueeRepeatLimit(-1);
+        voiceTranscriptView.setSelected(true);
+        voiceTranscriptView.setPadding(dp(18), dp(8), dp(18), dp(8));
+        voiceTranscriptView.setClickable(false);
+        voiceTranscriptView.setFocusable(false);
+        GradientDrawable transcriptBg = new GradientDrawable();
+        transcriptBg.setColor(Color.rgb(12, 20, 25));
+        transcriptBg.setCornerRadius(dp(18));
+        transcriptBg.setStroke(dp(2), Color.rgb(70, 190, 150));
+        voiceTranscriptView.setBackground(transcriptBg);
+        voiceTranscriptView.setElevation(dp(40));
+        voiceTranscriptView.setVisibility(View.GONE);
+        FrameLayout.LayoutParams transcriptParams = new FrameLayout.LayoutParams(
+                dp(420), dp(54), Gravity.TOP | Gravity.CENTER_HORIZONTAL);
+        transcriptParams.setMargins(dp(12), dp(18), dp(12), 0);
+        root.addView(voiceTranscriptView, transcriptParams);
+
         setContentView(root);
     }
 
