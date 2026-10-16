@@ -189,7 +189,8 @@ public final class V10CarActivity
         // Independent app projection is the bottom layer.
         // The existing dashboard is added after it and remains above it.
         projectionLayer=new FrameLayout(this);
-        projectionLayer.setVisibility(View.VISIBLE);
+        // Layer 1 is shown only on Home and only when a default app is configured.
+        projectionLayer.setVisibility(View.GONE);
         root.addView(projectionLayer, new FrameLayout.LayoutParams(-1,-1));
 
         // Independent second projection surface, controlled only by APP CHỌN.
@@ -615,8 +616,8 @@ private void launchProjection(
 
     activeTarget = component;
     V10SessionStore.setTarget(this, component);
+    // Layer 2 is independent; launching it must not reveal or alter Home's layer 1.
     appProjectionLayer.setVisibility(View.VISIBLE);
-    projectionLayer.setVisibility(View.VISIBLE);
     launcherLayer.setVisibility(View.VISIBLE);
 
     /*
@@ -630,7 +631,8 @@ private void launchBackgroundProjection(ComponentName component) {
     if (component == null || backgroundSession == null) return;
     activeBackgroundTarget = component;
     V10SessionStore.setBackgroundTarget(this, component);
-    projectionLayer.setVisibility(View.VISIBLE);
+    // Layer 1 is a Home background, never shown over APP CHỌN or other screens.
+    projectionLayer.setVisibility(isHomeScreen() ? View.VISIBLE : View.GONE);
     backgroundSession.setTarget(component);
 }
 
@@ -648,10 +650,16 @@ private void stopBackgroundProjection() {
     projectionLayer.setVisibility(View.GONE);
 }
 
+private boolean isHomeScreen() {
+    return appPanel == null || appPanel.getVisibility() != View.VISIBLE;
+}
+
     private void returnToLauncher() {
 
         // HOME returns to the dashboard without tearing down the background app.
-        projectionLayer.setVisibility(View.VISIBLE);
+        projectionLayer.setVisibility(
+                V10SessionStore.getBackgroundTarget(this) != null
+                        ? View.VISIBLE : View.GONE);
 
         launcherLayer
                 .setVisibility(
@@ -700,8 +708,8 @@ private void showApps() {
      * V10ProjectionSession.setTarget() will detect the
      * changed target and recreate the display.
      */
-    // The app picker is a separate overlay, not the projection surface.
-    projectionLayer.setVisibility(View.VISIBLE);
+    // Layer 1 belongs only to Home. Keep it hidden while APP CHỌN is open.
+    projectionLayer.setVisibility(View.GONE);
 
     launcherLayer.setVisibility(
             View.VISIBLE);
@@ -734,8 +742,10 @@ private void hideApps() {
     launcherLayer.setVisibility(
             View.VISIBLE);
 
-    // Keep the selected app projected behind the app-picker overlay.
-    projectionLayer.setVisibility(View.VISIBLE);
+    // Returning to Home restores only its configured default background app.
+    projectionLayer.setVisibility(
+            V10SessionStore.getBackgroundTarget(this) != null
+                    ? View.VISIBLE : View.GONE);
 }
 
     private void createFloatingTouchKey() {
