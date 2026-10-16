@@ -1,7 +1,7 @@
 package com.carassistant.v10.voice;
 
 import android.Manifest;
-import android.app.Activity;
+import android.content.Context;
 import android.content.Intent;
 import android.content.pm.PackageManager;
 import android.os.Bundle;
@@ -26,7 +26,7 @@ public final class VoiceAssistantController {
         void onStateChanged(boolean listening, String status);
     }
 
-    private final Activity activity;
+    private final Context context;
     private final Listener listener;
     private final VoiceCommandRouter router;
     private final Handler mainHandler = new Handler(Looper.getMainLooper());
@@ -38,15 +38,15 @@ public final class VoiceAssistantController {
     private boolean destroyed;
     private String pendingSpeech;
 
-    public VoiceAssistantController(Activity activity, Listener listener, VoiceCommandRouter router) {
-        if (activity == null || router == null) {
-            throw new IllegalArgumentException("activity and router are required");
+    public VoiceAssistantController(Context context, Listener listener, VoiceCommandRouter router) {
+        if (context == null || router == null) {
+            throw new IllegalArgumentException("context and router are required");
         }
-        this.activity = activity;
+        this.context = context;
         this.listener = listener;
         this.router = router;
 
-        textToSpeech = new TextToSpeech(activity.getApplicationContext(), status ->
+        textToSpeech = new TextToSpeech(context.getApplicationContext(), status ->
                 mainHandler.post(() -> {
                     // Post until after the TextToSpeech constructor has assigned the field.
                     if (destroyed || textToSpeech == null) return;
@@ -74,14 +74,14 @@ public final class VoiceAssistantController {
     private void startListeningOnMain() {
         if (destroyed || listening) return;
 
-        if (activity.checkSelfPermission(Manifest.permission.RECORD_AUDIO)
+        if (context.checkSelfPermission(Manifest.permission.RECORD_AUDIO)
                 != PackageManager.PERMISSION_GRANTED) {
             notifyState(false, "Cần cấp quyền micro.");
             speak("Bạn hãy cấp quyền micro cho CarAssistant trước.");
             return;
         }
 
-        if (!SpeechRecognizer.isRecognitionAvailable(activity)) {
+        if (!SpeechRecognizer.isRecognitionAvailable(context)) {
             notifyState(false, "Không có dịch vụ nhận dạng giọng nói.");
             speak("Điện thoại chưa có dịch vụ nhận dạng giọng nói. Hãy kiểm tra dịch vụ Google và ngôn ngữ tiếng Việt.");
             return;
@@ -89,7 +89,7 @@ public final class VoiceAssistantController {
 
         try {
             if (recognizer == null) {
-                recognizer = SpeechRecognizer.createSpeechRecognizer(activity);
+                recognizer = SpeechRecognizer.createSpeechRecognizer(context);
                 recognizer.setRecognitionListener(new RecognitionListener() {
                     @Override public void onReadyForSpeech(Bundle params) {
                         notifyState(true, "Đang nghe…");
