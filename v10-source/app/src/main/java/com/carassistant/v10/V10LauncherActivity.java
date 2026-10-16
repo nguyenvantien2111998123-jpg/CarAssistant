@@ -316,6 +316,14 @@ public final class V10LauncherActivity
                         dp(90),
                         dp(58)));
 
+        TextView settingsButton = buttonText("SETUPS");
+        settingsButton.setOnClickListener(v ->
+                startActivity(new Intent(this, V10SettingsActivity.class)));
+        LinearLayout.LayoutParams settingsParams =
+                new LinearLayout.LayoutParams(dp(100), dp(58));
+        settingsParams.setMargins(dp(8), 0, 0, 0);
+        dockRow.addView(settingsButton, settingsParams);
+
         dashboard.addView(
                 dockRow,
                 new LinearLayout.LayoutParams(
