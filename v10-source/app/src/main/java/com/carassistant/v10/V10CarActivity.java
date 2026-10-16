@@ -448,28 +448,18 @@ public final class V10CarActivity
                     }
                 });
 
-        if (appPanel != null
-                && appPanel
-                        .getChildCount() > 1) {
+        // appPanel children are: header, selected-app label, then the
+        // ScrollView. Do not assume the list is child index 1: that is the
+        // label, so the grid otherwise stays empty after loadApps().
+        if (appPanel != null) {
+            for (int i = 0; i < appPanel.getChildCount(); i++) {
+                View child = appPanel.getChildAt(i);
+                if (!(child instanceof ScrollView)) continue;
 
-            View child =
-                    appPanel
-                            .getChildAt(1);
-
-            if (child
-                    instanceof ScrollView) {
-
-                View inside =
-                        ((ScrollView)
-                                child)
-                                .getChildAt(0);
-
-                if (inside
-                        instanceof GridLayout) {
-
-                    rebuildAppGrid(
-                            (GridLayout)
-                                    inside);
+                View inside = ((ScrollView) child).getChildAt(0);
+                if (inside instanceof GridLayout) {
+                    rebuildAppGrid((GridLayout) inside);
+                    break;
                 }
             }
         }
