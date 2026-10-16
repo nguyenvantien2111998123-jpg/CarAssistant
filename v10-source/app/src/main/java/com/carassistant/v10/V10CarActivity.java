@@ -311,23 +311,7 @@ public final class V10CarActivity
         title.setGravity(Gravity.CENTER);
         header.addView(title, new LinearLayout.LayoutParams(0, dp(58), 1));
 
-        TextView stopButton = buttonText("DỪNG");
-        stopButton.setOnClickListener(v -> stopAppPickerProjection());
-        header.addView(stopButton, new LinearLayout.LayoutParams(dp(76), dp(58)));
-
-        TextView projectButton = buttonText("CHIẾU");
-        projectButton.setOnClickListener(v -> {
-            if (selectedAppTarget != null) {
-                hideApps();
-                launchProjection(selectedAppTarget);
-            }
-        });
-        header.addView(projectButton, new LinearLayout.LayoutParams(dp(76), dp(58)));
         appPanel.addView(header);
-
-        selectedAppLabel = text("Chưa chọn ứng dụng để chiếu", 13, Color.LTGRAY);
-        selectedAppLabel.setPadding(dp(10), dp(4), dp(10), dp(4));
-        appPanel.addView(selectedAppLabel, new LinearLayout.LayoutParams(-1, dp(32)));
 
         ScrollView scroll =
                 new ScrollView(this);
@@ -541,10 +525,9 @@ public final class V10CarActivity
         n.setGravity(Gravity.CENTER);
         n.setMaxLines(2);
         t.addView(n,new LinearLayout.LayoutParams(-1,dp(38)));
-        t.setOnClickListener(v -> {
-            selectedAppTarget = app.component;
-            if (selectedAppLabel != null) selectedAppLabel.setText("Đã chọn: " + app.name + " — nhấn CHIẾU");
-        });
+        // Selecting an app starts projection immediately; the picker and Home UI
+        // are hidden by launchProjection() while display 2 takes over.
+        t.setOnClickListener(v -> launchProjection(app.component));
         return t;
     }
 
