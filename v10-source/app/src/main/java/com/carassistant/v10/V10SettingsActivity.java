@@ -24,6 +24,8 @@ import java.util.List;
 
 /** Phone-side setup screen with tap-to-expand sections. */
 public final class V10SettingsActivity extends Activity {
+    public static final String EXTRA_REQUEST_MICROPHONE = "request_microphone_permission";
+    private boolean returnAfterMicPermission;
     private LinearLayout list;
     private LinearLayout favoriteChoices;
     private LinearLayout backgroundChoices;
@@ -38,8 +40,18 @@ public final class V10SettingsActivity extends Activity {
 
     @Override protected void onCreate(Bundle state) {
         super.onCreate(state);
+        returnAfterMicPermission = getIntent().getBooleanExtra(EXTRA_REQUEST_MICROPHONE, false);
         loadAvailableApps();
         buildUi();
+        if (returnAfterMicPermission) {
+            if (checkSelfPermission(Manifest.permission.RECORD_AUDIO)
+                    == PackageManager.PERMISSION_GRANTED) {
+                finish();
+            } else {
+                getWindow().getDecorView().post(() ->
+                        requestPermissions(new String[]{Manifest.permission.RECORD_AUDIO}, 4102));
+            }
+        }
     }
 
     @Override protected void onResume() {
@@ -261,6 +273,20 @@ public final class V10SettingsActivity extends Activity {
             V10SessionStore.setQuickLaunchApps(this, selected);
             rebuildFavoriteAppChoices();
         });
+    }
+
+    @Override
+    public void onRequestPermissionsResult(int requestCode, String[] permissions, int[] grantResults) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults);
+        if (requestCode != 4102) return;
+        refreshStatus();
+        boolean granted = grantResults.length > 0
+                && grantResults[0] == PackageManager.PERMISSION_GRANTED;
+        if (returnAfterMicPermission && granted) {
+            finish();
+        } else if (returnAfterMicPermission) {
+            returnAfterMicPermission = false;
+        }
     }
 
     private void refreshStatus() {
