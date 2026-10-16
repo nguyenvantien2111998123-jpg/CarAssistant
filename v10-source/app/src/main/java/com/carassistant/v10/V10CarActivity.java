@@ -193,7 +193,7 @@ public final class V10CarActivity
                         }
 
                         @Override
-                        public void showApps() {
+                        public void showAppPicker() {
                             V10CarActivity.this.showApps();
                         }
 
