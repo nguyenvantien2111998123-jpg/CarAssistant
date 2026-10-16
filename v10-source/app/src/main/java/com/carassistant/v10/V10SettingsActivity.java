@@ -23,6 +23,9 @@ import android.widget.TextView;
 /** Phone-side permission and projection diagnostics screen. */
 public final class V10SettingsActivity extends Activity {
     private LinearLayout list;
+    private LinearLayout favoriteChoices;
+    private TextView favoriteStatus;
+    private ArrayList<ResolveInfo> availableFavoriteApps = new ArrayList<>();
 
     @Override protected void onCreate(Bundle state) {
         super.onCreate(state);
@@ -59,6 +62,20 @@ public final class V10SettingsActivity extends Activity {
         selectedBackground.setTag("background_selected");
         list.addView(selectedBackground, params(-1, dp(42)));
         addBackgroundAppChoices(selectedBackground);
+
+        TextView favoritesTitle = text("ỨNG DỤNG HAY DÙNG", 16, Color.WHITE);
+        favoritesTitle.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
+        list.addView(favoritesTitle, params(-1, dp(42)));
+        TextView favoritesIntro = text(
+                "Chọn đúng 3 ứng dụng để hiện trên thanh dọc bên trái ở Home của Android Auto. Chạm lại ứng dụng đã chọn để bỏ chọn.",
+                14, Color.LTGRAY);
+        list.addView(favoritesIntro, params(-1, dp(58)));
+        favoriteStatus = text("", 14, Color.WHITE);
+        list.addView(favoriteStatus, params(-1, dp(38)));
+        favoriteChoices = new LinearLayout(this);
+        favoriteChoices.setOrientation(LinearLayout.VERTICAL);
+        list.addView(favoriteChoices, params(-1, -2));
+        loadFavoriteAppChoices();
 
         addButton("TẮT APP NỀN HOME", () -> {
             V10SessionStore.setBackgroundTarget(this, null);
@@ -110,6 +127,76 @@ public final class V10SettingsActivity extends Activity {
                 refreshStatus();
             });
         }
+    }
+
+    private void loadFavoriteAppChoices() {
+        List<ResolveInfo> results = getPackageManager().queryIntentActivities(
+                new Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LAUNCHER), 0);
+        availableFavoriteApps.clear();
+        for (ResolveInfo info : results) {
+            if (info.activityInfo != null && !getPackageName().equals(info.activityInfo.packageName)) {
+                availableFavoriteApps.add(info);
+            }
+        }
+        Collections.sort(availableFavoriteApps, new Comparator<ResolveInfo>() {
+            @Override public int compare(ResolveInfo a, ResolveInfo b) {
+                return String.valueOf(a.loadLabel(getPackageManager()))
+                        .compareToIgnoreCase(String.valueOf(b.loadLabel(getPackageManager())));
+            }
+        });
+        rebuildFavoriteAppChoices();
+    }
+
+    private void rebuildFavoriteAppChoices() {
+        if (favoriteChoices == null || favoriteStatus == null) return;
+        favoriteChoices.removeAllViews();
+        ArrayList<ComponentName> selected = V10SessionStore.getQuickLaunchApps(this);
+        favoriteStatus.setText("Đã chọn " + selected.size() + " / 3 ứng dụng");
+        for (ResolveInfo info : availableFavoriteApps) {
+            ComponentName component = new ComponentName(
+                    info.activityInfo.packageName, info.activityInfo.name);
+            String label = String.valueOf(info.loadLabel(getPackageManager()));
+            boolean checked = isFavoriteSelected(selected, component);
+            addFavoriteChoiceButton(label + (checked ? "   ✓ ĐÃ CHỌN" : ""), component, checked);
+        }
+    }
+
+    private boolean isFavoriteSelected(List<ComponentName> selected, ComponentName candidate) {
+        for (ComponentName item : selected) {
+            if (item != null && item.getPackageName().equals(candidate.getPackageName())) return true;
+        }
+        return false;
+    }
+
+    private void addFavoriteChoiceButton(String label, ComponentName component, boolean checked) {
+        TextView button = text(label, 14, Color.WHITE);
+        button.setGravity(Gravity.CENTER_VERTICAL);
+        button.setPadding(dp(14), 0, dp(10), 0);
+        button.setBackgroundColor(checked ? Color.rgb(35, 75, 85) : Color.rgb(29, 35, 42));
+        LinearLayout.LayoutParams p = params(-1, dp(48));
+        p.setMargins(0, dp(3), 0, dp(3));
+        favoriteChoices.addView(button, p);
+        button.setOnClickListener(v -> {
+            ArrayList<ComponentName> selected = V10SessionStore.getQuickLaunchApps(this);
+            int found = -1;
+            for (int i = 0; i < selected.size(); i++) {
+                if (selected.get(i).getPackageName().equals(component.getPackageName())) {
+                    found = i;
+                    break;
+                }
+            }
+            if (found >= 0) {
+                selected.remove(found);
+            } else {
+                if (selected.size() >= 3) {
+                    favoriteStatus.setText("Đã đủ 3 app. Bỏ chọn một app trước khi chọn app khác.");
+                    return;
+                }
+                selected.add(component);
+            }
+            V10SessionStore.setQuickLaunchApps(this, selected);
+            rebuildFavoriteAppChoices();
+        });
     }
 
     private void refreshStatus() {
