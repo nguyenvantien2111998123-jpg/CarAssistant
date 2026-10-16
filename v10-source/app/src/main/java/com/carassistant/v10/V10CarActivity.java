@@ -45,7 +45,6 @@ public final class V10CarActivity
             new Handler(Looper.getMainLooper());
 
     private FrameLayout root;
-    private NavigationMapView navigationMap;
     private FrameLayout projectionLayer;
     private LinearLayout launcherLayer;
     private LinearLayout dashboard;
@@ -53,6 +52,12 @@ public final class V10CarActivity
     private LinearLayout dock;
     private TextureView textureView;
     private V10ProjectionSession session;
+    private FrameLayout appProjectionLayer;
+    private TextureView appTextureView;
+    private V10ProjectionSession backgroundSession;
+    private ComponentName activeBackgroundTarget;
+    private ComponentName selectedAppTarget;
+    private TextView selectedAppLabel;
 
     private TextView floatingTouchKey;
     private LinearLayout floatingMenu;
@@ -96,17 +101,14 @@ public final class V10CarActivity
                         return;
                     }
 
-                    ComponentName target =
-                            V10SessionStore
-                                    .getTarget(
-                                            V10CarActivity.this);
+                    ComponentName target = V10SessionStore.getTarget(V10CarActivity.this);
+                    if (target != null && !target.equals(activeTarget)) launchProjection(target);
 
-                    if (target != null
-                            && !target.equals(
-                                    activeTarget)) {
-
-                        launchProjection(
-                                target);
+                    ComponentName backgroundTarget = V10SessionStore.getBackgroundTarget(V10CarActivity.this);
+                    if (backgroundTarget != null && !backgroundTarget.equals(activeBackgroundTarget)) {
+                        launchBackgroundProjection(backgroundTarget);
+                    } else if (backgroundTarget == null && activeBackgroundTarget != null) {
+                        stopBackgroundProjection();
                     }
 
                     handler.postDelayed(
@@ -158,8 +160,6 @@ public final class V10CarActivity
         if (root == null) {
             buildUi();
             attachProjection();
-
-        if (navigationMap != null) navigationMap.onHostResume();
         }
 
         loadApps();
@@ -174,13 +174,11 @@ public final class V10CarActivity
         handler.post(clockTicker);
         handler.post(targetPoller);
 
-        ComponentName target =
-                V10SessionStore
-                        .getTarget(this);
+        ComponentName backgroundTarget = V10SessionStore.getBackgroundTarget(this);
+        if (backgroundTarget != null) launchBackgroundProjection(backgroundTarget);
 
-        if (target != null) {
-            launchProjection(target);
-        }
+        ComponentName target = V10SessionStore.getTarget(this);
+        if (target != null) launchProjection(target);
     }
 
 
@@ -188,16 +186,17 @@ public final class V10CarActivity
         root=new FrameLayout(this);
         root.setBackgroundColor(Color.TRANSPARENT);
 
-        navigationMap=new NavigationMapView(this);
-        root.addView(
-                navigationMap,
-                new FrameLayout.LayoutParams(-1,-1));
-
+        // Independent app projection is the bottom layer.
+        // The existing dashboard is added after it and remains above it.
         projectionLayer=new FrameLayout(this);
+        // Layer 1 is shown only on Home and only when a default app is configured.
         projectionLayer.setVisibility(View.GONE);
-        root.addView(
-                projectionLayer,
-                new FrameLayout.LayoutParams(-1,-1));
+        root.addView(projectionLayer, new FrameLayout.LayoutParams(-1,-1));
+
+        // Independent second projection surface, controlled only by APP CHỌN.
+        appProjectionLayer = new FrameLayout(this);
+        appProjectionLayer.setVisibility(View.GONE);
+        root.addView(appProjectionLayer, new FrameLayout.LayoutParams(-1, -1));
 
         launcherLayer=new LinearLayout(this);
         launcherLayer.setOrientation(LinearLayout.VERTICAL);
@@ -225,7 +224,7 @@ public final class V10CarActivity
         sidebar.setOrientation(LinearLayout.VERTICAL);
         sidebar.setGravity(Gravity.TOP|Gravity.CENTER_HORIZONTAL);
         sidebar.setPadding(dp(3),dp(3),dp(3),dp(3));
-        dashboard.addView(sidebar,new LinearLayout.LayoutParams(dp(88),-1));
+        dashboard.addView(sidebar,new LinearLayout.LayoutParams(dp(64),-1));
 
         TextView choose=sidebarButton("APP CHỌN");
         choose.setOnClickListener(v->showApps());
@@ -237,7 +236,7 @@ public final class V10CarActivity
         sidebar.addView(dock,new LinearLayout.LayoutParams(-1,0,1f));
 
         TextView voice=sidebarButton("🎙");
-        voice.setTextSize(20);
+        voice.setTextSize(18);
         voice.setOnClickListener(v->{});
         sidebar.addView(voice,sidebarFixedButtonParams());
 
@@ -276,7 +275,10 @@ public final class V10CarActivity
         appPanel.setOrientation(
                 LinearLayout.VERTICAL);
 
-        appPanel.setBackgroundColor(Color.TRANSPARENT);
+        // Opaque selector surface prevents the projected app texture from visually
+        // swallowing the app list while APP CHỌN is open.
+        appPanel.setBackgroundColor(Color.rgb(7, 9, 12));
+        appPanel.setElevation(dp(24));
 
         appPanel.setVisibility(
                 View.GONE);
@@ -305,21 +307,9 @@ public final class V10CarActivity
                         dp(90),
                         dp(58)));
 
-        TextView title =
-                text(
-                        "APPLICATIONS",
-                        21,
-                        Color.WHITE);
-
-        title.setGravity(
-                Gravity.CENTER);
-
-        header.addView(
-                title,
-                new LinearLayout.LayoutParams(
-                        0,
-                        dp(58),
-                        1));
+        TextView title = text("APPLICATIONS", 18, Color.WHITE);
+        title.setGravity(Gravity.CENTER);
+        header.addView(title, new LinearLayout.LayoutParams(0, dp(58), 1));
 
         appPanel.addView(header);
 
@@ -442,28 +432,18 @@ public final class V10CarActivity
                     }
                 });
 
-        if (appPanel != null
-                && appPanel
-                        .getChildCount() > 1) {
+        // appPanel children are: header, selected-app label, then the
+        // ScrollView. Do not assume the list is child index 1: that is the
+        // label, so the grid otherwise stays empty after loadApps().
+        if (appPanel != null) {
+            for (int i = 0; i < appPanel.getChildCount(); i++) {
+                View child = appPanel.getChildAt(i);
+                if (!(child instanceof ScrollView)) continue;
 
-            View child =
-                    appPanel
-                            .getChildAt(1);
-
-            if (child
-                    instanceof ScrollView) {
-
-                View inside =
-                        ((ScrollView)
-                                child)
-                                .getChildAt(0);
-
-                if (inside
-                        instanceof GridLayout) {
-
-                    rebuildAppGrid(
-                            (GridLayout)
-                                    inside);
+                View inside = ((ScrollView) child).getChildAt(0);
+                if (inside instanceof GridLayout) {
+                    rebuildAppGrid((GridLayout) inside);
+                    break;
                 }
             }
         }
@@ -471,41 +451,26 @@ public final class V10CarActivity
 
 
     private void rebuildDock() {
-        if(dock==null)return;
+        if (dock == null) return;
         dock.removeAllViews();
-        ArrayList<AppInfo> q=getQuickLaunchApps();
-        int n=Math.min(4,q.size());
-        for(int i=0;i<n;i++) {
-            dock.addView(quickLaunchTile(q.get(i)),sidebarQuickParams());
+        ArrayList<AppInfo> favorites = getQuickLaunchApps();
+        for (AppInfo app : favorites) {
+            dock.addView(quickLaunchTile(app), sidebarQuickParams());
         }
     }
 
     private ArrayList<AppInfo> getQuickLaunchApps() {
-        ArrayList<AppInfo> out=new ArrayList<>();
-        String[] p={
-                "com.google.android.apps.maps",
-                "com.google.android.youtube",
-                "com.zing.zalo",
-                "com.spotify.music"
-        };
-        for(String x:p) {
-            for(AppInfo a:apps) {
-                if(x.equals(a.component.getPackageName())) {
-                    out.add(a);
+        ArrayList<AppInfo> out = new ArrayList<>();
+        ArrayList<ComponentName> configured = V10SessionStore.getQuickLaunchApps(this);
+        for (ComponentName component : configured) {
+            if (component == null) continue;
+            for (AppInfo app : apps) {
+                if (component.getPackageName().equals(app.component.getPackageName())) {
+                    out.add(app);
                     break;
                 }
             }
-            if(out.size()==4)break;
-        }
-        if(out.size()<4) {
-            for(AppInfo a:apps) {
-                boolean duplicate=false;
-                for(AppInfo b:out) {
-                    if(b.component.equals(a.component)) duplicate=true;
-                }
-                if(!duplicate)out.add(a);
-                if(out.size()==4)break;
-            }
+            if (out.size() == 3) break;
         }
         return out;
     }
@@ -522,11 +487,11 @@ public final class V10CarActivity
         Drawable d=getRealAppIcon(app.component.getPackageName());
         if(d!=null)i.setImageDrawable(d);
         i.setScaleType(ImageView.ScaleType.CENTER_INSIDE);
-        t.addView(i,new LinearLayout.LayoutParams(dp(42),dp(42)));
-        TextView n=text(app.name,8,Color.WHITE);
+        t.addView(i,new LinearLayout.LayoutParams(dp(30),dp(30)));
+        TextView n=text(app.name,7,Color.WHITE);
         n.setGravity(Gravity.CENTER);
         n.setMaxLines(1);
-        t.addView(n,new LinearLayout.LayoutParams(-1,dp(18)));
+        t.addView(n,new LinearLayout.LayoutParams(-1,dp(16)));
         t.setOnClickListener(v->launchProjection(app.component));
         return t;
     }
@@ -560,40 +525,30 @@ public final class V10CarActivity
         n.setGravity(Gravity.CENTER);
         n.setMaxLines(2);
         t.addView(n,new LinearLayout.LayoutParams(-1,dp(38)));
-        t.setOnClickListener(v->{hideApps();launchProjection(app.component);});
+        // Selecting an app starts projection immediately; the picker and Home UI
+        // are hidden by launchProjection() while display 2 takes over.
+        t.setOnClickListener(v -> launchProjection(app.component));
         return t;
     }
 
 
     private void attachProjection() {
 
-        textureView =
-                new TextureView(this);
+        // Layer 1: the fixed app chosen in phone SETUPS.
+        textureView = new TextureView(this);
+        projectionLayer.addView(textureView, new FrameLayout.LayoutParams(-1, -1));
+        backgroundSession = new V10ProjectionSession(this, 0);
+        backgroundSession.attachTextureView(textureView);
+        textureView.setOnTouchListener(new V10InputController(backgroundSession).createListener());
 
-        projectionLayer.addView(
-                textureView,
-                new FrameLayout.LayoutParams(
-                        -1,
-                        -1));
-
-        session =
-                new V10ProjectionSession(
-                        this);
-
-        session.attachTextureView(
-                textureView);
+        // Layer 2: app chosen on the car-side APP CHỌN screen.
+        appTextureView = new TextureView(this);
+        appProjectionLayer.addView(appTextureView, new FrameLayout.LayoutParams(-1, -1));
+        session = new V10ProjectionSession(this, 1);
+        session.attachTextureView(appTextureView);
+        appTextureView.setOnTouchListener(new V10InputController(session).createListener());
 
         createFloatingTouchKey();
-
-        V10InputController
-                inputController =
-                        new V10InputController(
-                                session);
-
-        textureView
-                .setOnTouchListener(
-                        inputController
-                                .createListener());
     }
 
 
@@ -620,66 +575,77 @@ private void launchProjection(
         session.release();
     }
 
-    activeTarget =
-            component;
+    activeTarget = component;
+    V10SessionStore.setTarget(this, component);
 
-    /*
-     * Keep the existing V10 session persistence.
-     */
-    V10SessionStore
-            .setTarget(
-                    this,
-                    component);
-
-    /*
-     * Hide the complete launcher UI.
-     */
-    launcherLayer
-            .setVisibility(
-                    View.GONE);
-
-    appPanel
-            .setVisibility(
-                    View.GONE);
-
-    dashboard
-            .setVisibility(
-                    View.GONE);
-
-    projectionLayer
-            .setVisibility(
-                    View.VISIBLE);
+    // Display 2 owns the entire surface while an app is projected:
+    // hide display 1 and the Android Auto Home chrome so neither can
+    // cover the selected app.
+    projectionLayer.setVisibility(View.GONE);
+    appProjectionLayer.setVisibility(View.VISIBLE);
+    launcherLayer.setVisibility(View.GONE);
 
     /*
      * Start the existing proven V10 projection
      * engine.
      */
-    session.setTarget(
-            component);
+    session.setTarget(component);
+}
+
+private void launchBackgroundProjection(ComponentName component) {
+    if (component == null || backgroundSession == null) return;
+    activeBackgroundTarget = component;
+    V10SessionStore.setBackgroundTarget(this, component);
+    // Layer 1 is a Home background, never shown over APP CHỌN or other screens.
+    projectionLayer.setVisibility(isHomeScreen() ? View.VISIBLE : View.GONE);
+    backgroundSession.setTarget(component);
+}
+
+private void stopAppPickerProjection() {
+    if (session != null) {
+        session.hideTask();
+        session.setTarget(null);
+    }
+    V10SessionStore.clearTarget(this);
+    activeTarget = null;
+    appProjectionLayer.setVisibility(View.GONE);
+}
+
+private void stopBackgroundProjection() {
+    if (backgroundSession != null) backgroundSession.setTarget(null);
+    V10SessionStore.setBackgroundTarget(this, null);
+    activeBackgroundTarget = null;
+    projectionLayer.setVisibility(View.GONE);
+}
+
+private boolean isHomeScreen() {
+    return launcherLayer != null
+            && launcherLayer.getVisibility() == View.VISIBLE
+            && dashboard != null
+            && dashboard.getVisibility() == View.VISIBLE
+            && appPanel != null
+            && appPanel.getVisibility() != View.VISIBLE;
 }
 
     private void returnToLauncher() {
 
-        if (session != null
-                && session.isActive()) {
+        // Leaving display 2 returns to Home and restores display 1.
+        // Detach display 2 first so it cannot remain visible under Home chrome.
+        if (session != null) {
             session.hideTask();
+            session.setTarget(null);
         }
+        V10SessionStore.clearTarget(this);
+        activeTarget = null;
+        appProjectionLayer.setVisibility(View.GONE);
 
-        projectionLayer
-                .setVisibility(
-                        View.GONE);
+        launcherLayer.setVisibility(View.VISIBLE);
+        dashboard.setVisibility(View.VISIBLE);
+        appPanel.setVisibility(View.GONE);
 
-        launcherLayer
-                .setVisibility(
-                        View.VISIBLE);
-
-        dashboard
-                .setVisibility(
-                        View.VISIBLE);
-
-        appPanel
-                .setVisibility(
-                        View.GONE);
+        projectionLayer.setVisibility(
+                V10SessionStore.getBackgroundTarget(this) != null
+                        ? View.VISIBLE : View.GONE);
     }
 
 
@@ -716,17 +682,23 @@ private void showApps() {
      * V10ProjectionSession.setTarget() will detect the
      * changed target and recreate the display.
      */
-    projectionLayer.setVisibility(
-            View.GONE);
+    // Both projection surfaces must stay behind the selector. TextureView content can
+    // otherwise visually compete with the transparent launcher hierarchy on some devices.
+    projectionLayer.setVisibility(View.GONE);
+    appProjectionLayer.setVisibility(View.GONE);
 
-    launcherLayer.setVisibility(
-            View.VISIBLE);
+    launcherLayer.setVisibility(View.VISIBLE);
+    dashboard.setVisibility(View.GONE);
+    appPanel.setVisibility(View.VISIBLE);
 
-    dashboard.setVisibility(
-            View.GONE);
-
-    appPanel.setVisibility(
-            View.VISIBLE);
+    // Force a deterministic foreground order whenever the selector opens.
+    launcherLayer.bringToFront();
+    appPanel.bringToFront();
+    appPanel.setElevation(dp(24));
+    appPanel.invalidate();
+    launcherLayer.invalidate();
+    if (floatingMenu != null) floatingMenu.bringToFront();
+    if (floatingTouchKey != null) floatingTouchKey.bringToFront();
 
     loadApps();
 }
@@ -741,24 +713,9 @@ private void hideApps() {
         return;
     }
 
-    appPanel.setVisibility(
-            View.GONE);
-
-    dashboard.setVisibility(
-            View.VISIBLE);
-
-    launcherLayer.setVisibility(
-            View.VISIBLE);
-
-    /*
-     * The Applications screen belongs to the
-     * V10 dashboard.
-     *
-     * Projection is hidden until an application
-     * is selected again.
-     */
-    projectionLayer.setVisibility(
-            View.GONE);
+    // Closing APP CHỌN returns to the single Home composition:
+    // display 1 behind the dashboard; display 2 hidden until chosen again.
+    returnToLauncher();
 }
 
     private void createFloatingTouchKey() {
@@ -779,7 +736,7 @@ private void hideApps() {
     int savedX = prefs.getInt("x", dp(18));
     int savedY = prefs.getInt("y", dp(120));
     params.setMargins(0, savedY, savedX, 0);
-    projectionLayer.addView(floatingTouchKey, params);
+    root.addView(floatingTouchKey, params);
     floatingTouchKey.setOnTouchListener(
                 (view, event) -> {
                     switch (event.getActionMasked()) {
@@ -883,7 +840,7 @@ private void showFloatingMenu() {
                 new FrameLayout.LayoutParams(dp(170), -2,
                         Gravity.TOP | Gravity.END);
         params.setMargins(0, dp(70), dp(18), 0);
-        projectionLayer.addView(floatingMenu, params);
+        root.addView(floatingMenu, params);
         floatingMenu.bringToFront();
         floatingTouchKey.bringToFront();
     }
@@ -907,7 +864,7 @@ private void addFloatingMenuButton(String label, Runnable action) {
 
 private void hideFloatingMenu() {
     if (floatingMenu == null) return;
-    projectionLayer.removeView(floatingMenu);
+    root.removeView(floatingMenu);
     floatingMenu = null;
 }
 
@@ -982,7 +939,6 @@ private void hideFloatingMenu() {
 
         super.onPause();
 
-        if (navigationMap != null) navigationMap.onHostPause();
     }
 
     @Override
@@ -1005,7 +961,6 @@ private void hideFloatingMenu() {
 
         resumed = false;
 
-        if (navigationMap != null) { navigationMap.onHostDestroy(); navigationMap = null; }
 
         handler.removeCallbacks(
                 clockTicker);
@@ -1013,12 +968,8 @@ private void hideFloatingMenu() {
         handler.removeCallbacks(
                 targetPoller);
 
-        if (session != null) {
-
-            session.destroy();
-
-            session = null;
-        }
+        if (session != null) { session.destroy(); session = null; }
+        if (backgroundSession != null) { backgroundSession.destroy(); backgroundSession = null; }
 
         V10SessionStore
                 .clearCurrentActivity(
@@ -1026,6 +977,8 @@ private void hideFloatingMenu() {
 
         root = null;
         textureView = null;
+        appTextureView = null;
+        appProjectionLayer = null;
         projectionLayer = null;
         launcherLayer = null;
         dashboard = null;
@@ -1074,27 +1027,28 @@ private void hideFloatingMenu() {
 
 
     private LinearLayout.LayoutParams sidebarButtonParams() {
-        LinearLayout.LayoutParams p=new LinearLayout.LayoutParams(-1,dp(62));
+        LinearLayout.LayoutParams p=new LinearLayout.LayoutParams(-1,dp(48));
         p.setMargins(dp(1),dp(2),dp(1),dp(2));
         return p;
     }
 
     private LinearLayout.LayoutParams sidebarFixedButtonParams() {
-        LinearLayout.LayoutParams p=new LinearLayout.LayoutParams(-1,dp(62));
+        LinearLayout.LayoutParams p=new LinearLayout.LayoutParams(-1,dp(48));
         p.setMargins(dp(1),dp(2),dp(1),dp(2));
         return p;
     }
 
     private LinearLayout.LayoutParams sidebarQuickParams() {
-        LinearLayout.LayoutParams p=new LinearLayout.LayoutParams(-1,dp(66));
+        LinearLayout.LayoutParams p=new LinearLayout.LayoutParams(-1,dp(54));
         p.setMargins(dp(1),dp(2),dp(1),dp(2));
         return p;
     }
 
     private TextView sidebarButton(String value) {
         TextView v=buttonText(value);
-        v.setTextSize(11);
+        v.setTextSize(9);
         v.setGravity(Gravity.CENTER);
+        v.setPadding(dp(2),dp(2),dp(2),dp(2));
         return v;
     }
 
