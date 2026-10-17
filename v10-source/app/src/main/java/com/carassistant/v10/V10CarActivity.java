@@ -9,6 +9,7 @@ import android.view.MotionEvent;
 import android.view.ViewConfiguration;
 import android.view.ViewGroup;
 import android.content.Intent;
+import android.net.Uri;
 import android.content.pm.ResolveInfo;
 import android.content.pm.ApplicationInfo;
 import android.content.pm.PackageManager;
@@ -212,6 +213,44 @@ public final class V10CarActivity
 
                         @Override
                         public String openVoiceTask(String category, String query, String explicitProvider) {
+                            if ("navigation".equals(category) || "nearby".equals(category)) {
+                                AppInfo selectedApp = null;
+                                if (explicitProvider != null && !explicitProvider.trim().isEmpty()) {
+                                    selectedApp = findAppByVoice(explicitProvider);
+                                } else {
+                                    ComponentName configured = V10SessionStore.getDefaultVoiceApp(
+                                            V10CarActivity.this, "navigation");
+                                    if (configured != null) {
+                                        selectedApp = findAppByVoice(appLabelForComponent(configured));
+                                        if (selectedApp == null) {
+                                            for (AppInfo app : apps) {
+                                                if (configured.getPackageName().equals(app.component.getPackageName())) {
+                                                    selectedApp = app;
+                                                    break;
+                                                }
+                                            }
+                                        }
+                                    } else {
+                                        String[] candidates = new String[]{"Google Maps", "Vietmap", "Navitel", "Maps"};
+                                        for (String candidate : candidates) {
+                                            selectedApp = findAppByVoice(candidate);
+                                            if (selectedApp != null) break;
+                                        }
+                                    }
+                                }
+                                if (selectedApp == null) return null;
+                                launchProjection(selectedApp.component);
+                                if (query != null && !query.trim().isEmpty() && session != null) {
+                                    String mapUri = buildMapUri(selectedApp.component, query,
+                                            "nearby".equals(category));
+                                    if (mapUri != null) {
+                                        session.launchViewIntentOnDisplay(
+                                                selectedApp.component.getPackageName(), mapUri);
+                                    }
+                                }
+                                return selectedApp.name;
+                            }
+
                             if ("music".equals(category) || "video".equals(category)) {
                                 ComponentName selected = null;
                                 String selectedLabel = null;
@@ -253,6 +292,37 @@ public final class V10CarActivity
                                         ? voiceBackgroundTaskManager.launchApp(selected)
                                         : voiceBackgroundTaskManager.search(selected, query, category);
                                 return accepted ? selectedLabel : null;
+                            }
+
+                            if ("tv".equals(category)) {
+                                AppInfo selectedApp = null;
+                                if (explicitProvider != null && !explicitProvider.trim().isEmpty()) {
+                                    selectedApp = findAppByVoice(explicitProvider);
+                                } else {
+                                    ComponentName configured = V10SessionStore.getDefaultVoiceApp(
+                                            V10CarActivity.this, "tv");
+                                    if (configured != null) {
+                                        for (AppInfo app : apps) {
+                                            if (configured.getPackageName().equals(app.component.getPackageName())) {
+                                                selectedApp = app;
+                                                break;
+                                            }
+                                        }
+                                    } else {
+                                        String[] candidates = new String[]{"VTV Go", "FPT Play", "TV"};
+                                        for (String candidate : candidates) {
+                                            selectedApp = findAppByVoice(candidate);
+                                            if (selectedApp != null) break;
+                                        }
+                                    }
+                                }
+                                if (selectedApp == null) return null;
+                                launchProjection(selectedApp.component);
+                                if (query != null && !query.trim().isEmpty() && session != null) {
+                                    session.launchSearchIntentOnDisplay(
+                                            selectedApp.component.getPackageName(), query);
+                                }
+                                return selectedApp.name;
                             }
 
                             if (explicitProvider != null && !explicitProvider.trim().isEmpty()) {
@@ -1123,6 +1193,18 @@ private void hideFloatingMenu() {
             return;
         }
         voiceAssistantController.toggleListening();
+    }
+
+    private String buildMapUri(ComponentName component, String query, boolean nearby) {
+        if (component == null || query == null || query.trim().isEmpty()) return null;
+        String encoded = Uri.encode(query.trim());
+        if ("com.google.android.apps.maps".equals(component.getPackageName())) {
+            if (nearby) return "geo:0,0?q=" + encoded;
+            return "google.navigation:q=" + encoded;
+        }
+        // Many navigation apps accept geo: search intents; the target app may still
+        // require confirmation or may not implement this generic Android URI.
+        return "geo:0,0?q=" + encoded;
     }
 
     private String appLabelForComponent(ComponentName component) {
