@@ -44,8 +44,8 @@ public final class VoiceAssistantController {
     private boolean sessionActive;
     private boolean speechStarted;
     private boolean destroyed;
-    private boolean endBeepPlayed;
     private boolean commandHandled;
+    private boolean dispatchStarted;
     private String pendingSpeech;
     private String lastTranscript = "";
 
@@ -63,7 +63,6 @@ public final class VoiceAssistantController {
         try {
             if (recognizer != null) recognizer.cancel();
         } catch (RuntimeException ignored) { }
-        endBeepPlayed = true;
         notifyState(false, "Không nghe thấy giọng nói. Đã hủy.", "", false);
     };
 
@@ -77,14 +76,12 @@ public final class VoiceAssistantController {
         sessionActive = false;
         listening = false;
         commandHandled = true;
-        endBeepPlayed = true;
         cancelNoSpeechWatchdog();
         try {
             if (recognizer != null) recognizer.cancel();
         } catch (RuntimeException ignored) { }
-        playBeep();
         notifyState(false, "Đang xử lý lệnh…", "", false);
-        dispatchTranscript(transcript);
+        dispatchTranscriptOnce(transcript);
     };
 
     private void scheduleSilenceWatchdog() {
@@ -119,12 +116,9 @@ public final class VoiceAssistantController {
         try {
             if (recognizer != null) recognizer.cancel();
         } catch (RuntimeException ignored) { }
-        if (!endBeepPlayed) {
-            playBeep();
-            endBeepPlayed = true;
         }
         notifyState(false, "Đang xử lý lệnh…", "", false);
-        dispatchTranscript(transcript);
+        dispatchTranscriptOnce(transcript);
     };
 
     private void cancelFinalResultFallback() {
@@ -134,6 +128,12 @@ public final class VoiceAssistantController {
     private void scheduleFinalResultFallback() {
         mainHandler.removeCallbacks(finalResultFallback);
         mainHandler.postDelayed(finalResultFallback, 1200L);
+    }
+
+    private void dispatchTranscriptOnce(String transcript) {
+        if (destroyed || dispatchStarted) return;
+        dispatchStarted = true;
+        dispatchTranscript(transcript);
     }
 
     private void dispatchTranscript(String transcript) {
@@ -230,8 +230,6 @@ public final class VoiceAssistantController {
                         cancelNoSpeechWatchdog();
                         cancelSilenceWatchdog();
                         listening = false;
-                        if (!endBeepPlayed) playBeep();
-                        endBeepPlayed = true;
                         notifyState(false, "Đang xử lý lệnh…", "", false);
                         // Give the service a short opportunity to deliver final text; the
                         // watchdog below is the fallback if it never does.
@@ -261,15 +259,11 @@ public final class VoiceAssistantController {
                         if (!transcript.isEmpty()) {
                             listening = false;
                             commandHandled = true;
-                            if (!endBeepPlayed) playBeep();
-                            endBeepPlayed = true;
                             notifyState(false, "Đang xử lý lệnh…", "", false);
-                            dispatchTranscript(transcript);
+                            dispatchTranscriptOnce(transcript);
                             return;
                         }
 
-                        if (!endBeepPlayed) playBeep();
-                        endBeepPlayed = true;
                         listening = false;
                         commandHandled = true;
                         String status = "Không nhận được câu lệnh.";
@@ -292,8 +286,6 @@ public final class VoiceAssistantController {
                         cancelSilenceWatchdog();
                         sessionActive = false;
                         listening = false;
-                        if (!endBeepPlayed) playBeep();
-                        endBeepPlayed = true;
                         commandHandled = true;
 
                         ArrayList<String> matches = results == null
@@ -304,7 +296,7 @@ public final class VoiceAssistantController {
                                 : matches.get(0).trim();
 
                         notifyState(false, "Đang xử lý lệnh…", "", false);
-                        dispatchTranscript(transcript);
+                        dispatchTranscriptOnce(transcript);
                     }
 
                     @Override public void onPartialResults(Bundle partialResults) {
@@ -334,8 +326,8 @@ public final class VoiceAssistantController {
             if (textToSpeech != null) textToSpeech.stop();
             lastTranscript = "";
             speechStarted = false;
-            endBeepPlayed = false;
             commandHandled = false;
+            dispatchStarted = false;
             cancelSilenceWatchdog();
             mainHandler.removeCallbacks(finalResultFallback);
 
@@ -363,7 +355,6 @@ public final class VoiceAssistantController {
             listening = false;
             cancelNoSpeechWatchdog();
             cancelSilenceWatchdog();
-            if (!endBeepPlayed) playBeep();
             notifyState(false, "Không khởi động được micro.", "", false);
             speak("Không khởi động được nhận dạng giọng nói. Bạn hãy thử lại.");
         }
@@ -395,8 +386,6 @@ public final class VoiceAssistantController {
         cancelSilenceWatchdog();
         mainHandler.removeCallbacks(finalResultFallback);
         lastTranscript = "";
-        if (wasActive && !endBeepPlayed) playBeep();
-        endBeepPlayed = true;
         notifyState(false, wasActive ? "Đã hủy lệnh voice." : "Đã dừng nghe.", "", false);
     }
 
