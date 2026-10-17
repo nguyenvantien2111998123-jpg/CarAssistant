@@ -1,0 +1,131 @@
+name: CarAsistant Virtual Lab
+
+on:
+  workflow_dispatch:
+  pull_request:
+    branches:
+      - main
+      - projection-background-settings-v1
+      - voice-assistant-v1
+  push:
+    branches:
+      - voice-assistant-v2-commands-settings
+
+permissions:
+  contents: read
+
+jobs:
+  build-and-unit-test:
+    name: Build APK and run unit tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+          cache: gradle
+
+      - name: Run JUnit unit tests
+        working-directory: v10-source
+        run: |
+          chmod +x gradlew
+          ./gradlew --no-daemon --stacktrace testDebugUnitTest
+
+      - name: Assemble debug APK
+        working-directory: v10-source
+        run: ./gradlew --no-daemon --stacktrace assembleDebug
+
+      - name: Upload APK for emulator job
+        uses: actions/upload-artifact@v4
+        with:
+          name: carassistant-debug-apk
+          path: v10-source/app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Upload unit test report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: carassistant-unit-test-report
+          path: |
+            v10-source/app/build/reports/tests/testDebugUnitTest/
+            v10-source/app/build/test-results/testDebugUnitTest/
+          if-no-files-found: warn
+          retention-days: 14
+
+  poco-f1-emulator-smoke:
+    name: POCO F1 profile emulator smoke test
+    needs: build-and-unit-test
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Download APK
+        uses: actions/download-artifact@v4
+        with:
+          name: carassistant-debug-apk
+          path: dist
+
+      - name: Boot Android emulator with POCO-like screen profile
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 29
+          target: google_apis
+          arch: x86_64
+          profile: pixel_2
+          emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none
+          disable-animations: true
+          emulator-boot-timeout: 600
+          script: |
+            set -eu
+            mkdir -p test-results
+            adb wait-for-device
+            adb shell settings put system accelerometer_rotation 0 || true
+            adb shell wm size 1080x2246
+            adb shell wm density 403
+            adb shell getprop > test-results/emulator-getprop.txt
+            adb shell wm size > test-results/emulator-size.txt
+            adb shell wm density > test-results/emulator-density.txt
+            adb shell dumpsys display > test-results/display-before.txt
+
+            adb logcat -c
+            adb install -r dist/app-debug.apk
+            adb shell am force-stop com.carassistant.v10
+            adb shell am start -W -n com.carassistant.v10/.V10LauncherActivity | tee test-results/launch.txt
+
+            # Give Android time to complete activity startup and record any crash.
+            sleep 8
+            adb logcat -d -v threadtime > test-results/logcat.txt
+            adb shell dumpsys activity activities > test-results/activities.txt
+            adb shell dumpsys display > test-results/display-after.txt
+            adb shell screencap -p /sdcard/carassistant-screen.png
+            adb pull /sdcard/carassistant-screen.png test-results/carassistant-screen.png
+
+            if grep -E 'FATAL EXCEPTION|Fatal signal|Process: com\\.carassistant\\.v10' test-results/logcat.txt; then
+              echo 'FAIL: crash signature found in logcat'
+              exit 1
+            fi
+
+            if ! adb shell pidof com.carassistant.v10 >/dev/null 2>&1; then
+              echo 'FAIL: CarAsistant process is not running after launch'
+              exit 1
+            fi
+
+            echo 'PASS: APK installed, launcher start requested, process alive, no fatal crash signature found.'
+
+      - name: Upload emulator diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: carassistant-virtual-lab-diagnostics
+          path: test-results/
+          if-no-files-found: warn
+          retention-days: 14
