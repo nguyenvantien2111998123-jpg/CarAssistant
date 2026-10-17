@@ -1,10 +1,12 @@
 package com.carassistant.v10.voice;
 
-/** Routes parsed voice intents to existing CarAssistant UI actions. */
+/** Routes parsed voice intents to the existing CarAssistant projection UI. */
 public final class VoiceCommandRouter {
     public interface Host {
         /** Opens a matching installed app and returns its visible label, or null when not found. */
         String openApp(String spokenName);
+        /** Opens a category's explicit app or configured default. */
+        String openVoiceTask(String category, String query, String explicitProvider);
         void showAppPicker();
         void goHome();
     }
@@ -34,13 +36,20 @@ public final class VoiceCommandRouter {
         switch (command.type) {
             case OPEN_APP: {
                 String opened = host.openApp(command.argument);
-                if (opened == null) {
-                    return new Result(true,
-                            "Tôi chưa tìm thấy ứng dụng " + command.argument + ".",
-                            false);
-                }
+                if (opened == null) return new Result(true,
+                        "Tôi chưa tìm thấy ứng dụng " + command.argument + ".", false);
                 return new Result(true, "Đang mở " + opened + ".", false);
             }
+            case NAVIGATE:
+                return openCategory(command, "navigation", "Đang mở bản đồ");
+            case SEARCH_NEARBY:
+                return openCategory(command, "navigation", "Đang mở bản đồ để tìm");
+            case PLAY_MUSIC:
+                return openCategory(command, "music", "Đang mở ứng dụng nhạc");
+            case PLAY_VIDEO:
+                return openCategory(command, "video", "Đang mở ứng dụng video");
+            case OPEN_TV:
+                return openCategory(command, "tv", "Đang mở ứng dụng TV");
             case SHOW_APPS:
                 host.showAppPicker();
                 return new Result(true, "Đây là danh sách ứng dụng.", false);
@@ -52,8 +61,23 @@ public final class VoiceCommandRouter {
             case UNKNOWN:
             default:
                 return new Result(false,
-                        "Tôi chưa hiểu lệnh đó. Bạn hãy thử nói mở một ứng dụng, hiện danh sách ứng dụng hoặc về màn hình chính.",
+                        "Tôi chưa hiểu lệnh đó. Bạn có thể nói dẫn đường đến một địa điểm, tìm địa điểm gần đây, mở nhạc, mở video, mở kênh TV hoặc mở một ứng dụng.",
                         false);
         }
+    }
+
+    private Result openCategory(VoiceCommandParser.Command command, String category, String prefix) {
+        String opened = host.openVoiceTask(category, command.argument, command.provider);
+        if (opened == null) {
+            String categoryName = category.equals("navigation") ? "bản đồ"
+                    : category.equals("music") ? "ứng dụng nhạc"
+                    : category.equals("video") ? "ứng dụng video" : "ứng dụng TV";
+            return new Result(true, "Chưa chọn được " + categoryName
+                    + ". Hãy chọn ứng dụng mặc định trong phần cài đặt trợ lý.", false);
+        }
+        String detail = command.argument.isEmpty() ? "" : " cho nội dung " + command.argument;
+        if (!command.provider.isEmpty()) detail += " bằng " + command.provider;
+        return new Result(true, prefix + " " + opened + detail
+                + ". Nếu ứng dụng chưa tự nhận truy vấn, hãy xác nhận trên màn hình.", false);
     }
 }
