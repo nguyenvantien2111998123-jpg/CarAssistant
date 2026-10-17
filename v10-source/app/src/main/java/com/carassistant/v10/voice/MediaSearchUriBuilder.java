@@ -1,7 +1,6 @@
 package com.carassistant.v10.voice;
 
 import java.net.URLEncoder;
-import java.nio.charset.StandardCharsets;
 import java.util.Locale;
 
 /**
@@ -16,9 +15,13 @@ public final class MediaSearchUriBuilder {
                 || query == null || query.trim().isEmpty()) return null;
 
         String pkg = packageName.trim().toLowerCase(Locale.ROOT);
-        String encoded = URLEncoder.encode(query.trim(), StandardCharsets.UTF_8)
-                .replace("+", "%20");
-        boolean music = "music".equalsIgnoreCase(category);
+        final String encoded;
+        try {
+            // Use the String/encoding-name overload for Android 10+ runtime compatibility.
+            encoded = URLEncoder.encode(query.trim(), "UTF-8").replace("+", "%20");
+        } catch (java.io.UnsupportedEncodingException impossible) {
+            return null;
+        }
 
         // Official, ReVanced and Morphe YouTube Music package families.
         if (isYouTubeMusicPackage(pkg)) {
