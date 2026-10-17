@@ -267,9 +267,10 @@ public final class VoiceAssistantController {
             intent.putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_POSSIBLY_COMPLETE_SILENCE_LENGTH_MILLIS, COMPLETE_SILENCE_MS);
 
             notifyState(true, "Đang nghe…", "", true);
+            // Start the 3-second no-speech timeout immediately after the listening beep.
             playBeep();
-            recognizer.startListening(intent);
             scheduleNoSpeechWatchdog();
+            recognizer.startListening(intent);
         } catch (RuntimeException exception) {
             sessionActive = false;
             listening = false;
