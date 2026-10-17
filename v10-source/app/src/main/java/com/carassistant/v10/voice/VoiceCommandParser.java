@@ -110,6 +110,26 @@ public final class VoiceCommandParser {
             return new Command(Type.PLAY_VIDEO, "", "", "video");
         }
 
+        // Generic media wording: "Mở <tên nội dung> trên YouTube" and
+        // "Mở <tên bài> trên YouTube Music/Zing MP3" need to be treated as
+        // search-and-play requests, not as requests to launch an app by name.
+        value = firstPrefix(text, "mo ", "phat ", "bat ", "xem ", "tim ");
+        if (value != null) {
+            String[] mediaPair = splitFirst(value, " tren ", " bang ");
+            String provider = normalize(mediaPair[1]);
+            if (!mediaPair[1].isEmpty() && !mediaPair[0].isEmpty()) {
+                if (provider.contains("youtube music") || provider.contains("zing mp3")
+                        || provider.contains("spotify") || provider.contains("nhaccuatui")
+                        || provider.contains("nhac cua tui")) {
+                    return new Command(Type.PLAY_MUSIC, mediaPair[0], mediaPair[1], "music");
+                }
+                if (provider.contains("youtube") || provider.contains("revanced")
+                        || provider.contains("morphe")) {
+                    return new Command(Type.PLAY_VIDEO, mediaPair[0], mediaPair[1], "video");
+                }
+            }
+        }
+
         if (text.startsWith("mo ")) {
             String app = text.substring(3).trim();
             if (!app.isEmpty()) return new Command(Type.OPEN_APP, app);
