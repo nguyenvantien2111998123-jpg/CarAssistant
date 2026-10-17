@@ -46,13 +46,27 @@ public final class V10DisplayController {
 
     public synchronized boolean ensureDisplay(SurfaceTexture texture, int width, int height) {
         if (destroyed || texture == null || width < 1 || height < 1) return false;
+        texture.setDefaultBufferSize(width, height);
+        return ensureDisplay(new Surface(texture), width, height);
+    }
+
+    /**
+     * Creates or rebinds a virtual display to an owned Surface.
+     * Ownership of the supplied Surface transfers to this controller.
+     */
+    public synchronized boolean ensureDisplay(Surface newSurface, int width, int height) {
+        if (destroyed || newSurface == null || width < 1 || height < 1) {
+            if (newSurface != null) {
+                try { newSurface.release(); } catch (Throwable ignored) { }
+            }
+            return false;
+        }
         if (virtualDisplay != null && display != null) {
-            attachSurface(texture, width, height);
+            replaceSurface(newSurface);
+            virtualDisplay.setSurface(newSurface);
             return true;
         }
         try {
-            texture.setDefaultBufferSize(width, height);
-            Surface newSurface = new Surface(texture);
             DisplayManager manager = (DisplayManager) context.getSystemService(Context.DISPLAY_SERVICE);
             if (manager == null) {
                 newSurface.release();
@@ -135,6 +149,30 @@ public final class V10DisplayController {
                 + " -f 0x10000000"
                 + " -n '" + flat + "'";
         execute(command, "Launch failed");
+    }
+
+    /** Starts a VIEW URI inside this exact virtual display, never the phone display. */
+    public synchronized void launchViewIntentOnDisplay(String packageName, String uri) {
+        if (!isReady() || packageName == null || packageName.trim().isEmpty()
+                || uri == null || uri.trim().isEmpty()) {
+            Log.w(TAG, "Refusing invalid background VIEW intent");
+            return;
+        }
+        final int displayId = display.getDisplayId();
+        final int userId = Process.myUid() / 100000;
+        final String command = "/system/bin/am start"
+                + " --user " + userId
+                + " --display " + displayId
+                + " --windowingMode 1"
+                + " -a android.intent.action.VIEW"
+                + " -d " + shellQuote(uri)
+                + " -p " + shellQuote(packageName)
+                + " -f 0x10000000";
+        execute(command, "Background VIEW intent failed");
+    }
+
+    private static String shellQuote(String value) {
+        return "'" + value.replace("'", "'\\\"'\\\"'") + "'";
     }
 
     public synchronized void resumeExistingTask(ComponentName component) {
