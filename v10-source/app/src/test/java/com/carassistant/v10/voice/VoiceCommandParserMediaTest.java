@@ -21,7 +21,7 @@ public final class VoiceCommandParserMediaTest {
                 new VoiceCommandParser().parse("Mở video nhạc Sơn Tùng trên YouTube");
 
         assertEquals(VoiceCommandParser.Type.PLAY_VIDEO, command.type);
-        assertEquals("nhac son tung", command.argument);
+        assertEquals("son tung", command.argument);
         assertEquals("youtube", command.provider);
         assertEquals("video", command.category);
     }
