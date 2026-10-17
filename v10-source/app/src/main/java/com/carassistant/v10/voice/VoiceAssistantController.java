@@ -194,8 +194,10 @@ public final class VoiceAssistantController {
                         boolean noSpeechError = error == SpeechRecognizer.ERROR_NO_MATCH
                                 || error == SpeechRecognizer.ERROR_SPEECH_TIMEOUT;
                         String transcript = lastTranscript.trim();
-                        // Services can signal no-match early. Keep the session until the 3-second timer.
-                        if (transcript.isEmpty() && !speechStarted && noSpeechError) return;
+                        // Keep the beep-based timeout authoritative for an empty session.
+                        // Recognition services can emit several kinds of early errors without speech.
+                        if (transcript.isEmpty() && !speechStarted
+                                && error != SpeechRecognizer.ERROR_INSUFFICIENT_PERMISSIONS) return;
                         cancelNoSpeechWatchdog();
                         cancelSilenceWatchdog();
                         mainHandler.removeCallbacks(finalResultFallback);
@@ -226,6 +228,14 @@ public final class VoiceAssistantController {
                                 : results.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION);
                         String transcript = matches == null || matches.isEmpty()
                                 ? lastTranscript : matches.get(0).trim();
+
+                        // Some recognition services report an empty result when the user
+                        // has not spoken. Do not let that callback cancel the beep-based
+                        // 3-second watchdog; it owns the no-speech timeout.
+                        if (transcript.trim().isEmpty() && !speechStarted) {
+                            return;
+                        }
+
                         cancelNoSpeechWatchdog();
                         cancelSilenceWatchdog();
                         mainHandler.removeCallbacks(finalResultFallback);
