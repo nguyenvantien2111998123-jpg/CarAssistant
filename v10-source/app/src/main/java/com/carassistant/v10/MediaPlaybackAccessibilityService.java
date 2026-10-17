@@ -190,6 +190,11 @@ public final class MediaPlaybackAccessibilityService extends AccessibilityServic
         return null;
     }
 
+    private static final class Candidate {
+        AccessibilityNodeInfo node;
+        int score;
+    }
+
     private void clearPending(android.content.SharedPreferences prefs) {
         prefs.edit().remove("target_package").remove("query")
                 .remove("phase").remove("started_at").apply();
