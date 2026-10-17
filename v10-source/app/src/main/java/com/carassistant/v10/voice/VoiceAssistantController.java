@@ -63,7 +63,9 @@ public final class VoiceAssistantController {
 
 
     private final Runnable noSpeechWatchdog = () -> {
-        if (destroyed || !sessionActive || !listening || speechStarted || commandHandled) return;
+        // The timeout belongs to the voice session, not the UI listening flag:
+        // some SpeechRecognizer implementations change that flag before reporting an error.
+        if (destroyed || !sessionActive || speechStarted || commandHandled) return;
         if (!lastTranscript.trim().isEmpty()) return;
         sessionActive = false;
         listening = false;
@@ -175,6 +177,11 @@ public final class VoiceAssistantController {
                     @Override public void onBufferReceived(byte[] buffer) { }
                     @Override public void onEndOfSpeech() {
                         if (destroyed || !sessionActive || commandHandled) return;
+                        // Some recognition services may emit onEndOfSpeech without a real
+                        // speech start. Do not let that callback disable the 3-second timeout.
+                        if (!speechStarted && lastTranscript.trim().isEmpty()) {
+                            return;
+                        }
                         speechStarted = true;
                         listening = false;
                         cancelNoSpeechWatchdog();
