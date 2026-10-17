@@ -255,9 +255,8 @@ public final class V10CarActivity
                                 ComponentName selected = null;
                                 String selectedLabel = null;
 
-                                // Media search/play runs on the dedicated hidden display.
-                                // Never call launchProjection() from this branch: the visible
-                                // map task and its surface must remain untouched.
+                                // Media must be visible on the car-side secondary projection display
+                                // (session/display 1), not the hidden ImageReader-only virtual display.
                                 if (explicitProvider != null && !explicitProvider.trim().isEmpty()) {
                                     AppInfo explicitApp = findAppByVoice(explicitProvider);
                                     if (explicitApp == null) return null;
@@ -283,17 +282,23 @@ public final class V10CarActivity
                                     }
                                 }
 
-                                if (selected == null) return null;
-                                if (voiceBackgroundTaskManager == null) {
-                                    voiceBackgroundTaskManager = new VoiceBackgroundTaskManager(
-                                            V10CarActivity.this);
+                                if (selected == null || session == null) return null;
+                                String mediaUri = null;
+                                if (query != null && !query.trim().isEmpty()) {
+                                    mediaUri = VoiceBackgroundTaskManager.buildSearchUri(
+                                            selected, query.trim(), category);
+                                    if (mediaUri == null) return null;
                                 }
-                                boolean accepted = query == null || query.trim().isEmpty()
-                                        ? voiceBackgroundTaskManager.launchApp(selected)
-                                        : voiceBackgroundTaskManager.search(selected, query, category);
-                                return accepted ? selectedLabel : null;
-                            }
 
+                                // Launch on the real projection surface, then send the search
+                                // intent to that same display. Keep the phone UI out of this flow.
+                                launchProjection(selected);
+                                if (mediaUri != null) {
+                                    session.launchViewIntentOnDisplay(
+                                            selected.getPackageName(), mediaUri);
+                                }
+                                return selectedLabel == null ? selected.getPackageName() : selectedLabel;
+                            }
                             if ("tv".equals(category)) {
                                 AppInfo selectedApp = null;
                                 if (explicitProvider != null && !explicitProvider.trim().isEmpty()) {
