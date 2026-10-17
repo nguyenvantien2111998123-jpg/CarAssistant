@@ -210,6 +210,36 @@ public final class V10CarActivity
                         }
 
                         @Override
+                        public String openVoiceTask(String category, String query, String explicitProvider) {
+                            if (explicitProvider != null && !explicitProvider.trim().isEmpty()) {
+                                return openAppByVoice(explicitProvider);
+                            }
+
+                            ComponentName configured = V10SessionStore.getDefaultVoiceApp(
+                                    V10CarActivity.this, category);
+                            if (configured != null) {
+                                launchProjection(configured);
+                                return appLabelForComponent(configured);
+                            }
+
+                            String[] candidates;
+                            if ("navigation".equals(category)) {
+                                candidates = new String[]{"Google Maps", "Vietmap", "Navitel", "Maps"};
+                            } else if ("music".equals(category)) {
+                                candidates = new String[]{"Zing MP3", "Spotify", "YouTube Music", "NhacCuaTui"};
+                            } else if ("video".equals(category)) {
+                                candidates = new String[]{"YouTube"};
+                            } else {
+                                candidates = new String[]{"VTV Go", "FPT Play", "TV"};
+                            }
+                            for (String candidate : candidates) {
+                                String opened = openAppByVoice(candidate);
+                                if (opened != null) return opened;
+                            }
+                            return null;
+                        }
+
+                        @Override
                         public void showAppPicker() {
                             V10CarActivity.this.showApps();
                         }
@@ -1055,6 +1085,14 @@ private void hideFloatingMenu() {
         voiceAssistantController.toggleListening();
     }
 
+    private String appLabelForComponent(ComponentName component) {
+        if (component == null) return null;
+        for (AppInfo app : apps) {
+            if (component.getPackageName().equals(app.component.getPackageName())) return app.name;
+        }
+        return component.getPackageName();
+    }
+
     private String openAppByVoice(String spokenName) {
         String query = VoiceCommandParser.normalize(spokenName);
         if (query.isEmpty()) return null;
@@ -1076,6 +1114,15 @@ private void hideFloatingMenu() {
                 score = Math.max(score, 95);
             }
             if (query.contains("spotify") && pkg.contains("spotify")) score = Math.max(score, 95);
+            if (query.contains("zing mp3") && (pkg.contains("zing") || label.contains("zing mp3"))) {
+                score = Math.max(score, 95);
+            }
+            if (query.contains("vietmap") && (pkg.contains("vietmap") || label.contains("vietmap"))) {
+                score = Math.max(score, 95);
+            }
+            if (query.contains("navitel") && (pkg.contains("navitel") || label.contains("navitel"))) {
+                score = Math.max(score, 95);
+            }
 
             if (score > bestScore) {
                 bestScore = score;
