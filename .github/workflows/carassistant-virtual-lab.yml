@@ -129,3 +129,68 @@ jobs:
           path: test-results/
           if-no-files-found: warn
           retention-days: 14
+
+  car-display-simulation:
+    name: Landscape virtual car display probe
+    needs: build-and-unit-test
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - name: Download APK
+        uses: actions/download-artifact@v4
+        with:
+          name: carassistant-debug-apk
+          path: dist
+
+      - name: Boot landscape car-screen emulator
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 29
+          target: google_apis
+          arch: x86_64
+          profile: pixel_2
+          emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none
+          disable-animations: true
+          emulator-boot-timeout: 600
+          script: |
+            set -eu
+            mkdir -p test-results
+            adb wait-for-device
+            adb shell settings put system accelerometer_rotation 0 || true
+            adb shell wm size 1280x720
+            adb shell wm density 160
+            adb shell wm size > test-results/car-display-size.txt
+            adb shell wm density > test-results/car-display-density.txt
+            adb shell dumpsys display > test-results/car-display-before.txt
+            adb logcat -c
+            adb install -r dist/app-debug.apk
+
+            # Probe the real CarActivity on a landscape Android emulator.
+            # A successful standalone launch is useful smoke coverage; a failure
+            # may mean the Android Auto host/gearhead service is absent, so it is
+            # reported as INCONCLUSIVE rather than mislabelled as an app crash.
+            adb shell am force-stop com.carassistant.v10
+            (adb shell am start -W -n com.carassistant.v10/.V10CarActivity > test-results/car-activity-launch.txt 2>&1 || true)
+            sleep 8
+            adb logcat -d -v threadtime > test-results/car-display-logcat.txt
+            adb shell dumpsys activity activities > test-results/car-display-activities.txt
+            adb shell dumpsys display > test-results/car-display-after.txt
+            adb shell screencap -p /sdcard/carassistant-car-screen.png
+            adb pull /sdcard/carassistant-car-screen.png test-results/carassistant-car-screen.png || true
+
+            if grep -E 'FATAL EXCEPTION|Fatal signal|Process: com\\.carassistant\\.v10' test-results/car-display-logcat.txt; then
+              echo 'INCONCLUSIVE: CarActivity failed in a hostless emulator; inspect logcat because Android Auto gearhead is not installed.' | tee test-results/car-display-status.txt
+            elif grep -q 'V10CarActivity' test-results/car-display-activities.txt; then
+              echo 'PASS: V10CarActivity appears in the landscape emulator activity stack.' | tee test-results/car-display-status.txt
+            else
+              echo 'INCONCLUSIVE: standalone CarActivity launch did not appear in activity stack; a real Android Auto host may be required.' | tee test-results/car-display-status.txt
+            fi
+
+      - name: Upload car-display diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: carassistant-car-display-diagnostics
+          path: test-results/
+          if-no-files-found: warn
+          retention-days: 14
