@@ -17,6 +17,8 @@ import android.widget.LinearLayout;
 import android.widget.ScrollView;
 import android.widget.TextView;
 
+import com.carassistant.v10.RootShellSession;
+
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Comparator;
@@ -32,6 +34,8 @@ public final class V10SettingsActivity extends Activity {
     private TextView favoriteStatus;
     private TextView selectedBackground;
     private TextView permissionStatus;
+    private TextView orientationStatus;
+    private final RootShellSession orientationShell = new RootShellSession();
     private final ArrayList<ResolveInfo> availableApps = new ArrayList<>();
 
     private interface SectionBuilder {
@@ -59,6 +63,7 @@ public final class V10SettingsActivity extends Activity {
         refreshStatus();
         rebuildFavoriteAppChoices();
         rebuildBackgroundAppChoices();
+        refreshOrientationStatus();
     }
 
     private void buildUi() {
@@ -95,6 +100,21 @@ public final class V10SettingsActivity extends Activity {
                 rebuildBackgroundAppChoices();
             });
             rebuildBackgroundAppChoices();
+        });
+
+        addSection("HƯỚNG MÀN HÌNH CHIẾU", "Tùy chọn ép ứng dụng trên màn hình phụ sang ngang", body -> {
+            TextView hint = text(
+                    "Khi bật, CarAssistant cố định hướng ngang riêng cho màn hình chiếu 2. Không thay đổi hướng màn hình điện thoại. Cần LSPosed hoạt động trong system_server; có thể cần mở lại ứng dụng đang chiếu để áp dụng.",
+                    13, Color.LTGRAY);
+            hint.setPadding(dp(4), dp(2), dp(4), dp(8));
+            body.addView(hint, params(-1, -2));
+
+            orientationStatus = text("Đang kiểm tra trạng thái…", 14, Color.WHITE);
+            orientationStatus.setPadding(dp(8), dp(8), dp(8), dp(8));
+            body.addView(orientationStatus, params(-1, -2));
+
+            addButton(body, "BẬT ÉP ỨNG DỤNG CHIẾU NGANG", () -> setForceLandscape(true));
+            addButton(body, "TẮT ÉP ỨNG DỤNG CHIẾU NGANG", () -> setForceLandscape(false));
         });
 
         addSection("ỨNG DỤNG HAY DÙNG", "Chọn tối đa 3 ứng dụng cho thanh dọc bên trái", body -> {
@@ -287,6 +307,69 @@ public final class V10SettingsActivity extends Activity {
         } else if (returnAfterMicPermission) {
             returnAfterMicPermission = false;
         }
+    }
+
+    private void refreshOrientationStatus() {
+        if (orientationStatus == null) return;
+        orientationStatus.setText("Đang kiểm tra trạng thái…");
+        RootShellSession.EXEC.execute(() -> {
+            String value = null;
+            String error = null;
+            try {
+                value = orientationShell.run(6,
+                        "settings get global carassistant_force_landscape");
+            } catch (Throwable t) {
+                error = t.getMessage();
+            }
+            final String result = value;
+            final String failure = error;
+            runOnUiThread(() -> {
+                if (orientationStatus == null) return;
+                if (failure != null) {
+                    orientationStatus.setText(
+                            "Không đọc được trạng thái. Hãy kiểm tra quyền root/su và LSPosed.");
+                } else if ("1".equals(result == null ? "" : result.trim())) {
+                    orientationStatus.setText("Trạng thái: ĐÃ BẬT ép ứng dụng chiếu ngang.");
+                } else {
+                    orientationStatus.setText("Trạng thái: ĐANG TẮT ép ứng dụng chiếu ngang.");
+                }
+            });
+        });
+    }
+
+    private void setForceLandscape(boolean enabled) {
+        if (orientationStatus != null) {
+            orientationStatus.setText("Đang lưu cài đặt…");
+        }
+        RootShellSession.EXEC.execute(() -> {
+            String error = null;
+            try {
+                orientationShell.run(8, enabled
+                        ? "settings put global carassistant_force_landscape 1"
+                        : "settings delete global carassistant_force_landscape");
+            } catch (Throwable t) {
+                error = t.getMessage();
+            }
+            final String failure = error;
+            runOnUiThread(() -> {
+                if (orientationStatus == null) return;
+                if (failure != null) {
+                    orientationStatus.setText(
+                            "Lưu thất bại. Hãy kiểm tra quyền root/su: " + failure);
+                } else {
+                    orientationStatus.setText(enabled
+                            ? "Đã bật ép ngang. Hãy mở lại ứng dụng đang chiếu để áp dụng."
+                            : "Đã tắt ép ngang. Hãy mở lại ứng dụng đang chiếu để áp dụng.");
+                }
+                refreshOrientationStatus();
+            });
+        });
+    }
+
+    @Override
+    protected void onDestroy() {
+        orientationShell.destroy();
+        super.onDestroy();
     }
 
     private void refreshStatus() {
