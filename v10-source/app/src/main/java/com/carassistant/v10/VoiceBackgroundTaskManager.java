@@ -91,32 +91,9 @@ public final class VoiceBackgroundTaskManager {
     }
 
     public static String buildSearchUri(ComponentName component, String query, String category) {
-        String pkg = component.getPackageName();
-        String encoded = Uri.encode(query);
-
-        String lowerPkg = pkg.toLowerCase(java.util.Locale.ROOT);
-        if ("com.google.android.apps.youtube.music".equals(pkg) || lowerPkg.contains("youtubemusic")) {
-            return "https://music.youtube.com/search?q=" + encoded;
-        }
-        // Official YouTube, ReVanced and ReVanced Extended may use different package IDs.
-        if (lowerPkg.contains("youtube")
-                || (lowerPkg.contains("revanced")
-                    && ("music".equals(category) || "video".equals(category)))) {
-            return "https://www.youtube.com/results?search_query=" + encoded;
-        }
-        if ("com.spotify.music".equals(pkg)) {
-            return "spotify:search:" + encoded;
-        }
-        if (pkg.toLowerCase(java.util.Locale.ROOT).contains("zing")) {
-            return "https://zingmp3.vn/tim-kiem/tat-ca?q=" + encoded;
-        }
-        if ("com.nct".equals(pkg) || pkg.toLowerCase(java.util.Locale.ROOT).contains("nhaccuatui")) {
-            return "https://www.nhaccuatui.com/tim-kiem?q=" + encoded;
-        }
-
-        Log.w(TAG, "No known background search URI for package " + pkg
-                + " (category=" + category + ")");
-        return null;
+        if (component == null) return null;
+        return com.carassistant.v10.voice.MediaSearchUriBuilder.build(
+                component.getPackageName(), query, category);
     }
 
     private void closeReader() {
