@@ -275,6 +275,7 @@ public final class V10CarActivity
                                     }
                                 } else {
                                     selected = V10SessionStore.getDefaultVoiceApp(
+                                            V10CarActivity.this, category);
                                     if (selected != null) {
                                         selectedLabel = appLabelForComponent(selected);
                                     } else {
