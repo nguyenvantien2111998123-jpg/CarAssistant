@@ -79,6 +79,9 @@ public final class VoiceBackgroundTaskManager {
             }
         }
         try {
+            // Do not pass ImageReader.getSurface() again after the display has been created:
+            // the controller owns that Surface wrapper and may release it when rebinding.
+            if (displayController.isReady()) return true;
             return displayController.ensureDisplay(imageReader.getSurface(), WIDTH, HEIGHT)
                     && displayController.isReady();
         } catch (RuntimeException e) {
@@ -124,8 +127,8 @@ public final class VoiceBackgroundTaskManager {
     public synchronized void destroy() {
         if (destroyed) return;
         destroyed = true;
-        closeReader();
         displayController.destroy();
+        closeReader();
         imageThread.quitSafely();
     }
 }
