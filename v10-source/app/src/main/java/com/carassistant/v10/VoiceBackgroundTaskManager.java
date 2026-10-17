@@ -95,15 +95,14 @@ public final class VoiceBackgroundTaskManager {
         String encoded = Uri.encode(query);
 
         String lowerPkg = pkg.toLowerCase(java.util.Locale.ROOT);
+        if ("com.google.android.apps.youtube.music".equals(pkg) || lowerPkg.contains("youtubemusic")) {
+            return "https://music.youtube.com/search?q=" + encoded;
+        }
         // Official YouTube, ReVanced and ReVanced Extended may use different package IDs.
-        // Route all YouTube-family packages through the same supported search deep link.
         if (lowerPkg.contains("youtube")
                 || (lowerPkg.contains("revanced")
                     && ("music".equals(category) || "video".equals(category)))) {
             return "https://www.youtube.com/results?search_query=" + encoded;
-        }
-        if ("com.google.android.apps.youtube.music".equals(pkg)) {
-            return "https://music.youtube.com/search?q=" + encoded;
         }
         if ("com.spotify.music".equals(pkg)) {
             return "spotify:search:" + encoded;
