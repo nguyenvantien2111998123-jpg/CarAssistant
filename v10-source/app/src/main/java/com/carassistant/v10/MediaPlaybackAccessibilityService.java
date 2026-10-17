@@ -3,6 +3,7 @@ package com.carassistant.v10;
 import android.accessibilityservice.AccessibilityService;
 import android.view.accessibility.AccessibilityEvent;
 import android.view.accessibility.AccessibilityNodeInfo;
+import android.view.accessibility.AccessibilityWindowInfo;
 import android.util.Log;
 
 import java.util.ArrayList;
@@ -37,7 +38,7 @@ public final class MediaPlaybackAccessibilityService extends AccessibilityServic
             return;
         }
 
-        AccessibilityNodeInfo root = getRootInActiveWindow();
+        AccessibilityNodeInfo root = findRootForPackage(eventPackage);
         if (root == null) return;
         try {
             if ("search".equals(phase)) {
@@ -73,8 +74,8 @@ public final class MediaPlaybackAccessibilityService extends AccessibilityServic
         if (node == null || depth > MAX_DEPTH) return;
         CharSequence className = node.getClassName();
         boolean editable = className != null && className.toString().toLowerCase(Locale.ROOT).contains("edittext");
-        String text = collectText(node, depth, new StringBuilder()).toString()
-                .toLowerCase(Locale.ROOT).trim();
+        String text = com.carassistant.v10.voice.VoiceCommandParser.normalize(
+                collectText(node, depth, new StringBuilder()).toString());
         if (!editable && !text.isEmpty() && text.length() > 3 && node.isClickable()) {
             int matches = 0;
             for (String token : tokens) {
@@ -119,7 +120,7 @@ public final class MediaPlaybackAccessibilityService extends AccessibilityServic
             String text = "";
             if (node.getText() != null) text += node.getText().toString();
             if (node.getContentDescription() != null) text += " " + node.getContentDescription();
-            String normalized = text.toLowerCase(Locale.ROOT);
+            String normalized = com.carassistant.v10.voice.VoiceCommandParser.normalize(text);
             boolean playLabel = normalized.contains("play") || normalized.contains("phát")
                     || normalized.contains("phat") || normalized.contains("tiếp tục")
                     || normalized.contains("tiep tuc") || normalized.contains("resume")
@@ -161,6 +162,32 @@ public final class MediaPlaybackAccessibilityService extends AccessibilityServic
             node.recycle();
         }
         return false;
+    }
+
+    private AccessibilityNodeInfo findRootForPackage(String targetPackage) {
+        // On multi-display devices the active window may belong to the phone or car host.
+        // Search interactive windows for the actual media package before giving up.
+        try {
+            for (AccessibilityWindowInfo window : getWindows()) {
+                if (window == null) continue;
+                AccessibilityNodeInfo candidate = window.getRoot();
+                if (candidate == null) continue;
+                CharSequence packageName = candidate.getPackageName();
+                if (packageName != null && targetPackage.contentEquals(packageName)) {
+                    return candidate;
+                }
+                candidate.recycle();
+            }
+        } catch (RuntimeException error) {
+            Log.w(TAG, "Cannot inspect interactive windows", error);
+        }
+        AccessibilityNodeInfo active = getRootInActiveWindow();
+        if (active != null) {
+            CharSequence packageName = active.getPackageName();
+            if (packageName != null && targetPackage.contentEquals(packageName)) return active;
+            active.recycle();
+        }
+        return null;
     }
 
     private void clearPending(android.content.SharedPreferences prefs) {
