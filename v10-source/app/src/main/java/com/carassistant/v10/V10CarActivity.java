@@ -260,8 +260,16 @@ public final class V10CarActivity
                                     String normalizedProvider = VoiceCommandParser.normalize(explicitProvider);
                                     ComponentName configured = V10SessionStore.getDefaultVoiceApp(
                                             V10CarActivity.this, category);
-                                    // A generic "YouTube" request should honor the selected YouTube-family
-                                    // default (including ReVanced), rather than accidentally picking YouTube Music.
+                                    // For the generic provider "YouTube", prefer a configured YouTube-family
+                                    // app. If this category has no YouTube default, use the selected video default
+                                    // so "mở nhạc ... trên YouTube" also resolves to the chosen ReVanced app.
+                                    if (configured == null
+                                            || (!configured.getPackageName().toLowerCase(Locale.ROOT).contains("youtube")
+                                                && !configured.getPackageName().toLowerCase(Locale.ROOT).contains("revanced"))) {
+                                        ComponentName videoDefault = V10SessionStore.getDefaultVoiceApp(
+                                                V10CarActivity.this, "video");
+                                        if (videoDefault != null) configured = videoDefault;
+                                    }
                                     if ("youtube".equals(normalizedProvider) && configured != null
                                             && (configured.getPackageName().toLowerCase(Locale.ROOT).contains("youtube")
                                                 || configured.getPackageName().toLowerCase(Locale.ROOT).contains("revanced"))) {
