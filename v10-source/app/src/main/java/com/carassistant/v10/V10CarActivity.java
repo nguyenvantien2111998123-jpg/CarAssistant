@@ -1254,14 +1254,30 @@ private void hideFloatingMenu() {
             else if (label.length() >= 4 && query.contains(label)) score = 80;
             else if (query.length() >= 4 && label.contains(query)) score = 70;
 
-            if (query.contains("youtube") && pkg.contains("youtube")) score = Math.max(score, 95);
+            // Prefer the exact requested app family before generic YouTube matching.
+            // This avoids selecting the first installed YouTube variant when the user says
+            // "Morphe" or "ReVanced" explicitly.
+            if (query.contains("morphe") && pkg.contains("morphe")) {
+                score = Math.max(score, 120);
+            }
+            if (query.contains("revanced") && pkg.contains("revanced")) {
+                score = Math.max(score, 120);
+            }
+            if (query.contains("youtube music")) {
+                boolean musicPackage = com.carassistant.v10.voice.MediaSearchUriBuilder
+                        .isYouTubeMusicPackage(pkg);
+                if (musicPackage) score = Math.max(score, 115);
+                else if (pkg.contains("youtube")) score = Math.max(score, 60);
+            } else if (query.equals("youtube") && pkg.contains("youtube")) {
+                score = Math.max(score, 90);
+            }
             if ((query.equals("maps") || query.equals("google maps"))
                     && (pkg.equals("com.google.android.apps.maps") || label.contains("maps"))) {
                 score = Math.max(score, 95);
             }
-            if (query.contains("spotify") && pkg.contains("spotify")) score = Math.max(score, 95);
+            if (query.contains("spotify") && pkg.contains("spotify")) score = Math.max(score, 110);
             if (query.contains("zing mp3") && (pkg.contains("zing") || label.contains("zing mp3"))) {
-                score = Math.max(score, 95);
+                score = Math.max(score, 110);
             }
             if (query.contains("vietmap") && (pkg.contains("vietmap") || label.contains("vietmap"))) {
                 score = Math.max(score, 95);
