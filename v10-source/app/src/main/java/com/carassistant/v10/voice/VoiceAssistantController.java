@@ -148,8 +148,7 @@ public final class VoiceAssistantController {
                     @Override public void onBeginningOfSpeech() {
                         if (destroyed || !sessionActive || commandHandled) return;
                         speechStarted = true;
-                        // Do not cancel the hard no-transcript timeout here: some Android
-                        // recognition services report false speech starts from background noise.
+                        // Partial results reset the command-completion silence timer.
                         scheduleSilenceWatchdog();
                         notifyState(true, "Đang nghe…", lastTranscript, true);
                     }
@@ -157,16 +156,14 @@ public final class VoiceAssistantController {
                     @Override public void onBufferReceived(byte[] buffer) { }
                     @Override public void onEndOfSpeech() {
                         if (destroyed || !sessionActive || commandHandled) return;
-                        // Some recognition services may emit onEndOfSpeech without a real
-                        // speech start. Do not let that callback disable the 3-second timeout.
                         if (lastTranscript.trim().isEmpty()) {
-                            // Empty end-of-speech callbacks are not proof that words were spoken.
-                            // Leave the hard timeout responsible for ending this session.
+                            // Wait for a possible final result; if none arrives, resume listening.
+                            scheduleFinalResultFallback();
                             return;
                         }
                         speechStarted = true;
                         listening = false;
-                                        cancelSilenceWatchdog();
+                    cancelSilenceWatchdog();
                         notifyState(false, "Đang xử lý lệnh…", "", false);
                         scheduleFinalResultFallback();
                     }
@@ -201,9 +198,7 @@ public final class VoiceAssistantController {
                         String transcript = matches == null || matches.isEmpty()
                                 ? lastTranscript : matches.get(0).trim();
 
-                        // Some recognition services report an empty result when the user
-                        // has not spoken. Do not let that callback cancel the beep-based
-                        // 3-second watchdog; it owns the no-speech timeout.
+                        // Empty results are retried without ending the voice session.
                         if (transcript.trim().isEmpty()) { restartListeningAfterSilence(); return; }
 
                                         cancelSilenceWatchdog();
@@ -223,7 +218,7 @@ public final class VoiceAssistantController {
                         if (partial == null || partial.trim().isEmpty()) return;
                         String updated = partial.trim();
                         speechStarted = true;
-                                        if (!updated.equals(lastTranscript)) {
+                        if (!updated.equals(lastTranscript)) {
                             lastTranscript = updated;
                             scheduleSilenceWatchdog();
                         }
