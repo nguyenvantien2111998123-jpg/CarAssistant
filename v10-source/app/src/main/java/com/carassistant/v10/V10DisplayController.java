@@ -167,7 +167,9 @@ public final class V10DisplayController {
                 + " -a android.intent.action.VIEW"
                 + " -d " + shellQuote(uri)
                 + " -p " + shellQuote(packageName)
-                + " -f 0x10000000";
+                // Force an independent task on the requested projection display. Without MULTIPLE_TASK,
+                // Android may reuse the app's existing phone task and deliver the search there.
+                + " -f 0x18000000";
         execute(command, "Background VIEW intent failed");
     }
 
