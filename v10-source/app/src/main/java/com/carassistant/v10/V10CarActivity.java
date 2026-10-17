@@ -1052,7 +1052,7 @@ private void hideFloatingMenu() {
             startActivity(permissionIntent);
             return;
         }
-        voiceAssistantController.startListening();
+        voiceAssistantController.toggleListening();
     }
 
     private String openAppByVoice(String spokenName) {
