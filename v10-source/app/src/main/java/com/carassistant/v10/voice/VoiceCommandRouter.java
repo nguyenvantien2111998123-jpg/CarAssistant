@@ -43,7 +43,7 @@ public final class VoiceCommandRouter {
             case NAVIGATE:
                 return openCategory(command, "navigation", "Đang mở bản đồ");
             case SEARCH_NEARBY:
-                return openCategory(command, "navigation", "Đang mở bản đồ để tìm");
+                return openCategory(command, "nearby", "Đang mở bản đồ để tìm");
             case PLAY_MUSIC:
                 return openCategory(command, "music", "Đang mở ứng dụng nhạc");
             case PLAY_VIDEO:
@@ -69,7 +69,7 @@ public final class VoiceCommandRouter {
     private Result openCategory(VoiceCommandParser.Command command, String category, String prefix) {
         String opened = host.openVoiceTask(category, command.argument, command.provider);
         if (opened == null) {
-            String categoryName = category.equals("navigation") ? "bản đồ"
+            String categoryName = ("navigation".equals(category) || "nearby".equals(category)) ? "bản đồ"
                     : category.equals("music") ? "ứng dụng nhạc"
                     : category.equals("video") ? "ứng dụng video" : "ứng dụng TV";
             return new Result(true, "Chưa chọn được " + categoryName
@@ -84,6 +84,13 @@ public final class VoiceCommandRouter {
             return new Result(true, "Đã gửi yêu cầu tìm kiếm " + mediaType + " nền cho "
                     + command.argument + " bằng " + opened
                     + ". Màn hình bản đồ vẫn được giữ nguyên; việc tự phát phụ thuộc khả năng của ứng dụng.", false);
+        }
+        if ("tv".equals(category)) {
+            if (command.argument.isEmpty()) {
+                return new Result(true, "Đang mở ứng dụng TV " + opened + ".", false);
+            }
+            return new Result(true, "Đã mở " + opened + " và gửi yêu cầu tìm kênh "
+                    + command.argument + ". Việc tự chuyển kênh phụ thuộc ứng dụng TV.", false);
         }
         String detail = command.argument.isEmpty() ? "" : " cho nội dung " + command.argument;
         if (!command.provider.isEmpty()) detail += " bằng " + command.provider;
