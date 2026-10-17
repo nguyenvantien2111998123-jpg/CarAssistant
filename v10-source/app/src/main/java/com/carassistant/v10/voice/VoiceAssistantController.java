@@ -72,6 +72,8 @@ public final class VoiceAssistantController {
         cancelSilenceWatchdog();
         mainHandler.removeCallbacks(finalResultFallback);
         lastTranscript = "";
+        // Audible confirmation that the 3-second no-speech timeout cancelled listening.
+        playBeep();
         notifyState(false, "Đã hủy lệnh voice sau 3 giây không nói.", "", false);
     };
 
