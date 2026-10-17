@@ -47,10 +47,10 @@ public final class VoiceAssistantController {
     private final Runnable noSpeechWatchdog = () -> {
         if (destroyed || !sessionActive || !listening || speechStarted || commandHandled) return;
         if (!lastTranscript.trim().isEmpty()) return;
-        cancelRecognizer();
         sessionActive = false;
         listening = false;
         commandHandled = true;
+        cancelRecognizer();
         cancelSilenceWatchdog();
         mainHandler.removeCallbacks(finalResultFallback);
         lastTranscript = "";
@@ -287,12 +287,12 @@ public final class VoiceAssistantController {
         cancelNoSpeechWatchdog();
         cancelSilenceWatchdog();
         mainHandler.removeCallbacks(finalResultFallback);
-        if (wasActive) cancelRecognizer();
         sessionActive = false;
         listening = false;
         speechStarted = false;
         commandHandled = true;
         lastTranscript = "";
+        if (wasActive) cancelRecognizer();
         notifyState(false, status, "", false);
     }
 
