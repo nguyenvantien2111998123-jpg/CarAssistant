@@ -63,7 +63,9 @@ public final class VoiceAssistantController {
 
 
     private final Runnable noSpeechWatchdog = () -> {
-        if (destroyed || !sessionActive || !listening || speechStarted || commandHandled) return;
+        // The timeout belongs to the voice session, not the UI listening flag:
+        // some SpeechRecognizer implementations change that flag before reporting an error.
+        if (destroyed || !sessionActive || speechStarted || commandHandled) return;
         if (!lastTranscript.trim().isEmpty()) return;
         sessionActive = false;
         listening = false;
@@ -72,6 +74,8 @@ public final class VoiceAssistantController {
         cancelSilenceWatchdog();
         mainHandler.removeCallbacks(finalResultFallback);
         lastTranscript = "";
+        // Audible confirmation that the 3-second no-speech timeout cancelled listening.
+        playBeep();
         notifyState(false, "Đã hủy lệnh voice sau 3 giây không nói.", "", false);
     };
 
@@ -173,6 +177,11 @@ public final class VoiceAssistantController {
                     @Override public void onBufferReceived(byte[] buffer) { }
                     @Override public void onEndOfSpeech() {
                         if (destroyed || !sessionActive || commandHandled) return;
+                        // Some recognition services may emit onEndOfSpeech without a real
+                        // speech start. Do not let that callback disable the 3-second timeout.
+                        if (!speechStarted && lastTranscript.trim().isEmpty()) {
+                            return;
+                        }
                         speechStarted = true;
                         listening = false;
                         cancelNoSpeechWatchdog();
@@ -185,8 +194,10 @@ public final class VoiceAssistantController {
                         boolean noSpeechError = error == SpeechRecognizer.ERROR_NO_MATCH
                                 || error == SpeechRecognizer.ERROR_SPEECH_TIMEOUT;
                         String transcript = lastTranscript.trim();
-                        // Services can signal no-match early. Keep the session until the 3-second timer.
-                        if (transcript.isEmpty() && !speechStarted && noSpeechError) return;
+                        // Keep the beep-based timeout authoritative for an empty session.
+                        // Recognition services can emit several kinds of early errors without speech.
+                        if (transcript.isEmpty() && !speechStarted
+                                && error != SpeechRecognizer.ERROR_INSUFFICIENT_PERMISSIONS) return;
                         cancelNoSpeechWatchdog();
                         cancelSilenceWatchdog();
                         mainHandler.removeCallbacks(finalResultFallback);
@@ -217,6 +228,14 @@ public final class VoiceAssistantController {
                                 : results.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION);
                         String transcript = matches == null || matches.isEmpty()
                                 ? lastTranscript : matches.get(0).trim();
+
+                        // Some recognition services report an empty result when the user
+                        // has not spoken. Do not let that callback cancel the beep-based
+                        // 3-second watchdog; it owns the no-speech timeout.
+                        if (transcript.trim().isEmpty() && !speechStarted) {
+                            return;
+                        }
+
                         cancelNoSpeechWatchdog();
                         cancelSilenceWatchdog();
                         mainHandler.removeCallbacks(finalResultFallback);
@@ -267,9 +286,10 @@ public final class VoiceAssistantController {
             intent.putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_POSSIBLY_COMPLETE_SILENCE_LENGTH_MILLIS, COMPLETE_SILENCE_MS);
 
             notifyState(true, "Đang nghe…", "", true);
+            // Start the 3-second no-speech timeout immediately after the listening beep.
             playBeep();
-            recognizer.startListening(intent);
             scheduleNoSpeechWatchdog();
+            recognizer.startListening(intent);
         } catch (RuntimeException exception) {
             sessionActive = false;
             listening = false;
