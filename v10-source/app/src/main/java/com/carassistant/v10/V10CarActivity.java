@@ -313,6 +313,15 @@ public final class V10CarActivity
                                 // intent to that same display. Keep the phone UI out of this flow.
                                 launchProjection(selected);
                                 if (mediaUri != null) {
+                                    // The accessibility fallback is opt-in. Save the exact target
+                                    // before dispatch so it can select a result and tap Play only in
+                                    // the requested app, with a bounded timeout.
+                                    getSharedPreferences("media_autoplay", MODE_PRIVATE).edit()
+                                            .putString("target_package", selected.getPackageName())
+                                            .putString("query", query.trim())
+                                            .putString("phase", "search")
+                                            .putLong("started_at", System.currentTimeMillis())
+                                            .apply();
                                     session.launchViewIntentOnDisplay(
                                             selected.getPackageName(), mediaUri);
                                 }
