@@ -44,11 +44,13 @@ public final class OrientationHooks {
                                 DisplayManager manager = (DisplayManager) context.getSystemService(
                                         Context.DISPLAY_SERVICE);
                                 Display display = manager == null ? null : manager.getDisplay(displayId);
-                                if (display == null || !AACastDisplay.matches(
-                                        DisplayReflect.ownerPackage(display),
-                                        display.getName(),
-                                        DisplayReflect.type(display),
-                                        DisplayReflect.ownerUid(display))) {
+                                if (display == null
+                                        || !AACastDisplay.matches(
+                                                DisplayReflect.ownerPackage(display),
+                                                display.getName(),
+                                                DisplayReflect.type(display),
+                                                DisplayReflect.ownerUid(display))
+                                        || !(AACastDisplay.PREFIX + "2").equals(display.getName())) {
                                     return;
                                 }
 
