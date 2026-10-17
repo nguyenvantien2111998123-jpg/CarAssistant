@@ -5,20 +5,22 @@ This directory documents the automated CI test environments used by
 
 ## Phone-side emulator profile
 
-- Android emulator: API 29 / Android 10, Google APIs, x86_64
+- Android emulator: API 31 / Android 12, Google APIs, x86_64
 - Screen override: 1080 x 2246
-- Density override: 403 dpi
+- Density override: 440 dpi
 - APK: the actual `v10-source/app` debug APK
 - Checks: JUnit parser tests, Gradle APK assembly, install, launcher startup,
   process liveness, fatal crash signatures, logcat, display dumpsys, screenshot.
 
-The profile approximates the POCO F1's screen dimensions and Android 10 baseline.
+The profile approximates the POCO F1's screen dimensions and Android 12 API 31 baseline, using 440 dpi as a starting logical-density override.
 It is **not** a full POCO F1 hardware/ROM clone: the emulator CPU is x86_64, its
-vendor/system image is not MIUI, and it does not include root + LSPosed hooks.
+vendor/system image is not PixelOS for beryllium, and it does not include Magisk or
+LSPosed hooks. API level and screen overrides do not recreate Snapdragon 845 / Adreno
+630 hardware or the real device's privileged system services.
 
 ## Car-screen emulator profile
 
-- Android emulator: API 29 / Android 10, Google APIs, x86_64
+- Android emulator: API 31 / Android 12, Google APIs, x86_64
 - Screen override: 1280 x 720, 160 dpi
 - Probe: attempt to launch the real `V10CarActivity` and capture its activity stack,
   display state, logcat and screenshot.
