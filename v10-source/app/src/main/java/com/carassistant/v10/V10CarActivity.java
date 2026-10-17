@@ -68,6 +68,7 @@ public final class V10CarActivity
     private TextView floatingVoiceButton;
     private TextView voiceTranscriptView;
     private VoiceAssistantController voiceAssistantController;
+    private VoiceBackgroundTaskManager voiceBackgroundTaskManager;
 
     private TextView floatingTouchKey;
     private LinearLayout floatingMenu;
@@ -211,6 +212,49 @@ public final class V10CarActivity
 
                         @Override
                         public String openVoiceTask(String category, String query, String explicitProvider) {
+                            if ("music".equals(category) || "video".equals(category)) {
+                                ComponentName selected = null;
+                                String selectedLabel = null;
+
+                                // Media search/play runs on the dedicated hidden display.
+                                // Never call launchProjection() from this branch: the visible
+                                // map task and its surface must remain untouched.
+                                if (explicitProvider != null && !explicitProvider.trim().isEmpty()) {
+                                    AppInfo explicitApp = findAppByVoice(explicitProvider);
+                                    if (explicitApp == null) return null;
+                                    selected = explicitApp.component;
+                                    selectedLabel = explicitApp.name;
+                                } else {
+                                    selected = V10SessionStore.getDefaultVoiceApp(
+                                            V10CarActivity.this, category);
+                                    if (selected != null) {
+                                        selectedLabel = appLabelForComponent(selected);
+                                    } else {
+                                        String[] candidates = "music".equals(category)
+                                                ? new String[]{"Zing MP3", "Spotify", "YouTube Music", "NhacCuaTui"}
+                                                : new String[]{"YouTube"};
+                                        for (String candidate : candidates) {
+                                            AppInfo app = findAppByVoice(candidate);
+                                            if (app != null) {
+                                                selected = app.component;
+                                                selectedLabel = app.name;
+                                                break;
+                                            }
+                                        }
+                                    }
+                                }
+
+                                if (selected == null) return null;
+                                if (voiceBackgroundTaskManager == null) {
+                                    voiceBackgroundTaskManager = new VoiceBackgroundTaskManager(
+                                            V10CarActivity.this);
+                                }
+                                boolean accepted = query == null || query.trim().isEmpty()
+                                        ? voiceBackgroundTaskManager.launchApp(selected)
+                                        : voiceBackgroundTaskManager.search(selected, query, category);
+                                return accepted ? selectedLabel : null;
+                            }
+
                             if (explicitProvider != null && !explicitProvider.trim().isEmpty()) {
                                 return openAppByVoice(explicitProvider);
                             }
@@ -225,10 +269,6 @@ public final class V10CarActivity
                             String[] candidates;
                             if ("navigation".equals(category)) {
                                 candidates = new String[]{"Google Maps", "Vietmap", "Navitel", "Maps"};
-                            } else if ("music".equals(category)) {
-                                candidates = new String[]{"Zing MP3", "Spotify", "YouTube Music", "NhacCuaTui"};
-                            } else if ("video".equals(category)) {
-                                candidates = new String[]{"YouTube"};
                             } else {
                                 candidates = new String[]{"VTV Go", "FPT Play", "TV"};
                             }
@@ -1093,7 +1133,7 @@ private void hideFloatingMenu() {
         return component.getPackageName();
     }
 
-    private String openAppByVoice(String spokenName) {
+    private AppInfo findAppByVoice(String spokenName) {
         String query = VoiceCommandParser.normalize(spokenName);
         if (query.isEmpty()) return null;
 
@@ -1131,6 +1171,12 @@ private void hideFloatingMenu() {
         }
 
         if (best == null || bestScore < 60) return null;
+        return best;
+    }
+
+    private String openAppByVoice(String spokenName) {
+        AppInfo best = findAppByVoice(spokenName);
+        if (best == null) return null;
         launchProjection(best.component);
         return best.name;
     }
@@ -1181,6 +1227,10 @@ private void hideFloatingMenu() {
         if (voiceAssistantController != null) {
             voiceAssistantController.destroy();
             voiceAssistantController = null;
+        }
+        if (voiceBackgroundTaskManager != null) {
+            voiceBackgroundTaskManager.destroy();
+            voiceBackgroundTaskManager = null;
         }
         if (session != null) { session.destroy(); session = null; }
         if (backgroundSession != null) { backgroundSession.destroy(); backgroundSession = null; }
