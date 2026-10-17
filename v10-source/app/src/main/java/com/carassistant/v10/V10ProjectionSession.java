@@ -59,6 +59,20 @@ public final class V10ProjectionSession implements TextureView.SurfaceTextureLis
 
     public int getDisplayId() { return displayController.getDisplayId(); }
 
+    /** Sends a VIEW URI to the currently projected app on this display. */
+    public boolean launchViewIntentOnDisplay(String packageName, String uri) {
+        if (!isActive() || packageName == null || uri == null) return false;
+        displayController.launchViewIntentOnDisplay(packageName, uri);
+        return true;
+    }
+
+    /** Best-effort standard search action for apps that implement Android ACTION_SEARCH. */
+    public boolean launchSearchIntentOnDisplay(String packageName, String query) {
+        if (!isActive() || packageName == null || query == null || query.trim().isEmpty()) return false;
+        displayController.launchSearchIntentOnDisplay(packageName, query);
+        return true;
+    }
+
     public void tap(float x, float y) {
         if (!isActive()) return;
         execute("/system/bin/input -d " + displayController.getDisplayId()
