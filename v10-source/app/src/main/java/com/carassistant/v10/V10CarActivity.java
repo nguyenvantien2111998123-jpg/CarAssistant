@@ -258,24 +258,28 @@ public final class V10CarActivity
                                 // (session/display 1), not the hidden ImageReader-only virtual display.
                                 if (explicitProvider != null && !explicitProvider.trim().isEmpty()) {
                                     String normalizedProvider = VoiceCommandParser.normalize(explicitProvider);
-                                    ComponentName configured = V10SessionStore.getDefaultVoiceApp(
-                                            V10CarActivity.this, category);
-                                    // For the generic provider "YouTube", prefer a configured YouTube-family
-                                    // app. If this category has no YouTube default, use the selected video default
-                                    // so "mở nhạc ... trên YouTube" also resolves to the chosen ReVanced app.
-                                    if (configured == null
-                                            || (!configured.getPackageName().toLowerCase(Locale.ROOT).contains("youtube")
-                                                && !configured.getPackageName().toLowerCase(Locale.ROOT).contains("revanced"))) {
-                                        ComponentName videoDefault = V10SessionStore.getDefaultVoiceApp(
+                                    if ("youtube".equals(normalizedProvider)) {
+                                        // "on YouTube" is the generic video-provider wording. Respect the
+                                        // user's configured video app even when it is ReVanced/Morphe or
+                                        // another selected variant; don't pick an arbitrary installed copy.
+                                        ComponentName configured = V10SessionStore.getDefaultVoiceApp(
                                                 V10CarActivity.this, "video");
-                                        if (videoDefault != null) configured = videoDefault;
-                                    }
-                                    if ("youtube".equals(normalizedProvider) && configured != null
-                                            && (configured.getPackageName().toLowerCase(Locale.ROOT).contains("youtube")
-                                                || configured.getPackageName().toLowerCase(Locale.ROOT).contains("revanced"))) {
-                                        selected = configured;
-                                        selectedLabel = appLabelForComponent(configured);
+                                        if (configured == null) {
+                                            configured = V10SessionStore.getDefaultVoiceApp(
+                                                    V10CarActivity.this, category);
+                                        }
+                                        if (configured != null) {
+                                            selected = configured;
+                                            selectedLabel = appLabelForComponent(configured);
+                                        } else {
+                                            AppInfo explicitApp = findAppByVoice("youtube");
+                                            if (explicitApp == null) return null;
+                                            selected = explicitApp.component;
+                                            selectedLabel = explicitApp.name;
+                                        }
                                     } else {
+                                        // Explicit names such as YouTube Music Morphe, YouTube Morphe,
+                                        // YouTube ReVanced and Zing MP3 resolve to that exact installed app.
                                         AppInfo explicitApp = findAppByVoice(explicitProvider);
                                         if (explicitApp == null) return null;
                                         selected = explicitApp.component;
