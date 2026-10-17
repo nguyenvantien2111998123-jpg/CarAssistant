@@ -106,7 +106,7 @@ public final class VoiceCommandParser {
         if (matches(text, "mo nhac", "bat nhac", "phat nhac")) {
             return new Command(Type.PLAY_MUSIC, "", "", "music");
         }
-        if (matches(text, "mo video", "xem video")) {
+        if (matches(text, "mo video", "phat video", "xem video", "mo phim", "phat phim", "xem phim", "mo youtube")) {
             return new Command(Type.PLAY_VIDEO, "", "", "video");
         }
 
