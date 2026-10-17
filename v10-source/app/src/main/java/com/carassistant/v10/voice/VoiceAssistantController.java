@@ -13,113 +13,102 @@ import android.speech.RecognitionListener;
 import android.speech.RecognizerIntent;
 import android.speech.SpeechRecognizer;
 import android.speech.tts.TextToSpeech;
-
 import java.util.ArrayList;
 import java.util.Locale;
 import java.util.UUID;
 
-/**
- * Push-to-talk speech lifecycle for CarAssistant V1.
- * Keeps recognition feedback responsive and does not touch projection surfaces.
- */
+/** Push-to-talk lifecycle. A second button press cancels the active voice session. */
 public final class VoiceAssistantController {
     public interface Listener {
-        void onStateChanged(boolean listening, String status,
-                            String transcript, boolean showTranscript);
+        void onStateChanged(boolean listening, String status, String transcript, boolean showTranscript);
     }
 
     private static final long COMPLETE_SILENCE_MS = 3000L;
+    private static final long NO_SPEECH_TIMEOUT_MS = 3000L;
+    private static final long FINAL_RESULT_TIMEOUT_MS = 1200L;
 
     private final Context context;
     private final Listener listener;
     private final VoiceCommandRouter router;
     private final Handler mainHandler = new Handler(Looper.getMainLooper());
-
     private SpeechRecognizer recognizer;
     private TextToSpeech textToSpeech;
     private ToneGenerator toneGenerator;
     private boolean ttsReady;
     private boolean listening;
+    private boolean sessionActive;
+    private boolean speechStarted;
     private boolean destroyed;
     private boolean endBeepPlayed;
     private boolean commandHandled;
     private String pendingSpeech;
     private String lastTranscript = "";
 
-    private final Runnable silenceWatchdog = () -> {
-        if (destroyed || !listening || commandHandled) return;
-        String transcript = lastTranscript == null ? "" : lastTranscript.trim();
-        if (transcript.isEmpty()) return;
-
-        // Some Android recognition services delay onEndOfSpeech/onResults indefinitely.
-        // End capture ourselves after 3 seconds without speech and use the latest partial text.
+    private final Runnable noSpeechWatchdog = () -> {
+        if (destroyed || !sessionActive || !listening || speechStarted || commandHandled) return;
+        if (!lastTranscript.trim().isEmpty()) return;
+        cancelRecognizer();
+        sessionActive = false;
         listening = false;
         commandHandled = true;
-        endBeepPlayed = true;
-        try {
-            if (recognizer != null) recognizer.cancel();
-        } catch (RuntimeException ignored) { }
-        playBeep();
-        notifyState(false, "Đang xử lý lệnh…", "", false);
-        dispatchTranscript(transcript);
+        cancelSilenceWatchdog();
+        mainHandler.removeCallbacks(finalResultFallback);
+        lastTranscript = "";
+        notifyState(false, "Đã hủy lệnh voice sau 3 giây không nói.", "", false);
     };
 
+    private final Runnable silenceWatchdog = () -> {
+        if (destroyed || !sessionActive || !listening || commandHandled) return;
+        String transcript = lastTranscript.trim();
+        if (transcript.isEmpty()) return;
+        // If recognition stalls after partial text, route the command once.
+        sessionActive = false;
+        listening = false;
+        commandHandled = true;
+        cancelNoSpeechWatchdog();
+        mainHandler.removeCallbacks(finalResultFallback);
+        cancelRecognizer();
+        notifyState(false, "Đang xử lý lệnh…", "", false);
+        dispatchTranscriptOnce(transcript);
+    };
+
+    private final Runnable finalResultFallback = () -> {
+        if (destroyed || !sessionActive || commandHandled) return;
+        String transcript = lastTranscript.trim();
+        if (transcript.isEmpty()) {
+            cancelListeningOnMain("Đã hủy lệnh voice do không nhận được câu nói.");
+            return;
+        }
+        sessionActive = false;
+        listening = false;
+        commandHandled = true;
+        cancelNoSpeechWatchdog();
+        cancelSilenceWatchdog();
+        cancelRecognizer();
+        notifyState(false, "Đang xử lý lệnh…", "", false);
+        dispatchTranscriptOnce(transcript);
+    };
+
+    private void scheduleNoSpeechWatchdog() {
+        mainHandler.removeCallbacks(noSpeechWatchdog);
+        mainHandler.postDelayed(noSpeechWatchdog, NO_SPEECH_TIMEOUT_MS);
+    }
+    private void cancelNoSpeechWatchdog() { mainHandler.removeCallbacks(noSpeechWatchdog); }
     private void scheduleSilenceWatchdog() {
         mainHandler.removeCallbacks(silenceWatchdog);
         mainHandler.postDelayed(silenceWatchdog, COMPLETE_SILENCE_MS);
     }
-
-    private void cancelSilenceWatchdog() {
-        mainHandler.removeCallbacks(silenceWatchdog);
-    }
-
-    private final Runnable finalResultFallback = () -> {
-        if (destroyed || commandHandled) return;
-        String transcript = lastTranscript == null ? "" : lastTranscript.trim();
-        if (transcript.isEmpty()) return;
-
-        // Bound the wait for a final recognition callback after end-of-speech.
-        commandHandled = true;
-        listening = false;
-        cancelSilenceWatchdog();
-        try {
-            if (recognizer != null) recognizer.cancel();
-        } catch (RuntimeException ignored) { }
-        if (!endBeepPlayed) {
-            playBeep();
-            endBeepPlayed = true;
-        }
-        notifyState(false, "Đang xử lý lệnh…", "", false);
-        dispatchTranscript(transcript);
-    };
-
+    private void cancelSilenceWatchdog() { mainHandler.removeCallbacks(silenceWatchdog); }
     private void scheduleFinalResultFallback() {
         mainHandler.removeCallbacks(finalResultFallback);
-        mainHandler.postDelayed(finalResultFallback, 1200L);
-    }
-
-    private void dispatchTranscript(String transcript) {
-        if (destroyed || transcript == null || transcript.trim().isEmpty()) {
-            notifyState(false, "Chưa nhận được câu nói.", "", false);
-            speak("Tôi chưa nghe rõ. Bạn thử lại nhé.");
-            return;
-        }
-        VoiceCommandRouter.Result result = router.route(transcript.trim());
-        notifyState(false, result.understood
-                ? "Đã nhận: " + transcript.trim()
-                : "Chưa hiểu: " + transcript.trim(), "", false);
-        speak(result.response);
-        lastTranscript = "";
+        mainHandler.postDelayed(finalResultFallback, FINAL_RESULT_TIMEOUT_MS);
     }
 
     public VoiceAssistantController(Context context, Listener listener, VoiceCommandRouter router) {
-        if (context == null || router == null) {
-            throw new IllegalArgumentException("context and router are required");
-        }
+        if (context == null || router == null) throw new IllegalArgumentException("context and router are required");
         this.context = context;
         this.listener = listener;
         this.router = router;
-
         textToSpeech = new TextToSpeech(context.getApplicationContext(), status ->
                 mainHandler.post(() -> {
                     if (destroyed || textToSpeech == null) return;
@@ -140,20 +129,23 @@ public final class VoiceAssistantController {
                 }));
     }
 
-    public void startListening() {
-        runOnMain(this::startListeningOnMain);
+    public void startListening() { runOnMain(this::startListeningOnMain); }
+
+    /** First press starts listening; second press cancels without dispatching the partial command. */
+    public void toggleListening() {
+        runOnMain(() -> {
+            if (sessionActive) cancelListeningOnMain("Đã hủy lệnh voice.");
+            else startListeningOnMain();
+        });
     }
 
     private void startListeningOnMain() {
-        if (destroyed || listening) return;
-
-        if (context.checkSelfPermission(Manifest.permission.RECORD_AUDIO)
-                != PackageManager.PERMISSION_GRANTED) {
+        if (destroyed || sessionActive) return;
+        if (context.checkSelfPermission(Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
             notifyState(false, "Cần cấp quyền micro.", "", false);
             speak("Bạn hãy cấp quyền micro cho CarAssistant trước.");
             return;
         }
-
         if (!SpeechRecognizer.isRecognitionAvailable(context)) {
             notifyState(false, "Không có dịch vụ nhận dạng giọng nói.", "", false);
             speak("Điện thoại chưa có dịch vụ nhận dạng giọng nói. Hãy kiểm tra dịch vụ Google và ngôn ngữ tiếng Việt.");
@@ -165,184 +157,189 @@ public final class VoiceAssistantController {
                 recognizer = SpeechRecognizer.createSpeechRecognizer(context);
                 recognizer.setRecognitionListener(new RecognitionListener() {
                     @Override public void onReadyForSpeech(Bundle params) {
-                        notifyState(true, "Đang nghe…", lastTranscript, true);
+                        if (!destroyed && sessionActive && !commandHandled)
+                            notifyState(true, "Đang nghe…", lastTranscript, true);
                     }
-
                     @Override public void onBeginningOfSpeech() {
+                        if (destroyed || !sessionActive || commandHandled) return;
+                        speechStarted = true;
+                        cancelNoSpeechWatchdog();
                         scheduleSilenceWatchdog();
                         notifyState(true, "Đang nghe…", lastTranscript, true);
                     }
-
-                    @Override public void onRmsChanged(float rmsdB) {
-                        // RMS may stay high from background noise; partial transcript changes
-                        // are used to detect continued speech instead.
-                    }
-
+                    @Override public void onRmsChanged(float rmsdB) { }
                     @Override public void onBufferReceived(byte[] buffer) { }
-
                     @Override public void onEndOfSpeech() {
-                        if (destroyed || commandHandled) return;
-                        cancelSilenceWatchdog();
+                        if (destroyed || !sessionActive || commandHandled) return;
+                        speechStarted = true;
                         listening = false;
-                        if (!endBeepPlayed) playBeep();
-                        endBeepPlayed = true;
+                        cancelNoSpeechWatchdog();
+                        cancelSilenceWatchdog();
                         notifyState(false, "Đang xử lý lệnh…", "", false);
-                        // Give the service a short opportunity to deliver final text; the
-                        // watchdog below is the fallback if it never does.
                         scheduleFinalResultFallback();
                     }
-
                     @Override public void onError(int error) {
-                        if (destroyed || commandHandled) return;
+                        if (destroyed || !sessionActive || commandHandled) return;
+                        boolean noSpeechError = error == SpeechRecognizer.ERROR_NO_MATCH
+                                || error == SpeechRecognizer.ERROR_SPEECH_TIMEOUT;
+                        String transcript = lastTranscript.trim();
+                        // Services can signal no-match early. Keep the session until the 3-second timer.
+                        if (transcript.isEmpty() && !speechStarted && noSpeechError) return;
+                        cancelNoSpeechWatchdog();
                         cancelSilenceWatchdog();
                         mainHandler.removeCallbacks(finalResultFallback);
-
-                        // If the service errors after showing a usable partial transcript,
-                        // prefer executing that command over waiting or announcing a false retry.
-                        if (lastTranscript != null && !lastTranscript.trim().isEmpty()) {
+                        if (!transcript.isEmpty()) {
+                            sessionActive = false;
                             listening = false;
                             commandHandled = true;
-                            if (!endBeepPlayed) playBeep();
-                            endBeepPlayed = true;
+                            cancelRecognizer();
                             notifyState(false, "Đang xử lý lệnh…", "", false);
-                            dispatchTranscript(lastTranscript);
+                            dispatchTranscriptOnce(transcript);
                             return;
                         }
-
-                        if (!endBeepPlayed) playBeep();
+                        sessionActive = false;
                         listening = false;
-                        String status = "Không nhận được câu lệnh.";
-                        if (error == SpeechRecognizer.ERROR_NO_MATCH
-                                || error == SpeechRecognizer.ERROR_SPEECH_TIMEOUT) {
-                            status = "Chưa nghe rõ câu lệnh.";
-                            notifyState(false, status, "", false);
-                            speak("Tôi chưa nghe rõ. Bạn thử lại nhé.");
-                        } else if (error == SpeechRecognizer.ERROR_INSUFFICIENT_PERMISSIONS) {
-                            notifyState(false, "Chưa được cấp quyền micro.", "", false);
-                            speak("CarAssistant chưa được cấp quyền micro.");
-                        } else {
-                            notifyState(false, status, "", false);
-                            speak("Không thể nhận dạng giọng nói lúc này. Bạn hãy thử lại.");
-                        }
-                    }
-
-                    @Override public void onResults(Bundle results) {
-                        if (destroyed || commandHandled) return;
-                        cancelSilenceWatchdog();
-                        listening = false;
-                        if (!endBeepPlayed) playBeep();
-                        endBeepPlayed = true;
                         commandHandled = true;
-
-                        ArrayList<String> matches = results == null
-                                ? null
+                        cancelRecognizer();
+                        String status = error == SpeechRecognizer.ERROR_INSUFFICIENT_PERMISSIONS
+                                ? "Chưa được cấp quyền micro." : "Không thể nhận dạng giọng nói lúc này.";
+                        notifyState(false, status, "", false);
+                        if (error == SpeechRecognizer.ERROR_INSUFFICIENT_PERMISSIONS)
+                            speak("CarAssistant chưa được cấp quyền micro.");
+                        else if (!noSpeechError)
+                            speak("Không thể nhận dạng giọng nói lúc này. Bạn hãy thử lại.");
+                    }
+                    @Override public void onResults(Bundle results) {
+                        if (destroyed || !sessionActive || commandHandled) return;
+                        ArrayList<String> matches = results == null ? null
                                 : results.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION);
                         String transcript = matches == null || matches.isEmpty()
-                                ? lastTranscript
-                                : matches.get(0).trim();
-
+                                ? lastTranscript : matches.get(0).trim();
+                        cancelNoSpeechWatchdog();
+                        cancelSilenceWatchdog();
+                        mainHandler.removeCallbacks(finalResultFallback);
+                        sessionActive = false;
+                        listening = false;
+                        commandHandled = true;
                         notifyState(false, "Đang xử lý lệnh…", "", false);
-                        dispatchTranscript(transcript);
+                        dispatchTranscriptOnce(transcript);
                     }
-
                     @Override public void onPartialResults(Bundle partialResults) {
-                        if (destroyed || !listening || commandHandled) return;
-                        ArrayList<String> matches = partialResults == null
-                                ? null
+                        if (destroyed || !sessionActive || !listening || commandHandled) return;
+                        ArrayList<String> matches = partialResults == null ? null
                                 : partialResults.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION);
                         if (matches == null || matches.isEmpty()) return;
                         String partial = matches.get(0);
                         if (partial == null || partial.trim().isEmpty()) return;
-                        String updatedTranscript = partial.trim();
-                        // Extend the timeout only when recognized text actually changes.
-                        // Duplicate partial callbacks must not delay command execution.
-                        if (!updatedTranscript.equals(lastTranscript)) {
-                            lastTranscript = updatedTranscript;
+                        String updated = partial.trim();
+                        speechStarted = true;
+                        cancelNoSpeechWatchdog();
+                        if (!updated.equals(lastTranscript)) {
+                            lastTranscript = updated;
                             scheduleSilenceWatchdog();
                         }
                         notifyState(true, "Đang nghe…", lastTranscript, true);
                     }
-
                     @Override public void onEvent(int eventType, Bundle params) { }
                 });
             }
 
             if (textToSpeech != null) textToSpeech.stop();
             lastTranscript = "";
+            speechStarted = false;
             endBeepPlayed = false;
             commandHandled = false;
+            sessionActive = true;
+            listening = true;
+            cancelNoSpeechWatchdog();
             cancelSilenceWatchdog();
             mainHandler.removeCallbacks(finalResultFallback);
 
             Intent intent = new Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH);
-            intent.putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL,
-                    RecognizerIntent.LANGUAGE_MODEL_FREE_FORM);
+            intent.putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM);
             intent.putExtra(RecognizerIntent.EXTRA_LANGUAGE, "vi-VN");
             intent.putExtra(RecognizerIntent.EXTRA_LANGUAGE_PREFERENCE, "vi-VN");
             intent.putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 1);
             intent.putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true);
-            intent.putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_COMPLETE_SILENCE_LENGTH_MILLIS,
-                    COMPLETE_SILENCE_MS);
-            intent.putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_POSSIBLY_COMPLETE_SILENCE_LENGTH_MILLIS,
-                    COMPLETE_SILENCE_MS);
+            intent.putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_COMPLETE_SILENCE_LENGTH_MILLIS, COMPLETE_SILENCE_MS);
+            intent.putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_POSSIBLY_COMPLETE_SILENCE_LENGTH_MILLIS, COMPLETE_SILENCE_MS);
 
-            listening = true;
             notifyState(true, "Đang nghe…", "", true);
             playBeep();
             recognizer.startListening(intent);
+            scheduleNoSpeechWatchdog();
         } catch (RuntimeException exception) {
+            sessionActive = false;
             listening = false;
-            if (!endBeepPlayed) playBeep();
+            commandHandled = true;
+            cancelNoSpeechWatchdog();
+            cancelSilenceWatchdog();
+            mainHandler.removeCallbacks(finalResultFallback);
             notifyState(false, "Không khởi động được micro.", "", false);
             speak("Không khởi động được nhận dạng giọng nói. Bạn hãy thử lại.");
         }
     }
 
-    public void cancelListening() {
-        runOnMain(() -> {
-            if (recognizer != null && listening) {
-                try {
-                    recognizer.cancel();
-                } catch (RuntimeException ignored) { }
-            }
-            listening = false;
-            commandHandled = true;
-            cancelSilenceWatchdog();
-            mainHandler.removeCallbacks(finalResultFallback);
+    public void cancelListening() { runOnMain(() -> cancelListeningOnMain("Đã dừng nghe.")); }
+
+    private void cancelListeningOnMain(String status) {
+        boolean wasActive = sessionActive || listening;
+        cancelNoSpeechWatchdog();
+        cancelSilenceWatchdog();
+        mainHandler.removeCallbacks(finalResultFallback);
+        if (wasActive) cancelRecognizer();
+        sessionActive = false;
+        listening = false;
+        speechStarted = false;
+        commandHandled = true;
+        lastTranscript = "";
+        notifyState(false, status, "", false);
+    }
+
+    private void cancelRecognizer() {
+        if (recognizer == null) return;
+        try { recognizer.cancel(); } catch (RuntimeException ignored) { }
+    }
+
+    private void dispatchTranscriptOnce(String transcript) {
+        if (destroyed) return;
+        String clean = transcript == null ? "" : transcript.trim();
+        if (clean.isEmpty()) {
             lastTranscript = "";
-            if (!endBeepPlayed) playBeep();
-            endBeepPlayed = true;
-            notifyState(false, "Đã dừng nghe.", "", false);
-        });
+            notifyState(false, "Chưa nhận được câu nói.", "", false);
+            return;
+        }
+        sessionActive = false;
+        listening = false;
+        commandHandled = true;
+        cancelNoSpeechWatchdog();
+        cancelSilenceWatchdog();
+        mainHandler.removeCallbacks(finalResultFallback);
+        VoiceCommandRouter.Result result = router.route(clean);
+        notifyState(false, result.understood ? "Đã nhận: " + clean : "Chưa hiểu: " + clean, "", false);
+        speak(result.response);
+        lastTranscript = "";
     }
 
     public void destroy() {
         runOnMain(() -> {
             if (destroyed) return;
             destroyed = true;
+            sessionActive = false;
             listening = false;
+            cancelNoSpeechWatchdog();
             cancelSilenceWatchdog();
             mainHandler.removeCallbacks(finalResultFallback);
-
             if (recognizer != null) {
-                try {
-                    recognizer.cancel();
-                    recognizer.destroy();
-                } catch (RuntimeException ignored) { }
+                try { recognizer.cancel(); recognizer.destroy(); } catch (RuntimeException ignored) { }
                 recognizer = null;
             }
-
             if (textToSpeech != null) {
-                try {
-                    textToSpeech.stop();
-                    textToSpeech.shutdown();
-                } catch (RuntimeException ignored) { }
+                try { textToSpeech.stop(); textToSpeech.shutdown(); } catch (RuntimeException ignored) { }
                 textToSpeech = null;
             }
             if (toneGenerator != null) {
-                try {
-                    toneGenerator.release();
-                } catch (RuntimeException ignored) { }
+                try { toneGenerator.release(); } catch (RuntimeException ignored) { }
                 toneGenerator = null;
             }
             ttsReady = false;
@@ -352,39 +349,26 @@ public final class VoiceAssistantController {
     private void playBeep() {
         if (destroyed) return;
         try {
-            if (toneGenerator == null) {
-                toneGenerator = new ToneGenerator(AudioManager.STREAM_MUSIC, 75);
-            }
+            if (toneGenerator == null) toneGenerator = new ToneGenerator(AudioManager.STREAM_MUSIC, 75);
             toneGenerator.startTone(ToneGenerator.TONE_PROP_BEEP, 120);
         } catch (RuntimeException ignored) { }
     }
-
     private void speak(String message) {
         if (message == null || message.trim().isEmpty()) return;
         runOnMain(() -> {
             if (destroyed) return;
-            if (textToSpeech == null || !ttsReady) {
-                pendingSpeech = message;
-                return;
-            }
-            try {
-                textToSpeech.speak(message, TextToSpeech.QUEUE_FLUSH, null,
-                        UUID.randomUUID().toString());
-            } catch (RuntimeException ignored) { }
+            if (textToSpeech == null || !ttsReady) { pendingSpeech = message; return; }
+            try { textToSpeech.speak(message, TextToSpeech.QUEUE_FLUSH, null, UUID.randomUUID().toString()); }
+            catch (RuntimeException ignored) { }
         });
     }
-
-    private void notifyState(boolean isListening, String status,
-                             String transcript, boolean showTranscript) {
+    private void notifyState(boolean isListening, String status, String transcript, boolean showTranscript) {
         if (listener == null || destroyed) return;
         runOnMain(() -> {
-            if (!destroyed && listener != null) {
-                listener.onStateChanged(isListening, status,
-                        transcript == null ? "" : transcript, showTranscript);
-            }
+            if (!destroyed && listener != null)
+                listener.onStateChanged(isListening, status, transcript == null ? "" : transcript, showTranscript);
         });
     }
-
     private void runOnMain(Runnable action) {
         if (Looper.myLooper() == Looper.getMainLooper()) action.run();
         else mainHandler.post(action);
