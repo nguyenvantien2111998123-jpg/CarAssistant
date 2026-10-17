@@ -79,9 +79,9 @@ public final class VoiceCommandParser {
             return mediaCommand(Type.PLAY_MUSIC, value, "music");
         }
 
-        value = stripPrefix(text, "mo video ");
-        if (value != null) return mediaCommand(Type.PLAY_VIDEO, value, "video");
         value = stripPrefix(text, "mo video nhac ");
+        if (value != null) return mediaCommand(Type.PLAY_VIDEO, value, "video");
+        value = stripPrefix(text, "mo video ");
         if (value != null) return mediaCommand(Type.PLAY_VIDEO, value, "video");
         value = stripPrefix(text, "mo youtube ");
         if (value != null) return mediaCommand(Type.PLAY_VIDEO, value, "video");
