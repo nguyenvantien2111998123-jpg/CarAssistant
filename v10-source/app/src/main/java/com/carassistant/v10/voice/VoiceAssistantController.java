@@ -65,7 +65,7 @@ public final class VoiceAssistantController {
     private final Runnable noSpeechWatchdog = () -> {
         // The timeout belongs to the voice session, not the UI listening flag:
         // some SpeechRecognizer implementations change that flag before reporting an error.
-        if (destroyed || !sessionActive || speechStarted || commandHandled) return;
+        if (destroyed || !sessionActive || commandHandled) return;
         if (!lastTranscript.trim().isEmpty()) return;
         sessionActive = false;
         listening = false;
@@ -169,7 +169,8 @@ public final class VoiceAssistantController {
                     @Override public void onBeginningOfSpeech() {
                         if (destroyed || !sessionActive || commandHandled) return;
                         speechStarted = true;
-                        cancelNoSpeechWatchdog();
+                        // Do not cancel the hard no-transcript timeout here: some Android
+                        // recognition services report false speech starts from background noise.
                         scheduleSilenceWatchdog();
                         notifyState(true, "Đang nghe…", lastTranscript, true);
                     }
@@ -179,7 +180,9 @@ public final class VoiceAssistantController {
                         if (destroyed || !sessionActive || commandHandled) return;
                         // Some recognition services may emit onEndOfSpeech without a real
                         // speech start. Do not let that callback disable the 3-second timeout.
-                        if (!speechStarted && lastTranscript.trim().isEmpty()) {
+                        if (lastTranscript.trim().isEmpty()) {
+                            // Empty end-of-speech callbacks are not proof that words were spoken.
+                            // Leave the hard timeout responsible for ending this session.
                             return;
                         }
                         speechStarted = true;
@@ -196,7 +199,7 @@ public final class VoiceAssistantController {
                         String transcript = lastTranscript.trim();
                         // Keep the beep-based timeout authoritative for an empty session.
                         // Recognition services can emit several kinds of early errors without speech.
-                        if (transcript.isEmpty() && !speechStarted
+                        if (transcript.isEmpty()
                                 && error != SpeechRecognizer.ERROR_INSUFFICIENT_PERMISSIONS) return;
                         cancelNoSpeechWatchdog();
                         cancelSilenceWatchdog();
@@ -232,7 +235,8 @@ public final class VoiceAssistantController {
                         // Some recognition services report an empty result when the user
                         // has not spoken. Do not let that callback cancel the beep-based
                         // 3-second watchdog; it owns the no-speech timeout.
-                        if (transcript.trim().isEmpty() && !speechStarted) {
+                        if (transcript.trim().isEmpty()) {
+                            // Empty final results must not disarm the timeout or end the session.
                             return;
                         }
 
