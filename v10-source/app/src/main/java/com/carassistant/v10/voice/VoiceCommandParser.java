@@ -80,7 +80,16 @@ public final class VoiceCommandParser {
         value = firstPrefix(text, "mo nhac ", "phat nhac ", "bat nhac ", "tim nhac ");
         if (value != null) return mediaCommand(Type.PLAY_MUSIC, value, "music");
 
-        value = firstPrefix(text, "mo video nhac ", "mo video bai hat ");
+        value = stripPrefix(text, "mo video nhac ");
+        if (value != null) {
+            // Keep "nhạc trẻ/bolero/rap/remix..." as the actual search phrase,
+            // while treating "nhạc <artist/song>" as a command prefix.
+            if (startsWithAny(value, "tre ", "bolero", "rap ", "remix", "lofi", "tru tinh", "tinh ca")) {
+                value = "nhac " + value;
+            }
+            return mediaCommand(Type.PLAY_VIDEO, value, "video");
+        }
+        value = stripPrefix(text, "mo video bai hat ");
         if (value != null) return mediaCommand(Type.PLAY_VIDEO, value, "video");
         value = firstPrefix(text, "mo video ", "xem video ", "mo youtube ", "tim video ");
         if (value != null) return mediaCommand(Type.PLAY_VIDEO, value, "video");
@@ -129,6 +138,11 @@ public final class VoiceCommandParser {
         if (matches(v, "cay xang", "tram xang", "cay xang gan nhat")) return "cay xang";
         if (matches(v, "benh vien", "atm", "bai do xe", "khach san", "nha thuoc")) return v;
         return null;
+    }
+
+    private static boolean startsWithAny(String value, String... prefixes) {
+        for (String prefix : prefixes) if (value.startsWith(prefix)) return true;
+        return false;
     }
 
     private static String firstPrefix(String value, String... prefixes) {
