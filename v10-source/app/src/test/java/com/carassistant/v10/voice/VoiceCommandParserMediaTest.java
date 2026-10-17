@@ -42,6 +42,32 @@ public final class VoiceCommandParserMediaTest {
     }
 
     @Test
+    public void parsesPlayVideoPhraseOnYoutube() {
+        VoiceCommandParser.Command command = parser.parse("Phát video hướng dẫn sửa xe trên YouTube");
+        assertEquals(VoiceCommandParser.Type.PLAY_VIDEO, command.type);
+        assertEquals("huong dan sua xe", command.argument);
+        assertEquals("youtube", command.provider);
+        assertEquals("video", command.category);
+    }
+
+    @Test
+    public void parsesMovieSearchOnYoutube() {
+        VoiceCommandParser.Command command = parser.parse("Tìm phim Dune trên YouTube");
+        assertEquals(VoiceCommandParser.Type.PLAY_VIDEO, command.type);
+        assertEquals("dune", command.argument);
+        assertEquals("youtube", command.provider);
+        assertEquals("video", command.category);
+    }
+
+    @Test
+    public void parsesOpenMoviePhraseOnYoutube() {
+        VoiceCommandParser.Command command = parser.parse("Mở phim Avatar trên YouTube");
+        assertEquals(VoiceCommandParser.Type.PLAY_VIDEO, command.type);
+        assertEquals("avatar", command.argument);
+        assertEquals("youtube", command.provider);
+    }
+
+    @Test
     public void parsesNavigationDestinationAndMapProvider() {
         VoiceCommandParser.Command command = parser.parse("Dẫn đường đến chợ Bến Thành bằng Google Maps");
         assertEquals(VoiceCommandParser.Type.NAVIGATE, command.type);
