@@ -23,6 +23,7 @@ public final class VoiceAssistantController {
     }
 
     private static final long COMPLETE_SILENCE_MS = 3000L;
+    private static final long NO_SPEECH_TIMEOUT_MS = 3000L;
     private static final long FINAL_RESULT_TIMEOUT_MS = 1200L;
 
     private final Context context;
@@ -43,6 +44,13 @@ public final class VoiceAssistantController {
     private boolean restartPending;
     private String lastTranscript = "";
 
+    /** Cancels a fresh listening session if no speech starts within three seconds. */
+    private final Runnable noSpeechWatchdog = () -> {
+        if (destroyed || !sessionActive || commandHandled || speechStarted
+                || !lastTranscript.trim().isEmpty()) return;
+        cancelListeningOnMain("Đã hủy lệnh voice sau 3 giây không nói.");
+    };
+
     private final Runnable finalResultFallback = () -> {
         if (destroyed || !sessionActive || commandHandled) return;
         String transcript = lastTranscript.trim();
@@ -51,6 +59,7 @@ public final class VoiceAssistantController {
         listening = false;
         commandHandled = true;
         cancelSilenceWatchdog();
+        mainHandler.removeCallbacks(noSpeechWatchdog);
         cancelRecognizer();
         notifyState(false, "Đang xử lý lệnh…", "", false);
         dispatchTranscriptOnce(transcript);
@@ -148,6 +157,7 @@ public final class VoiceAssistantController {
                     @Override public void onBeginningOfSpeech() {
                         if (destroyed || !sessionActive || commandHandled) return;
                         speechStarted = true;
+                        mainHandler.removeCallbacks(noSpeechWatchdog);
                         // Partial results reset the command-completion silence timer.
                         scheduleSilenceWatchdog();
                         notifyState(true, "Đang nghe…", lastTranscript, true);
@@ -218,6 +228,7 @@ public final class VoiceAssistantController {
                         if (partial == null || partial.trim().isEmpty()) return;
                         String updated = partial.trim();
                         speechStarted = true;
+                        mainHandler.removeCallbacks(noSpeechWatchdog);
                         if (!updated.equals(lastTranscript)) {
                             lastTranscript = updated;
                             scheduleSilenceWatchdog();
@@ -237,6 +248,7 @@ public final class VoiceAssistantController {
             sessionActive = true;
             listening = true;
             cancelSilenceWatchdog();
+            mainHandler.removeCallbacks(noSpeechWatchdog);
             mainHandler.removeCallbacks(finalResultFallback);
 
             Intent intent = createRecognizerIntent();
@@ -258,6 +270,7 @@ public final class VoiceAssistantController {
     private void cancelListeningOnMain(String status) {
         boolean wasActive = sessionActive || listening;
         cancelSilenceWatchdog();
+        mainHandler.removeCallbacks(noSpeechWatchdog);
         mainHandler.removeCallbacks(finalResultFallback);
         sessionActive = false;
         listening = false;
@@ -287,6 +300,7 @@ public final class VoiceAssistantController {
         listening = false;
         commandHandled = true;
         cancelSilenceWatchdog();
+        mainHandler.removeCallbacks(noSpeechWatchdog);
         mainHandler.removeCallbacks(finalResultFallback);
         VoiceCommandRouter.Result result = router.route(clean);
         notifyState(false, result.understood ? "Đã nhận: " + clean : "Chưa hiểu: " + clean, "", false);
@@ -301,6 +315,7 @@ public final class VoiceAssistantController {
             sessionActive = false;
             listening = false;
                 cancelSilenceWatchdog();
+            mainHandler.removeCallbacks(noSpeechWatchdog);
             mainHandler.removeCallbacks(finalResultFallback);
             if (recognizer != null) {
                 try { recognizer.cancel(); recognizer.destroy(); } catch (RuntimeException ignored) { }
@@ -344,7 +359,13 @@ public final class VoiceAssistantController {
     private void startRecognizerIfActive(Intent intent) {
         if (destroyed || !sessionActive || commandHandled || initialRecognizerStarted) return;
         initialRecognizerStarted = true;
-        try { if (recognizer != null) recognizer.startListening(intent); }
+        try {
+            if (recognizer != null) recognizer.startListening(intent);
+            if (!speechStarted && lastTranscript.trim().isEmpty()) {
+                mainHandler.removeCallbacks(noSpeechWatchdog);
+                mainHandler.postDelayed(noSpeechWatchdog, NO_SPEECH_TIMEOUT_MS);
+            }
+        }
         catch (RuntimeException exception) {
             sessionActive = false; listening = false; commandHandled = true;
             notifyState(false, "Không khởi động được micro.", "", false);
