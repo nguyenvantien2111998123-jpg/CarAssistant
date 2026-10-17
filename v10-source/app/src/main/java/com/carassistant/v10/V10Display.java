@@ -30,7 +30,7 @@ public final class V10Display {
         if (name == null || !name.startsWith(PREFIX)) return false;
         try {
             int index = Integer.parseInt(name.substring(PREFIX.length()));
-            return index >= 1 && index <= 2;
+            return index >= 1 && index <= 3;
         } catch (NumberFormatException ignored) {
             return false;
         }
