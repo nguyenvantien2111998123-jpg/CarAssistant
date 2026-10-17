@@ -44,6 +44,24 @@ public final class VoiceAssistantController {
     private String pendingSpeech;
     private String lastTranscript = "";
 
+    private final Runnable finalResultFallback = () -> {
+        if (destroyed || !sessionActive || commandHandled) return;
+        String transcript = lastTranscript.trim();
+        if (transcript.isEmpty()) {
+            cancelListeningOnMain("Đã hủy lệnh voice do không nhận được câu nói.");
+            return;
+        }
+        sessionActive = false;
+        listening = false;
+        commandHandled = true;
+        cancelNoSpeechWatchdog();
+        cancelSilenceWatchdog();
+        cancelRecognizer();
+        notifyState(false, "Đang xử lý lệnh…", "", false);
+        dispatchTranscriptOnce(transcript);
+    };
+
+
     private final Runnable noSpeechWatchdog = () -> {
         if (destroyed || !sessionActive || !listening || speechStarted || commandHandled) return;
         if (!lastTranscript.trim().isEmpty()) return;
@@ -72,22 +90,6 @@ public final class VoiceAssistantController {
         dispatchTranscriptOnce(transcript);
     };
 
-    private final Runnable finalResultFallback = () -> {
-        if (destroyed || !sessionActive || commandHandled) return;
-        String transcript = lastTranscript.trim();
-        if (transcript.isEmpty()) {
-            cancelListeningOnMain("Đã hủy lệnh voice do không nhận được câu nói.");
-            return;
-        }
-        sessionActive = false;
-        listening = false;
-        commandHandled = true;
-        cancelNoSpeechWatchdog();
-        cancelSilenceWatchdog();
-        cancelRecognizer();
-        notifyState(false, "Đang xử lý lệnh…", "", false);
-        dispatchTranscriptOnce(transcript);
-    };
 
     private void scheduleNoSpeechWatchdog() {
         mainHandler.removeCallbacks(noSpeechWatchdog);
