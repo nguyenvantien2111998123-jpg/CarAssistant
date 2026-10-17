@@ -16,6 +16,7 @@ public final class V10SessionStore {
             "target_component";
     private static final String BACKGROUND_TARGET = "background_target_component";
     private static final String QUICK_APPS = "home_quick_apps";
+    private static final String AUTO_OPEN_ANDROID_AUTO = "auto_open_android_auto";
 
     private static volatile V10CarActivity currentActivity;
 
