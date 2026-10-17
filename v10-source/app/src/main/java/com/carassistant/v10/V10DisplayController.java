@@ -175,6 +175,26 @@ public final class V10DisplayController {
         return "'" + value.replace("'", "'\"'\"'") + "'";
     }
 
+    /** Sends a standard Android ACTION_SEARCH request to an app on this display. */
+    public synchronized void launchSearchIntentOnDisplay(String packageName, String query) {
+        if (!isReady() || packageName == null || packageName.trim().isEmpty()
+                || query == null || query.trim().isEmpty()) {
+            Log.w(TAG, "Refusing invalid SEARCH intent");
+            return;
+        }
+        final int displayId = display.getDisplayId();
+        final int userId = Process.myUid() / 100000;
+        final String command = "/system/bin/am start"
+                + " --user " + userId
+                + " --display " + displayId
+                + " --windowingMode 1"
+                + " -a android.intent.action.SEARCH"
+                + " --es query " + shellQuote(query.trim())
+                + " -p " + shellQuote(packageName)
+                + " -f 0x10000000";
+        execute(command, "Display SEARCH intent failed");
+    }
+
     public synchronized void resumeExistingTask(ComponentName component) {
         if (!isReady() || component == null) return;
         target = component;
