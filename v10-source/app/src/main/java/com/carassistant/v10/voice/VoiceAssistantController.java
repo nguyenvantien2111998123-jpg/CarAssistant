@@ -29,6 +29,7 @@ public final class VoiceAssistantController {
     }
 
     private static final long COMPLETE_SILENCE_MS = 3000L;
+    private static final long NO_SPEECH_TIMEOUT_MS = 2000L;
 
     private final Context context;
     private final Listener listener;
@@ -40,11 +41,31 @@ public final class VoiceAssistantController {
     private ToneGenerator toneGenerator;
     private boolean ttsReady;
     private boolean listening;
+    private boolean sessionActive;
+    private boolean speechStarted;
     private boolean destroyed;
     private boolean endBeepPlayed;
     private boolean commandHandled;
     private String pendingSpeech;
     private String lastTranscript = "";
+
+    private final Runnable noSpeechWatchdog = () -> {
+        if (destroyed || !sessionActive || !listening || speechStarted) return;
+        String transcript = lastTranscript == null ? "" : lastTranscript.trim();
+        if (!transcript.isEmpty()) return;
+
+        // No speech arrived within two seconds of the start beep: cancel without dispatching a command.
+        sessionActive = false;
+        listening = false;
+        commandHandled = true;
+        cancelSilenceWatchdog();
+        mainHandler.removeCallbacks(finalResultFallback);
+        try {
+            if (recognizer != null) recognizer.cancel();
+        } catch (RuntimeException ignored) { }
+        endBeepPlayed = true;
+        notifyState(false, "Không nghe thấy giọng nói. Đã hủy.", "", false);
+    };
 
     private final Runnable silenceWatchdog = () -> {
         if (destroyed || !listening || commandHandled) return;
@@ -53,9 +74,11 @@ public final class VoiceAssistantController {
 
         // Some Android recognition services delay onEndOfSpeech/onResults indefinitely.
         // End capture ourselves after 3 seconds without speech and use the latest partial text.
+        sessionActive = false;
         listening = false;
         commandHandled = true;
         endBeepPlayed = true;
+        cancelNoSpeechWatchdog();
         try {
             if (recognizer != null) recognizer.cancel();
         } catch (RuntimeException ignored) { }
@@ -73,6 +96,15 @@ public final class VoiceAssistantController {
         mainHandler.removeCallbacks(silenceWatchdog);
     }
 
+    private void scheduleNoSpeechWatchdog() {
+        mainHandler.removeCallbacks(noSpeechWatchdog);
+        mainHandler.postDelayed(noSpeechWatchdog, NO_SPEECH_TIMEOUT_MS);
+    }
+
+    private void cancelNoSpeechWatchdog() {
+        mainHandler.removeCallbacks(noSpeechWatchdog);
+    }
+
     private final Runnable finalResultFallback = () -> {
         if (destroyed || commandHandled) return;
         String transcript = lastTranscript == null ? "" : lastTranscript.trim();
@@ -80,7 +112,9 @@ public final class VoiceAssistantController {
 
         // Bound the wait for a final recognition callback after end-of-speech.
         commandHandled = true;
+        sessionActive = false;
         listening = false;
+        cancelNoSpeechWatchdog();
         cancelSilenceWatchdog();
         try {
             if (recognizer != null) recognizer.cancel();
@@ -99,6 +133,10 @@ public final class VoiceAssistantController {
     }
 
     private void dispatchTranscript(String transcript) {
+        sessionActive = false;
+        listening = false;
+        cancelNoSpeechWatchdog();
+        cancelSilenceWatchdog();
         if (destroyed || transcript == null || transcript.trim().isEmpty()) {
             notifyState(false, "Chưa nhận được câu nói.", "", false);
             speak("Tôi chưa nghe rõ. Bạn thử lại nhé.");
@@ -145,7 +183,7 @@ public final class VoiceAssistantController {
     }
 
     private void startListeningOnMain() {
-        if (destroyed || listening) return;
+        if (destroyed || sessionActive) return;
 
         if (context.checkSelfPermission(Manifest.permission.RECORD_AUDIO)
                 != PackageManager.PERMISSION_GRANTED) {
@@ -169,6 +207,8 @@ public final class VoiceAssistantController {
                     }
 
                     @Override public void onBeginningOfSpeech() {
+                        speechStarted = true;
+                        cancelNoSpeechWatchdog();
                         scheduleSilenceWatchdog();
                         notifyState(true, "Đang nghe…", lastTranscript, true);
                     }
@@ -182,6 +222,8 @@ public final class VoiceAssistantController {
 
                     @Override public void onEndOfSpeech() {
                         if (destroyed || commandHandled) return;
+                        speechStarted = true;
+                        cancelNoSpeechWatchdog();
                         cancelSilenceWatchdog();
                         listening = false;
                         if (!endBeepPlayed) playBeep();
@@ -197,23 +239,37 @@ public final class VoiceAssistantController {
                         cancelSilenceWatchdog();
                         mainHandler.removeCallbacks(finalResultFallback);
 
+                        String transcript = lastTranscript == null ? "" : lastTranscript.trim();
+                        boolean noSpeechError = error == SpeechRecognizer.ERROR_NO_MATCH
+                                || error == SpeechRecognizer.ERROR_SPEECH_TIMEOUT;
+
+                        // Some recognition services report no-match before the requested two-second
+                        // no-speech timeout. Keep the session alive until that timer cancels it.
+                        if (transcript.isEmpty() && !speechStarted && noSpeechError) {
+                            return;
+                        }
+
+                        cancelNoSpeechWatchdog();
+                        sessionActive = false;
+
                         // If the service errors after showing a usable partial transcript,
-                        // prefer executing that command over waiting or announcing a false retry.
-                        if (lastTranscript != null && !lastTranscript.trim().isEmpty()) {
+                        // prefer executing that command over announcing a false retry.
+                        if (!transcript.isEmpty()) {
                             listening = false;
                             commandHandled = true;
                             if (!endBeepPlayed) playBeep();
                             endBeepPlayed = true;
                             notifyState(false, "Đang xử lý lệnh…", "", false);
-                            dispatchTranscript(lastTranscript);
+                            dispatchTranscript(transcript);
                             return;
                         }
 
                         if (!endBeepPlayed) playBeep();
+                        endBeepPlayed = true;
                         listening = false;
+                        commandHandled = true;
                         String status = "Không nhận được câu lệnh.";
-                        if (error == SpeechRecognizer.ERROR_NO_MATCH
-                                || error == SpeechRecognizer.ERROR_SPEECH_TIMEOUT) {
+                        if (noSpeechError) {
                             status = "Chưa nghe rõ câu lệnh.";
                             notifyState(false, status, "", false);
                             speak("Tôi chưa nghe rõ. Bạn thử lại nhé.");
@@ -228,7 +284,9 @@ public final class VoiceAssistantController {
 
                     @Override public void onResults(Bundle results) {
                         if (destroyed || commandHandled) return;
+                        cancelNoSpeechWatchdog();
                         cancelSilenceWatchdog();
+                        sessionActive = false;
                         listening = false;
                         if (!endBeepPlayed) playBeep();
                         endBeepPlayed = true;
@@ -247,6 +305,8 @@ public final class VoiceAssistantController {
 
                     @Override public void onPartialResults(Bundle partialResults) {
                         if (destroyed || !listening || commandHandled) return;
+                        speechStarted = true;
+                        cancelNoSpeechWatchdog();
                         ArrayList<String> matches = partialResults == null
                                 ? null
                                 : partialResults.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION);
@@ -269,6 +329,7 @@ public final class VoiceAssistantController {
 
             if (textToSpeech != null) textToSpeech.stop();
             lastTranscript = "";
+            speechStarted = false;
             endBeepPlayed = false;
             commandHandled = false;
             cancelSilenceWatchdog();
@@ -286,41 +347,62 @@ public final class VoiceAssistantController {
             intent.putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_POSSIBLY_COMPLETE_SILENCE_LENGTH_MILLIS,
                     COMPLETE_SILENCE_MS);
 
+            sessionActive = true;
+            speechStarted = false;
             listening = true;
             notifyState(true, "Đang nghe…", "", true);
             playBeep();
             recognizer.startListening(intent);
+            scheduleNoSpeechWatchdog();
         } catch (RuntimeException exception) {
+            sessionActive = false;
             listening = false;
+            cancelNoSpeechWatchdog();
+            cancelSilenceWatchdog();
             if (!endBeepPlayed) playBeep();
             notifyState(false, "Không khởi động được micro.", "", false);
             speak("Không khởi động được nhận dạng giọng nói. Bạn hãy thử lại.");
         }
     }
 
-    public void cancelListening() {
+    public void toggleListening() {
         runOnMain(() -> {
-            if (recognizer != null && listening) {
-                try {
-                    recognizer.cancel();
-                } catch (RuntimeException ignored) { }
-            }
-            listening = false;
-            commandHandled = true;
-            cancelSilenceWatchdog();
-            mainHandler.removeCallbacks(finalResultFallback);
-            lastTranscript = "";
-            if (!endBeepPlayed) playBeep();
-            endBeepPlayed = true;
-            notifyState(false, "Đã dừng nghe.", "", false);
+            if (sessionActive) cancelListeningOnMain();
+            else startListeningOnMain();
         });
+    }
+
+    public void cancelListening() {
+        runOnMain(this::cancelListeningOnMain);
+    }
+
+    private void cancelListeningOnMain() {
+        boolean wasActive = sessionActive || listening;
+        if (recognizer != null && wasActive) {
+            try {
+                recognizer.cancel();
+            } catch (RuntimeException ignored) { }
+        }
+        sessionActive = false;
+        listening = false;
+        speechStarted = false;
+        commandHandled = true;
+        cancelNoSpeechWatchdog();
+        cancelSilenceWatchdog();
+        mainHandler.removeCallbacks(finalResultFallback);
+        lastTranscript = "";
+        if (wasActive && !endBeepPlayed) playBeep();
+        endBeepPlayed = true;
+        notifyState(false, wasActive ? "Đã hủy lệnh voice." : "Đã dừng nghe.", "", false);
     }
 
     public void destroy() {
         runOnMain(() -> {
             if (destroyed) return;
             destroyed = true;
+            sessionActive = false;
             listening = false;
+            cancelNoSpeechWatchdog();
             cancelSilenceWatchdog();
             mainHandler.removeCallbacks(finalResultFallback);
 
