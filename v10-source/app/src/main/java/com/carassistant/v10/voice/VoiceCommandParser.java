@@ -80,7 +80,7 @@ public final class VoiceCommandParser {
         value = firstPrefix(text, "mo nhac ", "phat nhac ", "bat nhac ", "tim nhac ");
         if (value != null) return mediaCommand(Type.PLAY_MUSIC, value, "music");
 
-        value = stripPrefix(text, "mo video nhac ");
+        value = firstPrefix(text, "mo video nhac ", "phat video nhac ", "tim video nhac ");
         if (value != null) {
             // Keep "nhạc trẻ/bolero/rap/remix..." as the actual search phrase,
             // while treating "nhạc <artist/song>" as a command prefix.
@@ -89,9 +89,13 @@ public final class VoiceCommandParser {
             }
             return mediaCommand(Type.PLAY_VIDEO, value, "video");
         }
-        value = stripPrefix(text, "mo video bai hat ");
+        value = firstPrefix(text, "mo video bai hat ", "phat video bai hat ", "tim video bai hat ");
         if (value != null) return mediaCommand(Type.PLAY_VIDEO, value, "video");
-        value = firstPrefix(text, "mo video ", "xem video ", "mo youtube ", "tim video ");
+        value = firstPrefix(text, "mo video ", "phat video ", "xem video ", "tim video ", "mo youtube ");
+        if (value != null) return mediaCommand(Type.PLAY_VIDEO, value, "video");
+
+        value = firstPrefix(text, "mo phim ", "phat phim ", "xem phim ", "tim phim ",
+                "mo bo phim ", "phat bo phim ", "tim bo phim ");
         if (value != null) return mediaCommand(Type.PLAY_VIDEO, value, "video");
 
         value = firstPrefix(text, "mo kenh ", "chuyen kenh ", "xem kenh ");
