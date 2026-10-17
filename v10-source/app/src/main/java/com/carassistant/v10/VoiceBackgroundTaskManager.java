@@ -90,11 +90,16 @@ public final class VoiceBackgroundTaskManager {
         }
     }
 
-    private static String buildSearchUri(ComponentName component, String query, String category) {
+    public static String buildSearchUri(ComponentName component, String query, String category) {
         String pkg = component.getPackageName();
         String encoded = Uri.encode(query);
 
-        if ("com.google.android.youtube".equals(pkg)) {
+        String lowerPkg = pkg.toLowerCase(java.util.Locale.ROOT);
+        // Official YouTube, ReVanced and ReVanced Extended may use different package IDs.
+        // Route all YouTube-family packages through the same supported search deep link.
+        if (lowerPkg.contains("youtube")
+                || (lowerPkg.contains("revanced")
+                    && ("music".equals(category) || "video".equals(category)))) {
             return "https://www.youtube.com/results?search_query=" + encoded;
         }
         if ("com.google.android.apps.youtube.music".equals(pkg)) {
