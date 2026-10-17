@@ -30,6 +30,8 @@ public final class V10SettingsActivity extends Activity {
     private TextView favoriteStatus;
     private TextView selectedBackground;
     private TextView permissionStatus;
+    private TextView autoOpenStatus;
+    private TextView autoOpenButton;
     private final ArrayList<ResolveInfo> availableApps = new ArrayList<>();
 
     private interface SectionBuilder {
@@ -69,6 +71,31 @@ public final class V10SettingsActivity extends Activity {
                 14, Color.LTGRAY);
         intro.setPadding(0, 0, 0, dp(12));
         list.addView(intro, params(-1, -2));
+
+        addSection("TỰ ĐỘNG MỞ ANDROID AUTO",
+                "Tự mở CarAssistant khi kết nối với màn hình xe", body -> {
+            autoOpenStatus = text("", 14, Color.LTGRAY);
+            autoOpenStatus.setPadding(dp(4), dp(4), dp(4), dp(8));
+            body.addView(autoOpenStatus, params(-1, -2));
+            autoOpenButton = text("", 14, Color.WHITE);
+            autoOpenButton.setGravity(Gravity.CENTER);
+            autoOpenButton.setPadding(dp(8), dp(6), dp(8), dp(6));
+            autoOpenButton.setBackgroundColor(Color.rgb(29, 35, 42));
+            LinearLayout.LayoutParams toggleParams = params(-1, dp(48));
+            toggleParams.setMargins(0, dp(3), 0, dp(3));
+            body.addView(autoOpenButton, toggleParams);
+            autoOpenButton.setOnClickListener(v -> {
+                boolean enabled = !V10SessionStore.getAutoOpenAndroidAuto(this);
+                V10SessionStore.setAutoOpenAndroidAuto(this, enabled);
+                refreshAutoOpenSetting();
+            });
+            TextView note = text(
+                    "Lưu ý: công tắc lưu lựa chọn. Tự động chuyển màn hình phụ thuộc vào cơ chế tích hợp Android Auto/LSPosed và cần kiểm thử trên xe.",
+                    13, Color.LTGRAY);
+            note.setPadding(dp(4), dp(8), dp(4), dp(4));
+            body.addView(note, params(-1, -2));
+            refreshAutoOpenSetting();
+        });
 
         addSection("NỀN HOME", "Chọn ứng dụng chạy ở lớp nền", body -> {
             selectedBackground = text("", 14, Color.LTGRAY);
@@ -261,6 +288,20 @@ public final class V10SettingsActivity extends Activity {
             V10SessionStore.setQuickLaunchApps(this, selected);
             rebuildFavoriteAppChoices();
         });
+    }
+
+    private void refreshAutoOpenSetting() {
+        if (autoOpenStatus == null || autoOpenButton == null) return;
+        boolean enabled = V10SessionStore.getAutoOpenAndroidAuto(this);
+        autoOpenStatus.setText(enabled
+                ? "Trạng thái: ĐÃ BẬT"
+                : "Trạng thái: ĐÃ TẮT");
+        autoOpenButton.setText(enabled
+                ? "TẮT TỰ ĐỘNG MỞ"
+                : "BẬT TỰ ĐỘNG MỞ");
+        autoOpenButton.setBackgroundColor(enabled
+                ? Color.rgb(35, 75, 85)
+                : Color.rgb(29, 35, 42));
     }
 
     private void refreshStatus() {
