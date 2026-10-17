@@ -59,7 +59,7 @@ public final class VoiceAssistantController {
         listening = false;
         commandHandled = true;
         cancelSilenceWatchdog();
-        mainHandler.removeCallbacks(finalResultFallback);
+        cancelFinalResultFallback();
         try {
             if (recognizer != null) recognizer.cancel();
         } catch (RuntimeException ignored) { }
@@ -126,6 +126,10 @@ public final class VoiceAssistantController {
         notifyState(false, "Đang xử lý lệnh…", "", false);
         dispatchTranscript(transcript);
     };
+
+    private void cancelFinalResultFallback() {
+        mainHandler.removeCallbacks(finalResultFallback);
+    }
 
     private void scheduleFinalResultFallback() {
         mainHandler.removeCallbacks(finalResultFallback);
