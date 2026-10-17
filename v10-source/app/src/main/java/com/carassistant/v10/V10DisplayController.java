@@ -172,7 +172,7 @@ public final class V10DisplayController {
     }
 
     private static String shellQuote(String value) {
-        return "'" + value.replace("'", "'\\\"'\\\"'") + "'";
+        return "'" + value.replace("'", "'\"'\"'") + "'";
     }
 
     public synchronized void resumeExistingTask(ComponentName component) {
