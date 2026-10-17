@@ -76,14 +76,12 @@ public final class VoiceCommandRouter {
                     + ". Hãy chọn ứng dụng mặc định trong phần cài đặt trợ lý.", false);
         }
         if ("music".equals(category) || "video".equals(category)) {
-            if (command.argument.isEmpty()) {
-                return new Result(true, "Đã gửi yêu cầu mở " + opened
-                        + " ở luồng nền. Màn hình bản đồ hiện tại vẫn được giữ nguyên.", false);
-            }
             String mediaType = "music".equals(category) ? "nhạc" : "video";
-            return new Result(true, "Đã gửi yêu cầu tìm kiếm " + mediaType + " nền cho "
-                    + command.argument + " bằng " + opened
-                    + ". Màn hình bản đồ vẫn được giữ nguyên; việc tự phát phụ thuộc khả năng của ứng dụng.", false);
+            if (command.argument.isEmpty()) {
+                return new Result(true, "Đang mở " + opened + " trên màn hình chiếu.", false);
+            }
+            return new Result(true, "Đang mở " + opened + " trên màn hình chiếu để tìm và phát "
+                    + mediaType + " \"" + command.argument + "\". Khả năng tự phát còn tùy ứng dụng.", false);
         }
         if ("tv".equals(category)) {
             if (command.argument.isEmpty()) {
