@@ -116,7 +116,6 @@ public final class VoiceAssistantController {
         try {
             if (recognizer != null) recognizer.cancel();
         } catch (RuntimeException ignored) { }
-        }
         notifyState(false, "Đang xử lý lệnh…", "", false);
         dispatchTranscriptOnce(transcript);
     };
