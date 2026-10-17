@@ -67,6 +67,33 @@ public final class VoiceCommandParserMediaTest {
         assertEquals("youtube", command.provider);
     }
 
+
+    @Test
+    public void parsesGenericOpenPhraseAsVideoSearchWhenYoutubeIsNamed() {
+        VoiceCommandParser.Command command = parser.parse("Mở Sơn Tùng trên YouTube");
+        assertEquals(VoiceCommandParser.Type.PLAY_VIDEO, command.type);
+        assertEquals("son tung", command.argument);
+        assertEquals("youtube", command.provider);
+        assertEquals("video", command.category);
+    }
+
+    @Test
+    public void parsesGenericOpenPhraseAsMusicSearchWhenYoutubeMusicIsNamed() {
+        VoiceCommandParser.Command command = parser.parse("Mở Nơi này có anh trên YouTube Music Morphe");
+        assertEquals(VoiceCommandParser.Type.PLAY_MUSIC, command.type);
+        assertEquals("noi nay co anh", command.argument);
+        assertEquals("youtube music morphe", command.provider);
+        assertEquals("music", command.category);
+    }
+
+    @Test
+    public void wakePhraseCanPrefixMediaCommand() {
+        VoiceCommandParser.Command command = parser.parse("HEY CU, mở video mèo hài trên YouTube");
+        assertEquals(VoiceCommandParser.Type.PLAY_VIDEO, command.type);
+        assertEquals("meo hai", command.argument);
+        assertEquals("youtube", command.provider);
+    }
+
     @Test
     public void parsesNavigationDestinationAndMapProvider() {
         VoiceCommandParser.Command command = parser.parse("Dẫn đường đến chợ Bến Thành bằng Google Maps");
