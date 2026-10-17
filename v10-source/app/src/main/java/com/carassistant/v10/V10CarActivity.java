@@ -9,6 +9,7 @@ import android.view.MotionEvent;
 import android.view.ViewConfiguration;
 import android.view.ViewGroup;
 import android.content.Intent;
+import android.net.Uri;
 import android.content.pm.ResolveInfo;
 import android.content.pm.ApplicationInfo;
 import android.content.pm.PackageManager;
@@ -207,6 +208,182 @@ public final class V10CarActivity
                         @Override
                         public String openApp(String spokenName) {
                             return openAppByVoice(spokenName);
+                        }
+
+                        @Override
+                        public String openVoiceTask(String category, String query, String explicitProvider) {
+                            if ("navigation".equals(category) || "nearby".equals(category)) {
+                                AppInfo selectedApp = null;
+                                if (explicitProvider != null && !explicitProvider.trim().isEmpty()) {
+                                    selectedApp = findAppByVoice(explicitProvider);
+                                } else {
+                                    ComponentName configured = V10SessionStore.getDefaultVoiceApp(
+                                            V10CarActivity.this, "navigation");
+                                    if (configured != null) {
+                                        selectedApp = findAppByVoice(appLabelForComponent(configured));
+                                        if (selectedApp == null) {
+                                            for (AppInfo app : apps) {
+                                                if (configured.getPackageName().equals(app.component.getPackageName())) {
+                                                    selectedApp = app;
+                                                    break;
+                                                }
+                                            }
+                                        }
+                                    } else {
+                                        String[] candidates = new String[]{"Google Maps", "Vietmap", "Navitel", "Maps"};
+                                        for (String candidate : candidates) {
+                                            selectedApp = findAppByVoice(candidate);
+                                            if (selectedApp != null) break;
+                                        }
+                                    }
+                                }
+                                if (selectedApp == null) return null;
+                                launchProjection(selectedApp.component);
+                                if (query != null && !query.trim().isEmpty() && session != null) {
+                                    String mapUri = buildMapUri(selectedApp.component, query,
+                                            "nearby".equals(category));
+                                    if (mapUri != null) {
+                                        session.launchViewIntentOnDisplay(
+                                                selectedApp.component.getPackageName(), mapUri);
+                                    }
+                                }
+                                return selectedApp.name;
+                            }
+
+                            if ("music".equals(category) || "video".equals(category)) {
+                                ComponentName selected = null;
+                                String selectedLabel = null;
+
+                                // Media must be visible on the car-side secondary projection display
+                                // (session/display 1), not the hidden ImageReader-only virtual display.
+                                if (explicitProvider != null && !explicitProvider.trim().isEmpty()) {
+                                    String normalizedProvider = VoiceCommandParser.normalize(explicitProvider);
+                                    if ("youtube".equals(normalizedProvider)) {
+                                        // "on YouTube" is the generic video-provider wording. Respect the
+                                        // user's configured video app even when it is ReVanced/Morphe or
+                                        // another selected variant; don't pick an arbitrary installed copy.
+                                        ComponentName configured = V10SessionStore.getDefaultVoiceApp(
+                                                V10CarActivity.this, "video");
+                                        if (configured == null) {
+                                            configured = V10SessionStore.getDefaultVoiceApp(
+                                                    V10CarActivity.this, category);
+                                        }
+                                        if (configured != null) {
+                                            selected = configured;
+                                            selectedLabel = appLabelForComponent(configured);
+                                        } else {
+                                            AppInfo explicitApp = findAppByVoice("youtube");
+                                            if (explicitApp == null) return null;
+                                            selected = explicitApp.component;
+                                            selectedLabel = explicitApp.name;
+                                        }
+                                    } else {
+                                        // Explicit names such as YouTube Music Morphe, YouTube Morphe,
+                                        // YouTube ReVanced and Zing MP3 resolve to that exact installed app.
+                                        AppInfo explicitApp = findAppByVoice(explicitProvider);
+                                        if (explicitApp == null) return null;
+                                        selected = explicitApp.component;
+                                        selectedLabel = explicitApp.name;
+                                    }
+                                } else {
+                                    selected = V10SessionStore.getDefaultVoiceApp(
+                                            V10CarActivity.this, category);
+                                    if (selected != null) {
+                                        selectedLabel = appLabelForComponent(selected);
+                                    } else {
+                                        String[] candidates = "music".equals(category)
+                                                ? new String[]{"Zing MP3", "Spotify", "YouTube Music", "NhacCuaTui"}
+                                                : new String[]{"YouTube"};
+                                        for (String candidate : candidates) {
+                                            AppInfo app = findAppByVoice(candidate);
+                                            if (app != null) {
+                                                selected = app.component;
+                                                selectedLabel = app.name;
+                                                break;
+                                            }
+                                        }
+                                    }
+                                }
+
+                                if (selected == null || session == null) return null;
+                                String mediaUri = null;
+                                if (query != null && !query.trim().isEmpty()) {
+                                    mediaUri = VoiceBackgroundTaskManager.buildSearchUri(
+                                            selected, query.trim(), category);
+                                    if (mediaUri == null) return null;
+                                }
+
+                                // Launch on the real projection surface, then send the search
+                                // intent to that same display. Keep the phone UI out of this flow.
+                                launchProjection(selected);
+                                if (mediaUri != null) {
+                                    // The accessibility fallback is opt-in. Save the exact target
+                                    // before dispatch so it can select a result and tap Play only in
+                                    // the requested app, with a bounded timeout.
+                                    getSharedPreferences("media_autoplay", MODE_PRIVATE).edit()
+                                            .putString("target_package", selected.getPackageName())
+                                            .putString("query", query.trim())
+                                            .putString("phase", "search")
+                                            .putLong("started_at", System.currentTimeMillis())
+                                            .apply();
+                                    session.launchViewIntentOnDisplay(
+                                            selected.getPackageName(), mediaUri);
+                                }
+                                return selectedLabel == null ? selected.getPackageName() : selectedLabel;
+                            }
+                            if ("tv".equals(category)) {
+                                AppInfo selectedApp = null;
+                                if (explicitProvider != null && !explicitProvider.trim().isEmpty()) {
+                                    selectedApp = findAppByVoice(explicitProvider);
+                                } else {
+                                    ComponentName configured = V10SessionStore.getDefaultVoiceApp(
+                                            V10CarActivity.this, "tv");
+                                    if (configured != null) {
+                                        for (AppInfo app : apps) {
+                                            if (configured.getPackageName().equals(app.component.getPackageName())) {
+                                                selectedApp = app;
+                                                break;
+                                            }
+                                        }
+                                    } else {
+                                        String[] candidates = new String[]{"VTV Go", "FPT Play", "TV"};
+                                        for (String candidate : candidates) {
+                                            selectedApp = findAppByVoice(candidate);
+                                            if (selectedApp != null) break;
+                                        }
+                                    }
+                                }
+                                if (selectedApp == null) return null;
+                                launchProjection(selectedApp.component);
+                                if (query != null && !query.trim().isEmpty() && session != null) {
+                                    session.launchSearchIntentOnDisplay(
+                                            selectedApp.component.getPackageName(), query);
+                                }
+                                return selectedApp.name;
+                            }
+
+                            if (explicitProvider != null && !explicitProvider.trim().isEmpty()) {
+                                return openAppByVoice(explicitProvider);
+                            }
+
+                            ComponentName configured = V10SessionStore.getDefaultVoiceApp(
+                                    V10CarActivity.this, category);
+                            if (configured != null) {
+                                launchProjection(configured);
+                                return appLabelForComponent(configured);
+                            }
+
+                            String[] candidates;
+                            if ("navigation".equals(category)) {
+                                candidates = new String[]{"Google Maps", "Vietmap", "Navitel", "Maps"};
+                            } else {
+                                candidates = new String[]{"VTV Go", "FPT Play", "TV"};
+                            }
+                            for (String candidate : candidates) {
+                                String opened = openAppByVoice(candidate);
+                                if (opened != null) return opened;
+                            }
+                            return null;
                         }
 
                         @Override
@@ -1055,7 +1232,27 @@ private void hideFloatingMenu() {
         voiceAssistantController.toggleListening();
     }
 
-    private String openAppByVoice(String spokenName) {
+    private String buildMapUri(ComponentName component, String query, boolean nearby) {
+        if (component == null || query == null || query.trim().isEmpty()) return null;
+        String encoded = Uri.encode(query.trim());
+        if ("com.google.android.apps.maps".equals(component.getPackageName())) {
+            if (nearby) return "geo:0,0?q=" + encoded;
+            return "google.navigation:q=" + encoded;
+        }
+        // Many navigation apps accept geo: search intents; the target app may still
+        // require confirmation or may not implement this generic Android URI.
+        return "geo:0,0?q=" + encoded;
+    }
+
+    private String appLabelForComponent(ComponentName component) {
+        if (component == null) return null;
+        for (AppInfo app : apps) {
+            if (component.getPackageName().equals(app.component.getPackageName())) return app.name;
+        }
+        return component.getPackageName();
+    }
+
+    private AppInfo findAppByVoice(String spokenName) {
         String query = VoiceCommandParser.normalize(spokenName);
         if (query.isEmpty()) return null;
 
@@ -1070,12 +1267,37 @@ private void hideFloatingMenu() {
             else if (label.length() >= 4 && query.contains(label)) score = 80;
             else if (query.length() >= 4 && label.contains(query)) score = 70;
 
-            if (query.contains("youtube") && pkg.contains("youtube")) score = Math.max(score, 95);
+            // Prefer the exact requested app family before generic YouTube matching.
+            // This avoids selecting the first installed YouTube variant when the user says
+            // "Morphe" or "ReVanced" explicitly.
+            if (query.contains("morphe") && pkg.contains("morphe")) {
+                score = Math.max(score, 120);
+            }
+            if (query.contains("revanced") && pkg.contains("revanced")) {
+                score = Math.max(score, 120);
+            }
+            if (query.contains("youtube music")) {
+                boolean musicPackage = com.carassistant.v10.voice.MediaSearchUriBuilder
+                        .isYouTubeMusicPackage(pkg);
+                if (musicPackage) score = Math.max(score, 115);
+                else if (pkg.contains("youtube")) score = Math.max(score, 60);
+            } else if (query.equals("youtube") && pkg.contains("youtube")) {
+                score = Math.max(score, 90);
+            }
             if ((query.equals("maps") || query.equals("google maps"))
                     && (pkg.equals("com.google.android.apps.maps") || label.contains("maps"))) {
                 score = Math.max(score, 95);
             }
-            if (query.contains("spotify") && pkg.contains("spotify")) score = Math.max(score, 95);
+            if (query.contains("spotify") && pkg.contains("spotify")) score = Math.max(score, 110);
+            if (query.contains("zing mp3") && (pkg.contains("zing") || label.contains("zing mp3"))) {
+                score = Math.max(score, 110);
+            }
+            if (query.contains("vietmap") && (pkg.contains("vietmap") || label.contains("vietmap"))) {
+                score = Math.max(score, 95);
+            }
+            if (query.contains("navitel") && (pkg.contains("navitel") || label.contains("navitel"))) {
+                score = Math.max(score, 95);
+            }
 
             if (score > bestScore) {
                 bestScore = score;
@@ -1084,6 +1306,12 @@ private void hideFloatingMenu() {
         }
 
         if (best == null || bestScore < 60) return null;
+        return best;
+    }
+
+    private String openAppByVoice(String spokenName) {
+        AppInfo best = findAppByVoice(spokenName);
+        if (best == null) return null;
         launchProjection(best.component);
         return best.name;
     }
@@ -1135,6 +1363,7 @@ private void hideFloatingMenu() {
             voiceAssistantController.destroy();
             voiceAssistantController = null;
         }
+
         if (session != null) { session.destroy(); session = null; }
         if (backgroundSession != null) { backgroundSession.destroy(); backgroundSession = null; }
 

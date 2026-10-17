@@ -35,6 +35,9 @@ public final class V10SettingsActivity extends Activity {
     private TextView selectedBackground;
     private TextView permissionStatus;
     private TextView orientationStatus;
+    private LinearLayout defaultVoiceAppChoices;
+    private TextView defaultVoiceAppStatus;
+    private String selectedDefaultVoiceCategory = "navigation";
     private final RootShellSession orientationShell = new RootShellSession();
     private final ArrayList<ResolveInfo> availableApps = new ArrayList<>();
 
@@ -132,6 +135,33 @@ public final class V10SettingsActivity extends Activity {
             rebuildFavoriteAppChoices();
         });
 
+        addSection("ỨNG DỤNG MẶC ĐỊNH CHO TRỢ LÝ", "Chọn app ưu tiên cho dẫn đường, nhạc, video và TV", body -> {
+            TextView hint = text(
+                    "Lựa chọn được lưu riêng theo từng nhóm. Đây là ứng dụng ưu tiên khi câu lệnh không nêu tên ứng dụng.",
+                    13, Color.LTGRAY);
+            hint.setPadding(dp(4), dp(2), dp(4), dp(8));
+            body.addView(hint, params(-1, -2));
+
+            addButton(body, "DẪN ĐƯỜNG", () -> selectDefaultVoiceCategory("navigation"));
+            addButton(body, "NGHE NHẠC", () -> selectDefaultVoiceCategory("music"));
+            addButton(body, "XEM VIDEO", () -> selectDefaultVoiceCategory("video"));
+            addButton(body, "XEM TV", () -> selectDefaultVoiceCategory("tv"));
+
+            defaultVoiceAppStatus = text("", 14, Color.WHITE);
+            defaultVoiceAppStatus.setPadding(dp(4), dp(8), dp(4), dp(8));
+            body.addView(defaultVoiceAppStatus, params(-1, -2));
+
+            defaultVoiceAppChoices = new LinearLayout(this);
+            defaultVoiceAppChoices.setOrientation(LinearLayout.VERTICAL);
+            body.addView(defaultVoiceAppChoices, params(-1, -2));
+
+            addButton(body, "BỎ CHỌN ỨNG DỤNG MẶC ĐỊNH", () -> {
+                V10SessionStore.setDefaultVoiceApp(this, selectedDefaultVoiceCategory, null);
+                rebuildDefaultVoiceAppChoices();
+            });
+            rebuildDefaultVoiceAppChoices();
+        });
+
         addSection("QUYỀN VÀ CHẨN ĐOÁN", "Vị trí, micro, cài đặt ứng dụng, Root/LSPosed", body -> {
             permissionStatus = text("", 14, Color.WHITE);
             permissionStatus.setPadding(dp(12), dp(10), dp(12), dp(10));
@@ -214,6 +244,49 @@ public final class V10SettingsActivity extends Activity {
                         .compareToIgnoreCase(String.valueOf(b.loadLabel(getPackageManager())));
             }
         });
+    }
+
+    private void selectDefaultVoiceCategory(String category) {
+        selectedDefaultVoiceCategory = category;
+        rebuildDefaultVoiceAppChoices();
+    }
+
+    private String defaultVoiceCategoryLabel(String category) {
+        if ("navigation".equals(category)) return "DẪN ĐƯỜNG";
+        if ("music".equals(category)) return "NGHE NHẠC";
+        if ("video".equals(category)) return "XEM VIDEO";
+        return "XEM TV";
+    }
+
+    private void rebuildDefaultVoiceAppChoices() {
+        if (defaultVoiceAppChoices == null || defaultVoiceAppStatus == null) return;
+        defaultVoiceAppChoices.removeAllViews();
+        ComponentName selected = V10SessionStore.getDefaultVoiceApp(this, selectedDefaultVoiceCategory);
+        defaultVoiceAppStatus.setText("Nhóm: " + defaultVoiceCategoryLabel(selectedDefaultVoiceCategory)
+                + "\nỨng dụng đang chọn: "
+                + (selected == null ? "Chưa chọn" : appLabel(selected.getPackageName())));
+
+        for (ResolveInfo info : availableApps) {
+            if (info.activityInfo == null) continue;
+            ComponentName component = new ComponentName(info.activityInfo.packageName, info.activityInfo.name);
+            boolean checked = selected != null
+                    && selected.getPackageName().equals(component.getPackageName());
+            String label = String.valueOf(info.loadLabel(getPackageManager()));
+            addButton(defaultVoiceAppChoices, label + (checked ? "  ✓ ĐANG CHỌN" : ""), () -> {
+                V10SessionStore.setDefaultVoiceApp(this, selectedDefaultVoiceCategory, component);
+                rebuildDefaultVoiceAppChoices();
+            });
+        }
+    }
+
+    private String appLabel(String packageName) {
+        for (ResolveInfo info : availableApps) {
+            if (info.activityInfo != null
+                    && packageName.equals(info.activityInfo.packageName)) {
+                return String.valueOf(info.loadLabel(getPackageManager()));
+            }
+        }
+        return packageName;
     }
 
     private void rebuildBackgroundAppChoices() {

@@ -3,23 +3,29 @@ package com.carassistant.v10.voice;
 import java.text.Normalizer;
 import java.util.Locale;
 
-/** Small, deterministic Vietnamese command parser for push-to-talk V1. */
+/** Deterministic Vietnamese voice command parser for CarAssistant. */
 public final class VoiceCommandParser {
     public enum Type {
-        OPEN_APP,
-        SHOW_APPS,
-        HOME,
-        CANCEL,
+        OPEN_APP, SHOW_APPS, HOME, CANCEL,
+        NAVIGATE, SEARCH_NEARBY, PLAY_MUSIC, PLAY_VIDEO, OPEN_TV,
         UNKNOWN
     }
 
     public static final class Command {
         public final Type type;
+        /** Destination, search query, channel, or app name. */
         public final String argument;
+        /** Explicit provider/app spoken after "bằng" or "trên". */
+        public final String provider;
+        /** navigation, music, video, or tv; empty for general commands. */
+        public final String category;
 
-        Command(Type type, String argument) {
+        Command(Type type, String argument) { this(type, argument, "", ""); }
+        Command(Type type, String argument, String provider, String category) {
             this.type = type;
             this.argument = argument == null ? "" : argument.trim();
+            this.provider = provider == null ? "" : provider.trim();
+            this.category = category == null ? "" : category;
         }
     }
 
@@ -27,46 +33,171 @@ public final class VoiceCommandParser {
         String text = normalize(transcript);
         if (text.isEmpty()) return new Command(Type.UNKNOWN, "");
 
-        // Accept an optional assistant name at the beginning without requiring wake-word mode.
+        if (text.equals("hey cu")) return new Command(Type.CANCEL, "");
+        if (text.startsWith("hey cu ")) text = text.substring(7).trim();
         if (text.startsWith("kiki ")) text = text.substring(5).trim();
         if (text.startsWith("car assistant ")) text = text.substring(14).trim();
 
-        if (matches(text, "huy", "huy lenh", "dung lai", "bo qua", "thoi")) {
+        if (matches(text, "huy", "huy lenh", "dung lai", "bo qua", "thoi", "cancel", "dung")) {
             return new Command(Type.CANCEL, "");
         }
-
-        if (matches(text,
-                "mo danh sach ung dung",
-                "hien danh sach ung dung",
-                "danh sach ung dung",
-                "mo app chon",
-                "app chon",
-                "hien app")) {
+        if (matches(text, "mo danh sach ung dung", "hien danh sach ung dung",
+                "danh sach ung dung", "mo app chon", "app chon", "hien app")) {
             return new Command(Type.SHOW_APPS, "");
         }
-
-        if (matches(text,
-                "ve man hinh chinh",
-                "ve trang chu",
-                "tro ve man hinh chinh",
-                "ve home",
-                "home",
-                "trang chu")) {
+        if (matches(text, "ve man hinh chinh", "ve trang chu",
+                "tro ve man hinh chinh", "ve home", "home", "trang chu")) {
             return new Command(Type.HOME, "");
+        }
+
+        String value = firstPrefix(text,
+                "dan duong den ", "dan duong toi ", "chi duong den ",
+                "chi duong toi ", "chi duong ", "dieu huong den ", "dieu huong toi ");
+        if (value != null) return navigationCommand(value);
+
+        // "Đến cây xăng gần nhất bằng Navitel" is also a destination command.
+        value = stripPrefix(text, "den ");
+        if (value != null && !value.isEmpty()) return navigationCommand(value);
+
+        value = stripPrefix(text, "tim quanh day ");
+        if (value != null) {
+            String place = nearbyCategory(value);
+            if (place != null) return new Command(Type.SEARCH_NEARBY, place, "", "navigation");
+        }
+        value = stripPrefix(text, "tim gan day ");
+        if (value != null) {
+            String place = nearbyCategory(value);
+            if (place != null) return new Command(Type.SEARCH_NEARBY, place, "", "navigation");
+        }
+        value = stripPrefix(text, "tim ");
+        if (value != null) {
+            String place = nearbyCategory(value);
+            if (place != null) return new Command(Type.SEARCH_NEARBY, place, "", "navigation");
+        }
+
+        value = firstPrefix(text, "mo bai hat ", "phat bai hat ", "bat bai hat ", "tim bai hat ");
+        if (value != null) return mediaCommand(Type.PLAY_MUSIC, value, "music");
+        value = firstPrefix(text, "mo nhac ", "phat nhac ", "bat nhac ", "tim nhac ");
+        if (value != null) return mediaCommand(Type.PLAY_MUSIC, value, "music");
+
+        value = firstPrefix(text, "mo video nhac ", "phat video nhac ", "tim video nhac ");
+        if (value != null) {
+            // Keep "nhạc trẻ/bolero/rap/remix..." as the actual search phrase,
+            // while treating "nhạc <artist/song>" as a command prefix.
+            if (startsWithAny(value, "tre ", "bolero", "rap ", "remix", "lofi", "tru tinh", "tinh ca")) {
+                value = "nhac " + value;
+            }
+            return mediaCommand(Type.PLAY_VIDEO, value, "video");
+        }
+        value = firstPrefix(text, "mo video bai hat ", "phat video bai hat ", "tim video bai hat ");
+        if (value != null) return mediaCommand(Type.PLAY_VIDEO, value, "video");
+        value = firstPrefix(text, "mo video ", "phat video ", "xem video ", "tim video ", "mo youtube ");
+        if (value != null) return mediaCommand(Type.PLAY_VIDEO, value, "video");
+
+        value = firstPrefix(text, "mo phim ", "phat phim ", "xem phim ", "tim phim ",
+                "mo bo phim ", "phat bo phim ", "tim bo phim ");
+        if (value != null) return mediaCommand(Type.PLAY_VIDEO, value, "video");
+
+        value = firstPrefix(text, "mo kenh ", "chuyen kenh ", "xem kenh ");
+        if (value != null) return mediaCommand(Type.OPEN_TV, value, "tv");
+        if (matches(text, "mo tv", "mo truyen hinh", "bat tv", "mo ung dung tv")) {
+            return new Command(Type.OPEN_TV, "", "", "tv");
+        }
+        if (matches(text, "mo nhac", "bat nhac", "phat nhac")) {
+            return new Command(Type.PLAY_MUSIC, "", "", "music");
+        }
+        if (matches(text, "mo video", "phat video", "xem video", "mo phim", "phat phim", "xem phim", "mo youtube")) {
+            return new Command(Type.PLAY_VIDEO, "", "", "video");
+        }
+
+        // Generic media wording: "Mở <tên nội dung> trên YouTube" and
+        // "Mở <tên bài> trên YouTube Music/Zing MP3" need to be treated as
+        // search-and-play requests, not as requests to launch an app by name.
+        value = firstPrefix(text, "mo ", "phat ", "bat ", "xem ", "tim ");
+        if (value != null) {
+            String[] mediaPair = splitFirst(value, " tren ", " bang ");
+            String provider = normalize(mediaPair[1]);
+            if (!mediaPair[1].isEmpty() && !mediaPair[0].isEmpty()) {
+                if (provider.contains("youtube music") || provider.contains("zing mp3")
+                        || provider.contains("spotify") || provider.contains("nhaccuatui")
+                        || provider.contains("nhac cua tui")) {
+                    return new Command(Type.PLAY_MUSIC, mediaPair[0], mediaPair[1], "music");
+                }
+                if (provider.contains("youtube") || provider.contains("revanced")
+                        || provider.contains("morphe")) {
+                    return new Command(Type.PLAY_VIDEO, mediaPair[0], mediaPair[1], "video");
+                }
+            }
         }
 
         if (text.startsWith("mo ")) {
             String app = text.substring(3).trim();
             if (!app.isEmpty()) return new Command(Type.OPEN_APP, app);
         }
-
         return new Command(Type.UNKNOWN, text);
     }
 
-    private static boolean matches(String text, String... choices) {
-        for (String choice : choices) {
-            if (text.equals(choice)) return true;
+    private static Command navigationCommand(String value) {
+        String[] pair = splitFirst(value, " bang ", " tren ");
+        if (pair[0].isEmpty()) return new Command(Type.UNKNOWN, value);
+        return new Command(Type.NAVIGATE, pair[0], pair[1], "navigation");
+    }
+
+    private static Command mediaCommand(Type type, String value, String category) {
+        String clean = value == null ? "" : value.trim();
+        String[] pair = splitFirst(clean, " tren ", " bang ");
+        return new Command(type, pair[0], pair[1], category);
+    }
+
+    private static String nearbyCategory(String value) {
+        String v = value.trim();
+        String[] suffixes = {"o gan day", "gan day", "gan toi", "gan nhat", "gan nhat day", "xung quanh day"};
+        for (String suffix : suffixes) {
+            if (v.endsWith(" " + suffix)) v = v.substring(0, v.length() - suffix.length()).trim();
+            else if (v.equals(suffix)) v = "";
         }
+        if (matches(v, "nha hang", "quan an", "nha hang gan nhat", "quan an gan nhat")) return "nha hang";
+        if (matches(v, "quan cafe", "quan ca phe", "cafe", "ca phe", "quan coffee")) return "quan cafe";
+        if (matches(v, "tiem sua xe", "gara sua xe", "sua xe", "garage sua xe")) return "tiem sua xe";
+        if (matches(v, "cay xang", "tram xang", "cay xang gan nhat")) return "cay xang";
+        if (matches(v, "benh vien", "atm", "bai do xe", "khach san", "nha thuoc")) return v;
+        return null;
+    }
+
+    private static boolean startsWithAny(String value, String... prefixes) {
+        for (String prefix : prefixes) if (value.startsWith(prefix)) return true;
+        return false;
+    }
+
+    private static String firstPrefix(String value, String... prefixes) {
+        for (String prefix : prefixes) {
+            String result = stripPrefix(value, prefix);
+            if (result != null) return result;
+        }
+        return null;
+    }
+
+    private static String stripPrefix(String value, String prefix) {
+        return value.startsWith(prefix) ? value.substring(prefix.length()).trim() : null;
+    }
+
+    private static String[] splitFirst(String value, String... delimiters) {
+        int best = -1;
+        String delimiter = "";
+        for (String candidate : delimiters) {
+            int index = value.indexOf(candidate);
+            if (index >= 0 && (best < 0 || index < best)) {
+                best = index;
+                delimiter = candidate;
+            }
+        }
+        if (best < 0) return new String[]{value.trim(), ""};
+        return new String[]{value.substring(0, best).trim(),
+                value.substring(best + delimiter.length()).trim()};
+    }
+
+    private static boolean matches(String text, String... choices) {
+        for (String choice : choices) if (text.equals(choice)) return true;
         return false;
     }
 
@@ -77,7 +208,6 @@ public final class VoiceCommandParser {
         String decomposed = Normalizer.normalize(lower, Normalizer.Form.NFD)
                 .replaceAll("\\p{M}+", "");
         return decomposed.replaceAll("[^a-z0-9 ]", " ")
-                .replaceAll("\\s+", " ")
-                .trim();
+                .replaceAll("\\s+", " ").trim();
     }
 }

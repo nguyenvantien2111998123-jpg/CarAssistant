@@ -106,41 +106,17 @@ tasks.matching { it.name == 'mergeDexRelease' }.configureEach { task ->
         if (!legacyDex.exists()) {
             throw new GradleException("Thiếu app/libs/aasdk-legacy.dex!")
         }
+
+        // Keep the original Android Auto SDK bytecode in its own dex bucket.
+        // Merging this prebuilt dex with app dexes through D8 fails because the
+        // legacy SDK contains androidx classes also supplied by app dependencies
+        // (for example RemoteActionCompatParcelizer). Android 5+ supports native
+        // multidex, and the debug variant already uses this separate-bucket model.
         def outputDir = task.outputDir.get().asFile
-        def dexFilter = { it.isFile() && it.name ==~ /classes\d*\.dex/ } as FileFilter
-        def appDexes = outputDir.listFiles(dexFilter)?.toList() ?: []
-        if (appDexes.isEmpty()) {
-            throw new GradleException("Không tìm thấy classes*.dex trong " + outputDir)
-        }
-
-        def buildDirFile = project.layout.buildDirectory.asFile.get()
-        def tempDir = new File(buildDirFile, "intermediates/dex_merged_temp")
-        tempDir.deleteDir()
-        tempDir.mkdirs()
-
-        def sdkDir = android.sdkDirectory.absolutePath
-        def buildToolsVersion = android.buildToolsVersion
-        def d8Tool = "${sdkDir}/build-tools/${buildToolsVersion}/d8"
-
-        project.exec {
-            commandLine([d8Tool, '--min-api', '29', '--output', tempDir.absolutePath]
-                    + appDexes*.absolutePath + [legacyDex.absolutePath])
-        }
-
-        def mergedDexes = tempDir.listFiles(dexFilter)?.toList() ?: []
-        if (mergedDexes.isEmpty()) {
-            throw new GradleException("D8 merge dex thất bại!")
-        }
-
-        appDexes.each { it.delete() }
-        mergedDexes.each { merged ->
-            def target = new File(outputDir, merged.name)
-            if (!merged.renameTo(target)) {
-                target.bytes = merged.bytes
-                merged.delete()
-            }
-        }
-        tempDir.deleteDir()
+        def bucket = new File(outputDir, "legacy_sdk")
+        bucket.deleteDir()
+        bucket.mkdirs()
+        new File(bucket, "classes.dex").bytes = legacyDex.bytes
     }
 }
 
