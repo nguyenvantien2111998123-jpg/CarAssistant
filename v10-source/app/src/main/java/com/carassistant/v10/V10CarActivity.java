@@ -69,7 +69,6 @@ public final class V10CarActivity
     private TextView floatingVoiceButton;
     private TextView voiceTranscriptView;
     private VoiceAssistantController voiceAssistantController;
-    private VoiceBackgroundTaskManager voiceBackgroundTaskManager;
 
     private TextView floatingTouchKey;
     private LinearLayout floatingMenu;
@@ -258,13 +257,24 @@ public final class V10CarActivity
                                 // Media must be visible on the car-side secondary projection display
                                 // (session/display 1), not the hidden ImageReader-only virtual display.
                                 if (explicitProvider != null && !explicitProvider.trim().isEmpty()) {
-                                    AppInfo explicitApp = findAppByVoice(explicitProvider);
-                                    if (explicitApp == null) return null;
-                                    selected = explicitApp.component;
-                                    selectedLabel = explicitApp.name;
+                                    String normalizedProvider = VoiceCommandParser.normalize(explicitProvider);
+                                    ComponentName configured = V10SessionStore.getDefaultVoiceApp(
+                                            V10CarActivity.this, category);
+                                    // A generic "YouTube" request should honor the selected YouTube-family
+                                    // default (including ReVanced), rather than accidentally picking YouTube Music.
+                                    if ("youtube".equals(normalizedProvider) && configured != null
+                                            && (configured.getPackageName().toLowerCase(Locale.ROOT).contains("youtube")
+                                                || configured.getPackageName().toLowerCase(Locale.ROOT).contains("revanced"))) {
+                                        selected = configured;
+                                        selectedLabel = appLabelForComponent(configured);
+                                    } else {
+                                        AppInfo explicitApp = findAppByVoice(explicitProvider);
+                                        if (explicitApp == null) return null;
+                                        selected = explicitApp.component;
+                                        selectedLabel = explicitApp.name;
+                                    }
                                 } else {
                                     selected = V10SessionStore.getDefaultVoiceApp(
-                                            V10CarActivity.this, category);
                                     if (selected != null) {
                                         selectedLabel = appLabelForComponent(selected);
                                     } else {
@@ -1315,10 +1325,7 @@ private void hideFloatingMenu() {
             voiceAssistantController.destroy();
             voiceAssistantController = null;
         }
-        if (voiceBackgroundTaskManager != null) {
-            voiceBackgroundTaskManager.destroy();
-            voiceBackgroundTaskManager = null;
-        }
+
         if (session != null) { session.destroy(); session = null; }
         if (backgroundSession != null) { backgroundSession.destroy(); backgroundSession = null; }
 
