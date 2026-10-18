@@ -69,7 +69,7 @@ public final class MediaPlaybackAccessibilityService extends AccessibilityServic
         super.onServiceConnected();
         Log.i(TAG, "DIAG serviceConnected sdk=" + Build.VERSION.SDK_INT
                 + " flags=" + getServiceInfo().flags
-                + " canRetrieveWindowContent=" + getServiceInfo().canRetrieveWindowContent);
+                + " canRetrieveWindowContent=" + getServiceInfo().getCanRetrieveWindowContent());
         dumpAccessibilityWindowSnapshot("service-connected", "", -1, true);
     }
 
