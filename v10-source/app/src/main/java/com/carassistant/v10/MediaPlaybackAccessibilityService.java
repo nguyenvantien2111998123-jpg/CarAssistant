@@ -25,6 +25,7 @@ public final class MediaPlaybackAccessibilityService extends AccessibilityServic
     private static final int MAX_DEPTH = 12;
     private static final long RETRY_INTERVAL_MS = 400L;
     private final Handler automationHandler = new Handler(Looper.getMainLooper());
+    private long lastWindowSnapshotAt; // Rate-limit diagnostic snapshots while UI events are noisy.
 
     private final Runnable playRetry = new Runnable() {
         @Override public void run() {
@@ -64,6 +65,150 @@ public final class MediaPlaybackAccessibilityService extends AccessibilityServic
     };
 
     @Override
+    protected void onServiceConnected() {
+        super.onServiceConnected();
+        Log.i(TAG, "DIAG serviceConnected sdk=" + Build.VERSION.SDK_INT
+                + " flags=" + getServiceInfo().flags
+                + " canRetrieveWindowContent=" + getServiceInfo().canRetrieveWindowContent);
+        dumpAccessibilityWindowSnapshot("service-connected", "", -1, true);
+    }
+
+    /**
+     * Diagnostic only: record what Android actually exposes to this service.
+     * Never logs visible text or spoken queries; only package/class and node counts.
+     */
+    private void dumpAccessibilityWindowSnapshot(
+            String reason, String targetPackage, int targetDisplayId, boolean force) {
+        long now = System.currentTimeMillis();
+        if (!force && now - lastWindowSnapshotAt < 1500L) return;
+        lastWindowSnapshotAt = now;
+        Log.i(TAG, "DIAG windows begin reason=" + reason
+                + " targetPackage=" + targetPackage
+                + " targetDisplayId=" + targetDisplayId
+                + " sdk=" + Build.VERSION.SDK_INT);
+        int windowCount = 0;
+        int targetPackageWindows = 0;
+        int targetDisplayWindows = 0;
+        try {
+            if (Build.VERSION.SDK_INT >= 30) {
+                SparseArray<List<AccessibilityWindowInfo>> displays = getWindowsOnAllDisplays();
+                if (displays == null) {
+                    Log.w(TAG, "DIAG getWindowsOnAllDisplays returned null");
+                } else {
+                    for (int displayIndex = 0; displayIndex < displays.size(); displayIndex++) {
+                        int arrayDisplayId = displays.keyAt(displayIndex);
+                        List<AccessibilityWindowInfo> windows = displays.valueAt(displayIndex);
+                        if (windows == null) continue;
+                        for (AccessibilityWindowInfo window : windows) {
+                            if (window == null) continue;
+                            windowCount++;
+                            AccessibilityNodeInfo root = null;
+                            try {
+                                int actualDisplayId = window.getDisplayId();
+                                root = window.getRoot();
+                                String rootPackage = root == null || root.getPackageName() == null
+                                        ? "<no-root-package>" : root.getPackageName().toString();
+                                String rootClass = root == null || root.getClassName() == null
+                                        ? "<no-root-class>" : root.getClassName().toString();
+                                int[] counts = new int[4]; // nodes, text-bearing, clickable, editable
+                                if (root != null) summarizeNode(root, 0, counts);
+                                if (!targetPackage.isEmpty() && targetPackage.equals(rootPackage)) {
+                                    targetPackageWindows++;
+                                    if (targetDisplayId < 0 || targetDisplayId == actualDisplayId) {
+                                        targetDisplayWindows++;
+                                    }
+                                }
+                                Log.i(TAG, "DIAG window arrayDisplay=" + arrayDisplayId
+                                        + " windowDisplay=" + actualDisplayId
+                                        + " windowId=" + window.getId()
+                                        + " type=" + window.getType()
+                                        + " active=" + window.isActive()
+                                        + " focused=" + window.isFocused()
+                                        + " rootAvailable=" + (root != null)
+                                        + " rootPackage=" + rootPackage
+                                        + " rootClass=" + rootClass
+                                        + " nodes=" + counts[0]
+                                        + " textNodes=" + counts[1]
+                                        + " clickableNodes=" + counts[2]
+                                        + " editableNodes=" + counts[3]);
+                            } catch (RuntimeException error) {
+                                Log.w(TAG, "DIAG window inspect failed display=" + arrayDisplayId, error);
+                            } finally {
+                                if (root != null) root.recycle();
+                                window.recycle();
+                            }
+                        }
+                    }
+                }
+            } else {
+                List<AccessibilityWindowInfo> windows = getWindows();
+                if (windows != null) {
+                    for (AccessibilityWindowInfo window : windows) {
+                        if (window == null) continue;
+                        windowCount++;
+                        AccessibilityNodeInfo root = null;
+                        try {
+                            root = window.getRoot();
+                            String rootPackage = root == null || root.getPackageName() == null
+                                    ? "<no-root-package>" : root.getPackageName().toString();
+                            String rootClass = root == null || root.getClassName() == null
+                                    ? "<no-root-class>" : root.getClassName().toString();
+                            int[] counts = new int[4];
+                            if (root != null) summarizeNode(root, 0, counts);
+                            if (!targetPackage.isEmpty() && targetPackage.equals(rootPackage)) {
+                                targetPackageWindows++;
+                            }
+                            Log.i(TAG, "DIAG window display=<API<30> windowId=" + window.getId()
+                                    + " type=" + window.getType()
+                                    + " active=" + window.isActive()
+                                    + " focused=" + window.isFocused()
+                                    + " rootAvailable=" + (root != null)
+                                    + " rootPackage=" + rootPackage
+                                    + " rootClass=" + rootClass
+                                    + " nodes=" + counts[0]
+                                    + " textNodes=" + counts[1]
+                                    + " clickableNodes=" + counts[2]
+                                    + " editableNodes=" + counts[3]);
+                        } catch (RuntimeException error) {
+                            Log.w(TAG, "DIAG window inspect failed", error);
+                        } finally {
+                            if (root != null) root.recycle();
+                            window.recycle();
+                        }
+                    }
+                }
+            }
+        } catch (RuntimeException error) {
+            Log.w(TAG, "DIAG cannot enumerate accessibility windows", error);
+        }
+        Log.i(TAG, "DIAG windows end count=" + windowCount
+                + " targetPackageWindows=" + targetPackageWindows
+                + " targetDisplayWindows=" + targetDisplayWindows);
+    }
+
+    private void summarizeNode(AccessibilityNodeInfo node, int depth, int[] counts) {
+        if (node == null || depth > 10 || counts[0] >= 1200) return;
+        counts[0]++;
+        if ((node.getText() != null && node.getText().length() > 0)
+                || (node.getContentDescription() != null
+                && node.getContentDescription().length() > 0)) counts[1]++;
+        if (node.isClickable()) counts[2]++;
+        if (node.isEditable()) counts[3]++;
+        int childCount = node.getChildCount();
+        for (int i = 0; i < childCount && counts[0] < 1200; i++) {
+            AccessibilityNodeInfo child = null;
+            try {
+                child = node.getChild(i);
+                if (child != null) summarizeNode(child, depth + 1, counts);
+            } catch (RuntimeException ignored) {
+                // A provider can invalidate nodes while the UI is changing.
+            } finally {
+                if (child != null) child.recycle();
+            }
+        }
+    }
+
+    @Override
     public void onAccessibilityEvent(AccessibilityEvent event) {
         if (event == null || event.getPackageName() == null) return;
         String eventPackage = event.getPackageName().toString();
@@ -77,6 +222,36 @@ public final class MediaPlaybackAccessibilityService extends AccessibilityServic
 
         if (targetPackage.isEmpty() || query.isEmpty() || phase.isEmpty()) return;
         if (!targetPackage.equals(eventPackage)) return;
+        dumpAccessibilityWindowSnapshot("target-event-" + event.getEventType(),
+                targetPackage, targetDisplayId, false);
+        AccessibilityNodeInfo eventSourceForDiag = event.getSource();
+        if (eventSourceForDiag != null) {
+            try {
+                AccessibilityWindowInfo sourceWindow = eventSourceForDiag.getWindow();
+                if (sourceWindow != null) {
+                    try {
+                        Log.i(TAG, "DIAG event sourcePackage=" + eventPackage
+                                + " eventType=" + event.getEventType()
+                                + " sourceWindowId=" + sourceWindow.getId()
+                                + " sourceDisplayId=" + (Build.VERSION.SDK_INT >= 30
+                                        ? sourceWindow.getDisplayId() : -1)
+                                + " targetDisplayId=" + targetDisplayId);
+                    } finally {
+                        sourceWindow.recycle();
+                    }
+                } else {
+                    Log.i(TAG, "DIAG event source has no window package=" + eventPackage
+                            + " eventType=" + event.getEventType());
+                }
+            } catch (RuntimeException error) {
+                Log.w(TAG, "DIAG cannot inspect event source window", error);
+            } finally {
+                eventSourceForDiag.recycle();
+            }
+        } else {
+            Log.i(TAG, "DIAG event has no source package=" + eventPackage
+                    + " eventType=" + event.getEventType());
+        }
         if (startedAt <= 0L || System.currentTimeMillis() - startedAt > MAX_PENDING_MS) {
             clearPending(prefs);
             return;
