@@ -34,6 +34,10 @@ public final class MediaPlaybackAccessibilityService extends AccessibilityServic
             String phase = prefs.getString("phase", "");
             int targetDisplayId = prefs.getInt("target_display_id", -1);
             long startedAt = prefs.getLong("started_at", 0L);
+            if (prefs.getBoolean("mini_engine_active", false)) {
+                automationHandler.postDelayed(this, RETRY_INTERVAL_MS);
+                return;
+            }
             if (targetPackage.isEmpty() || !"play".equals(phase)) return;
             if (startedAt <= 0L || System.currentTimeMillis() - startedAt > MAX_PENDING_MS) {
                 clearPending(prefs);
@@ -75,6 +79,8 @@ public final class MediaPlaybackAccessibilityService extends AccessibilityServic
         int targetDisplayId = prefs.getInt("target_display_id", -1);
         long startedAt = prefs.getLong("started_at", 0L);
 
+        // Once the Mini Access Engine claims the request, avoid competing taps.
+        if (prefs.getBoolean("mini_engine_active", false)) return;
         if (targetPackage.isEmpty() || query.isEmpty() || phase.isEmpty()) return;
         if (!targetPackage.equals(eventPackage)) return;
         if (startedAt <= 0L || System.currentTimeMillis() - startedAt > MAX_PENDING_MS) {
@@ -411,6 +417,10 @@ public final class MediaPlaybackAccessibilityService extends AccessibilityServic
             String phase = prefs.getString("phase", "");
             int targetDisplayId = prefs.getInt("target_display_id", -1);
             long startedAt = prefs.getLong("started_at", 0L);
+            if (prefs.getBoolean("mini_engine_active", false)) {
+                automationHandler.postDelayed(this, 1000L);
+                return;
+            }
             if (targetPackage.isEmpty() || query.isEmpty()) {
                 automationHandler.postDelayed(this, 1000L);
                 return;
