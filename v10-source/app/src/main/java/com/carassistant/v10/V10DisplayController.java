@@ -196,11 +196,11 @@ public final class V10DisplayController {
                 + "; RESOLVED=$(/system/bin/cmd package resolve-activity --brief --user " + userId
                 + " -a android.intent.action.VIEW -d " + quotedUri + " -p " + quotedPackage
                 + " 2>/dev/null | /system/bin/tail -n 1); "
-                + "if [ -n \\"$RESOLVED\\" ] && [ \\"$RESOLVED\\" != \\"No activity found\\" ]; then "
+                + "if [ -n \"$RESOLVED\" ] && [ \"$RESOLVED\" != \"No activity found\" ]; then "
                 + "/system/bin/am start --user " + userId
                 + " --display " + displayId
                 + " --windowingMode 1"
-                + " -n \\"$RESOLVED\\""
+                + " -n \"$RESOLVED\""
                 + " -a android.intent.action.VIEW"
                 + " -d " + quotedUri
                 + " -f 0x18000000"
