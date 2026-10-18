@@ -299,10 +299,18 @@ public final class MediaPlaybackAccessibilityService extends AccessibilityServic
             String text = node.getText() == null ? "" : node.getText().toString();
             String description = node.getContentDescription() == null
                     ? "" : node.getContentDescription().toString();
-            String normalized = com.carassistant.v10.voice.VoiceCommandParser.normalize(
-                    text + " " + description + " " + node.getViewIdResourceName());
-            if (normalized.contains("pause") || normalized.contains("tạm dừng")
-                    || normalized.contains("tam dung")) found = true;
+            String label = com.carassistant.v10.voice.VoiceCommandParser.normalize(
+                    text + " " + description);
+            String viewId = com.carassistant.v10.voice.VoiceCommandParser.normalize(
+                    node.getViewIdResourceName());
+            boolean toggleLabel = label.contains("play pause") || label.contains("playpause")
+                    || label.contains("pause play") || label.contains("pauseplay");
+            boolean pauseLabel = !toggleLabel && (label.contains("pause")
+                    || label.contains("tạm dừng") || label.contains("tam dung"));
+            boolean toggleId = viewId.contains("play pause") || viewId.contains("playpause")
+                    || viewId.contains("pause play") || viewId.contains("pauseplay");
+            boolean pauseId = !toggleId && viewId.contains("pause");
+            if (pauseLabel || pauseId) found = true;
             node.recycle();
             if (found) {
                 for (int j = i + 1; j < nodes.size(); j++) nodes.get(j).recycle();
@@ -327,10 +335,10 @@ public final class MediaPlaybackAccessibilityService extends AccessibilityServic
                     : node.getContentDescription().toString();
             String value = com.carassistant.v10.voice.VoiceCommandParser.normalize(
                     text + " " + description + " " + node.getViewIdResourceName());
-            if (className.contains("seekbar") || className.contains("progressbar")
-                    || value.contains("now playing") || value.contains("đang phát")
-                    || value.contains("dang phat") || value.contains("video player")
-                    || value.contains("music player")) ready = true;
+            if (className.contains("seekbar") || value.contains("seek bar")
+                    || value.contains("seekbar") || value.contains("now playing")
+                    || value.contains("đang phát") || value.contains("dang phat")
+                    || value.contains("video player") || value.contains("music player")) ready = true;
             node.recycle();
             if (ready) {
                 for (int j = i + 1; j < nodes.size(); j++) nodes.get(j).recycle();
