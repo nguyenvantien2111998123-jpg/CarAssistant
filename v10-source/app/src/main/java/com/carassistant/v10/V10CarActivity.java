@@ -887,7 +887,7 @@ private void dispatchMediaSearchOnProjection(ComponentName target, String uri, S
 
             // Delay a little after the launcher intent so the provider's own task is
             // already on the target display; ACTION_VIEW then starts an independent task there.
-            boolean accepted = session.launchViewIntentOnDisplay(target.getPackageName(), uri);
+            boolean accepted = session.launchMediaViewIntentOnDisplay(target.getPackageName(), uri);
             if (!accepted) {
                 getSharedPreferences("media_autoplay", MODE_PRIVATE).edit()
                         .remove("target_package").remove("query")
