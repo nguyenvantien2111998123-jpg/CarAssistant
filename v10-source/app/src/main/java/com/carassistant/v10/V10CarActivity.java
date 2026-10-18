@@ -1410,6 +1410,8 @@ private void hideFloatingMenu() {
     @Override
     public void onDestroy() {
 
+        MediaOcrAutoPlayEngine.stop();
+
         if (keyboardController != null) {
             keyboardController.stop();
             keyboardController = null;
