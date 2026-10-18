@@ -173,6 +173,15 @@ public final class V10SettingsActivity extends Activity {
                             Manifest.permission.ACCESS_COARSE_LOCATION}, 4101));
             addButton(body, "CẤP QUYỀN MICRO", () ->
                     requestPermissions(new String[]{Manifest.permission.RECORD_AUDIO}, 4102));
+            addButton(body, "MỞ CÀI ĐẶT TRỢ NĂNG ĐỂ BẬT TỰ PHÁT MEDIA", () ->
+                    startActivity(new Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)));
+
+            TextView mediaHint = text(
+                    "Để trợ lý tự chọn kết quả và bấm Phát trong YouTube/Zing MP3, mở Trợ năng và bật dịch vụ “CarAsistant Media Auto Play”. Android yêu cầu người dùng tự bật quyền này; ứng dụng không thể tự cấp.",
+                    13, Color.LTGRAY);
+            mediaHint.setPadding(dp(4), dp(10), dp(4), dp(8));
+            body.addView(mediaHint, params(-1, -2));
+
             addButton(body, "MỞ CÀI ĐẶT ỨNG DỤNG", () -> {
                 Intent i = new Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
                         Uri.parse("package:" + getPackageName()));
