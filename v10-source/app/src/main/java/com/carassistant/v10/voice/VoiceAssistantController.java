@@ -46,7 +46,9 @@ public final class VoiceAssistantController {
 
     /** Cancels a fresh listening session if no speech starts within three seconds. */
     private final Runnable noSpeechWatchdog = () -> {
-        if (destroyed || !sessionActive || commandHandled || speechStarted
+        // SpeechRecognizer can report audio activity for cabin noise without returning
+        // any words. Cancel on the original 3-second deadline unless text was recognized.
+        if (destroyed || !sessionActive || commandHandled
                 || !lastTranscript.trim().isEmpty()) return;
         cancelListeningOnMain("Đã hủy lệnh voice sau 3 giây không nói.");
     };
@@ -157,7 +159,8 @@ public final class VoiceAssistantController {
                     @Override public void onBeginningOfSpeech() {
                         if (destroyed || !sessionActive || commandHandled) return;
                         speechStarted = true;
-                        mainHandler.removeCallbacks(noSpeechWatchdog);
+                        // Keep the initial no-speech deadline until actual words are recognized.
+                        // Cabin noise can trigger onBeginningOfSpeech without any transcript.
                         // Partial results reset the command-completion silence timer.
                         scheduleSilenceWatchdog();
                         notifyState(true, "Đang nghe…", lastTranscript, true);
