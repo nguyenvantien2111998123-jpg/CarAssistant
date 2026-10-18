@@ -73,6 +73,13 @@ public final class V10ProjectionSession implements TextureView.SurfaceTextureLis
         return true;
     }
 
+    /** Starts a media search on the phone first, retaining its live task for later projection. */
+    public boolean launchMediaViewIntentOnPhone(String packageName, String uri) {
+        if (destroyed || packageName == null || uri == null) return false;
+        displayController.launchMediaViewIntentOnPhone(packageName, uri);
+        return true;
+    }
+
     /** Best-effort standard search action for apps that implement Android ACTION_SEARCH. */
     public boolean launchSearchIntentOnDisplay(String packageName, String query) {
         if (!isActive() || packageName == null || query == null || query.trim().isEmpty()) return false;
