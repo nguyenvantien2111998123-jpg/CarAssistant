@@ -82,7 +82,10 @@ public final class MediaPlaybackAccessibilityService extends AccessibilityServic
             return;
         }
 
-        AccessibilityNodeInfo root = findRootForPackage(eventPackage, targetDisplayId);
+        AccessibilityNodeInfo root = findRootFromEvent(event, eventPackage, targetDisplayId);
+        if (root == null) {
+            root = findRootForPackage(eventPackage, targetDisplayId);
+        }
         if (root == null) {
             // The media app may be opening on a non-default display. Window events can
             // arrive before its accessibility root is exposed; retry on the next event.
@@ -253,6 +256,44 @@ public final class MediaPlaybackAccessibilityService extends AccessibilityServic
             node.recycle();
         }
         return false;
+    }
+
+    /**
+     * Prefer the source window of the actual accessibility event. On older Android
+     * releases the global window list may not expose non-default-display windows,
+     * even though the service receives events from those windows.
+     */
+    private AccessibilityNodeInfo findRootFromEvent(
+            AccessibilityEvent event, String targetPackage, int targetDisplayId) {
+        AccessibilityNodeInfo current = event == null ? null : event.getSource();
+        if (current == null) return null;
+        CharSequence sourcePackage = current.getPackageName();
+        if (sourcePackage == null || !targetPackage.contentEquals(sourcePackage)) {
+            current.recycle();
+            return null;
+        }
+
+        if (Build.VERSION.SDK_INT >= 30 && targetDisplayId >= 0) {
+            AccessibilityWindowInfo sourceWindow = current.getWindow();
+            if (sourceWindow != null) {
+                try {
+                    if (sourceWindow.getDisplayId() != targetDisplayId) {
+                        current.recycle();
+                        return null;
+                    }
+                } finally {
+                    sourceWindow.recycle();
+                }
+            }
+        }
+
+        for (int depth = 0; depth < MAX_DEPTH; depth++) {
+            AccessibilityNodeInfo parent = current.getParent();
+            if (parent == null) return current;
+            current.recycle();
+            current = parent;
+        }
+        return current;
     }
 
     private AccessibilityNodeInfo findRootForPackage(String targetPackage, int targetDisplayId) {
