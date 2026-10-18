@@ -42,6 +42,7 @@ public final class MediaPlaybackAccessibilityService extends AccessibilityServic
                 return;
             }
 
+            dumpAccessibilityWindowSnapshot("play-retry", targetPackage, targetDisplayId, false);
             AccessibilityNodeInfo root = findRootForPackage(targetPackage, targetDisplayId);
             if (root != null) {
                 try {
@@ -604,6 +605,7 @@ public final class MediaPlaybackAccessibilityService extends AccessibilityServic
                 return;
             }
 
+            dumpAccessibilityWindowSnapshot("search-retry", targetPackage, targetDisplayId, false);
             AccessibilityNodeInfo root = findRootForPackage(targetPackage, targetDisplayId);
             if (root != null) {
                 try {
