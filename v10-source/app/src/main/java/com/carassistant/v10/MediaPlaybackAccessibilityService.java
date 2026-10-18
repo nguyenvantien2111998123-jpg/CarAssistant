@@ -23,6 +23,7 @@ public final class MediaPlaybackAccessibilityService extends AccessibilityServic
     private static final String PREFS = "media_autoplay";
     private static final long MAX_PENDING_MS = 30_000L;
     private static final int MAX_DEPTH = 12;
+    private static final long RETRY_INTERVAL_MS = 400L;
     private final Handler automationHandler = new Handler(Looper.getMainLooper());
 
     private final Runnable playRetry = new Runnable() {
@@ -31,6 +32,7 @@ public final class MediaPlaybackAccessibilityService extends AccessibilityServic
                     getSharedPreferences(PREFS, MODE_PRIVATE);
             String targetPackage = prefs.getString("target_package", "");
             String phase = prefs.getString("phase", "");
+            int targetDisplayId = prefs.getInt("target_display_id", -1);
             long startedAt = prefs.getLong("started_at", 0L);
             if (targetPackage.isEmpty() || !"play".equals(phase)) return;
             if (startedAt <= 0L || System.currentTimeMillis() - startedAt > MAX_PENDING_MS) {
@@ -39,7 +41,7 @@ public final class MediaPlaybackAccessibilityService extends AccessibilityServic
                 return;
             }
 
-            AccessibilityNodeInfo root = findRootForPackage(targetPackage);
+            AccessibilityNodeInfo root = findRootForPackage(targetPackage, targetDisplayId);
             if (root != null) {
                 try {
                     AccessibilityNodeInfo play = findPlayControl(root);
@@ -70,6 +72,7 @@ public final class MediaPlaybackAccessibilityService extends AccessibilityServic
         String targetPackage = prefs.getString("target_package", "");
         String query = prefs.getString("query", "");
         String phase = prefs.getString("phase", "");
+        int targetDisplayId = prefs.getInt("target_display_id", -1);
         long startedAt = prefs.getLong("started_at", 0L);
 
         if (targetPackage.isEmpty() || query.isEmpty() || phase.isEmpty()) return;
@@ -79,7 +82,7 @@ public final class MediaPlaybackAccessibilityService extends AccessibilityServic
             return;
         }
 
-        AccessibilityNodeInfo root = findRootForPackage(eventPackage);
+        AccessibilityNodeInfo root = findRootForPackage(eventPackage, targetDisplayId);
         if (root == null) {
             // The media app may be opening on a non-default display. Window events can
             // arrive before its accessibility root is exposed; retry on the next event.
@@ -252,7 +255,7 @@ public final class MediaPlaybackAccessibilityService extends AccessibilityServic
         return false;
     }
 
-    private AccessibilityNodeInfo findRootForPackage(String targetPackage) {
+    private AccessibilityNodeInfo findRootForPackage(String targetPackage, int targetDisplayId) {
         // API 30+ can expose windows from all displays. getWindows() alone may only
         // return the default/active display and miss the app projected to display 2.
         if (Build.VERSION.SDK_INT >= 30) {
@@ -265,10 +268,14 @@ public final class MediaPlaybackAccessibilityService extends AccessibilityServic
                         if (window == null) continue;
                         AccessibilityNodeInfo candidate = null;
                         try {
+                            int windowDisplayId = window.getDisplayId();
+                            if (targetDisplayId >= 0 && windowDisplayId != targetDisplayId) continue;
                             candidate = window.getRoot();
                             if (candidate != null) {
                                 CharSequence packageName = candidate.getPackageName();
                                 if (packageName != null && targetPackage.contentEquals(packageName)) {
+                                    Log.d(TAG, "Matched accessibility root package=" + targetPackage
+                                            + " displayId=" + windowDisplayId);
                                     return candidate;
                                 }
                             }
@@ -317,7 +324,20 @@ public final class MediaPlaybackAccessibilityService extends AccessibilityServic
         AccessibilityNodeInfo active = getRootInActiveWindow();
         if (active != null) {
             CharSequence packageName = active.getPackageName();
-            if (packageName != null && targetPackage.contentEquals(packageName)) return active;
+            boolean packageMatches = packageName != null && targetPackage.contentEquals(packageName);
+            boolean displayMatches = targetDisplayId < 0;
+            if (Build.VERSION.SDK_INT >= 30) {
+                AccessibilityWindowInfo activeWindow = active.getWindow();
+                if (activeWindow != null) {
+                    try {
+                        displayMatches = targetDisplayId < 0
+                                || activeWindow.getDisplayId() == targetDisplayId;
+                    } finally {
+                        activeWindow.recycle();
+                    }
+                }
+            }
+            if (packageMatches && displayMatches) return active;
             active.recycle();
         }
         return null;
@@ -330,16 +350,82 @@ public final class MediaPlaybackAccessibilityService extends AccessibilityServic
 
     private void clearPending(android.content.SharedPreferences prefs) {
         automationHandler.removeCallbacks(playRetry);
+        automationHandler.removeCallbacks(searchRetry);
         prefs.edit().remove("target_package").remove("query")
-                .remove("phase").remove("started_at").apply();
+                .remove("phase").remove("target_display_id").remove("started_at").apply();
+    }
+
+    /**
+     * Accessibility events are not consistently delivered for projected/non-focused
+     * windows on all Android builds. Poll the explicitly selected display while a
+     * voice media request is pending, rather than depending on one content-change event.
+     */
+    private final Runnable searchRetry = new Runnable() {
+        @Override public void run() {
+            android.content.SharedPreferences prefs =
+                    getSharedPreferences(PREFS, MODE_PRIVATE);
+            String targetPackage = prefs.getString("target_package", "");
+            String query = prefs.getString("query", "");
+            String phase = prefs.getString("phase", "");
+            int targetDisplayId = prefs.getInt("target_display_id", -1);
+            long startedAt = prefs.getLong("started_at", 0L);
+            if (targetPackage.isEmpty() || query.isEmpty()
+                    || !"search".equals(phase)) return;
+            if (startedAt <= 0L || System.currentTimeMillis() - startedAt > MAX_PENDING_MS) {
+                clearPending(prefs);
+                Log.w(TAG, "Search selection timed out for " + targetPackage
+                        + " displayId=" + targetDisplayId);
+                return;
+            }
+
+            AccessibilityNodeInfo root = findRootForPackage(targetPackage, targetDisplayId);
+            if (root != null) {
+                try {
+                    AccessibilityNodeInfo result = findSearchResult(root, query);
+                    if (result != null) {
+                        boolean clicked = clickNodeOrClickableParent(result);
+                        if (clicked) {
+                            prefs.edit().putString("phase", "play").apply();
+                            Log.i(TAG, "Selected matching result package=" + targetPackage
+                                    + " displayId=" + targetDisplayId);
+                            automationHandler.removeCallbacks(playRetry);
+                            automationHandler.postDelayed(playRetry, 500L);
+                            return;
+                        }
+                        Log.w(TAG, "Result click rejected package=" + targetPackage
+                                + " displayId=" + targetDisplayId);
+                    } else {
+                        Log.d(TAG, "No matching result yet package=" + targetPackage
+                                + " displayId=" + targetDisplayId);
+                    }
+                } catch (RuntimeException error) {
+                    Log.w(TAG, "Search selection retry failed", error);
+                } finally {
+                    root.recycle();
+                }
+            } else {
+                Log.d(TAG, "No root for package=" + targetPackage
+                        + " displayId=" + targetDisplayId);
+            }
+            automationHandler.postDelayed(this, RETRY_INTERVAL_MS);
+        }
+    };
+
+    @Override
+    protected void onServiceConnected() {
+        super.onServiceConnected();
+        automationHandler.removeCallbacks(searchRetry);
+        automationHandler.post(searchRetry);
     }
 
     @Override public void onInterrupt() {
         automationHandler.removeCallbacks(playRetry);
+        automationHandler.removeCallbacks(searchRetry);
     }
 
     @Override public void onDestroy() {
         automationHandler.removeCallbacks(playRetry);
+        automationHandler.removeCallbacks(searchRetry);
         super.onDestroy();
     }
 }
