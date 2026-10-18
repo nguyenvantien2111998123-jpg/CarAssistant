@@ -5,6 +5,8 @@ import android.view.accessibility.AccessibilityEvent;
 import android.view.accessibility.AccessibilityNodeInfo;
 import android.view.accessibility.AccessibilityWindowInfo;
 import android.util.Log;
+import android.os.Handler;
+import android.os.Looper;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -19,6 +21,39 @@ public final class MediaPlaybackAccessibilityService extends AccessibilityServic
     private static final String PREFS = "media_autoplay";
     private static final long MAX_PENDING_MS = 25_000L;
     private static final int MAX_DEPTH = 12;
+    private final Handler automationHandler = new Handler(Looper.getMainLooper());
+
+    private final Runnable playRetry = new Runnable() {
+        @Override public void run() {
+            android.content.SharedPreferences prefs =
+                    getSharedPreferences(PREFS, MODE_PRIVATE);
+            String targetPackage = prefs.getString("target_package", "");
+            String phase = prefs.getString("phase", "");
+            long startedAt = prefs.getLong("started_at", 0L);
+            if (targetPackage.isEmpty() || !"play".equals(phase)) return;
+            if (startedAt <= 0L || System.currentTimeMillis() - startedAt > MAX_PENDING_MS) {
+                clearPending(prefs);
+                return;
+            }
+
+            AccessibilityNodeInfo root = findRootForPackage(targetPackage);
+            if (root != null) {
+                try {
+                    AccessibilityNodeInfo play = findPlayControl(root);
+                    if (play != null && clickNodeOrClickableParent(play)) {
+                        clearPending(prefs);
+                        Log.i(TAG, "Tapped a visible play control in " + targetPackage);
+                        root.recycle();
+                        return;
+                    }
+                } catch (RuntimeException error) {
+                    Log.w(TAG, "Play retry failed", error);
+                }
+                root.recycle();
+            }
+            automationHandler.postDelayed(this, 450L);
+        }
+    };
 
     @Override
     public void onAccessibilityEvent(AccessibilityEvent event) {
@@ -45,14 +80,13 @@ public final class MediaPlaybackAccessibilityService extends AccessibilityServic
                 AccessibilityNodeInfo result = findSearchResult(root, query);
                 if (result != null && clickNodeOrClickableParent(result)) {
                     prefs.edit().putString("phase", "play").apply();
+                    automationHandler.removeCallbacks(playRetry);
+                    automationHandler.postDelayed(playRetry, 350L);
                     Log.i(TAG, "Selected a matching search result in " + eventPackage);
                 }
             } else if ("play".equals(phase)) {
-                AccessibilityNodeInfo play = findPlayControl(root);
-                if (play != null && clickNodeOrClickableParent(play)) {
-                    clearPending(prefs);
-                    Log.i(TAG, "Tapped a visible play control in " + eventPackage);
-                }
+                automationHandler.removeCallbacks(playRetry);
+                automationHandler.post(playRetry);
             }
         } catch (RuntimeException error) {
             Log.w(TAG, "Accessibility media automation failed", error);
@@ -196,9 +230,17 @@ public final class MediaPlaybackAccessibilityService extends AccessibilityServic
     }
 
     private void clearPending(android.content.SharedPreferences prefs) {
+        automationHandler.removeCallbacks(playRetry);
         prefs.edit().remove("target_package").remove("query")
                 .remove("phase").remove("started_at").apply();
     }
 
-    @Override public void onInterrupt() { }
+    @Override public void onInterrupt() {
+        automationHandler.removeCallbacks(playRetry);
+    }
+
+    @Override public void onDestroy() {
+        automationHandler.removeCallbacks(playRetry);
+        super.onDestroy();
+    }
 }
