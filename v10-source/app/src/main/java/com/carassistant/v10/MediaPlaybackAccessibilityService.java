@@ -1,10 +1,12 @@
 package com.carassistant.v10;
 
 import android.accessibilityservice.AccessibilityService;
+import android.os.Build;
 import android.view.accessibility.AccessibilityEvent;
 import android.view.accessibility.AccessibilityNodeInfo;
 import android.view.accessibility.AccessibilityWindowInfo;
 import android.util.Log;
+import android.util.SparseArray;
 import android.os.Handler;
 import android.os.Looper;
 
@@ -19,7 +21,7 @@ import java.util.Locale;
 public final class MediaPlaybackAccessibilityService extends AccessibilityService {
     private static final String TAG = "CarAsstMediaA11y";
     private static final String PREFS = "media_autoplay";
-    private static final long MAX_PENDING_MS = 25_000L;
+    private static final long MAX_PENDING_MS = 30_000L;
     private static final int MAX_DEPTH = 12;
     private final Handler automationHandler = new Handler(Looper.getMainLooper());
 
@@ -33,6 +35,7 @@ public final class MediaPlaybackAccessibilityService extends AccessibilityServic
             if (targetPackage.isEmpty() || !"play".equals(phase)) return;
             if (startedAt <= 0L || System.currentTimeMillis() - startedAt > MAX_PENDING_MS) {
                 clearPending(prefs);
+                Log.w(TAG, "Auto-play timed out for " + targetPackage);
                 return;
             }
 
@@ -40,18 +43,21 @@ public final class MediaPlaybackAccessibilityService extends AccessibilityServic
             if (root != null) {
                 try {
                     AccessibilityNodeInfo play = findPlayControl(root);
-                    if (play != null && clickNodeOrClickableParent(play)) {
-                        clearPending(prefs);
-                        Log.i(TAG, "Tapped a visible play control in " + targetPackage);
-                        root.recycle();
-                        return;
+                    if (play != null) {
+                        boolean clicked = clickNodeOrClickableParent(play);
+                        if (clicked) {
+                            clearPending(prefs);
+                            Log.i(TAG, "Tapped a visible Play control in " + targetPackage);
+                            root.recycle();
+                            return;
+                        }
                     }
                 } catch (RuntimeException error) {
                     Log.w(TAG, "Play retry failed", error);
                 }
                 root.recycle();
             }
-            automationHandler.postDelayed(this, 450L);
+            automationHandler.postDelayed(this, 400L);
         }
     };
 
@@ -74,15 +80,27 @@ public final class MediaPlaybackAccessibilityService extends AccessibilityServic
         }
 
         AccessibilityNodeInfo root = findRootForPackage(eventPackage);
-        if (root == null) return;
+        if (root == null) {
+            // The media app may be opening on a non-default display. Window events can
+            // arrive before its accessibility root is exposed; retry on the next event.
+            Log.d(TAG, "No accessibility root yet for " + eventPackage
+                    + ", eventType=" + event.getEventType());
+            return;
+        }
         try {
             if ("search".equals(phase)) {
                 AccessibilityNodeInfo result = findSearchResult(root, query);
-                if (result != null && clickNodeOrClickableParent(result)) {
-                    prefs.edit().putString("phase", "play").apply();
-                    automationHandler.removeCallbacks(playRetry);
-                    automationHandler.postDelayed(playRetry, 350L);
-                    Log.i(TAG, "Selected a matching search result in " + eventPackage);
+                if (result != null) {
+                    boolean clicked = clickNodeOrClickableParent(result);
+                    if (clicked) {
+                        prefs.edit().putString("phase", "play").apply();
+                        automationHandler.removeCallbacks(playRetry);
+                        automationHandler.postDelayed(playRetry, 500L);
+                        Log.i(TAG, "Selected a matching search result in " + eventPackage);
+                    } else {
+                        Log.d(TAG, "Matching result was found but click was rejected in "
+                                + eventPackage);
+                    }
                 }
             } else if ("play".equals(phase)) {
                 automationHandler.removeCallbacks(playRetry);
@@ -95,37 +113,58 @@ public final class MediaPlaybackAccessibilityService extends AccessibilityServic
         }
     }
 
+    /**
+     * Prefer the smallest clickable result card that matches the spoken query.
+     * The previous scoring rewarded the largest text subtree, which could select a
+     * page/list container instead of an individual song or video result.
+     */
     private AccessibilityNodeInfo findSearchResult(AccessibilityNodeInfo root, String query) {
-        String[] tokens = query.toLowerCase(Locale.ROOT).split("\\s+");
+        String normalizedQuery =
+                com.carassistant.v10.voice.VoiceCommandParser.normalize(query);
+        String[] tokens = normalizedQuery.split("\\s+");
         int requiredMatches = Math.min(2, tokens.length);
         Candidate best = new Candidate();
-        collectSearchCandidates(root, tokens, requiredMatches, 0, best);
+        collectSearchCandidates(root, normalizedQuery, tokens, requiredMatches, 0, best);
         return best.node;
     }
 
-    private void collectSearchCandidates(AccessibilityNodeInfo node, String[] tokens,
-                                         int requiredMatches, int depth, Candidate best) {
+    private void collectSearchCandidates(AccessibilityNodeInfo node, String normalizedQuery,
+                                         String[] tokens, int requiredMatches,
+                                         int depth, Candidate best) {
         if (node == null || depth > MAX_DEPTH) return;
         CharSequence className = node.getClassName();
-        boolean editable = className != null && className.toString().toLowerCase(Locale.ROOT).contains("edittext");
-        String text = com.carassistant.v10.voice.VoiceCommandParser.normalize(
+        boolean editable = className != null
+                && className.toString().toLowerCase(Locale.ROOT).contains("edittext");
+        String normalizedText = com.carassistant.v10.voice.VoiceCommandParser.normalize(
                 collectText(node, depth, new StringBuilder()).toString());
-        if (!editable && !text.isEmpty() && text.length() > 3 && node.isClickable()) {
+        if (!editable && !normalizedText.isEmpty() && node.isClickable()) {
             int matches = 0;
             for (String token : tokens) {
-                if (token.length() >= 2 && text.contains(token)) matches++;
+                if (token.length() >= 2 && normalizedText.contains(token)) matches++;
             }
-            // Ignore the search box/suggestion that merely repeats the query.
-            if (matches >= requiredMatches && text.split("\\s+").length > tokens.length
-                    && matches * 100 + Math.min(text.length(), 99) > best.score) {
-                best.score = matches * 100 + Math.min(text.length(), 99);
-                best.node = AccessibilityNodeInfo.obtain(node);
+            int wordCount = normalizedText.split("\\s+").length;
+            boolean includesWholeQuery = !normalizedQuery.isEmpty()
+                    && normalizedText.contains(normalizedQuery);
+            // Avoid the search field/suggestion that only echoes the query. A real result
+            // normally includes a title plus artist, channel, duration, or other metadata.
+            if (matches >= requiredMatches && wordCount > tokens.length) {
+                // More query matches and a full phrase are better; among those, prefer the
+                // shortest matching clickable subtree so a page container is not tapped.
+                int score = matches * 1000
+                        + (includesWholeQuery ? 500 : 0)
+                        - Math.min(normalizedText.length(), 700);
+                if (score > best.score) {
+                    if (best.node != null) best.node.recycle();
+                    best.score = score;
+                    best.node = AccessibilityNodeInfo.obtain(node);
+                }
             }
         }
         for (int i = 0; i < node.getChildCount(); i++) {
             AccessibilityNodeInfo child = node.getChild(i);
             if (child != null) {
-                collectSearchCandidates(child, tokens, requiredMatches, depth + 1, best);
+                collectSearchCandidates(child, normalizedQuery, tokens, requiredMatches,
+                        depth + 1, best);
                 child.recycle();
             }
         }
@@ -155,14 +194,26 @@ public final class MediaPlaybackAccessibilityService extends AccessibilityServic
             if (node.getText() != null) text += node.getText().toString();
             if (node.getContentDescription() != null) text += " " + node.getContentDescription();
             String normalized = com.carassistant.v10.voice.VoiceCommandParser.normalize(text);
+            String viewId = node.getViewIdResourceName();
+            String normalizedId = com.carassistant.v10.voice.VoiceCommandParser.normalize(viewId);
+            boolean pauseState = normalized.contains("pause")
+                    || normalized.contains("tạm dừng")
+                    || normalized.contains("tam dung")
+                    || normalized.contains("stop");
             boolean playLabel = normalized.contains("play") || normalized.contains("phát")
                     || normalized.contains("phat") || normalized.contains("tiếp tục")
                     || normalized.contains("tiep tuc") || normalized.contains("resume")
                     || normalized.contains("watch now");
-            if (playLabel && node.isClickable()) {
+            boolean playId = normalizedId.contains("play")
+                    && !normalizedId.contains("pause")
+                    && !normalizedId.contains("play pause")
+                    && !normalizedId.contains("playpause");
+            if (!pauseState && (playLabel || playId)) {
                 for (AccessibilityNodeInfo other : nodes) {
                     if (other != node) other.recycle();
                 }
+                // The icon itself may not be clickable; clickNodeOrClickableParent walks
+                // up to the nearest clickable container.
                 return node;
             }
         }
@@ -186,7 +237,10 @@ public final class MediaPlaybackAccessibilityService extends AccessibilityServic
         AccessibilityNodeInfo current = AccessibilityNodeInfo.obtain(node);
         try {
             for (int i = 0; current != null && i < 5; i++) {
-                if (current.isClickable()) return current.performAction(AccessibilityNodeInfo.ACTION_CLICK);
+                if (current.isClickable()) {
+                    boolean clicked = current.performAction(AccessibilityNodeInfo.ACTION_CLICK);
+                    if (clicked) return true;
+                }
                 AccessibilityNodeInfo parent = current.getParent();
                 current.recycle();
                 current = parent;
@@ -199,22 +253,67 @@ public final class MediaPlaybackAccessibilityService extends AccessibilityServic
     }
 
     private AccessibilityNodeInfo findRootForPackage(String targetPackage) {
-        // On multi-display devices the active window may belong to the phone or car host.
-        // Search interactive windows for the actual media package before giving up.
-        try {
-            for (AccessibilityWindowInfo window : getWindows()) {
-                if (window == null) continue;
-                AccessibilityNodeInfo candidate = window.getRoot();
-                if (candidate == null) continue;
-                CharSequence packageName = candidate.getPackageName();
-                if (packageName != null && targetPackage.contentEquals(packageName)) {
-                    return candidate;
+        // API 30+ can expose windows from all displays. getWindows() alone may only
+        // return the default/active display and miss the app projected to display 2.
+        if (Build.VERSION.SDK_INT >= 30) {
+            try {
+                SparseArray<List<AccessibilityWindowInfo>> displays = getWindowsOnAllDisplays();
+                for (int displayIndex = 0; displayIndex < displays.size(); displayIndex++) {
+                    List<AccessibilityWindowInfo> windows = displays.valueAt(displayIndex);
+                    if (windows == null) continue;
+                    for (AccessibilityWindowInfo window : windows) {
+                        if (window == null) continue;
+                        AccessibilityNodeInfo candidate = null;
+                        try {
+                            candidate = window.getRoot();
+                            if (candidate != null) {
+                                CharSequence packageName = candidate.getPackageName();
+                                if (packageName != null && targetPackage.contentEquals(packageName)) {
+                                    return candidate;
+                                }
+                            }
+                        } finally {
+                            if (candidate != null) {
+                                CharSequence packageName = candidate.getPackageName();
+                                if (packageName == null || !targetPackage.contentEquals(packageName)) {
+                                    candidate.recycle();
+                                }
+                            }
+                            window.recycle();
+                        }
+                    }
                 }
-                candidate.recycle();
+            } catch (RuntimeException error) {
+                Log.w(TAG, "Cannot inspect windows on all displays", error);
             }
-        } catch (RuntimeException error) {
-            Log.w(TAG, "Cannot inspect interactive windows", error);
+        } else {
+            try {
+                for (AccessibilityWindowInfo window : getWindows()) {
+                    if (window == null) continue;
+                    AccessibilityNodeInfo candidate = null;
+                    try {
+                        candidate = window.getRoot();
+                        if (candidate != null) {
+                            CharSequence packageName = candidate.getPackageName();
+                            if (packageName != null && targetPackage.contentEquals(packageName)) {
+                                return candidate;
+                            }
+                        }
+                    } finally {
+                        if (candidate != null) {
+                            CharSequence packageName = candidate.getPackageName();
+                            if (packageName == null || !targetPackage.contentEquals(packageName)) {
+                                candidate.recycle();
+                            }
+                        }
+                        window.recycle();
+                    }
+                }
+            } catch (RuntimeException error) {
+                Log.w(TAG, "Cannot inspect interactive windows", error);
+            }
         }
+
         AccessibilityNodeInfo active = getRootInActiveWindow();
         if (active != null) {
             CharSequence packageName = active.getPackageName();
