@@ -880,31 +880,19 @@ private void dispatchMediaSearchOnProjection(ComponentName target, String uri, S
                 return;
             }
 
-            SharedPreferences mediaPrefs = getSharedPreferences("media_autoplay", MODE_PRIVATE);
-            boolean autoPlayEnabled = isMediaAutoPlayAccessibilityEnabled();
-            if (autoPlayEnabled) {
-                mediaPrefs.edit()
-                        .putString("target_package", target.getPackageName())
-                        .putString("query", query)
-                        .putString("phase", "search")
-                        .putInt("target_display_id", session.getDisplayId())
-                        .putLong("started_at", System.currentTimeMillis())
-                        .apply();
-            } else {
-                mediaPrefs.edit().remove("target_package").remove("query")
-                        .remove("phase").remove("target_display_id").remove("started_at").apply();
-                Toast.makeText(V10CarActivity.this,
-                        "Đã tìm trên màn hình chiếu. Muốn tự chọn kết quả và phát, hãy bật CarAsistant Media Auto Play trong Cài đặt Trợ năng.",
-                        Toast.LENGTH_LONG).show();
-            }
+            // OCR + root automation is the primary path; it does not depend on
+            // the phone's enabled Accessibility Services list.
+            getSharedPreferences("media_autoplay", MODE_PRIVATE).edit()
+                    .remove("target_package").remove("query").remove("phase")
+                    .remove("target_display_id").remove("started_at").apply();
 
-            // Delay a little after the launcher intent so the provider's own task is
-            // already on the target display; ACTION_VIEW then starts an independent task there.
             boolean accepted = session.launchMediaViewIntentOnDisplay(target.getPackageName(), uri);
-            if (!accepted) {
-                getSharedPreferences("media_autoplay", MODE_PRIVATE).edit()
-                        .remove("target_package").remove("query")
-                        .remove("phase").remove("started_at").apply();
+            if (accepted) {
+                MediaOcrAutoPlayEngine.start(
+                        V10CarActivity.this, session.getDisplayId(), target.getPackageName(), query);
+            } else {
+                Toast.makeText(V10CarActivity.this,
+                        "Không thể mở tìm kiếm trên màn hình chiếu.", Toast.LENGTH_SHORT).show();
             }
         }
     };
