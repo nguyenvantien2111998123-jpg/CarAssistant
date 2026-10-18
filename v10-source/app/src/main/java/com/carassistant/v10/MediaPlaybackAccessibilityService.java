@@ -34,32 +34,68 @@ public final class MediaPlaybackAccessibilityService extends AccessibilityServic
             String phase = prefs.getString("phase", "");
             int targetDisplayId = prefs.getInt("target_display_id", -1);
             long startedAt = prefs.getLong("started_at", 0L);
-            if (targetPackage.isEmpty() || !"play".equals(phase)) return;
-            if (startedAt <= 0L || System.currentTimeMillis() - startedAt > MAX_PENDING_MS) {
+            if (targetPackage.isEmpty()
+                    || (!"wait_player".equals(phase) && !"verify".equals(phase))) return;
+            long now = System.currentTimeMillis();
+            if (startedAt <= 0L || now - startedAt > MAX_PENDING_MS) {
+                Log.w(TAG, "Media automation timed out package=" + targetPackage
+                        + " displayId=" + targetDisplayId + " phase=" + phase);
                 clearPending(prefs);
-                Log.w(TAG, "Auto-play timed out for " + targetPackage);
                 return;
             }
 
             AccessibilityNodeInfo root = findRootForPackage(targetPackage, targetDisplayId);
             if (root != null) {
                 try {
-                    AccessibilityNodeInfo play = findPlayControl(root);
-                    if (play != null) {
-                        boolean clicked = clickNodeOrClickableParent(play);
-                        if (clicked) {
+                    if (isPlaybackConfirmed(root, prefs, now)) {
+                        Log.i(TAG, "Playback verified on player UI package=" + targetPackage
+                                + " displayId=" + targetDisplayId);
+                        clearPending(prefs);
+                        root.recycle();
+                        return;
+                    }
+                    if ("verify".equals(phase)) {
+                        long clickedAt = prefs.getLong("play_clicked_at", 0L);
+                        if (clickedAt > 0L && now - clickedAt >= 6000L) {
+                            Log.w(TAG, "Play click was not verified package=" + targetPackage
+                                    + " displayId=" + targetDisplayId);
                             clearPending(prefs);
-                            Log.i(TAG, "Tapped a visible Play control in " + targetPackage);
                             root.recycle();
                             return;
+                        }
+                    } else {
+                        long resultClickedAt = prefs.getLong("result_clicked_at", 0L);
+                        if (resultClickedAt > 0L && now - resultClickedAt >= 700L
+                                && isPlayerUiReady(root)) {
+                            AccessibilityNodeInfo play = findPlayControl(root);
+                            if (play != null) {
+                                boolean clicked = clickNodeOrClickableParent(play);
+                                if (clicked) {
+                                    prefs.edit().putString("phase", "verify")
+                                            .putLong("play_clicked_at", now).apply();
+                                    Log.i(TAG, "Play action accepted; verifying playback package="
+                                            + targetPackage + " displayId=" + targetDisplayId);
+                                    root.recycle();
+                                    automationHandler.postDelayed(this, RETRY_INTERVAL_MS);
+                                    return;
+                                }
+                                Log.d(TAG, "Play control click rejected package=" + targetPackage
+                                        + " displayId=" + targetDisplayId);
+                            }
+                        } else {
+                            Log.d(TAG, "Waiting for player UI package=" + targetPackage
+                                    + " displayId=" + targetDisplayId);
                         }
                     }
                 } catch (RuntimeException error) {
                     Log.w(TAG, "Play retry failed", error);
                 }
                 root.recycle();
+            } else {
+                Log.d(TAG, "No player root on target display package=" + targetPackage
+                        + " displayId=" + targetDisplayId);
             }
-            automationHandler.postDelayed(this, 400L);
+            automationHandler.postDelayed(this, RETRY_INTERVAL_MS);
         }
     };
 
@@ -99,7 +135,8 @@ public final class MediaPlaybackAccessibilityService extends AccessibilityServic
                 if (result != null) {
                     boolean clicked = clickNodeOrClickableParent(result);
                     if (clicked) {
-                        prefs.edit().putString("phase", "play").apply();
+                        prefs.edit().putString("phase", "wait_player")
+                                    .putLong("result_clicked_at", System.currentTimeMillis()).apply();
                         automationHandler.removeCallbacks(playRetry);
                         automationHandler.postDelayed(playRetry, 500L);
                         Log.i(TAG, "Selected a matching search result in " + eventPackage);
@@ -108,7 +145,7 @@ public final class MediaPlaybackAccessibilityService extends AccessibilityServic
                                 + eventPackage);
                     }
                 }
-            } else if ("play".equals(phase)) {
+            } else if ("wait_player".equals(phase) || "verify".equals(phase)) {
                 automationHandler.removeCallbacks(playRetry);
                 automationHandler.post(playRetry);
             }
@@ -127,15 +164,20 @@ public final class MediaPlaybackAccessibilityService extends AccessibilityServic
     private AccessibilityNodeInfo findSearchResult(AccessibilityNodeInfo root, String query) {
         String normalizedQuery =
                 com.carassistant.v10.voice.VoiceCommandParser.normalize(query);
-        String[] tokens = normalizedQuery.split("\\s+");
+        String[] tokens = normalizedQuery.trim().isEmpty()
+                ? new String[0] : normalizedQuery.trim().split("\\s+");
+        if (tokens.length == 0) return null;
         int requiredMatches = Math.min(2, tokens.length);
+        CharSequence packageNameValue = root.getPackageName();
+        String packageName = packageNameValue == null ? "" : packageNameValue.toString();
         Candidate best = new Candidate();
-        collectSearchCandidates(root, normalizedQuery, tokens, requiredMatches, 0, best);
+        collectSearchCandidates(root, normalizedQuery, tokens, requiredMatches,
+                packageName, 0, best);
         return best.node;
     }
 
     private void collectSearchCandidates(AccessibilityNodeInfo node, String normalizedQuery,
-                                         String[] tokens, int requiredMatches,
+                                         String[] tokens, int requiredMatches, String packageName,
                                          int depth, Candidate best) {
         if (node == null || depth > MAX_DEPTH) return;
         CharSequence className = node.getClassName();
@@ -151,13 +193,19 @@ public final class MediaPlaybackAccessibilityService extends AccessibilityServic
             int wordCount = normalizedText.split("\\s+").length;
             boolean includesWholeQuery = !normalizedQuery.isEmpty()
                     && normalizedText.contains(normalizedQuery);
-            // Avoid the search field/suggestion that only echoes the query. A real result
-            // normally includes a title plus artist, channel, duration, or other metadata.
-            if (matches >= requiredMatches && wordCount > tokens.length) {
+            // Do not require metadata beyond the query: some apps expose a clickable
+            // result whose accessible text is only the exact title/artist. Requiring more
+            // words than the query silently rejects those valid results in YouTube,
+            // YouTube Music, and Zing MP3. Editable search fields are already excluded above;
+            // rank longer result cards higher, but allow an exact-title clickable node.
+            if (matches >= requiredMatches && wordCount >= tokens.length) {
                 // More query matches and a full phrase are better; among those, prefer the
                 // shortest matching clickable subtree so a page container is not tapped.
-                int score = matches * 1000
-                        + (includesWholeQuery ? 500 : 0)
+                // Cap token matches so a giant clickable page container cannot beat
+                // the individual result card simply because it contains repeated metadata.
+                int score = Math.min(matches, requiredMatches) * 1000
+                        + (includesWholeQuery ? 600 : 0)
+                        + mediaResultMetadataBonus(normalizedText, packageName)
                         - Math.min(normalizedText.length(), 700);
                 if (score > best.score) {
                     if (best.node != null) best.node.recycle();
@@ -170,7 +218,7 @@ public final class MediaPlaybackAccessibilityService extends AccessibilityServic
             AccessibilityNodeInfo child = node.getChild(i);
             if (child != null) {
                 collectSearchCandidates(child, normalizedQuery, tokens, requiredMatches,
-                        depth + 1, best);
+                        packageName, depth + 1, best);
                 child.recycle();
             }
         }
@@ -192,39 +240,217 @@ public final class MediaPlaybackAccessibilityService extends AccessibilityServic
         return out;
     }
 
+    /** Prefer an actionable Play control by ID, then description, then exact label. */
     private AccessibilityNodeInfo findPlayControl(AccessibilityNodeInfo root) {
         List<AccessibilityNodeInfo> nodes = new ArrayList<>();
         collectNodes(root, 0, nodes);
+        AccessibilityNodeInfo best = null;
+        int bestScore = 0;
         for (AccessibilityNodeInfo node : nodes) {
-            String text = "";
-            if (node.getText() != null) text += node.getText().toString();
-            if (node.getContentDescription() != null) text += " " + node.getContentDescription();
-            String normalized = com.carassistant.v10.voice.VoiceCommandParser.normalize(text);
-            String viewId = node.getViewIdResourceName();
-            String normalizedId = com.carassistant.v10.voice.VoiceCommandParser.normalize(viewId);
-            boolean pauseState = normalized.contains("pause")
-                    || normalized.contains("tạm dừng")
-                    || normalized.contains("tam dung")
-                    || normalized.contains("stop");
-            boolean playLabel = normalized.contains("play") || normalized.contains("phát")
-                    || normalized.contains("phat") || normalized.contains("tiếp tục")
-                    || normalized.contains("tiep tuc") || normalized.contains("resume")
-                    || normalized.contains("watch now");
+            String text = node.getText() == null ? "" : node.getText().toString();
+            String description = node.getContentDescription() == null
+                    ? "" : node.getContentDescription().toString();
+            String normalizedText = com.carassistant.v10.voice.VoiceCommandParser.normalize(text);
+            String normalizedDescription =
+                    com.carassistant.v10.voice.VoiceCommandParser.normalize(description);
+            String normalizedId = com.carassistant.v10.voice.VoiceCommandParser.normalize(
+                    node.getViewIdResourceName());
+            String combined = normalizedText + " " + normalizedDescription;
+            boolean pauseState = combined.contains("pause")
+                    || combined.contains("tạm dừng") || combined.contains("tam dung");
             boolean playId = normalizedId.contains("play")
-                    && !normalizedId.contains("pause")
-                    && !normalizedId.contains("play pause")
-                    && !normalizedId.contains("playpause");
-            if (!pauseState && (playLabel || playId)) {
-                for (AccessibilityNodeInfo other : nodes) {
-                    if (other != node) other.recycle();
-                }
-                // The icon itself may not be clickable; clickNodeOrClickableParent walks
-                // up to the nearest clickable container.
-                return node;
+                    && !normalizedId.contains("pause") && !normalizedId.contains("playlist")
+                    && !normalizedId.contains("play pause") && !normalizedId.contains("playpause");
+            boolean playDescription = isExplicitPlayLabel(normalizedDescription);
+            boolean playText = isExplicitPlayLabel(normalizedText);
+            if (pauseState || !(playId || playDescription || playText)
+                    || !hasClickableAncestor(node)) continue;
+            int score = playId ? 300 : (playDescription ? 200 : 100);
+            if (score > bestScore) {
+                if (best != null) best.recycle();
+                best = AccessibilityNodeInfo.obtain(node);
+                bestScore = score;
             }
         }
         for (AccessibilityNodeInfo node : nodes) node.recycle();
-        return null;
+        if (best == null) Log.d(TAG, "No unambiguous actionable Play control in player UI");
+        return best;
+    }
+
+    private boolean isExplicitPlayLabel(String value) {
+        if (value == null || value.isEmpty()) return false;
+        return value.equals("play") || value.equals("phát") || value.equals("phat")
+                || value.equals("resume") || value.equals("tiếp tục") || value.equals("tiep tuc")
+                || value.equals("play video") || value.equals("play song")
+                || value.equals("phát video") || value.equals("phát bài hát")
+                || value.equals("xem ngay");
+    }
+
+    private boolean hasClickableAncestor(AccessibilityNodeInfo node) {
+        AccessibilityNodeInfo current = AccessibilityNodeInfo.obtain(node);
+        try {
+            for (int depth = 0; current != null && depth < 5; depth++) {
+                if (current.isClickable()) return true;
+                AccessibilityNodeInfo parent = current.getParent();
+                current.recycle();
+                current = parent;
+            }
+            return false;
+        } finally {
+            if (current != null) current.recycle();
+        }
+    }
+
+    /**
+     * Confirm actual player activity rather than treating any Pause-like label on a
+     * search preview/card as proof. Prefer a Pause control inside a recognized player
+     * surface; otherwise require the player's exposed progress range to move between
+     * observations. All inspection stays on the explicitly targeted display root.
+     */
+    private boolean isPlaybackConfirmed(AccessibilityNodeInfo root,
+                                        android.content.SharedPreferences prefs,
+                                        long now) {
+        if (!isPlayerUiReady(root)) return false;
+        if (hasPauseControl(root)) return true;
+
+        float progress = findPlaybackProgress(root);
+        if (Float.isNaN(progress)) return false;
+
+        long previousAt = prefs.getLong("progress_sample_at", 0L);
+        float previous = prefs.getFloat("progress_sample_value", -1f);
+        if (previousAt > 0L && now - previousAt >= 900L
+                && previous >= 0f && Math.abs(progress - previous) >= 0.0005f) {
+            Log.d(TAG, "Playback progress advanced from " + previous + " to " + progress);
+            return true;
+        }
+
+        if (previousAt == 0L || now - previousAt >= 900L) {
+            prefs.edit().putFloat("progress_sample_value", progress)
+                    .putLong("progress_sample_at", now).apply();
+        }
+        return false;
+    }
+
+    /** Returns a normalized 0..1 progress value exposed by a player seek/range control. */
+    private float findPlaybackProgress(AccessibilityNodeInfo root) {
+        List<AccessibilityNodeInfo> nodes = new ArrayList<>();
+        collectNodes(root, 0, nodes);
+        float progress = Float.NaN;
+        for (AccessibilityNodeInfo node : nodes) {
+            CharSequence classValue = node.getClassName();
+            String className = classValue == null ? ""
+                    : classValue.toString().toLowerCase(Locale.ROOT);
+            String viewId = com.carassistant.v10.voice.VoiceCommandParser.normalize(
+                    node.getViewIdResourceName());
+            boolean progressControl = className.contains("seekbar")
+                    || viewId.contains("seek") || viewId.contains("progress");
+            if (progressControl) {
+                AccessibilityNodeInfo.RangeInfo range = node.getRangeInfo();
+                if (range != null && range.getMax() > range.getMin()) {
+                    progress = (range.getCurrent() - range.getMin())
+                            / (range.getMax() - range.getMin());
+                    break;
+                }
+            }
+        }
+        for (AccessibilityNodeInfo node : nodes) node.recycle();
+        return progress;
+    }
+
+    /** Small app-specific hints help prefer song/video cards over generic containers. */
+    private int mediaResultMetadataBonus(String value, String packageName) {
+        int bonus = 0;
+        boolean youtubeMusic = packageName.equals("com.google.android.apps.youtube.music")
+                || packageName.equals("app.morphe.android.apps.youtube.music");
+        boolean youtube = packageName.equals("app.revanced.android.youtube")
+                || packageName.equals("app.morphe.android.youtube")
+                || packageName.equals("com.google.android.youtube");
+        boolean zing = packageName.equals("com.zing.mp3");
+        if (youtubeMusic || zing) {
+            if (value.contains("artist") || value.contains("nghe si")
+                    || value.contains("ca si") || value.contains("bai hat")
+                    || value.contains("album") || value.contains("playlist")
+                    || value.contains("music video") || value.contains("mv")) bonus += 180;
+        }
+        if (youtube) {
+            if (value.contains("views") || value.contains("luot xem")
+                    || value.contains("channel") || value.contains("kenh")
+                    || value.contains("ago") || value.contains("phut")
+                    || value.contains("video")) bonus += 120;
+        }
+        return bonus;
+    }
+
+    private boolean hasPauseControl(AccessibilityNodeInfo root) {
+        List<AccessibilityNodeInfo> nodes = new ArrayList<>();
+        collectNodes(root, 0, nodes);
+        boolean found = false;
+        for (int i = 0; i < nodes.size(); i++) {
+            AccessibilityNodeInfo node = nodes.get(i);
+            String text = node.getText() == null ? "" : node.getText().toString();
+            String description = node.getContentDescription() == null
+                    ? "" : node.getContentDescription().toString();
+            String label = com.carassistant.v10.voice.VoiceCommandParser.normalize(
+                    text + " " + description);
+            String viewId = com.carassistant.v10.voice.VoiceCommandParser.normalize(
+                    node.getViewIdResourceName());
+            boolean toggleLabel = label.contains("play pause") || label.contains("playpause")
+                    || label.contains("pause play") || label.contains("pauseplay");
+            boolean pauseLabel = !toggleLabel && (label.contains("pause")
+                    || label.contains("tạm dừng") || label.contains("tam dung"));
+            boolean toggleId = viewId.contains("play pause") || viewId.contains("playpause")
+                    || viewId.contains("pause play") || viewId.contains("pauseplay");
+            boolean pauseId = !toggleId && viewId.contains("pause");
+            if (pauseLabel || pauseId) found = true;
+            node.recycle();
+            if (found) {
+                for (int j = i + 1; j < nodes.size(); j++) nodes.get(j).recycle();
+                break;
+            }
+        }
+        return found;
+    }
+
+    /** Require signs of a player surface before clicking a control on a result page. */
+    private boolean isPlayerUiReady(AccessibilityNodeInfo root) {
+        if (hasPauseControl(root)) return true;
+        List<AccessibilityNodeInfo> nodes = new ArrayList<>();
+        collectNodes(root, 0, nodes);
+        boolean ready = false;
+        for (int i = 0; i < nodes.size(); i++) {
+            AccessibilityNodeInfo node = nodes.get(i);
+            String className = node.getClassName() == null ? ""
+                    : node.getClassName().toString().toLowerCase(Locale.ROOT);
+            String text = node.getText() == null ? "" : node.getText().toString();
+            String description = node.getContentDescription() == null ? ""
+                    : node.getContentDescription().toString();
+            String value = com.carassistant.v10.voice.VoiceCommandParser.normalize(
+                    text + " " + description + " " + node.getViewIdResourceName());
+            String viewId = com.carassistant.v10.voice.VoiceCommandParser.normalize(
+                    node.getViewIdResourceName());
+            boolean seekControl = className.contains("seekbar")
+                    || value.contains("seek bar") || value.contains("seekbar");
+            boolean playerLabel = value.contains("now playing") || value.contains("đang phát")
+                    || value.contains("dang phat") || value.contains("video player")
+                    || value.contains("music player");
+            // Some apps (including Compose-based players) expose no standard SeekBar class.
+            // Accept player-specific control IDs, but not generic Play labels from result cards.
+            boolean playerControlId = viewId.contains("player")
+                    && (viewId.contains("play") || viewId.contains("control")
+                    || viewId.contains("seek") || viewId.contains("progress"));
+            boolean explicitPlayerButtonId = (viewId.contains("play_button")
+                    || viewId.contains("playbutton") || viewId.contains("play_pause"))
+                    && !viewId.contains("playlist");
+            if (seekControl || playerLabel || playerControlId || explicitPlayerButtonId) {
+                ready = true;
+            }
+            node.recycle();
+            if (ready) {
+                for (int j = i + 1; j < nodes.size(); j++) nodes.get(j).recycle();
+                break;
+            }
+        }
+        return ready;
     }
 
     private void collectNodes(AccessibilityNodeInfo node, int depth, List<AccessibilityNodeInfo> out) {
@@ -393,7 +619,9 @@ public final class MediaPlaybackAccessibilityService extends AccessibilityServic
         automationHandler.removeCallbacks(playRetry);
         automationHandler.removeCallbacks(searchRetry);
         prefs.edit().remove("target_package").remove("query")
-                .remove("phase").remove("target_display_id").remove("started_at").apply();
+                .remove("phase").remove("target_display_id").remove("started_at")
+                .remove("result_clicked_at").remove("play_clicked_at")
+                .remove("progress_sample_at").remove("progress_sample_value").apply();
         automationHandler.postDelayed(searchRetry, 1000L);
     }
 
@@ -422,6 +650,10 @@ public final class MediaPlaybackAccessibilityService extends AccessibilityServic
                 return;
             }
             if (!"search".equals(phase)) {
+                if ("wait_player".equals(phase) || "verify".equals(phase)) {
+                    automationHandler.removeCallbacks(playRetry);
+                    automationHandler.post(playRetry);
+                }
                 automationHandler.postDelayed(this, 1000L);
                 return;
             }
@@ -433,7 +665,8 @@ public final class MediaPlaybackAccessibilityService extends AccessibilityServic
                     if (result != null) {
                         boolean clicked = clickNodeOrClickableParent(result);
                         if (clicked) {
-                            prefs.edit().putString("phase", "play").apply();
+                            prefs.edit().putString("phase", "wait_player")
+                                    .putLong("result_clicked_at", System.currentTimeMillis()).apply();
                             Log.i(TAG, "Selected matching result package=" + targetPackage
                                     + " displayId=" + targetDisplayId);
                             automationHandler.removeCallbacks(playRetry);

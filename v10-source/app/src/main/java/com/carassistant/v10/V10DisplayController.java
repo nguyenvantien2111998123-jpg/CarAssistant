@@ -214,6 +214,29 @@ public final class V10DisplayController {
         execute(command, "Media VIEW intent failed");
     }
 
+    /**
+     * Starts a media search on the phone display first. This deliberately does not
+     * force-stop the provider: its current task and playback state must remain alive
+     * so the projection launcher can reuse/move that task when the user selects the
+     * same app on Android Auto.
+     */
+    public synchronized boolean launchMediaViewIntentOnPhone(String packageName, String uri) {
+        if (packageName == null || packageName.trim().isEmpty()
+                || uri == null || uri.trim().isEmpty()) {
+            Log.w(TAG, "Refusing invalid phone media VIEW intent");
+            return false;
+        }
+        final int userId = Process.myUid() / 100000;
+        final String command = "/system/bin/am start"
+                + " --user " + userId
+                + " -a android.intent.action.VIEW"
+                + " -d " + shellQuote(uri)
+                + " -p " + shellQuote(packageName)
+                + " -f 0x10000000";
+        execute(command, "Phone media VIEW intent failed");
+        return true;
+    }
+
     private static String shellQuote(String value) {
         return "'" + value.replace("'", "'\"'\"'") + "'";
     }

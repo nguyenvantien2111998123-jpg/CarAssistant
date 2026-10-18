@@ -80,8 +80,9 @@ public final class VoiceCommandRouter {
             if (command.argument.isEmpty()) {
                 return new Result(true, "Đang mở " + opened + " trên màn hình chiếu.", false);
             }
-            return new Result(true, "Đang mở " + opened + " trên màn hình chiếu để tìm và phát "
-                    + mediaType + " \"" + command.argument + "\". Khả năng tự phát còn tùy ứng dụng.", false);
+            return new Result(true, "Đang tìm và phát trên điện thoại bằng " + opened
+                    + ". Khi chọn ứng dụng này trong Android Auto, hệ thống sẽ thử đưa task đang chạy sang màn hình phụ. Nội dung: \""
+                    + command.argument + "\". Khả năng tự phát còn tùy ứng dụng.", false);
         }
         if ("tv".equals(category)) {
             if (command.argument.isEmpty()) {

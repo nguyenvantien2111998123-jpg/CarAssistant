@@ -316,11 +316,14 @@ public final class V10CarActivity
                                     if (mediaUri == null) return null;
                                 }
 
-                                // Launch on the real projection surface, then send the search
-                                // intent to that same display. Keep the phone UI out of this flow.
-                                launchProjection(selected);
                                 if (mediaUri != null) {
-                                    dispatchMediaSearchOnProjection(selected, mediaUri, query.trim());
+                                    // Preserve the historical phone-first flow: search and autoplay
+                                    // on display 0, then let Android's normal task reuse/reparenting
+                                    // carry that live task to the secondary display when the user
+                                    // selects the same app in the Android Auto app picker.
+                                    dispatchMediaSearchOnPhone(selected, mediaUri, query.trim());
+                                } else {
+                                    launchProjection(selected);
                                 }
                                 return selectedLabel == null ? selected.getPackageName() : selectedLabel;
                             }
@@ -857,6 +860,43 @@ private void launchProjection(
      * engine.
      */
     session.setTarget(component);
+}
+
+/**
+ * Starts media search/playback on the phone while arming accessibility automation
+ * against the phone's default display. Do not force-stop the provider: its task and
+ * playback state must survive until the same app is selected for Android Auto projection.
+ */
+private void dispatchMediaSearchOnPhone(ComponentName target, String uri, String query) {
+    if (target == null || uri == null || query == null || query.trim().isEmpty()
+            || session == null) return;
+
+    SharedPreferences mediaPrefs = getSharedPreferences("media_autoplay", MODE_PRIVATE);
+    if (isMediaAutoPlayAccessibilityEnabled()) {
+        mediaPrefs.edit()
+                .putString("target_package", target.getPackageName())
+                .putString("query", query.trim())
+                .putString("phase", "search")
+                .putInt("target_display_id", 0)
+                .putLong("started_at", System.currentTimeMillis())
+                .remove("result_clicked_at")
+                .remove("play_clicked_at")
+                .apply();
+    } else {
+        mediaPrefs.edit().remove("target_package").remove("query")
+                .remove("phase").remove("target_display_id").remove("started_at")
+                .remove("result_clicked_at").remove("play_clicked_at").apply();
+        Toast.makeText(V10CarActivity.this,
+                "Đã mở tìm kiếm trên điện thoại. Hãy bật CarAsistant Media Auto Play trong Cài đặt Trợ năng để tự chọn và phát.",
+                Toast.LENGTH_LONG).show();
+    }
+
+    if (!session.launchMediaViewIntentOnPhone(target.getPackageName(), uri)) {
+        mediaPrefs.edit().remove("target_package").remove("query")
+                .remove("phase").remove("target_display_id").remove("started_at").apply();
+        Toast.makeText(V10CarActivity.this,
+                "Không thể mở tìm kiếm trên điện thoại.", Toast.LENGTH_SHORT).show();
+    }
 }
 
 /**
