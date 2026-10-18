@@ -193,9 +193,12 @@ public final class MediaPlaybackAccessibilityService extends AccessibilityServic
             int wordCount = normalizedText.split("\\s+").length;
             boolean includesWholeQuery = !normalizedQuery.isEmpty()
                     && normalizedText.contains(normalizedQuery);
-            // Avoid the search field/suggestion that only echoes the query. A real result
-            // normally includes a title plus artist, channel, duration, or other metadata.
-            if (matches >= requiredMatches && wordCount > tokens.length) {
+            // Do not require metadata beyond the query: some apps expose a clickable
+            // result whose accessible text is only the exact title/artist. Requiring more
+            // words than the query silently rejects those valid results in YouTube,
+            // YouTube Music, and Zing MP3. Editable search fields are already excluded above;
+            // rank longer result cards higher, but allow an exact-title clickable node.
+            if (matches >= requiredMatches && wordCount >= tokens.length) {
                 // More query matches and a full phrase are better; among those, prefer the
                 // shortest matching clickable subtree so a page container is not tapped.
                 // Cap token matches so a giant clickable page container cannot beat
