@@ -210,7 +210,7 @@ public final class MiniAccessEngine {
         for (Text.TextBlock block : recognized.getTextBlocks()) {
             for (Text.Line line : block.getLines()) {
                 Rect bounds = line.getBoundingBox();
-                if (bounds == null || bounds.centerY() < imageHeight * 0.11f) continue;
+                if (bounds == null || bounds.centerY() < imageHeight * 0.17f) continue;
                 String lineText = VoiceCommandParser.normalize(line.getText());
                 if (lineText.isEmpty()) continue;
                 int matches = 0;
