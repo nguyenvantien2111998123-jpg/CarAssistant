@@ -353,6 +353,7 @@ public final class MediaPlaybackAccessibilityService extends AccessibilityServic
         automationHandler.removeCallbacks(searchRetry);
         prefs.edit().remove("target_package").remove("query")
                 .remove("phase").remove("target_display_id").remove("started_at").apply();
+        automationHandler.postDelayed(searchRetry, 1000L);
     }
 
     /**
@@ -369,12 +370,18 @@ public final class MediaPlaybackAccessibilityService extends AccessibilityServic
             String phase = prefs.getString("phase", "");
             int targetDisplayId = prefs.getInt("target_display_id", -1);
             long startedAt = prefs.getLong("started_at", 0L);
-            if (targetPackage.isEmpty() || query.isEmpty()
-                    || !"search".equals(phase)) return;
+            if (targetPackage.isEmpty() || query.isEmpty()) {
+                automationHandler.postDelayed(this, 1000L);
+                return;
+            }
             if (startedAt <= 0L || System.currentTimeMillis() - startedAt > MAX_PENDING_MS) {
                 clearPending(prefs);
-                Log.w(TAG, "Search selection timed out for " + targetPackage
+                Log.w(TAG, "Media automation timed out for " + targetPackage
                         + " displayId=" + targetDisplayId);
+                return;
+            }
+            if (!"search".equals(phase)) {
+                automationHandler.postDelayed(this, 1000L);
                 return;
             }
 
@@ -390,6 +397,7 @@ public final class MediaPlaybackAccessibilityService extends AccessibilityServic
                                     + " displayId=" + targetDisplayId);
                             automationHandler.removeCallbacks(playRetry);
                             automationHandler.postDelayed(playRetry, 500L);
+                            automationHandler.postDelayed(this, 1000L);
                             return;
                         }
                         Log.w(TAG, "Result click rejected package=" + targetPackage
