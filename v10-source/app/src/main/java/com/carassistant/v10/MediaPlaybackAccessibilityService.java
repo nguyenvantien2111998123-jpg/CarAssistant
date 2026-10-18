@@ -346,12 +346,11 @@ public final class MediaPlaybackAccessibilityService extends AccessibilityServic
                 if (range != null && range.getMax() > range.getMin()) {
                     progress = (range.getCurrent() - range.getMin())
                             / (range.getMax() - range.getMin());
-                    node.recycle();
                     break;
                 }
             }
-            node.recycle();
         }
+        for (AccessibilityNodeInfo node : nodes) node.recycle();
         return progress;
     }
 
