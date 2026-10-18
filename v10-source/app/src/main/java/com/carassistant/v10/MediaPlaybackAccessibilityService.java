@@ -210,8 +210,9 @@ public final class MediaPlaybackAccessibilityService extends AccessibilityServic
 
     @Override
     public void onAccessibilityEvent(AccessibilityEvent event) {
-        if (event == null || event.getPackageName() == null) return;
-        String eventPackage = event.getPackageName().toString();
+        if (event == null) return;
+        String eventPackage = event.getPackageName() == null
+                ? "" : event.getPackageName().toString();
         android.content.SharedPreferences prefs =
                 getSharedPreferences(PREFS, MODE_PRIVATE);
         String targetPackage = prefs.getString("target_package", "");
@@ -221,9 +222,11 @@ public final class MediaPlaybackAccessibilityService extends AccessibilityServic
         long startedAt = prefs.getLong("started_at", 0L);
 
         if (targetPackage.isEmpty() || query.isEmpty() || phase.isEmpty()) return;
-        if (!targetPackage.equals(eventPackage)) return;
-        dumpAccessibilityWindowSnapshot("target-event-" + event.getEventType(),
+        // Snapshot on events from ANY package while a diagnostic/autoplay request is pending.
+        // This still produces evidence if the projected app itself emits no accessibility event.
+        dumpAccessibilityWindowSnapshot("event-" + event.getEventType(),
                 targetPackage, targetDisplayId, false);
+        if (!targetPackage.equals(eventPackage)) return;
         AccessibilityNodeInfo eventSourceForDiag = event.getSource();
         if (eventSourceForDiag != null) {
             try {
