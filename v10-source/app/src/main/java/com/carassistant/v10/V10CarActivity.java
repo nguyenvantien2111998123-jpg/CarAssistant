@@ -20,6 +20,8 @@ import android.graphics.drawable.Drawable;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
+import android.provider.Settings;
+import android.text.TextUtils;
 import android.view.Gravity;
 import android.view.TextureView;
 import android.view.View;
@@ -878,12 +880,22 @@ private void dispatchMediaSearchOnProjection(ComponentName target, String uri, S
                 return;
             }
 
-            getSharedPreferences("media_autoplay", MODE_PRIVATE).edit()
-                    .putString("target_package", target.getPackageName())
-                    .putString("query", query)
-                    .putString("phase", "search")
-                    .putLong("started_at", System.currentTimeMillis())
-                    .apply();
+            SharedPreferences mediaPrefs = getSharedPreferences("media_autoplay", MODE_PRIVATE);
+            boolean autoPlayEnabled = isMediaAutoPlayAccessibilityEnabled();
+            if (autoPlayEnabled) {
+                mediaPrefs.edit()
+                        .putString("target_package", target.getPackageName())
+                        .putString("query", query)
+                        .putString("phase", "search")
+                        .putLong("started_at", System.currentTimeMillis())
+                        .apply();
+            } else {
+                mediaPrefs.edit().remove("target_package").remove("query")
+                        .remove("phase").remove("started_at").apply();
+                Toast.makeText(V10CarActivity.this,
+                        "Đã tìm trên màn hình chiếu. Muốn tự chọn kết quả và phát, hãy bật CarAsistant Media Auto Play trong Cài đặt Trợ năng.",
+                        Toast.LENGTH_LONG).show();
+            }
 
             // Delay a little after the launcher intent so the provider's own task is
             // already on the target display; ACTION_VIEW then starts an independent task there.
@@ -896,6 +908,22 @@ private void dispatchMediaSearchOnProjection(ComponentName target, String uri, S
         }
     };
     handler.postDelayed(dispatch, 650L);
+}
+
+private boolean isMediaAutoPlayAccessibilityEnabled() {
+    String enabledServices = Settings.Secure.getString(
+            getContentResolver(), Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES);
+    if (TextUtils.isEmpty(enabledServices)) return false;
+
+    ComponentName expected = new ComponentName(
+            this, MediaPlaybackAccessibilityService.class);
+    TextUtils.SimpleStringSplitter splitter = new TextUtils.SimpleStringSplitter(':');
+    splitter.setString(enabledServices);
+    for (String entry : splitter) {
+        ComponentName enabled = ComponentName.unflattenFromString(entry);
+        if (expected.equals(enabled)) return true;
+    }
+    return false;
 }
 
 private void launchBackgroundProjection(ComponentName component) {
