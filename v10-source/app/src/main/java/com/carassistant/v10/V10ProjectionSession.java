@@ -66,6 +66,13 @@ public final class V10ProjectionSession implements TextureView.SurfaceTextureLis
         return true;
     }
 
+    /** Starts a media VIEW deep link on this session's exact display, isolating it from phone tasks. */
+    public boolean launchMediaViewIntentOnDisplay(String packageName, String uri) {
+        if (!isActive() || packageName == null || uri == null) return false;
+        displayController.launchMediaViewIntentOnDisplay(packageName, uri);
+        return true;
+    }
+
     /** Best-effort standard search action for apps that implement Android ACTION_SEARCH. */
     public boolean launchSearchIntentOnDisplay(String packageName, String query) {
         if (!isActive() || packageName == null || query == null || query.trim().isEmpty()) return false;
