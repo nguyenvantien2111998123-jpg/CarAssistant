@@ -172,7 +172,7 @@ public final class MediaOcrAutoPlayEngine {
             int score = 0;
             if (text.contains(normalizedQuery)) score += 10;
             for (String token : tokens) {
-                if (token.length() >= 3 && text.contains(token)) score += 2;
+                if (token.length() >= 3 && text.contains(token)) score += 1;
             }
             // Avoid tapping a random generic control for one-word queries.
             int required = tokens.length > 1 ? 2 : 10;
