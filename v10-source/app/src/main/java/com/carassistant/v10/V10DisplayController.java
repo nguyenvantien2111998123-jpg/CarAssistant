@@ -87,6 +87,15 @@ public final class V10DisplayController {
             virtualDisplay = created;
             display = createdDisplay;
             replaceSurface(newSurface);
+            Log.i(TAG, "DIAG virtualDisplayCreated index=" + displayIndex
+                    + " displayId=" + createdDisplay.getDisplayId()
+                    + " name=" + V10Display.nameFor(displayIndex)
+                    + " width=" + width + " height=" + height
+                    + " densityDpi=160 flags=10"
+                    + " presentationFlag=" + DisplayManager.VIRTUAL_DISPLAY_FLAG_PRESENTATION
+                    + " ownContentOnlyFlag=" + DisplayManager.VIRTUAL_DISPLAY_FLAG_OWN_CONTENT_ONLY
+                    + " publicFlag=" + DisplayManager.VIRTUAL_DISPLAY_FLAG_PUBLIC
+                    + " publicEnabled=false");
             return true;
         } catch (RuntimeException e) {
             Log.w(TAG, "Display creation failed", e);
@@ -139,6 +148,9 @@ public final class V10DisplayController {
         launched = true;
         final int displayId = display.getDisplayId();
         final int userId = Process.myUid() / 100000;
+        Log.i(TAG, "DIAG launchActivityOnDisplay displayId=" + displayId
+                + " component=" + component.flattenToString()
+                + " launchMode=MAIN_LAUNCHER");
         final String flat = component.flattenToString().replace("'", "'\"'\"'");
         final String command = "/system/bin/am start"
                 + " --user " + userId
