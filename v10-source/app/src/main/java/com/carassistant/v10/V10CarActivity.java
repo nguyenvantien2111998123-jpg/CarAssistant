@@ -72,6 +72,7 @@ public final class V10CarActivity
     private TextView floatingVoiceButton;
     private TextView voiceTranscriptView;
     private VoiceAssistantController voiceAssistantController;
+    private MiniAccessEngine miniAccessEngine;
 
     private TextView floatingTouchKey;
     private LinearLayout floatingMenu;
@@ -803,6 +804,7 @@ public final class V10CarActivity
         session = new V10ProjectionSession(this, 1);
         session.attachTextureView(appTextureView);
         appTextureView.setOnTouchListener(new V10InputController(session).createListener());
+        miniAccessEngine = new MiniAccessEngine(this, appTextureView, session);
 
         createFloatingTouchKey();
 
@@ -881,22 +883,16 @@ private void dispatchMediaSearchOnProjection(ComponentName target, String uri, S
             }
 
             SharedPreferences mediaPrefs = getSharedPreferences("media_autoplay", MODE_PRIVATE);
-            boolean autoPlayEnabled = isMediaAutoPlayAccessibilityEnabled();
-            if (autoPlayEnabled) {
-                mediaPrefs.edit()
-                        .putString("target_package", target.getPackageName())
-                        .putString("query", query)
-                        .putString("phase", "search")
-                        .putInt("target_display_id", session.getDisplayId())
-                        .putLong("started_at", System.currentTimeMillis())
-                        .apply();
-            } else {
-                mediaPrefs.edit().remove("target_package").remove("query")
-                        .remove("phase").remove("target_display_id").remove("started_at").apply();
-                Toast.makeText(V10CarActivity.this,
-                        "Đã tìm trên màn hình chiếu. Muốn tự chọn kết quả và phát, hãy bật CarAsistant Media Auto Play trong Cài đặt Trợ năng.",
-                        Toast.LENGTH_LONG).show();
-            }
+            // Keep the existing AccessibilityService as first attempt, but no longer
+            // require it: MiniAccessEngine provides an OCR + display-targeted tap fallback.
+            mediaPrefs.edit()
+                    .putString("target_package", target.getPackageName())
+                    .putString("query", query)
+                    .putString("phase", "search")
+                    .putInt("target_display_id", session.getDisplayId())
+                    .putLong("started_at", System.currentTimeMillis())
+                    .putBoolean("mini_engine_active", false)
+                    .apply();
 
             // Delay a little after the launcher intent so the provider's own task is
             // already on the target display; ACTION_VIEW then starts an independent task there.
@@ -904,7 +900,10 @@ private void dispatchMediaSearchOnProjection(ComponentName target, String uri, S
             if (!accepted) {
                 getSharedPreferences("media_autoplay", MODE_PRIVATE).edit()
                         .remove("target_package").remove("query")
-                        .remove("phase").remove("started_at").apply();
+                        .remove("phase").remove("target_display_id").remove("started_at")
+                        .putBoolean("mini_engine_active", false).apply();
+            } else if (miniAccessEngine != null) {
+                miniAccessEngine.start();
             }
         }
     };
@@ -1422,6 +1421,10 @@ private void hideFloatingMenu() {
     @Override
     public void onDestroy() {
 
+        if (miniAccessEngine != null) {
+            miniAccessEngine.close();
+            miniAccessEngine = null;
+        }
         if (keyboardController != null) {
             keyboardController.stop();
             keyboardController = null;
