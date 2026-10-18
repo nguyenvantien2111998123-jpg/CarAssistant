@@ -59,6 +59,7 @@ public final class V10CarActivity
     private LinearLayout dock;
     private TextureView textureView;
     private V10ProjectionSession session;
+    private CarAssistantKeyboardController keyboardController;
     private FrameLayout appProjectionLayer;
     private TextureView appTextureView;
     private V10ProjectionSession backgroundSession;
@@ -317,17 +318,7 @@ public final class V10CarActivity
                                 // intent to that same display. Keep the phone UI out of this flow.
                                 launchProjection(selected);
                                 if (mediaUri != null) {
-                                    // The accessibility fallback is opt-in. Save the exact target
-                                    // before dispatch so it can select a result and tap Play only in
-                                    // the requested app, with a bounded timeout.
-                                    getSharedPreferences("media_autoplay", MODE_PRIVATE).edit()
-                                            .putString("target_package", selected.getPackageName())
-                                            .putString("query", query.trim())
-                                            .putString("phase", "search")
-                                            .putLong("started_at", System.currentTimeMillis())
-                                            .apply();
-                                    session.launchViewIntentOnDisplay(
-                                            selected.getPackageName(), mediaUri);
+                                    dispatchMediaSearchOnProjection(selected, mediaUri, query.trim());
                                 }
                                 return selectedLabel == null ? selected.getPackageName() : selectedLabel;
                             }
@@ -812,11 +803,17 @@ public final class V10CarActivity
         appTextureView.setOnTouchListener(new V10InputController(session).createListener());
 
         createFloatingTouchKey();
+
+        keyboardController = new CarAssistantKeyboardController(
+                root, backgroundSession, session);
+        keyboardController.start();
     }
 
 
 private void launchProjection(
         ComponentName component) {
+
+    if (keyboardController != null) keyboardController.hide();
 
     if (component == null
             || session == null) {
@@ -860,6 +857,47 @@ private void launchProjection(
     session.setTarget(component);
 }
 
+/**
+ * Wait until the selected app is attached to display 2 before sending its search URI.
+ * Some media apps otherwise reuse an existing phone task during the initial launch race.
+ */
+private void dispatchMediaSearchOnProjection(ComponentName target, String uri, String query) {
+    if (target == null || uri == null || query == null || session == null) return;
+    final long deadline = SystemClock.uptimeMillis() + 5000L;
+    Runnable dispatch = new Runnable() {
+        @Override public void run() {
+            if (session == null || !target.equals(activeTarget)) return;
+            if (!session.isActive() || session.getDisplayId() <= 0) {
+                if (SystemClock.uptimeMillis() < deadline) {
+                    handler.postDelayed(this, 250L);
+                } else {
+                    Toast.makeText(V10CarActivity.this,
+                            "Không thể mở kết quả tìm kiếm trên màn hình chiếu.",
+                            Toast.LENGTH_SHORT).show();
+                }
+                return;
+            }
+
+            getSharedPreferences("media_autoplay", MODE_PRIVATE).edit()
+                    .putString("target_package", target.getPackageName())
+                    .putString("query", query)
+                    .putString("phase", "search")
+                    .putLong("started_at", System.currentTimeMillis())
+                    .apply();
+
+            // Delay a little after the launcher intent so the provider's own task is
+            // already on the target display; ACTION_VIEW then starts an independent task there.
+            boolean accepted = session.launchViewIntentOnDisplay(target.getPackageName(), uri);
+            if (!accepted) {
+                getSharedPreferences("media_autoplay", MODE_PRIVATE).edit()
+                        .remove("target_package").remove("query")
+                        .remove("phase").remove("started_at").apply();
+            }
+        }
+    };
+    handler.postDelayed(dispatch, 650L);
+}
+
 private void launchBackgroundProjection(ComponentName component) {
     if (component == null || backgroundSession == null) return;
     activeBackgroundTarget = component;
@@ -897,6 +935,8 @@ private boolean isHomeScreen() {
 
     private void returnToLauncher() {
 
+        if (keyboardController != null) keyboardController.hide();
+
         // Leaving display 2 returns to Home and restores display 1.
         // Detach display 2 first so it cannot remain visible under Home chrome.
         if (session != null) {
@@ -919,6 +959,8 @@ private boolean isHomeScreen() {
 
 
 private void showApps() {
+
+    if (keyboardController != null) keyboardController.hide();
 
     if (floatingVoiceButton != null) floatingVoiceButton.setVisibility(View.GONE);
 
@@ -1319,6 +1361,7 @@ private void hideFloatingMenu() {
     @Override
     public void onPause() {
 
+        if (keyboardController != null) keyboardController.hide();
         if (voiceAssistantController != null) voiceAssistantController.cancelListening();
         resumed = false;
 
@@ -1350,6 +1393,10 @@ private void hideFloatingMenu() {
     @Override
     public void onDestroy() {
 
+        if (keyboardController != null) {
+            keyboardController.stop();
+            keyboardController = null;
+        }
         resumed = false;
 
 
