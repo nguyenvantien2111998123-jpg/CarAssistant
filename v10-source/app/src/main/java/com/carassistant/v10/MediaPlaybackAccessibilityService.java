@@ -335,10 +335,24 @@ public final class MediaPlaybackAccessibilityService extends AccessibilityServic
                     : node.getContentDescription().toString();
             String value = com.carassistant.v10.voice.VoiceCommandParser.normalize(
                     text + " " + description + " " + node.getViewIdResourceName());
-            if (className.contains("seekbar") || value.contains("seek bar")
-                    || value.contains("seekbar") || value.contains("now playing")
-                    || value.contains("đang phát") || value.contains("dang phat")
-                    || value.contains("video player") || value.contains("music player")) ready = true;
+            String viewId = com.carassistant.v10.voice.VoiceCommandParser.normalize(
+                    node.getViewIdResourceName());
+            boolean seekControl = className.contains("seekbar")
+                    || value.contains("seek bar") || value.contains("seekbar");
+            boolean playerLabel = value.contains("now playing") || value.contains("đang phát")
+                    || value.contains("dang phat") || value.contains("video player")
+                    || value.contains("music player");
+            // Some apps (including Compose-based players) expose no standard SeekBar class.
+            // Accept player-specific control IDs, but not generic Play labels from result cards.
+            boolean playerControlId = viewId.contains("player")
+                    && (viewId.contains("play") || viewId.contains("control")
+                    || viewId.contains("seek") || viewId.contains("progress"));
+            boolean explicitPlayerButtonId = (viewId.contains("play_button")
+                    || viewId.contains("playbutton") || viewId.contains("play_pause"))
+                    && !viewId.contains("playlist");
+            if (seekControl || playerLabel || playerControlId || explicitPlayerButtonId) {
+                ready = true;
+            }
             node.recycle();
             if (ready) {
                 for (int j = i + 1; j < nodes.size(); j++) nodes.get(j).recycle();
