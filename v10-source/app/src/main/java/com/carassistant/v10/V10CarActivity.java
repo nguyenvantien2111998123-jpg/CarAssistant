@@ -887,11 +887,12 @@ private void dispatchMediaSearchOnProjection(ComponentName target, String uri, S
                         .putString("target_package", target.getPackageName())
                         .putString("query", query)
                         .putString("phase", "search")
+                        .putInt("target_display_id", session.getDisplayId())
                         .putLong("started_at", System.currentTimeMillis())
                         .apply();
             } else {
                 mediaPrefs.edit().remove("target_package").remove("query")
-                        .remove("phase").remove("started_at").apply();
+                        .remove("phase").remove("target_display_id").remove("started_at").apply();
                 Toast.makeText(V10CarActivity.this,
                         "Đã tìm trên màn hình chiếu. Muốn tự chọn kết quả và phát, hãy bật CarAsistant Media Auto Play trong Cài đặt Trợ năng.",
                         Toast.LENGTH_LONG).show();
