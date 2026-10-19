@@ -11,6 +11,10 @@ public final class V10ControlReceiver
             "com.carassistant.v10.CONTROL";
     public static final String ACTION_STEERING_VOICE =
             "com.carassistant.v10.STEERING_VOICE";
+    public static final String ACTION_STEERING_MEDIA_SEEK =
+            "com.carassistant.v10.STEERING_MEDIA_SEEK";
+    public static final String ACTION_STEERING_MEDIA_OPEN =
+            "com.carassistant.v10.STEERING_MEDIA_OPEN";
 
     public static final String EXTRA_COMMAND =
             "command";
@@ -27,6 +31,18 @@ public final class V10ControlReceiver
         if (ACTION_STEERING_VOICE.equals(intent.getAction())) {
             V10CarActivity voiceActivity = V10SessionStore.getCurrentActivity();
             if (voiceActivity != null) voiceActivity.handleSteeringVoiceCommand();
+            return;
+        }
+
+        if (ACTION_STEERING_MEDIA_SEEK.equals(intent.getAction())) {
+            int direction = intent.getIntExtra("direction", 0);
+            if (direction != 0) MediaSessionBridge.seekBy(direction > 0 ? 15000L : -15000L);
+            return;
+        }
+
+        if (ACTION_STEERING_MEDIA_OPEN.equals(intent.getAction())) {
+            V10CarActivity mediaActivity = V10SessionStore.getCurrentActivity();
+            if (mediaActivity != null) mediaActivity.handleOpenActiveMediaOnProjection();
             return;
         }
 
