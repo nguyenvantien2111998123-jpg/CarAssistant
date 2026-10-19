@@ -1288,7 +1288,7 @@ private void hideFloatingMenu() {
 
     /** Entry point used by the steering-wheel double-Next command. */
     public void handleSteeringVoiceCommand() {
-        runOnUiThread(this::activateVoiceAssistant);
+        handler.post(this::activateVoiceAssistant);
     }
 
     private void activateVoiceAssistant() {
