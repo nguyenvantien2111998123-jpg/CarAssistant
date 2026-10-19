@@ -8,6 +8,7 @@ import com.carassistant.v10.hook.GearheadAllow;
 import com.carassistant.v10.hook.GearheadDockPatcher;
 import com.carassistant.v10.hook.InputHooks;
 import com.carassistant.v10.hook.OrientationHooks;
+import com.carassistant.v10.hook.SteeringWheelKeyHooks;
 import com.carassistant.v10.hook.InstallerSpoof;
 
 import de.robv.android.xposed.IXposedHookLoadPackage;
@@ -47,6 +48,7 @@ public final class AACastBridge implements IXposedHookLoadPackage {
             if (GEARHEAD.equals(packageName)) {
                 GearheadAllow.install(param.classLoader);
                 GearheadDockPatcher.install();
+                SteeringWheelKeyHooks.install(param.classLoader);
             }
 
             if (Build.VERSION.SDK_INT >= 30) {
