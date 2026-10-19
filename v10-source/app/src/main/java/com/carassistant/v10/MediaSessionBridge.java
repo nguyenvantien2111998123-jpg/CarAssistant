@@ -196,18 +196,19 @@ public final class MediaSessionBridge extends NotificationListenerService {
             activeController = chosen;
             controllerCallback = null;
             if (chosen != null) {
+                final MediaController selectedController = chosen;
                 controllerCallback = new MediaController.Callback() {
                     @Override public void onMetadataChanged(MediaMetadata metadata) {
-                        publish(chosen);
+                        publish(selectedController);
                     }
                     @Override public void onPlaybackStateChanged(PlaybackState state) {
-                        publish(chosen);
+                        publish(selectedController);
                     }
                     @Override public void onSessionDestroyed() {
                         refreshFromManager();
                     }
                 };
-                try { chosen.registerCallback(controllerCallback, MAIN); }
+                try { selectedController.registerCallback(controllerCallback, MAIN); }
                 catch (RuntimeException error) { Log.w(TAG, "Cannot observe media controller", error); }
             }
         }
