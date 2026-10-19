@@ -13,29 +13,48 @@ import de.robv.android.xposed.XposedBridge;
 import de.robv.android.xposed.XposedHelpers;
 
 /**
- * Maps a quick double press of the steering-wheel NEXT key to CarAsistant voice.
- * A single NEXT press is delayed briefly, then replayed to Android's media routing.
- * No touch/input hooks are changed here.
+ * Steering-wheel media-key adapter installed in Android Auto (Gearhead).
+ *
+ * It consumes only MEDIA_NEXT and MEDIA_PREVIOUS while arbitrating short taps
+ * versus holds. Unknown media keys are observed but never rewritten.
+ * Touch/display hooks are intentionally untouched.
  */
 public final class SteeringWheelKeyHooks {
     private static final String TAG = "[AACast SteeringKey]";
     private static final String SELF = "com.carassistant.v10";
     private static final String VOICE_ACTION = "com.carassistant.v10.STEERING_VOICE";
+
     private static final long DOUBLE_PRESS_WINDOW_MS = 300L;
+    private static final long HOLD_START_MS = 450L;
+    private static final long HOLD_REPEAT_MS = 1000L;
+
+    private static final int NEXT = KeyEvent.KEYCODE_MEDIA_NEXT;
+    private static final int PREVIOUS = KeyEvent.KEYCODE_MEDIA_PREVIOUS;
+    private static final int FAST_FORWARD = KeyEvent.KEYCODE_MEDIA_FAST_FORWARD;
+    private static final int REWIND = KeyEvent.KEYCODE_MEDIA_REWIND;
 
     private static final Handler MAIN = new Handler(Looper.getMainLooper());
+    private static final Object LOCK = new Object();
+
+    private static int pressedKey = KeyEvent.KEYCODE_UNKNOWN;
+    private static long pressedDownTime;
+    private static boolean pressedHeld;
+    private static boolean pressedIsDoubleTap;
+    private static int holdRepeatCount;
+    private static Runnable holdStartRunnable;
+    private static Runnable holdRepeatRunnable;
+
     private static boolean pendingNext;
-    private static boolean consumeNextUp;
-    private static long firstNextTime;
+    private static long firstNextUpTime;
     private static Runnable pendingSingleNext;
 
     private static final int[] CANDIDATE_CODES = {
             KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE,
             KeyEvent.KEYCODE_MEDIA_STOP,
-            KeyEvent.KEYCODE_MEDIA_NEXT,
-            KeyEvent.KEYCODE_MEDIA_PREVIOUS,
+            NEXT,
+            PREVIOUS,
             KeyEvent.KEYCODE_MEDIA_REWIND,
-            KeyEvent.KEYCODE_MEDIA_FAST_FORWARD,
+            FAST_FORWARD,
             KeyEvent.KEYCODE_MEDIA_PLAY,
             KeyEvent.KEYCODE_MEDIA_PAUSE,
             KeyEvent.KEYCODE_MEDIA_SKIP_FORWARD,
@@ -68,59 +87,182 @@ public final class SteeringWheelKeyHooks {
                                     + " downTime=" + event.getDownTime()
                                     + " eventTime=" + event.getEventTime());
 
-                            if (event.getKeyCode() == KeyEvent.KEYCODE_MEDIA_NEXT) {
-                                handleNext(event, param);
+                            if (event.getKeyCode() == NEXT || event.getKeyCode() == PREVIOUS) {
+                                arbitrate(event, param);
                             }
                         }
                     });
-            XposedBridge.log(TAG + " double-press mapping installed; window="
-                    + DOUBLE_PRESS_WINDOW_MS + "ms");
+            XposedBridge.log(TAG + " media-key adapter installed; double="
+                    + DOUBLE_PRESS_WINDOW_MS + "ms, hold=" + HOLD_START_MS + "ms");
         } catch (Throwable error) {
             XposedBridge.log(TAG + " hook install failed: " + error);
         }
     }
 
-    private static void handleNext(KeyEvent event, MethodHookParam param) {
+    private static void arbitrate(KeyEvent event, XC_MethodHook.MethodHookParam param) {
+        final int key = event.getKeyCode();
         if (event.getAction() == KeyEvent.ACTION_DOWN) {
-            // Consume all repeat events while a Next press is held. A hold is not a double tap.
-            consumeNextUp = true;
             param.setResult(true);
             if (event.getRepeatCount() != 0) return;
 
-            long now = SystemClock.uptimeMillis();
-            if (pendingNext && now - firstNextTime <= DOUBLE_PRESS_WINDOW_MS) {
-                pendingNext = false;
-                if (pendingSingleNext != null) MAIN.removeCallbacks(pendingSingleNext);
-                pendingSingleNext = null;
-                XposedBridge.log(TAG + " double NEXT detected -> request CarAsistant voice");
-                requestVoice();
-                return;
-            }
+            synchronized (LOCK) {
+                long now = SystemClock.uptimeMillis();
 
-            // If the previous window has expired but its callback was delayed, flush it first.
-            if (pendingNext) {
-                pendingNext = false;
-                if (pendingSingleNext != null) MAIN.removeCallbacks(pendingSingleNext);
-                pendingSingleNext = null;
-                dispatchMediaNext();
-            }
+                if (key == NEXT && pendingNext) {
+                    long elapsed = now - firstNextUpTime;
+                    if (elapsed >= 0 && elapsed <= DOUBLE_PRESS_WINDOW_MS) {
+                        cancelPendingNextLocked();
+                        pressedKey = NEXT;
+                        pressedDownTime = event.getDownTime();
+                        pressedHeld = false;
+                        pressedIsDoubleTap = true;
+                        cancelHoldRunnablesLocked();
+                        XposedBridge.log(TAG + " double NEXT -> voice assistant");
+                        requestVoice();
+                        return;
+                    }
 
-            pendingNext = true;
-            firstNextTime = now;
-            pendingSingleNext = () -> {
-                if (!pendingNext) return;
-                pendingNext = false;
-                pendingSingleNext = null;
-                XposedBridge.log(TAG + " single NEXT -> replay media key");
-                dispatchMediaNext();
-            };
-            MAIN.postDelayed(pendingSingleNext, DOUBLE_PRESS_WINDOW_MS);
+                    // The previous single tap's timer was delayed; flush it before
+                    // beginning a new independent press.
+                    cancelPendingNextLocked();
+                    dispatchMediaKey(NEXT, false, 0L, 0);
+                }
+
+                // Ignore overlapping key-downs rather than corrupting press state.
+                if (pressedKey != KeyEvent.KEYCODE_UNKNOWN) return;
+
+                pressedKey = key;
+                pressedDownTime = event.getDownTime();
+                pressedHeld = false;
+                pressedIsDoubleTap = false;
+                holdRepeatCount = 0;
+
+                holdStartRunnable = () -> startHoldIfStillPressed(key);
+                MAIN.postDelayed(holdStartRunnable, HOLD_START_MS);
+            }
             return;
         }
 
-        if (event.getAction() == KeyEvent.ACTION_UP && consumeNextUp) {
-            consumeNextUp = false;
+        if (event.getAction() == KeyEvent.ACTION_UP) {
             param.setResult(true);
+            synchronized (LOCK) {
+                if (pressedKey != key) return;
+
+                cancelHoldRunnablesLocked();
+                if (pressedHeld) {
+                    int holdKey = key == NEXT ? FAST_FORWARD : REWIND;
+                    dispatchMediaKey(holdKey, true, pressedDownTime, holdRepeatCount);
+                    XposedBridge.log(TAG + " hold released key=" + key
+                            + " repeats=" + holdRepeatCount);
+                } else if (!pressedIsDoubleTap) {
+                    if (key == NEXT) {
+                        scheduleSingleNextLocked();
+                    } else {
+                        dispatchMediaKey(PREVIOUS, false, 0L, 0);
+                    }
+                }
+
+                pressedKey = KeyEvent.KEYCODE_UNKNOWN;
+                pressedDownTime = 0L;
+                pressedHeld = false;
+                pressedIsDoubleTap = false;
+                holdRepeatCount = 0;
+            }
+        }
+    }
+
+    private static void scheduleSingleNextLocked() {
+        cancelPendingNextLocked();
+        pendingNext = true;
+        firstNextUpTime = SystemClock.uptimeMillis();
+        pendingSingleNext = () -> {
+            synchronized (LOCK) {
+                if (!pendingNext) return;
+                pendingNext = false;
+                pendingSingleNext = null;
+                XposedBridge.log(TAG + " single NEXT -> active media session");
+                dispatchMediaKey(NEXT, false, 0L, 0);
+            }
+        };
+        MAIN.postDelayed(pendingSingleNext, DOUBLE_PRESS_WINDOW_MS);
+    }
+
+    private static void startHoldIfStillPressed(int key) {
+        synchronized (LOCK) {
+            if (pressedKey != key || pressedHeld || pressedIsDoubleTap) return;
+            pressedHeld = true;
+            holdRepeatCount = 0;
+            int holdKey = key == NEXT ? FAST_FORWARD : REWIND;
+            XposedBridge.log(TAG + " hold started key=" + key
+                    + " -> media key " + holdKey);
+            dispatchMediaKey(holdKey, false, pressedDownTime, 0);
+            holdRepeatRunnable = new Runnable() {
+                @Override
+                public void run() {
+                    synchronized (LOCK) {
+                        if (pressedKey != key || !pressedHeld) return;
+                        holdRepeatCount++;
+                        dispatchMediaKey(holdKey, false, pressedDownTime, holdRepeatCount);
+                        MAIN.postDelayed(this, HOLD_REPEAT_MS);
+                    }
+                }
+            };
+            MAIN.postDelayed(holdRepeatRunnable, HOLD_REPEAT_MS);
+        }
+    }
+
+    private static void cancelHoldRunnablesLocked() {
+        if (holdStartRunnable != null) MAIN.removeCallbacks(holdStartRunnable);
+        if (holdRepeatRunnable != null) MAIN.removeCallbacks(holdRepeatRunnable);
+        holdStartRunnable = null;
+        holdRepeatRunnable = null;
+    }
+
+    private static void cancelPendingNextLocked() {
+        if (pendingSingleNext != null) MAIN.removeCallbacks(pendingSingleNext);
+        pendingSingleNext = null;
+        pendingNext = false;
+    }
+
+    /**
+     * Dispatch a complete short press, or a held FF/RW key. The target player
+     * decides the seek rate; not all MediaSession implementations support seeking.
+     */
+    private static void dispatchMediaKey(int keyCode, boolean release,
+                                         long originalDownTime, int repeatCount) {
+        try {
+            Object app = XposedHelpers.callStaticMethod(
+                    XposedHelpers.findClass("android.app.ActivityThread", null),
+                    "currentApplication");
+            if (!(app instanceof Context)) {
+                XposedBridge.log(TAG + " no Gearhead application context for media dispatch");
+                return;
+            }
+            AudioManager audio = (AudioManager) ((Context) app)
+                    .getSystemService(Context.AUDIO_SERVICE);
+            if (audio == null) return;
+
+            long now = SystemClock.uptimeMillis();
+            if (release) {
+                long down = originalDownTime > 0L ? originalDownTime : now;
+                audio.dispatchMediaKeyEvent(new KeyEvent(
+                        down, now, KeyEvent.ACTION_UP, keyCode, 0));
+                return;
+            }
+
+            if (originalDownTime > 0L) {
+                audio.dispatchMediaKeyEvent(new KeyEvent(
+                        originalDownTime, now, KeyEvent.ACTION_DOWN, keyCode, repeatCount));
+                return;
+            }
+
+            long down = now;
+            audio.dispatchMediaKeyEvent(new KeyEvent(
+                    down, down, KeyEvent.ACTION_DOWN, keyCode, 0));
+            audio.dispatchMediaKeyEvent(new KeyEvent(
+                    down, SystemClock.uptimeMillis(), KeyEvent.ACTION_UP, keyCode, 0));
+        } catch (Throwable error) {
+            XposedBridge.log(TAG + " media dispatch failed key=" + keyCode + ": " + error);
         }
     }
 
@@ -130,7 +272,7 @@ public final class SteeringWheelKeyHooks {
                     XposedHelpers.findClass("android.app.ActivityThread", null),
                     "currentApplication");
             if (!(app instanceof Context)) {
-                XposedBridge.log(TAG + " cannot access Gearhead application context");
+                XposedBridge.log(TAG + " no Gearhead context for voice broadcast");
                 return;
             }
             Intent intent = new Intent(VOICE_ACTION);
@@ -138,27 +280,6 @@ public final class SteeringWheelKeyHooks {
             ((Context) app).sendBroadcast(intent);
         } catch (Throwable error) {
             XposedBridge.log(TAG + " voice broadcast failed: " + error);
-        }
-    }
-
-    private static void dispatchMediaNext() {
-        try {
-            Object app = XposedHelpers.callStaticMethod(
-                    XposedHelpers.findClass("android.app.ActivityThread", null),
-                    "currentApplication");
-            if (!(app instanceof Context)) {
-                XposedBridge.log(TAG + " cannot access Gearhead context to replay NEXT");
-                return;
-            }
-            AudioManager audio = (AudioManager) ((Context) app).getSystemService(Context.AUDIO_SERVICE);
-            if (audio == null) return;
-            long now = SystemClock.uptimeMillis();
-            audio.dispatchMediaKeyEvent(new KeyEvent(now, now, KeyEvent.ACTION_DOWN,
-                    KeyEvent.KEYCODE_MEDIA_NEXT, 0));
-            audio.dispatchMediaKeyEvent(new KeyEvent(now, now + 1, KeyEvent.ACTION_UP,
-                    KeyEvent.KEYCODE_MEDIA_NEXT, 0));
-        } catch (Throwable error) {
-            XposedBridge.log(TAG + " media NEXT replay failed: " + error);
         }
     }
 
