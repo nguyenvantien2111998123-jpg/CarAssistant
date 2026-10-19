@@ -571,14 +571,39 @@ public final class V10CarActivity
             if (ensureMediaAccess()) MediaSessionBridge.skipNext();
         });
 
-        mediaCard.setOnClickListener(v -> {
-            if (ensureMediaAccess()) MediaSessionBridge.togglePlayPause();
-        });
+        mediaCard.setOnClickListener(v -> openActiveMediaOnProjection());
         LinearLayout.LayoutParams mp=new LinearLayout.LayoutParams(0,dp(78),1f);
         mp.setMargins(dp(12),0,0,0);
         bottom.addView(mediaCard,mp);
     }
 
+
+    /** Called from the Android Auto media card and the steering-key bridge. */
+    public void handleOpenActiveMediaOnProjection() {
+        handler.post(this::openActiveMediaOnProjection);
+    }
+
+    private void openActiveMediaOnProjection() {
+        if (!ensureMediaAccess()) return;
+        MediaSessionBridge.Snapshot state = MediaSessionBridge.getSnapshot();
+        if (state == null || TextUtils.isEmpty(state.packageName)) {
+            Toast.makeText(this, "Chưa có ứng dụng media đang hoạt động.",
+                    Toast.LENGTH_SHORT).show();
+            return;
+        }
+        try {
+            Intent launch = getPackageManager().getLaunchIntentForPackage(state.packageName);
+            if (launch == null || launch.getComponent() == null) {
+                Toast.makeText(this, "Không tìm thấy màn hình mở của ứng dụng media.",
+                        Toast.LENGTH_SHORT).show();
+                return;
+            }
+            launchProjection(launch.getComponent());
+        } catch (RuntimeException error) {
+            Toast.makeText(this, "Không thể mở ứng dụng media trên màn hình phụ.",
+                    Toast.LENGTH_SHORT).show();
+        }
+    }
 
     private boolean ensureMediaAccess() {
         if (MediaSessionBridge.hasAccess(this)) return true;
