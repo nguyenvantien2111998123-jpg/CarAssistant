@@ -8,7 +8,7 @@ import com.carassistant.v10.hook.GearheadAllow;
 import com.carassistant.v10.hook.GearheadDockPatcher;
 import com.carassistant.v10.hook.InputHooks;
 import com.carassistant.v10.hook.OrientationHooks;
-import com.carassistant.v10.hook.SteeringWheelKeyHooks;
+import com.carassistant.v10.hook.SystemMediaKeyHooks;
 import com.carassistant.v10.hook.InstallerSpoof;
 
 import de.robv.android.xposed.IXposedHookLoadPackage;
@@ -38,6 +38,7 @@ public final class AACastBridge implements IXposedHookLoadPackage {
             DisplayHooks.installInputPolicy(param.classLoader);
             OrientationHooks.install(param.classLoader);
             InputHooks.install(param.classLoader);
+            SystemMediaKeyHooks.install(param.classLoader);
             return;
         }
 
@@ -48,7 +49,7 @@ public final class AACastBridge implements IXposedHookLoadPackage {
             if (GEARHEAD.equals(packageName)) {
                 GearheadAllow.install(param.classLoader);
                 GearheadDockPatcher.install();
-                SteeringWheelKeyHooks.install(param.classLoader);
+                // Media keys are arbitrated in system_server, where AVRCP events are dispatched.
             }
 
             if (Build.VERSION.SDK_INT >= 30) {
