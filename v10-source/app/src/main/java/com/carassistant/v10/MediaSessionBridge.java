@@ -124,6 +124,25 @@ public final class MediaSessionBridge extends NotificationListenerService {
         if (controller != null) controller.getTransportControls().skipToPrevious();
     }
 
+    /** Seek the active media session by a relative offset in milliseconds. */
+    public static void seekBy(long offsetMs) {
+        MediaController controller = activeController;
+        if (controller == null || offsetMs == 0L) return;
+        PlaybackState state = controller.getPlaybackState();
+        if (state == null) return;
+        long position = Math.max(0L, state.getPosition());
+        long target = Math.max(0L, position + offsetMs);
+        MediaMetadata metadata = controller.getMetadata();
+        long duration = metadata == null ? 0L
+                : metadata.getLong(MediaMetadata.METADATA_KEY_DURATION);
+        if (duration > 0L) target = Math.min(target, duration);
+        try {
+            controller.getTransportControls().seekTo(target);
+        } catch (RuntimeException error) {
+            Log.w(TAG, "Active media session rejected seek request", error);
+        }
+    }
+
     @Override
     public void onListenerConnected() {
         super.onListenerConnected();
