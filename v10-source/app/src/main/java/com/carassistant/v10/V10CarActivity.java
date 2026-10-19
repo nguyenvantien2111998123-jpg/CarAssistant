@@ -1286,6 +1286,11 @@ private void hideFloatingMenu() {
         super.onBackPressed();
     }
 
+    /** Entry point used by the steering-wheel double-Next command. */
+    public void handleSteeringVoiceCommand() {
+        runOnUiThread(this::activateVoiceAssistant);
+    }
+
     private void activateVoiceAssistant() {
         if (voiceAssistantController == null) {
             Toast.makeText(this, "Trợ lý giọng nói chưa sẵn sàng.", Toast.LENGTH_SHORT).show();
