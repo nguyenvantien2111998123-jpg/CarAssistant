@@ -50,7 +50,7 @@ public final class SystemMediaKeyHooks {
                     "com.android.server.media.MediaSessionService", loader);
             int count = 0;
             for (Method method : service.getDeclaredMethods()) {
-                if (!"dispatchMediaKeyEventLocked".equals(method.getName())) continue;
+                if (!"dispatchMediaKeyEvent".equals(method.getName())) continue;
                 boolean hasKeyEvent = false;
                 for (Class<?> type : method.getParameterTypes()) {
                     if (KeyEvent.class.isAssignableFrom(type)) hasKeyEvent = true;
@@ -82,7 +82,7 @@ public final class SystemMediaKeyHooks {
             }
             if (count == 0) {
                 INSTALLED.set(false);
-                XposedBridge.log(TAG + " no compatible dispatchMediaKeyEventLocked method");
+                XposedBridge.log(TAG + " no compatible dispatchMediaKeyEvent entry point");
             } else {
                 XposedBridge.log(TAG + " installed on " + count + " system media dispatch method(s)");
             }
