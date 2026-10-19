@@ -23,7 +23,7 @@ public final class VoiceAssistantController {
     }
 
     private static final long COMPLETE_SILENCE_MS = 3000L;
-    private static final long NO_SPEECH_TIMEOUT_MS = 3000L;
+    private static final long NO_SPEECH_TIMEOUT_MS = 7000L;
     private static final long FINAL_RESULT_TIMEOUT_MS = 1200L;
 
     private final Context context;
@@ -50,7 +50,7 @@ public final class VoiceAssistantController {
         // any words. Cancel on the original 3-second deadline unless text was recognized.
         if (destroyed || !sessionActive || commandHandled
                 || !lastTranscript.trim().isEmpty()) return;
-        cancelListeningOnMain("Đã hủy lệnh voice sau 3 giây không nói.");
+        cancelListeningOnMain("Đã hủy lệnh voice sau 7 giây không nói.");
     };
 
     private final Runnable finalResultFallback = () -> {
