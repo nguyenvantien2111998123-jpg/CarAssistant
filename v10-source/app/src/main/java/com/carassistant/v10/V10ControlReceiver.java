@@ -9,6 +9,8 @@ public final class V10ControlReceiver
 
     public static final String ACTION =
             "com.carassistant.v10.CONTROL";
+    public static final String ACTION_STEERING_VOICE =
+            "com.carassistant.v10.STEERING_VOICE";
 
     public static final String EXTRA_COMMAND =
             "command";
@@ -19,6 +21,12 @@ public final class V10ControlReceiver
             Intent intent) {
 
         if (intent == null) {
+            return;
+        }
+
+        if (ACTION_STEERING_VOICE.equals(intent.getAction())) {
+            V10CarActivity voiceActivity = V10SessionStore.getCurrentActivity();
+            if (voiceActivity != null) voiceActivity.handleSteeringVoiceCommand();
             return;
         }
 
