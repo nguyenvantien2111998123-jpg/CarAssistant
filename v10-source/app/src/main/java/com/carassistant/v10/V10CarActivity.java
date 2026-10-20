@@ -1448,15 +1448,19 @@ private void hideFloatingMenu() {
 
         MediaSessionBridge.Snapshot current = MediaSessionBridge.getSnapshot();
 
-        // The live playing session outranks a stale persisted package. This avoids
-        // reopening an old player after the user has switched to another media app.
-        if (current != null && current.playing
-                && !TextUtils.isEmpty(current.packageName)) {
-            lastPackage = current.packageName;
-            android.util.Log.i("CarAssistantMedia",
-                    "Reconnect selected live player " + lastPackage);
-            ensureMediaPackageProjected(lastPackage);
-            return;
+        // A newly published session also outranks the saved package when paused:
+        // do not resurrect an older player after the user switched apps.
+        if (current != null && !TextUtils.isEmpty(current.packageName)) {
+            if (!lastPackage.equals(current.packageName)) {
+                android.util.Log.i("CarAssistantMedia",
+                        "Reconnect switched saved player from " + lastPackage
+                                + " to current session " + current.packageName);
+                lastPackage = current.packageName;
+            }
+            if (current.playing) {
+                ensureMediaPackageProjected(lastPackage);
+                return;
+            }
         }
 
         // If Android has already reattached this player's session, request Play
