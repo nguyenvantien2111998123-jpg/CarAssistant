@@ -161,8 +161,8 @@ public final class MiniAccessEngine {
                             + " display=" + expectedDisplayId
                             + " x=" + candidate.x + " y=" + candidate.y
                             + "; handing off to Play phase");
-                    boolean tapped = projectionSession.tap(candidate.x, candidate.y);
-                    Log.i(TAG, "OCR result tap dispatched=" + tapped
+                    projectionSession.tap(candidate.x, candidate.y);
+                    Log.i(TAG, "OCR result tap dispatched to projection input"
                             + " package=" + expectedPackage + " display=" + expectedDisplayId);
                     running = false;
                     handler.removeCallbacks(scanTask);
