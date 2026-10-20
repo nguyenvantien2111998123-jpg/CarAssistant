@@ -51,12 +51,13 @@ public final class AACastBridge implements IXposedHookLoadPackage {
                 GearheadAllow.install(param.classLoader);
                 GearheadDockPatcher.install();
 
-                // AA Display-style auto-open: only hook the projection process where
-                // the Coolwalk facet bar is inflated and the internal car-app launcher lives.
-                if (param.processName != null
-                        && param.processName.endsWith(":projection")) {
-                    GearheadAutoOpen.install(param.classLoader);
-                }
+                // Android Auto versions/ROMs do not always use the same process suffix.
+                // Install the guarded watcher in every Gearhead process; it only schedules
+                // auto-open when that process inflates Gearhead's Coolwalk facet-bar resource.
+                // This avoids silently skipping auto-open when the UI runs outside :projection.
+                GearheadAutoOpen.install(param.classLoader);
+                XposedBridge.log("[AACast] Auto-open watcher initialized for process="
+                        + param.processName);
                 // Media keys are arbitrated in system_server, where AVRCP events are dispatched.
             }
 
