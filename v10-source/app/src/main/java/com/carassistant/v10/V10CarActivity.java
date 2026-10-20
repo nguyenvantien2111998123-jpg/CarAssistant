@@ -1469,7 +1469,7 @@ private void hideFloatingMenu() {
         // resumePackage() is package-guarded: it never sends Play to an unrelated app.
         MediaSessionBridge.resumePackage(expectedPackage);
 
-        if (attempt >= 12) {
+        if (attempt >= 11) {
             android.util.Log.w("CarAssistantMedia",
                     "Auto-resume not confirmed for " + expectedPackage
                             + "; check Notification Access and the player's resume support");
