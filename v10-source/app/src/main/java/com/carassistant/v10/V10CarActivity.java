@@ -420,7 +420,7 @@ public final class V10CarActivity
         if (target != null) launchProjection(target);
 
         if (V10SessionStore.consumePendingVoiceRequest()) {
-            handler.post(this::activateVoiceAssistant);
+            handler.post(this::activateVoiceAssistantFromSteering);
         }
     }
 
@@ -1411,7 +1411,31 @@ private void hideFloatingMenu() {
 
     /** Entry point used by the steering-wheel double-Next command. */
     public void handleSteeringVoiceCommand() {
-        handler.post(this::activateVoiceAssistant);
+        handler.post(() -> {
+            // A double press is an explicit start command, not a toggle: it must
+            // never cancel an already-starting voice session by accident.
+            if (!resumed || voiceAssistantController == null) {
+                V10SessionStore.requestVoiceOnNextActivity();
+                return;
+            }
+            activateVoiceAssistantFromSteering();
+        });
+    }
+
+    private void activateVoiceAssistantFromSteering() {
+        if (voiceAssistantController == null) {
+            V10SessionStore.requestVoiceOnNextActivity();
+            return;
+        }
+        if (checkSelfPermission(Manifest.permission.RECORD_AUDIO)
+                != PackageManager.PERMISSION_GRANTED) {
+            Intent permissionIntent = new Intent(this, V10SettingsActivity.class);
+            permissionIntent.putExtra(V10SettingsActivity.EXTRA_REQUEST_MICROPHONE, true);
+            permissionIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+            startActivity(permissionIntent);
+            return;
+        }
+        voiceAssistantController.startListening();
     }
 
     private void activateVoiceAssistant() {
