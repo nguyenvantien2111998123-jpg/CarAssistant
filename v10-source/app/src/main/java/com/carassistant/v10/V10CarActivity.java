@@ -191,6 +191,18 @@ public final class V10CarActivity
         MediaSessionBridge.addListener(mediaSessionListener);
         updateMediaCard(MediaSessionBridge.getSnapshot());
 
+        // A media app launch intercepted in Gearhead can arrive before this car
+        // Activity exists. Consume the one-shot request after display 2 is attached.
+        String pendingMediaPackage = getSharedPreferences("media_open", MODE_PRIVATE)
+                .getString("pending_media_package", null);
+        if (!TextUtils.isEmpty(pendingMediaPackage)) {
+            getSharedPreferences("media_open", MODE_PRIVATE).edit()
+                    .remove("pending_media_package").apply();
+            final String requestedPackage = pendingMediaPackage;
+            handler.postDelayed(
+                    () -> handleOpenActiveMediaOnProjection(requestedPackage), 350L);
+        }
+
         if (voiceAssistantController == null) {
             voiceAssistantController = new VoiceAssistantController(
                     this,
@@ -587,21 +599,35 @@ public final class V10CarActivity
     }
 
 
-    /** Called from the Android Auto media card and the steering-key bridge. */
+    /** Called from CarAsistant's media card, Gearhead's native media card and steering bridge. */
     public void handleOpenActiveMediaOnProjection() {
-        handler.post(this::openActiveMediaOnProjection);
+        handleOpenActiveMediaOnProjection(null);
+    }
+
+    public void handleOpenActiveMediaOnProjection(String requestedPackage) {
+        handler.post(() -> openActiveMediaOnProjection(requestedPackage));
     }
 
     private void openActiveMediaOnProjection() {
+        openActiveMediaOnProjection(null);
+    }
+
+    private void openActiveMediaOnProjection(String requestedPackage) {
         if (!ensureMediaAccess()) return;
         MediaSessionBridge.Snapshot state = MediaSessionBridge.getSnapshot();
-        if (state == null || TextUtils.isEmpty(state.packageName)) {
+
+        // Prefer the live session when it exists. The requested package is a fallback
+        // for the race where the native Android Auto card is tapped before the
+        // NotificationListener has republished its MediaSession.
+        String packageToOpen = state != null && !TextUtils.isEmpty(state.packageName)
+                ? state.packageName : requestedPackage;
+        if (TextUtils.isEmpty(packageToOpen)) {
             Toast.makeText(this, "Chưa có ứng dụng media đang hoạt động.",
                     Toast.LENGTH_SHORT).show();
             return;
         }
         try {
-            Intent launch = getPackageManager().getLaunchIntentForPackage(state.packageName);
+            Intent launch = getPackageManager().getLaunchIntentForPackage(packageToOpen);
             if (launch == null || launch.getComponent() == null) {
                 Toast.makeText(this, "Không tìm thấy màn hình mở của ứng dụng media.",
                         Toast.LENGTH_SHORT).show();
