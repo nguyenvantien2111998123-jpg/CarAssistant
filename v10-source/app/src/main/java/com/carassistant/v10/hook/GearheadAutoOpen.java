@@ -33,6 +33,8 @@ public final class GearheadAutoOpen {
     private static final String GEARHEAD = "com.google.android.projection.gearhead";
     private static final String PACKAGE = "com.carassistant.v10";
     private static final String SERVICE = "com.carassistant.v10.AACastCarService";
+    private static final String MEDIA_OPEN_ACTION = "com.carassistant.v10.STEERING_MEDIA_OPEN";
+    private static final String MEDIA_PACKAGE_EXTRA = "com.carassistant.v10.EXTRA_MEDIA_PACKAGE";
     private static final String FACET_BAR_RESOURCE = "gh_coolwalk_vertical_facet_bar";
 
     private static final long OPEN_DELAY_MS = 1000L;
@@ -43,6 +45,7 @@ public final class GearheadAutoOpen {
     private static final Handler MAIN = new Handler(Looper.getMainLooper());
     private static final AtomicBoolean INSTALLED = new AtomicBoolean(false);
     private static final AtomicBoolean OPEN_PENDING = new AtomicBoolean(false);
+    private static final AtomicBoolean MEDIA_REDIRECT_INSTALLED = new AtomicBoolean(false);
     private static volatile long lastSuccessfulOpenElapsed;
     private static volatile ClassLoader hostClassLoader;
 
@@ -140,8 +143,9 @@ public final class GearheadAutoOpen {
 
             Method launcher = findLauncherMethod(controller);
             if (launcher == null) {
-                throw new NoSuchMethodException("Static CarSystemUiControllerService.a(Intent) not found");
+                throw new NoSuchMethodException("Static CarSystemUiControllerService Intent launcher not found");
             }
+            installMediaLaunchRedirect(launcher);
 
             launcher.setAccessible(true);
             Intent intent = new Intent();
@@ -182,6 +186,72 @@ public final class GearheadAutoOpen {
             }
         }
         return intentMethodCount == 1 ? uniqueIntentMethod : null;
+    }
+
+    /**
+     * Android Auto's own media tile/bar launches a provider through Gearhead's
+     * activity launcher. Redirect known media-provider launches into CarAsistant
+     * so the player opens on display 2 instead of replacing the phone task.
+     */
+    private static void installMediaLaunchRedirect(Method launcher) {
+        if (!MEDIA_REDIRECT_INSTALLED.compareAndSet(false, true)) return;
+        XposedBridge.hookMethod(launcher, new XC_MethodHook() {
+            @Override
+            protected void beforeHookedMethod(MethodHookParam param) {
+                try {
+                    if (param.args == null || param.args.length == 0
+                            || !(param.args[0] instanceof Intent)) return;
+                    Intent requested = (Intent) param.args[0];
+                    ComponentName component = requested.getComponent();
+                    String targetPackage = component != null
+                            ? component.getPackageName() : requested.getPackage();
+                    if (!isKnownMediaPackage(targetPackage)) return;
+
+                    Context context = (Context) XposedHelpers.callStaticMethod(
+                            XposedHelpers.findClass("android.app.ActivityThread", null),
+                            "currentApplication");
+                    if (context == null) return;
+
+                    Intent redirect = new Intent(MEDIA_OPEN_ACTION);
+                    redirect.setPackage(PACKAGE);
+                    redirect.putExtra(MEDIA_PACKAGE_EXTRA, targetPackage);
+                    context.sendBroadcast(redirect);
+
+                    Intent carIntent = new Intent();
+                    carIntent.setComponent(new ComponentName(PACKAGE, SERVICE));
+                    carIntent.putExtra("android.intent.extra.PACKAGE_NAME", PACKAGE);
+                    carIntent.putExtra(MEDIA_PACKAGE_EXTRA, targetPackage);
+                    param.args[0] = carIntent;
+                    log("Redirected Gearhead media launch " + targetPackage
+                            + " to CarAsistant projection");
+                } catch (Throwable error) {
+                    log("Media launch redirect failed safely: " + error);
+                }
+            }
+        });
+        log("Installed Gearhead native media-launch redirect");
+    }
+
+    private static boolean isKnownMediaPackage(String packageName) {
+        if (packageName == null || PACKAGE.equals(packageName)) return false;
+        switch (packageName) {
+            case "com.google.android.youtube":
+            case "app.revanced.android.youtube":
+            case "app.morphe.android.youtube":
+            case "com.google.android.apps.youtube.music":
+            case "app.morphe.android.apps.youtube.music":
+            case "com.zing.mp3":
+            case "com.spotify.music":
+            case "org.videolan.vlc":
+            case "com.mxtech.videoplayer.ad":
+            case "com.maxmpz.audioplayer":
+            case "com.deezer.android":
+            case "com.soundcloud.android":
+            case "com.google.android.music":
+                return true;
+            default:
+                return false;
+        }
     }
 
     private static void log(String message) {
