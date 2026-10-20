@@ -29,6 +29,8 @@ import java.util.concurrent.CopyOnWriteArrayList;
  */
 public final class MediaSessionBridge extends NotificationListenerService {
     private static final String TAG = "CarAssistantMedia";
+    private static final String RESUME_PREFS = "carassistant_media_resume";
+    private static final String LAST_PACKAGE = "last_media_package";
     private static final Handler MAIN = new Handler(Looper.getMainLooper());
     private static final CopyOnWriteArrayList<Listener> LISTENERS = new CopyOnWriteArrayList<>();
 
@@ -79,6 +81,34 @@ public final class MediaSessionBridge extends NotificationListenerService {
 
     public static Snapshot getSnapshot() {
         return snapshot;
+    }
+
+    /** Package of the last media app with a published session, persisted across AA reconnects. */
+    public static String getLastKnownPackage(Context context) {
+        if (context == null) return null;
+        String value = context.getSharedPreferences(RESUME_PREFS, Context.MODE_PRIVATE)
+                .getString(LAST_PACKAGE, null);
+        return TextUtils.isEmpty(value) ? null : value;
+    }
+
+    /**
+     * Resume only the saved media app's session. Never send Play to an unrelated
+     * player that happened to become active while Android Auto was reconnecting.
+     */
+    public static boolean resumePackage(String expectedPackage) {
+        if (TextUtils.isEmpty(expectedPackage)) return false;
+        MediaController controller = activeController;
+        if (controller == null || !expectedPackage.equals(controller.getPackageName())) return false;
+        PlaybackState state = controller.getPlaybackState();
+        if (state != null && state.getState() == PlaybackState.STATE_PLAYING) return true;
+        try {
+            controller.getTransportControls().play();
+            Log.i(TAG, "Requested resume for last media package " + expectedPackage);
+            return true;
+        } catch (RuntimeException error) {
+            Log.w(TAG, "Last media session rejected Play", error);
+            return false;
+        }
     }
 
     public static boolean hasAccess(Context context) {
@@ -238,6 +268,12 @@ public final class MediaSessionBridge extends NotificationListenerService {
         if (controller == null) {
             snapshot = Snapshot.empty();
         } else {
+            try {
+                getSharedPreferences(RESUME_PREFS, Context.MODE_PRIVATE).edit()
+                        .putString(LAST_PACKAGE, controller.getPackageName()).apply();
+            } catch (RuntimeException error) {
+                Log.d(TAG, "Could not persist last media package", error);
+            }
             MediaMetadata metadata = controller.getMetadata();
             PlaybackState state = controller.getPlaybackState();
             String title = metadata == null ? "" : metadata.getString(MediaMetadata.METADATA_KEY_TITLE);

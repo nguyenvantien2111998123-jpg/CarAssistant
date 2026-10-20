@@ -167,6 +167,11 @@ public final class V10CarActivity
                 .setCurrentActivity(this);
 
         applyChrome();
+
+        // This activity is created by the Android Auto host when the projection
+        // session opens. Restore only the previously used player, after its media
+        // session has had time to reconnect; never launch it on the phone display.
+        handler.postDelayed(this::resumeRecentMediaOnConnect, 1800L);
     }
 
     @Override
@@ -1407,6 +1412,31 @@ private void hideFloatingMenu() {
         }
 
         super.onBackPressed();
+    }
+
+    private void resumeRecentMediaOnConnect() {
+        if (!resumed) return;
+
+        MediaSessionBridge.Snapshot current = MediaSessionBridge.getSnapshot();
+        if (current != null && current.playing) return;
+
+        String lastPackage = MediaSessionBridge.getLastKnownPackage(this);
+        if (lastPackage == null) return;
+
+        // If Android has already reattached the same player session, resume it
+        // directly without relaunching the app or disturbing the projection.
+        if (MediaSessionBridge.resumePackage(lastPackage)) return;
+
+        // No session yet: launch the saved player through CarAsistant's existing
+        // secondary-display path. Do not use startActivity(), which opens on phone.
+        Intent launch = getPackageManager().getLaunchIntentForPackage(lastPackage);
+        if (launch == null || launch.getComponent() == null) {
+            android.util.Log.i("CarAssistantMedia",
+                    "Skipping auto-resume; last media app is not installed: " + lastPackage);
+            return;
+        }
+        launchProjection(launch.getComponent());
+        handler.postDelayed(() -> MediaSessionBridge.resumePackage(lastPackage), 2500L);
     }
 
     /** Entry point used by the steering-wheel double-Next command. */
