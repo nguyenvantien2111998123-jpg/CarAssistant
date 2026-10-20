@@ -1421,14 +1421,22 @@ private void hideFloatingMenu() {
         if (lastPackage == null) return;
 
         MediaSessionBridge.Snapshot current = MediaSessionBridge.getSnapshot();
+
+        // The live playing session outranks a stale persisted package. This avoids
+        // reopening an old player after the user has switched to another media app.
         if (current != null && current.playing
-                && lastPackage.equals(current.packageName)) {
+                && !TextUtils.isEmpty(current.packageName)) {
+            lastPackage = current.packageName;
+            android.util.Log.i("CarAssistantMedia",
+                    "Reconnect selected live player " + lastPackage);
+            ensureMediaPackageProjected(lastPackage);
             return;
         }
 
         // If Android has already reattached this player's session, request Play
         // without relaunching the app or disturbing the current projection.
         if (MediaSessionBridge.resumePackage(lastPackage)) {
+            ensureMediaPackageProjected(lastPackage);
             // Verify playback state on subsequent callbacks; a successful binder
             // call does not necessarily mean the player actually started playing.
             handler.postDelayed(() -> retryResumeRecentMedia(lastPackage, 0), 1000L);
@@ -1444,15 +1452,30 @@ private void hideFloatingMenu() {
             return;
         }
 
-        boolean alreadyProjected = activeTarget != null
-                && lastPackage.equals(activeTarget.getPackageName());
-        if (!alreadyProjected) {
-            launchProjection(launch.getComponent());
-        }
+        ensureMediaPackageProjected(lastPackage);
 
         // MediaBrowser/MediaSession creation time varies by app and device.
         // Retry for up to 12 seconds rather than giving up after one 2.5s attempt.
         handler.postDelayed(() -> retryResumeRecentMedia(lastPackage, 0), 1000L);
+    }
+
+    /**
+     * Restores a media task only through display 2. Prefer the existing task so a
+     * reconnect does not create a duplicate player or launch an Activity on the phone.
+     */
+    private void ensureMediaPackageProjected(String packageName) {
+        if (TextUtils.isEmpty(packageName)) return;
+        if (activeTarget != null && packageName.equals(activeTarget.getPackageName())
+                && session != null && session.isActive()) {
+            return;
+        }
+        Intent launch = getPackageManager().getLaunchIntentForPackage(packageName);
+        if (launch == null || launch.getComponent() == null) {
+            android.util.Log.w("CarAssistantMedia",
+                    "Cannot project media package; no launch component: " + packageName);
+            return;
+        }
+        launchProjection(launch.getComponent(), true);
     }
 
     private void retryResumeRecentMedia(String expectedPackage, int attempt) {
@@ -1460,9 +1483,17 @@ private void hideFloatingMenu() {
 
         MediaSessionBridge.Snapshot current = MediaSessionBridge.getSnapshot();
         if (current != null && current.playing
-                && expectedPackage.equals(current.packageName)) {
-            android.util.Log.i("CarAssistantMedia",
-                    "Auto-resume confirmed for " + expectedPackage);
+                && !TextUtils.isEmpty(current.packageName)) {
+            if (expectedPackage.equals(current.packageName)) {
+                ensureMediaPackageProjected(expectedPackage);
+                android.util.Log.i("CarAssistantMedia",
+                        "Auto-resume confirmed for " + expectedPackage);
+            } else {
+                android.util.Log.i("CarAssistantMedia",
+                        "Stopped stale resume for " + expectedPackage
+                                + "; live player is " + current.packageName);
+                ensureMediaPackageProjected(current.packageName);
+            }
             return;
         }
 
