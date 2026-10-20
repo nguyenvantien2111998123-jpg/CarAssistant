@@ -159,15 +159,38 @@ public final class MediaSessionBridge extends NotificationListenerService {
         MediaController controller = activeController;
         if (controller == null || offsetMs == 0L) return;
         PlaybackState state = controller.getPlaybackState();
-        if (state == null) return;
+        if (state == null) {
+            Log.w(TAG, "Cannot seek: active media session has no playback state");
+            return;
+        }
+        long actions = state.getActions();
         long position = Math.max(0L, state.getPosition());
+        if (state.getState() == PlaybackState.STATE_PLAYING
+                && state.getLastPositionUpdateTime() > 0L) {
+            long elapsed = Math.max(0L,
+                    android.os.SystemClock.elapsedRealtime() - state.getLastPositionUpdateTime());
+            position += (long) (elapsed * state.getPlaybackSpeed());
+        }
         long target = Math.max(0L, position + offsetMs);
         MediaMetadata metadata = controller.getMetadata();
         long duration = metadata == null ? 0L
                 : metadata.getLong(MediaMetadata.METADATA_KEY_DURATION);
         if (duration > 0L) target = Math.min(target, duration);
         try {
-            controller.getTransportControls().seekTo(target);
+            if ((actions & PlaybackState.ACTION_SEEK_TO) != 0L) {
+                controller.getTransportControls().seekTo(target);
+                Log.i(TAG, "Seek requested package=" + controller.getPackageName()
+                        + " targetMs=" + target);
+            } else if (offsetMs > 0L && (actions & PlaybackState.ACTION_FAST_FORWARD) != 0L) {
+                controller.getTransportControls().fastForward();
+                Log.i(TAG, "Fast-forward fallback package=" + controller.getPackageName());
+            } else if (offsetMs < 0L && (actions & PlaybackState.ACTION_REWIND) != 0L) {
+                controller.getTransportControls().rewind();
+                Log.i(TAG, "Rewind fallback package=" + controller.getPackageName());
+            } else {
+                Log.w(TAG, "Active media session does not advertise seek/FF/RW actions: "
+                        + controller.getPackageName());
+            }
         } catch (RuntimeException error) {
             Log.w(TAG, "Active media session rejected seek request", error);
         }
