@@ -25,7 +25,7 @@ public final class SteeringWheelKeyHooks {
     private static final String VOICE_ACTION = "com.carassistant.v10.STEERING_VOICE";
 
     private static final long DOUBLE_PRESS_WINDOW_MS = 300L;
-    private static final long HOLD_START_MS = 1000L;
+    private static final long HOLD_START_MS = 700L;
     private static final long HOLD_REPEAT_MS = 1000L;
 
     private static final int NEXT = KeyEvent.KEYCODE_MEDIA_NEXT;
@@ -103,7 +103,18 @@ public final class SteeringWheelKeyHooks {
         final int key = event.getKeyCode();
         if (event.getAction() == KeyEvent.ACTION_DOWN) {
             param.setResult(true);
-            if (event.getRepeatCount() != 0) return;
+            if (event.getRepeatCount() != 0) {
+                // Some head units report a repeated DOWN instead of a clean hold
+                // duration. Treat it as a hold signal; never forward it as Next/Previous.
+                synchronized (LOCK) {
+                    if (pressedKey == key && !pressedHeld && !pressedIsDoubleTap) {
+                        XposedBridge.log(TAG + " repeated DOWN confirms hold key=" + key
+                                + " repeat=" + event.getRepeatCount());
+                        startHoldIfStillPressed(key);
+                    }
+                }
+                return;
+            }
 
             synchronized (LOCK) {
                 long now = SystemClock.uptimeMillis();
