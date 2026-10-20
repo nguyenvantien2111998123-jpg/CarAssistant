@@ -54,31 +54,28 @@ public final class GearheadAutoOpen {
         }
         hostClassLoader = classLoader;
         try {
-            XposedHelpers.findAndHookMethod(
+            XposedBridge.hookAllMethods(
                     LayoutInflater.class,
                     "inflate",
-                    int.class,
-                    ViewGroup.class,
-                    boolean.class,
                     new XC_MethodHook() {
                         @Override
                         protected void afterHookedMethod(MethodHookParam param) {
                             try {
+                                if (param.args == null || param.args.length == 0
+                                        || !(param.args[0] instanceof Integer)) {
+                                    return;
+                                }
                                 int resourceId = (Integer) param.args[0];
                                 LayoutInflater inflater = (LayoutInflater) param.thisObject;
                                 Context context = inflater.getContext();
                                 Resources resources = context.getResources();
 
-                                // Match by the exact resource ID, as AADisplay does. The
-                                // name-based fallback covers contexts with split resources.
                                 int expectedId = resources.getIdentifier(
                                         FACET_BAR_RESOURCE, "layout", GEARHEAD);
                                 boolean isFacetBar = expectedId != 0
                                         ? resourceId == expectedId
                                         : isFacetBarByName(resources, resourceId);
-                                if (!isFacetBar) {
-                                    return;
-                                }
+                                if (!isFacetBar) return;
 
                                 Object result = param.getResult();
                                 if (!(result instanceof ViewGroup)) {
@@ -168,17 +165,23 @@ public final class GearheadAutoOpen {
     }
 
     private static Method findLauncherMethod(Class<?> controller) {
+        Method uniqueIntentMethod = null;
+        int intentMethodCount = 0;
         for (Class<?> type = controller; type != null; type = type.getSuperclass()) {
             for (Method method : type.getDeclaredMethods()) {
-                if (Modifier.isStatic(method.getModifiers())
-                        && "a".equals(method.getName())
-                        && method.getParameterTypes().length == 1
-                        && Intent.class.equals(method.getParameterTypes()[0])) {
-                    return method;
+                if (!Modifier.isStatic(method.getModifiers())
+                        || method.getParameterTypes().length != 1
+                        || !Intent.class.equals(method.getParameterTypes()[0])) {
+                    continue;
                 }
+                // Keep the known AADisplay/Gearhead entry point as first choice.
+                if ("a".equals(method.getName())) return method;
+                // Android Auto obfuscation changes; use a fallback only if unambiguous.
+                uniqueIntentMethod = method;
+                intentMethodCount++;
             }
         }
-        return null;
+        return intentMethodCount == 1 ? uniqueIntentMethod : null;
     }
 
     private static void log(String message) {
