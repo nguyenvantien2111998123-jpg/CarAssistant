@@ -616,11 +616,17 @@ public final class V10CarActivity
         if (!ensureMediaAccess()) return;
         MediaSessionBridge.Snapshot state = MediaSessionBridge.getSnapshot();
 
-        // Prefer the live session when it exists. The requested package is a fallback
-        // for the race where the native Android Auto card is tapped before the
-        // NotificationListener has republished its MediaSession.
-        String packageToOpen = state != null && !TextUtils.isEmpty(state.packageName)
-                ? state.packageName : requestedPackage;
+        // A tap on a specific media tile is an explicit package request. Do not
+        // replace it with a different (possibly stale) global MediaSession package.
+        // Use the current session only when the caller did not specify a target.
+        String packageToOpen = !TextUtils.isEmpty(requestedPackage)
+                ? requestedPackage
+                : (state != null && !TextUtils.isEmpty(state.packageName)
+                        ? state.packageName : null);
+        android.util.Log.i("CarAssistantMedia", "Open media on projection requested="
+                + requestedPackage + " session="
+                + (state == null ? null : state.packageName)
+                + " selected=" + packageToOpen);
         if (TextUtils.isEmpty(packageToOpen)) {
             Toast.makeText(this, "Chưa có ứng dụng media đang hoạt động.",
                     Toast.LENGTH_SHORT).show();
