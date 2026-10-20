@@ -34,7 +34,11 @@ public final class V10ControlReceiver
 
         if (ACTION_STEERING_VOICE.equals(intent.getAction())) {
             V10CarActivity voiceActivity = V10SessionStore.getCurrentActivity();
-            if (voiceActivity != null) voiceActivity.handleSteeringVoiceCommand();
+            if (voiceActivity != null) {
+                voiceActivity.handleSteeringVoiceCommand();
+            } else {
+                V10SessionStore.requestVoiceOnNextActivity();
+            }
             return;
         }
 

@@ -418,6 +418,10 @@ public final class V10CarActivity
 
         ComponentName target = V10SessionStore.getTarget(this);
         if (target != null) launchProjection(target);
+
+        if (V10SessionStore.consumePendingVoiceRequest()) {
+            handler.post(this::activateVoiceAssistant);
+        }
     }
 
 
@@ -598,7 +602,7 @@ public final class V10CarActivity
                         Toast.LENGTH_SHORT).show();
                 return;
             }
-            launchProjection(launch.getComponent());
+            launchProjection(launch.getComponent(), true);
         } catch (RuntimeException error) {
             Toast.makeText(this, "Không thể mở ứng dụng media trên màn hình phụ.",
                     Toast.LENGTH_SHORT).show();
@@ -929,8 +933,11 @@ public final class V10CarActivity
     }
 
 
-private void launchProjection(
-        ComponentName component) {
+private void launchProjection(ComponentName component) {
+    launchProjection(component, false);
+}
+
+private void launchProjection(ComponentName component, boolean preferExistingMediaTask) {
 
     if (keyboardController != null) keyboardController.hide();
 
@@ -973,7 +980,8 @@ private void launchProjection(
      * Start the existing proven V10 projection
      * engine.
      */
-    session.setTarget(component);
+    if (preferExistingMediaTask) session.setMediaTarget(component);
+    else session.setTarget(component);
 }
 
 /**

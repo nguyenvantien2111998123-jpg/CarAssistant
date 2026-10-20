@@ -16,6 +16,7 @@ public final class V10ProjectionSession implements TextureView.SurfaceTextureLis
     private final RootShellSession rootShell = new RootShellSession();
     private TextureView textureView;
     private ComponentName target;
+    private boolean preferExistingMediaTask;
     private boolean destroyed;
     private int contentWidth;
     private int contentHeight;
@@ -38,19 +39,39 @@ public final class V10ProjectionSession implements TextureView.SurfaceTextureLis
     }
 
     public void setTarget(ComponentName component) {
+        setTarget(component, false);
+    }
+
+    /** Reuses the currently running media task when possible instead of opening a new launcher task. */
+    public void setMediaTarget(ComponentName component) {
+        setTarget(component, true);
+    }
+
+    private void setTarget(ComponentName component, boolean preferExistingMediaTask) {
         if (destroyed) return;
         if (component == null) {
             target = null;
+            this.preferExistingMediaTask = false;
             taskSession.clear();
             return;
         }
         boolean changed = target == null || !component.equals(target);
         target = component;
-        if (changed) {
+        this.preferExistingMediaTask = preferExistingMediaTask;
+        if (changed || preferExistingMediaTask) {
             taskSession.setTarget(component);
             if (displayController.isLaunched()) displayController.markNotLaunched();
         }
         attachCurrentSurface();
+    }
+
+    private void launchTargetTask() {
+        if (preferExistingMediaTask) {
+            preferExistingMediaTask = false;
+            displayController.launchMediaTaskOnDisplay(target);
+        } else {
+            displayController.launchNewTask(target);
+        }
     }
 
     public boolean isActive() {
@@ -149,13 +170,13 @@ public final class V10ProjectionSession implements TextureView.SurfaceTextureLis
         surfaceManager.attach(st, width, height);
 
         if (!wasReady) {
-            displayController.launchNewTask(target);
+            launchTargetTask();
             taskSession.active();
             Log.d(TAG, "[CREATE] layer=" + displayIndex + " display=" + displayController.getDisplayId());
             Log.d(TAG, "[CREATE] task=" + target.flattenToString());
             Log.d(TAG, "[ACTIVE] task=" + target.flattenToString());
         } else if (!wasLaunched) {
-            displayController.launchNewTask(target);
+            launchTargetTask();
             taskSession.active();
             Log.d(TAG, "[LAUNCH] task=" + target.flattenToString());
         } else if (taskSession.getState() == V10TaskSession.State.HIDDEN
