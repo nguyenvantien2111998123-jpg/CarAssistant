@@ -1417,26 +1417,68 @@ private void hideFloatingMenu() {
     private void resumeRecentMediaOnConnect() {
         if (!resumed) return;
 
-        MediaSessionBridge.Snapshot current = MediaSessionBridge.getSnapshot();
-        if (current != null && current.playing) return;
-
         String lastPackage = MediaSessionBridge.getLastKnownPackage(this);
         if (lastPackage == null) return;
 
-        // If Android has already reattached the same player session, resume it
-        // directly without relaunching the app or disturbing the projection.
-        if (MediaSessionBridge.resumePackage(lastPackage)) return;
+        MediaSessionBridge.Snapshot current = MediaSessionBridge.getSnapshot();
+        if (current != null && current.playing
+                && lastPackage.equals(current.packageName)) {
+            return;
+        }
 
-        // No session yet: launch the saved player through CarAsistant's existing
-        // secondary-display path. Do not use startActivity(), which opens on phone.
+        // If Android has already reattached this player's session, request Play
+        // without relaunching the app or disturbing the current projection.
+        if (MediaSessionBridge.resumePackage(lastPackage)) {
+            // Verify playback state on subsequent callbacks; a successful binder
+            // call does not necessarily mean the player actually started playing.
+            handler.postDelayed(() -> retryResumeRecentMedia(lastPackage, 0), 1000L);
+            return;
+        }
+
+        // No matching session yet: launch the saved player only through the
+        // existing secondary-display projection path, never startActivity().
         Intent launch = getPackageManager().getLaunchIntentForPackage(lastPackage);
         if (launch == null || launch.getComponent() == null) {
             android.util.Log.i("CarAssistantMedia",
                     "Skipping auto-resume; last media app is not installed: " + lastPackage);
             return;
         }
-        launchProjection(launch.getComponent());
-        handler.postDelayed(() -> MediaSessionBridge.resumePackage(lastPackage), 2500L);
+
+        boolean alreadyProjected = activeTarget != null
+                && lastPackage.equals(activeTarget.getPackageName());
+        if (!alreadyProjected) {
+            launchProjection(launch.getComponent());
+        }
+
+        // MediaBrowser/MediaSession creation time varies by app and device.
+        // Retry for up to 12 seconds rather than giving up after one 2.5s attempt.
+        handler.postDelayed(() -> retryResumeRecentMedia(lastPackage, 0), 1000L);
+    }
+
+    private void retryResumeRecentMedia(String expectedPackage, int attempt) {
+        if (!resumed) return;
+
+        MediaSessionBridge.Snapshot current = MediaSessionBridge.getSnapshot();
+        if (current != null && current.playing
+                && expectedPackage.equals(current.packageName)) {
+            android.util.Log.i("CarAssistantMedia",
+                    "Auto-resume confirmed for " + expectedPackage);
+            return;
+        }
+
+        // resumePackage() is package-guarded: it never sends Play to an unrelated app.
+        MediaSessionBridge.resumePackage(expectedPackage);
+
+        if (attempt >= 12) {
+            android.util.Log.w("CarAssistantMedia",
+                    "Auto-resume not confirmed for " + expectedPackage
+                            + "; check Notification Access and the player's resume support");
+            return;
+        }
+
+        handler.postDelayed(
+                () -> retryResumeRecentMedia(expectedPackage, attempt + 1),
+                1000L);
     }
 
     /** Entry point used by the steering-wheel double-Next command. */
