@@ -1469,7 +1469,8 @@ private void hideFloatingMenu() {
             ensureMediaPackageProjected(lastPackage);
             // Verify playback state on subsequent callbacks; a successful binder
             // call does not necessarily mean the player actually started playing.
-            handler.postDelayed(() -> retryResumeRecentMedia(lastPackage, 0), 1000L);
+            final String packageToRetry = lastPackage;
+            handler.postDelayed(() -> retryResumeRecentMedia(packageToRetry, 0), 1000L);
             return;
         }
 
@@ -1486,7 +1487,8 @@ private void hideFloatingMenu() {
 
         // MediaBrowser/MediaSession creation time varies by app and device.
         // Retry for up to 12 seconds rather than giving up after one 2.5s attempt.
-        handler.postDelayed(() -> retryResumeRecentMedia(lastPackage, 0), 1000L);
+        final String packageToRetry = lastPackage;
+        handler.postDelayed(() -> retryResumeRecentMedia(packageToRetry, 0), 1000L);
     }
 
     /**
