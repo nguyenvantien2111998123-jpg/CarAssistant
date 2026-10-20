@@ -271,8 +271,8 @@ public final class V10DisplayController {
                 + " | /system/bin/grep -F " + packageSelector
                 + " | /system/bin/sed -n 's/.*#[[:space:]]*\\([0-9][0-9]*\\).*/\\1/p'"
                 + " | /system/bin/head -n 1); "
-                + "if [ -n \\"$TASK_ID\\" ] && /system/bin/am task move-to-display"
-                + " \\"$TASK_ID\\" " + displayId + " >/dev/null 2>&1; then "
+                + "if [ -n \"$TASK_ID\" ] && /system/bin/am task move-to-display"
+                + " \"$TASK_ID\" " + displayId + " >/dev/null 2>&1; then "
                 + "echo 'CarAsistant: restored existing media task on projection display'; "
                 + "else /system/bin/am start --user " + userId
                 + " --display " + displayId
