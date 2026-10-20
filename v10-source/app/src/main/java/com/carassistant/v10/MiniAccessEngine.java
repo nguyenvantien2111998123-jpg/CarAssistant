@@ -149,15 +149,21 @@ public final class MiniAccessEngine {
                         bitmap.getWidth(), bitmap.getHeight());
                 if (candidate != null && requestStillPending(expectedDisplayId)) {
                     SharedPreferences current = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE);
-                    // Clear pending state before injecting input so the accessibility fallback
-                    // cannot act on the same search result a second time.
-                    current.edit().remove("target_package").remove("query")
-                            .remove("phase").remove("target_display_id").remove("started_at")
+                    // Keep the request alive after selecting a search result. The
+                    // accessibility service needs the same package/display context to
+                    // find and click Play on the detail/player screen.
+                    current.edit().putString("phase", "play")
                             .putBoolean("mini_engine_active", false).apply();
                     ownsPendingRequest = false;
-                    Log.i(TAG, "OCR matched projected search result; tapping display="
-                            + expectedDisplayId + " x=" + candidate.x + " y=" + candidate.y);
-                    projectionSession.tap(candidate.x, candidate.y);
+                    Log.i(TAG, "OCR selected projected search result; requestId="
+                            + current.getLong("started_at", 0L)
+                            + " package=" + expectedPackage
+                            + " display=" + expectedDisplayId
+                            + " x=" + candidate.x + " y=" + candidate.y
+                            + "; handing off to Play phase");
+                    boolean tapped = projectionSession.tap(candidate.x, candidate.y);
+                    Log.i(TAG, "OCR result tap dispatched=" + tapped
+                            + " package=" + expectedPackage + " display=" + expectedDisplayId);
                     running = false;
                     handler.removeCallbacks(scanTask);
                 } else {
