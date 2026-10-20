@@ -15,6 +15,10 @@ public final class V10ControlReceiver
             "com.carassistant.v10.STEERING_MEDIA_SEEK";
     public static final String ACTION_STEERING_MEDIA_OPEN =
             "com.carassistant.v10.STEERING_MEDIA_OPEN";
+    public static final String EXTRA_MEDIA_PACKAGE =
+            "com.carassistant.v10.EXTRA_MEDIA_PACKAGE";
+    private static final String MEDIA_OPEN_PREFS = "media_open";
+    private static final String PENDING_MEDIA_PACKAGE = "pending_media_package";
     public static final String ACTION_STEERING_MEDIA_NEXT =
             "com.carassistant.v10.STEERING_MEDIA_NEXT";
     public static final String ACTION_STEERING_MEDIA_PREVIOUS =
@@ -59,8 +63,14 @@ public final class V10ControlReceiver
         }
 
         if (ACTION_STEERING_MEDIA_OPEN.equals(intent.getAction())) {
+            String requestedPackage = intent.getStringExtra(EXTRA_MEDIA_PACKAGE);
             V10CarActivity mediaActivity = V10SessionStore.getCurrentActivity();
-            if (mediaActivity != null) mediaActivity.handleOpenActiveMediaOnProjection();
+            if (mediaActivity != null) {
+                mediaActivity.handleOpenActiveMediaOnProjection(requestedPackage);
+            } else if (requestedPackage != null && !requestedPackage.trim().isEmpty()) {
+                context.getSharedPreferences(MEDIA_OPEN_PREFS, Context.MODE_PRIVATE)
+                        .edit().putString(PENDING_MEDIA_PACKAGE, requestedPackage).apply();
+            }
             return;
         }
 
