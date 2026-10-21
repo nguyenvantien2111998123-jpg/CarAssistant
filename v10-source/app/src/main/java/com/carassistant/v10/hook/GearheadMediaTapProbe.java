@@ -25,7 +25,8 @@ public final class GearheadMediaTapProbe {
     private static final String GEARHEAD = "com.google.android.projection.gearhead";
     private static volatile boolean installed;
     private static final Handler MAIN = new Handler(Looper.getMainLooper());
-    private static final Set<View> DUMPED_ROOTS = Collections.newSetFromMap(new WeakHashMap<View, Boolean>());
+    private static final java.util.Map<View, Long> LAST_DUMPED_ROOTS = new WeakHashMap<>();
+    private static final long ROOT_DUMP_INTERVAL_MS = 1800L;
     private static final int MAX_TREE_NODES = 240;
 
     private GearheadMediaTapProbe() { }
@@ -42,6 +43,20 @@ public final class GearheadMediaTapProbe {
                             || !(param.args[0] instanceof View)) return;
                     final View candidate = (View) param.args[0];
                     MAIN.postDelayed(() -> dumpAttachedTree(candidate), 1200L);
+                }
+            });
+
+            // Android Auto can inflate/populate the media card after addView() returned for
+            // the window root. Observe child attachment and take throttled follow-up snapshots
+            // so the diagnostic tree includes the real, populated home/media surface.
+            XposedBridge.hookAllMethods(ViewGroup.class, "dispatchViewAdded", new XC_MethodHook() {
+                @Override protected void afterHookedMethod(MethodHookParam param) {
+                    Object value = param.thisObject;
+                    if (!(value instanceof View)) return;
+                    View root = (View) value;
+                    while (root.getParent() instanceof View) root = (View) root.getParent();
+                    final View candidateRoot = root;
+                    MAIN.postDelayed(() -> dumpAttachedTree(candidateRoot), 900L);
                 }
             });
 
@@ -80,8 +95,11 @@ public final class GearheadMediaTapProbe {
         try {
             if (root == null || !root.isAttachedToWindow() || root.getContext() == null
                     || !GEARHEAD.equals(root.getContext().getPackageName())) return;
-            synchronized (DUMPED_ROOTS) {
-                if (!DUMPED_ROOTS.add(root)) return;
+            synchronized (LAST_DUMPED_ROOTS) {
+                long now = android.os.SystemClock.uptimeMillis();
+                Long last = LAST_DUMPED_ROOTS.get(root);
+                if (last != null && now - last < ROOT_DUMP_INTERVAL_MS) return;
+                LAST_DUMPED_ROOTS.put(root, now);
             }
             StringBuilder out = new StringBuilder(4096);
             out.append("attached-root display=");
