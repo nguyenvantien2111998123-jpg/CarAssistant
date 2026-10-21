@@ -1,7 +1,5 @@
 package com.carassistant.v10;
 
-import android.app.PendingIntent;
-import android.content.Intent;
 import android.graphics.Bitmap;
 import android.media.MediaMetadata;
 import android.media.browse.MediaBrowser;
@@ -40,8 +38,8 @@ public final class CarAsistantMediaBrowserService extends MediaBrowserService
         mediaSession.setFlags(MediaSession.FLAG_HANDLES_MEDIA_BUTTONS
                 | MediaSession.FLAG_HANDLES_TRANSPORT_CONTROLS);
         mediaSession.setCallback(new MediaSession.Callback() {
-            @Override public void onPlay() { MediaSessionBridge.togglePlayPause(); }
-            @Override public void onPause() { MediaSessionBridge.togglePlayPause(); }
+            @Override public void onPlay() { MediaSessionBridge.play(); }
+            @Override public void onPause() { MediaSessionBridge.pause(); }
             @Override public void onSkipToNext() { MediaSessionBridge.skipNext(); }
             @Override public void onSkipToPrevious() { MediaSessionBridge.skipPrevious(); }
             @Override public void onPlayFromMediaId(String mediaId, Bundle extras) {
