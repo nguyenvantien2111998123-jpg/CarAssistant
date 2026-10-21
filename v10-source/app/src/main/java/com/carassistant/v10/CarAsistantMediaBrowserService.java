@@ -93,12 +93,18 @@ public final class CarAsistantMediaBrowserService extends MediaBrowserService
                 ? "CarAsistant V10" : snapshot.title;
         String artist = snapshot == null || TextUtils.isEmpty(snapshot.artist)
                 ? "Chạm để mở CarAsistant V10 trên màn hình xe" : snapshot.artist;
-        MediaBrowser.MediaItem item = new MediaBrowser.MediaItem(
+        android.media.MediaDescription.Builder description =
                 new android.media.MediaDescription.Builder()
                         .setMediaId(NOW_PLAYING_ID)
                         .setTitle(title)
-                        .setSubtitle(artist + " · Mở CarAsistant V10")
-                        .build(),
+                        .setSubtitle(artist + " · Mở CarAsistant V10");
+        // Android Auto may use the browse-row artwork independently of MediaSession metadata.
+        // Reuse the current track artwork when valid; never pass a recycled bitmap to the host.
+        if (snapshot != null && snapshot.artwork != null && !snapshot.artwork.isRecycled()) {
+            description.setIconBitmap(snapshot.artwork);
+        }
+        MediaBrowser.MediaItem item = new MediaBrowser.MediaItem(
+                description.build(),
                 MediaBrowser.MediaItem.FLAG_PLAYABLE);
         List<MediaBrowser.MediaItem> children = new ArrayList<>();
         children.add(item);
