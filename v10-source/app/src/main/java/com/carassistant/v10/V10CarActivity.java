@@ -1809,19 +1809,33 @@ private void hideFloatingMenu() {
     }
 
     /**
-     * Scale fixed dp measurements gently against the current projected window width.
-     * Android Auto head units range from compact 800x480-class displays to wide HD panels;
-     * using the current display metrics avoids baking in a Honda-only pixel resolution.
+     * Adapt fixed dp measurements to the actual projected window, not a guessed
+     * Honda BR-V pixel resolution. Width is the primary breakpoint; short or unusually
+     * shaped head-unit windows get a small secondary correction to protect vertical space.
      */
     private float responsiveLayoutScale() {
         android.util.DisplayMetrics metrics = getResources().getDisplayMetrics();
         float density = metrics.density > 0f ? metrics.density : 1f;
         float widthDp = metrics.widthPixels / density;
-        if (widthDp < 600f) return 0.86f;
-        if (widthDp < 720f) return 0.91f;
-        if (widthDp < 840f) return 0.96f;
-        if (widthDp < 1280f) return 1.0f;
-        return 1.05f;
+        float heightDp = metrics.heightPixels / density;
+
+        float scale;
+        if (widthDp < 600f) scale = 0.86f;
+        else if (widthDp < 720f) scale = 0.91f;
+        else if (widthDp < 840f) scale = 0.96f;
+        else if (widthDp < 1280f) scale = 1.0f;
+        else scale = 1.05f;
+
+        // Compact 800x480-class displays can have little usable height after AA chrome.
+        if (heightDp < 360f) scale *= 0.90f;
+        else if (heightDp < 420f) scale *= 0.94f;
+        else if (heightDp < 500f) scale *= 0.97f;
+
+        float aspect = heightDp > 0f ? widthDp / heightDp : 1.6f;
+        if (aspect > 2.25f && heightDp < 500f) scale *= 0.97f;
+        else if (aspect < 1.40f) scale *= 0.96f;
+
+        return Math.max(0.82f, Math.min(1.05f, scale));
     }
 
     private int dp(
