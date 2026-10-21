@@ -473,8 +473,12 @@ public final class V10CarActivity
         voiceTranscriptView.setBackground(transcriptBg);
         voiceTranscriptView.setElevation(dp(40));
         voiceTranscriptView.setVisibility(View.GONE);
+        // Keep the voice transcript inside the actual projected app window on small
+        // head units (including 7-inch displays) instead of assuming a fixed 420dp width.
+        int windowWidthPx = getResources().getDisplayMetrics().widthPixels;
+        int safeTranscriptWidth = Math.max(dp(180), Math.min(dp(420), windowWidthPx - dp(24)));
         FrameLayout.LayoutParams transcriptParams = new FrameLayout.LayoutParams(
-                dp(420), dp(54), Gravity.TOP | Gravity.CENTER_HORIZONTAL);
+                safeTranscriptWidth, dp(54), Gravity.TOP | Gravity.CENTER_HORIZONTAL);
         transcriptParams.setMargins(dp(12), dp(18), dp(12), 0);
         root.addView(voiceTranscriptView, transcriptParams);
 
@@ -1804,11 +1808,28 @@ private void hideFloatingMenu() {
                         Locale.getDefault());
     }
 
+    /**
+     * Scale fixed dp measurements gently against the current projected window width.
+     * Android Auto head units range from compact 800x480-class displays to wide HD panels;
+     * using the current display metrics avoids baking in a Honda-only pixel resolution.
+     */
+    private float responsiveLayoutScale() {
+        android.util.DisplayMetrics metrics = getResources().getDisplayMetrics();
+        float density = metrics.density > 0f ? metrics.density : 1f;
+        float widthDp = metrics.widthPixels / density;
+        if (widthDp < 600f) return 0.86f;
+        if (widthDp < 720f) return 0.91f;
+        if (widthDp < 840f) return 0.96f;
+        if (widthDp < 1280f) return 1.0f;
+        return 1.05f;
+    }
+
     private int dp(
             float value) {
 
         return Math.round(
                 value *
+                responsiveLayoutScale() *
                 getResources()
                         .getDisplayMetrics()
                         .density);
