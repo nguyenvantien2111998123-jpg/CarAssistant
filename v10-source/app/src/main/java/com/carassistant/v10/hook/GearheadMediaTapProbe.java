@@ -120,7 +120,7 @@ public final class GearheadMediaTapProbe {
                 .append(" click=").append(view.isClickable());
         CharSequence description = view.getContentDescription();
         if (description != null && description.length() > 0)
-            out.append(" desc=\\\"").append(trim(description.toString())).append('\\\"');
+            out.append(" desc=\\\"").append(trim(description.toString())).append('\"');
         if (view instanceof android.widget.TextView) {
             CharSequence text = ((android.widget.TextView) view).getText();
             if (text != null && text.length() > 0)
