@@ -44,8 +44,12 @@ public final class CarAsistantMediaBrowserService extends MediaBrowserService
             @Override public void onSkipToPrevious() { MediaSessionBridge.skipPrevious(); }
             @Override public void onPlayFromMediaId(String mediaId, Bundle extras) {
                 if (NOW_PLAYING_ID.equals(mediaId)) {
-                    // The Android Auto host has entered CarAsistant's media surface.
-                    // Actual projected task selection is handled by the in-car activity.
+                    // A tap on the media item is a request to return to the single
+                    // CarAsistant V10 projection UI, not to open a separate Media app.
+                    V10CarActivity activity = V10SessionStore.getCurrentActivity();
+                    if (activity != null) {
+                        activity.restoreProjectedTaskFromMediaTap();
+                    }
                     publishSnapshot(MediaSessionBridge.getSnapshot());
                 }
             }
@@ -70,8 +74,8 @@ public final class CarAsistantMediaBrowserService extends MediaBrowserService
         MediaBrowser.MediaItem item = new MediaBrowser.MediaItem(
                 new android.media.MediaDescription.Builder()
                         .setMediaId(NOW_PLAYING_ID)
-                        .setTitle("Mở nội dung đang chiếu")
-                        .setSubtitle("CarAsistant — màn hình xe")
+                        .setTitle("CarAsistant V10")
+                        .setSubtitle("Mở lại giao diện trên màn hình xe")
                         .build(),
                 MediaBrowser.MediaItem.FLAG_PLAYABLE);
         List<MediaBrowser.MediaItem> children = new ArrayList<>();
