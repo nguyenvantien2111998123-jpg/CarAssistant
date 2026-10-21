@@ -28,6 +28,17 @@ public final class CarAsistantMediaBrowserService extends MediaBrowserService
     private static final String ROOT_ID = "carassistant_root";
     private static final String NOW_PLAYING_ID = "carassistant_now_playing";
 
+    // Process-local deferred handoff. The host must resume its CarActivity before we
+    // manipulate projection views; launching V10CarActivity from the phone process can
+    // accidentally open the phone UI instead of the Android Auto display.
+    private static volatile boolean pendingRestoreFromMediaTap;
+
+    public static boolean consumePendingRestoreFromMediaTap() {
+        if (!pendingRestoreFromMediaTap) return false;
+        pendingRestoreFromMediaTap = false;
+        return true;
+    }
+
     private MediaSession mediaSession;
     private boolean listenerRegistered;
 
@@ -44,11 +55,15 @@ public final class CarAsistantMediaBrowserService extends MediaBrowserService
             @Override public void onSkipToPrevious() { MediaSessionBridge.skipPrevious(); }
             @Override public void onPlayFromMediaId(String mediaId, Bundle extras) {
                 if (NOW_PLAYING_ID.equals(mediaId)) {
-                    // A tap on the media item is a request to return to the single
-                    // CarAsistant V10 projection UI, not to open a separate Media app.
+                    // Android Auto may invoke this while the projected CarActivity is paused
+                    // or absent. Keep the request until the car UI is resumed; never start a
+                    // normal phone-side Activity from this phone-side MediaBrowserService.
+                    pendingRestoreFromMediaTap = true;
                     V10CarActivity activity = V10SessionStore.getCurrentActivity();
-                    if (activity != null) {
-                        activity.restoreProjectedTaskFromMediaTap();
+                    if (activity != null && activity.isCarUiResumed()) {
+                        if (consumePendingRestoreFromMediaTap()) {
+                            activity.restoreProjectedTaskFromMediaTap();
+                        }
                     }
                     publishSnapshot(MediaSessionBridge.getSnapshot());
                 }

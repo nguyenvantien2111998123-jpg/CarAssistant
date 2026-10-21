@@ -186,6 +186,12 @@ public final class V10CarActivity
         MediaSessionBridge.addListener(mediaSessionListener);
         updateMediaCard(MediaSessionBridge.getSnapshot());
 
+        // Android Auto can deliver the media-item tap while the CarActivity is stopped.
+        // Consume the deferred request only after the car UI and projection layers exist.
+        if (CarAsistantMediaBrowserService.consumePendingRestoreFromMediaTap()) {
+            restoreProjectedTaskFromMediaTap();
+        }
+
         if (voiceAssistantController == null) {
             voiceAssistantController = new VoiceAssistantController(
                     this,
@@ -1342,6 +1348,10 @@ private void hideFloatingMenu() {
      * Reuses the already-running car activity and restores its selected projection;
      * never launches the phone launcher or a second CarAsistant activity.
      */
+    public boolean isCarUiResumed() {
+        return resumed && root != null && launcherLayer != null;
+    }
+
     public void restoreProjectedTaskFromMediaTap() {
         handler.post(() -> {
             ComponentName target = activeTarget;
