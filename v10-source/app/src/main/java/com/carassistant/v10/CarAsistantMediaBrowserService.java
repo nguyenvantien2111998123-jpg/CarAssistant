@@ -108,6 +108,17 @@ public final class CarAsistantMediaBrowserService extends MediaBrowserService
     @Override
     public void onMediaChanged(MediaSessionBridge.Snapshot snapshot) {
         publishSnapshot(snapshot);
+        // Refresh the Android Auto browse row as well as the transport metadata so the
+        // displayed title/artist follows the active track without requiring a reconnect.
+        notifyBrowseRowChanged();
+    }
+
+    private void notifyBrowseRowChanged() {
+        try {
+            notifyChildrenChanged(ROOT_ID);
+        } catch (RuntimeException error) {
+            Log.w(TAG, "Unable to refresh Android Auto media browse row", error);
+        }
     }
 
     private void publishSnapshot(MediaSessionBridge.Snapshot snapshot) {
