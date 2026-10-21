@@ -26,7 +26,7 @@ public final class GearheadMediaTapProbe {
     private static volatile boolean installed;
     private static final Handler MAIN = new Handler(Looper.getMainLooper());
     private static final Set<View> DUMPED_ROOTS = Collections.newSetFromMap(new WeakHashMap<View, Boolean>());
-    private static final int MAX_TREE_NODES = 90;
+    private static final int MAX_TREE_NODES = 240;
 
     private GearheadMediaTapProbe() { }
 
@@ -88,6 +88,25 @@ public final class GearheadMediaTapProbe {
             try { out.append(root.getDisplay() == null ? "?" : root.getDisplay().getDisplayId()); }
             catch (Throwable ignored) { out.append("?"); }
             out.append(" size=").append(root.getWidth()).append('x').append(root.getHeight());
+            // Capture the actual head-unit logical geometry rather than assuming a fixed
+            // Honda BR-V pixel resolution from the screen's diagonal size.
+            try {
+                android.util.DisplayMetrics metrics = root.getResources().getDisplayMetrics();
+                out.append(" densityDpi=").append(metrics.densityDpi)
+                        .append(" density=").append(metrics.density)
+                        .append(" metrics=").append(metrics.widthPixels).append('x')
+                        .append(metrics.heightPixels)
+                        .append(" orientation=")
+                        .append(root.getResources().getConfiguration().orientation);
+                if (root.getDisplay() != null) {
+                    out.append(" rotation=").append(root.getDisplay().getRotation());
+                }
+                android.view.ViewGroup.LayoutParams params = root.getLayoutParams();
+                if (params != null) {
+                    out.append(" layoutParams=").append(params.width).append('x')
+                            .append(params.height);
+                }
+            } catch (Throwable ignored) { }
             int[] budget = new int[]{MAX_TREE_NODES};
             appendTree(root, out, 0, budget);
             String message = out.toString();
@@ -129,7 +148,7 @@ public final class GearheadMediaTapProbe {
         out.append(']');
         if (view instanceof ViewGroup) {
             ViewGroup group = (ViewGroup) view;
-            int count = Math.min(group.getChildCount(), 30);
+            int count = Math.min(group.getChildCount(), 50);
             for (int i = 0; i < count && budget[0] > 0; i++)
                 appendTree(group.getChildAt(i), out, depth + 1, budget);
         }
