@@ -6,6 +6,7 @@ import com.carassistant.v10.AACastDisplay;
 import com.carassistant.v10.hook.DisplayHooks;
 import com.carassistant.v10.hook.GearheadAllow;
 import com.carassistant.v10.hook.GearheadDockPatcher;
+import com.carassistant.v10.hook.GearheadMediaTapProbe;
 import com.carassistant.v10.hook.InputHooks;
 import com.carassistant.v10.hook.OrientationHooks;
 import com.carassistant.v10.hook.SteeringWheelKeyHooks;
@@ -48,6 +49,7 @@ public final class AACastBridge implements IXposedHookLoadPackage {
             if (GEARHEAD.equals(packageName)) {
                 GearheadAllow.install(param.classLoader);
                 GearheadDockPatcher.install();
+                GearheadMediaTapProbe.install(param.classLoader);
                 SteeringWheelKeyHooks.install(param.classLoader);
             }
 
