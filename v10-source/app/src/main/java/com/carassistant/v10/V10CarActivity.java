@@ -1337,6 +1337,23 @@ private void hideFloatingMenu() {
         }
     }
 
+    /**
+     * Called when Android Auto selects the CarAsistant media item.
+     * Reuses the already-running car activity and restores its selected projection;
+     * never launches the phone launcher or a second CarAsistant activity.
+     */
+    public void restoreProjectedTaskFromMediaTap() {
+        handler.post(() -> {
+            ComponentName target = activeTarget;
+            if (target == null) target = V10SessionStore.getTarget(this);
+            if (target != null) {
+                launchProjection(target);
+            } else {
+                returnToLauncher();
+            }
+        });
+    }
+
     public void handleControlHome() {
 
         returnToLauncher();
