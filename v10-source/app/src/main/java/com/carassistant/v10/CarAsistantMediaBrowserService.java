@@ -86,11 +86,18 @@ public final class CarAsistantMediaBrowserService extends MediaBrowserService
             result.sendResult(Collections.emptyList());
             return;
         }
+        // Describe the current track in the browse row, but keep a stable ID that
+        // routes taps back to the existing V10 car UI rather than creating another app.
+        MediaSessionBridge.Snapshot snapshot = MediaSessionBridge.getSnapshot();
+        String title = snapshot == null || TextUtils.isEmpty(snapshot.title)
+                ? "CarAsistant V10" : snapshot.title;
+        String artist = snapshot == null || TextUtils.isEmpty(snapshot.artist)
+                ? "Chạm để mở CarAsistant V10 trên màn hình xe" : snapshot.artist;
         MediaBrowser.MediaItem item = new MediaBrowser.MediaItem(
                 new android.media.MediaDescription.Builder()
                         .setMediaId(NOW_PLAYING_ID)
-                        .setTitle("CarAsistant V10")
-                        .setSubtitle("Mở lại giao diện trên màn hình xe")
+                        .setTitle(title)
+                        .setSubtitle(artist + " · Mở CarAsistant V10")
                         .build(),
                 MediaBrowser.MediaItem.FLAG_PLAYABLE);
         List<MediaBrowser.MediaItem> children = new ArrayList<>();
