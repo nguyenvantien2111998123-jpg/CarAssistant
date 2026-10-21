@@ -68,17 +68,16 @@ public final class GearheadMediaTapProbe {
                     try {
                         if (view.getContext() == null
                                 || !GEARHEAD.equals(view.getContext().getPackageName())) return;
+                        // Android Auto often uses obfuscated/generic class and resource names,
+                        // so a keyword-only filter can miss the exact home media-card tap target.
+                        // Record the actual clicked view and its ancestor chain in this diagnostic
+                        // build; do not consume the click or modify host behavior.
                         String details = describeChain(view);
-                        String lower = details.toLowerCase(Locale.ROOT);
-                        if (lower.contains("media") || lower.contains("playback")
-                                || lower.contains("album") || lower.contains("track")
-                                || lower.contains("song") || lower.contains("player")
-                                || lower.contains("browse") || lower.contains("queue")
-                                || lower.contains("music") || lower.contains("title")) {
-                            String message = "performClick " + details;
-                            Log.i(TAG, message);
-                            XposedBridge.log("[" + TAG + "] " + message);
-                        }
+                        String message = "performClick size=" + view.getWidth() + "x"
+                                + view.getHeight() + " bounds=[" + view.getLeft() + ","
+                                + view.getTop() + "] " + details;
+                        Log.i(TAG, message);
+                        XposedBridge.log("[" + TAG + "] " + message);
                     } catch (Throwable ignored) {
                         // Diagnostic-only: never interfere with Android Auto click handling.
                     }
