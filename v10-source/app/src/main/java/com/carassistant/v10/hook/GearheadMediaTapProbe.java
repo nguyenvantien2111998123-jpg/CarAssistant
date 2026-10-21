@@ -2,7 +2,6 @@ package com.carassistant.v10.hook;
 
 import android.view.View;
 import android.view.ViewGroup;
-import android.view.WindowManagerGlobal;
 import android.os.Handler;
 import android.os.Looper;
 import android.util.Log;
@@ -36,7 +35,8 @@ public final class GearheadMediaTapProbe {
         try {
             // Observe newly attached Android Auto windows and dump a bounded view tree.
             // Diagnostic-only: no layout, visibility, focus, or touch behavior is modified.
-            XposedBridge.hookAllMethods(WindowManagerGlobal.class, "addView", new XC_MethodHook() {
+            Class<?> windowManagerGlobal = XposedHelpers.findClass("android.view.WindowManagerGlobal", null);
+            XposedBridge.hookAllMethods(windowManagerGlobal, "addView", new XC_MethodHook() {
                 @Override protected void afterHookedMethod(MethodHookParam param) {
                     if (param.args == null || param.args.length == 0
                             || !(param.args[0] instanceof View)) return;
