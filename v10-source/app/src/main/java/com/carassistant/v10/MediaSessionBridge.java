@@ -114,6 +114,16 @@ public final class MediaSessionBridge extends NotificationListenerService {
         }
     }
 
+    public static void play() {
+        MediaController controller = activeController;
+        if (controller != null) controller.getTransportControls().play();
+    }
+
+    public static void pause() {
+        MediaController controller = activeController;
+        if (controller != null) controller.getTransportControls().pause();
+    }
+
     public static void skipNext() {
         MediaController controller = activeController;
         if (controller != null) controller.getTransportControls().skipToNext();
