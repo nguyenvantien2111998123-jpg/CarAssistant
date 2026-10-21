@@ -120,11 +120,11 @@ public final class GearheadMediaTapProbe {
                 .append(" click=").append(view.isClickable());
         CharSequence description = view.getContentDescription();
         if (description != null && description.length() > 0)
-            out.append(" desc=\\\"").append(trim(description.toString())).append('\"');
+            out.append(" desc=\\\"").append(trim(description.toString())).append("\\\"");
         if (view instanceof android.widget.TextView) {
             CharSequence text = ((android.widget.TextView) view).getText();
             if (text != null && text.length() > 0)
-                out.append(" text=\\\"").append(trim(text.toString())).append('\\\"');
+                out.append(" text=\\\"").append(trim(text.toString())).append("\\\"");
         }
         out.append(']');
         if (view instanceof ViewGroup) {
@@ -151,11 +151,11 @@ public final class GearheadMediaTapProbe {
             }
             CharSequence description = current.getContentDescription();
             if (description != null && description.length() > 0) {
-                out.append(" desc=").append(trim(description.toString()));
+            out.append(" desc=\\\"").append(trim(description.toString())).append("\\\"");
             }
             if (current instanceof android.widget.TextView) {
                 CharSequence text = ((android.widget.TextView) current).getText();
-                if (text != null && text.length() > 0) out.append(" text=").append(trim(text.toString()));
+                out.append(" text=\\\"").append(trim(text.toString())).append("\\\"");
             }
             if (!(current.getParent() instanceof View)) break;
             current = (View) current.getParent();
