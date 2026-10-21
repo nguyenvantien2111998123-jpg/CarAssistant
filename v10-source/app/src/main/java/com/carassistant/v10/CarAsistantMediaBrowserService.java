@@ -3,7 +3,7 @@ package com.carassistant.v10;
 import android.graphics.Bitmap;
 import android.media.MediaMetadata;
 import android.media.browse.MediaBrowser;
-import android.media.browse.MediaBrowserService;
+import android.service.media.MediaBrowserService;
 import android.media.session.MediaSession;
 import android.media.session.PlaybackState;
 import android.os.Bundle;
