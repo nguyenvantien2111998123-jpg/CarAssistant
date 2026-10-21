@@ -188,6 +188,10 @@ public final class MediaSessionBridge extends NotificationListenerService {
         if (controllers != null) {
             for (MediaController candidate : controllers) {
                 if (candidate == null) continue;
+                // Do not select CarAsistant's own published MediaSession. Doing so would
+                // mirror our own session back into itself and repeatedly trigger metadata/state
+                // callbacks whenever Android Auto connects.
+                if (getPackageName().equals(candidate.getPackageName())) continue;
                 PlaybackState state = candidate.getPlaybackState();
                 if (state != null && state.getState() == PlaybackState.STATE_PLAYING) {
                     chosen = candidate;
