@@ -60,11 +60,21 @@ public final class CarAsistantMediaBrowserService extends MediaBrowserService
                     // normal phone-side Activity from this phone-side MediaBrowserService.
                     pendingRestoreFromMediaTap = true;
                     V10CarActivity activity = V10SessionStore.getCurrentActivity();
+                    boolean restored = false;
                     if (activity != null && activity.isCarUiResumed()) {
                         if (consumePendingRestoreFromMediaTap()) {
                             activity.restoreProjectedTaskFromMediaTap();
+                            restored = true;
                         }
                     }
+                    // A media-card tap is also a Play request in Android Auto. Acknowledge
+                    // the transport action through the existing active session without
+                    // launching its phone-side Activity. This prevents the host waiting on a
+                    // play-from-media-id request while the V10 car surface is being restored.
+                    MediaSessionBridge.play();
+                    Log.i(TAG, "NOW_PLAYING tapped; carActivityPresent=" + (activity != null)
+                            + ", carUiResumed=" + (activity != null && activity.isCarUiResumed())
+                            + ", restoreScheduled=" + restored);
                     publishSnapshot(MediaSessionBridge.getSnapshot());
                 }
             }
