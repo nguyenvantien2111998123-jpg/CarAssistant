@@ -32,6 +32,7 @@ public final class CarAsistantMediaBrowserService extends MediaBrowserService
     // manipulate projection views; launching V10CarActivity from the phone process can
     // accidentally open the phone UI instead of the Android Auto display.
     private static volatile boolean pendingRestoreFromMediaTap;
+    private static volatile long lastRestoreRequestAtMs;
 
     public static boolean consumePendingRestoreFromMediaTap() {
         if (!pendingRestoreFromMediaTap) return false;
@@ -53,28 +54,21 @@ public final class CarAsistantMediaBrowserService extends MediaBrowserService
             @Override public void onPause() { MediaSessionBridge.pause(); }
             @Override public void onSkipToNext() { MediaSessionBridge.skipNext(); }
             @Override public void onSkipToPrevious() { MediaSessionBridge.skipPrevious(); }
+            @Override public void onPrepareFromMediaId(String mediaId, Bundle extras) {
+                if (NOW_PLAYING_ID.equals(mediaId)) {
+                    // Some Android Auto versions prepare the selected media item before
+                    // issuing Play. Handle both stages so a tap can restore the projected V10
+                    // task even when the host does not immediately call onPlayFromMediaId.
+                    requestProjectedRestore("prepare");
+                }
+            }
+
             @Override public void onPlayFromMediaId(String mediaId, Bundle extras) {
                 if (NOW_PLAYING_ID.equals(mediaId)) {
-                    // Android Auto may invoke this while the projected CarActivity is paused
-                    // or absent. Keep the request until the car UI is resumed; never start a
-                    // normal phone-side Activity from this phone-side MediaBrowserService.
-                    pendingRestoreFromMediaTap = true;
-                    V10CarActivity activity = V10SessionStore.getCurrentActivity();
-                    boolean restored = false;
-                    if (activity != null && activity.isCarUiResumed()) {
-                        if (consumePendingRestoreFromMediaTap()) {
-                            activity.restoreProjectedTaskFromMediaTap();
-                            restored = true;
-                        }
-                    }
-                    // A media-card tap is also a Play request in Android Auto. Acknowledge
-                    // the transport action through the existing active session without
-                    // launching its phone-side Activity. This prevents the host waiting on a
-                    // play-from-media-id request while the V10 car surface is being restored.
+                    requestProjectedRestore("play");
+                    // A media-card tap is also a Play request in Android Auto. Forward it to
+                    // the active media session, but never launch the source app on the phone.
                     MediaSessionBridge.play();
-                    Log.i(TAG, "NOW_PLAYING tapped; carActivityPresent=" + (activity != null)
-                            + ", carUiResumed=" + (activity != null && activity.isCarUiResumed())
-                            + ", restoreScheduled=" + restored);
                     publishSnapshot(MediaSessionBridge.getSnapshot());
                 }
             }
@@ -83,6 +77,31 @@ public final class CarAsistantMediaBrowserService extends MediaBrowserService
         MediaSessionBridge.addListener(this);
         listenerRegistered = true;
         publishSnapshot(MediaSessionBridge.getSnapshot());
+    }
+
+    private void requestProjectedRestore(String stage) {
+        long now = android.os.SystemClock.elapsedRealtime();
+        boolean restored = false;
+        // Prepare + Play may arrive back-to-back for one tap. Debounce only the projection
+        // restore, not transport commands, so the host cannot queue duplicate task restores.
+        synchronized (CarAsistantMediaBrowserService.class) {
+            if (now - lastRestoreRequestAtMs >= 1200L) {
+                lastRestoreRequestAtMs = now;
+                pendingRestoreFromMediaTap = true;
+                V10CarActivity activity = V10SessionStore.getCurrentActivity();
+                if (activity != null && activity.isCarUiResumed()
+                        && consumePendingRestoreFromMediaTap()) {
+                    activity.restoreProjectedTaskFromMediaTap();
+                    restored = true;
+                }
+                Log.i(TAG, "NOW_PLAYING " + stage + "; carActivityPresent="
+                        + (activity != null) + ", carUiResumed="
+                        + (activity != null && activity.isCarUiResumed())
+                        + ", restoreScheduled=" + restored);
+            } else {
+                Log.i(TAG, "NOW_PLAYING " + stage + "; duplicate restore suppressed");
+            }
+        }
     }
 
     @Override
