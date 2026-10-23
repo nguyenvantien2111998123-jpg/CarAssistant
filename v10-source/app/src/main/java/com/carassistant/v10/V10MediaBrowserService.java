@@ -3,6 +3,7 @@ package com.carassistant.v10;
 import android.graphics.Bitmap;
 import android.media.MediaMetadata;
 import android.media.browse.MediaBrowser;
+import android.media.MediaDescription;
 import android.service.media.MediaBrowserService;
 import android.media.session.MediaSession;
 import android.media.session.PlaybackState;
@@ -47,6 +48,10 @@ public final class V10MediaBrowserService extends MediaBrowserService {
             @Override public void onPlay() { MediaSessionBridge.play(); }
             @Override public void onPause() { MediaSessionBridge.pause(); }
             @Override public void onPlayFromMediaId(String mediaId, Bundle extras) {
+                if ("open_v10".equals(mediaId)) {
+                    requestV10Open();
+                    return;
+                }
                 MediaSessionBridge.play();
             }
             @Override public void onSkipToNext() { MediaSessionBridge.skipNext(); }
@@ -76,9 +81,22 @@ public final class V10MediaBrowserService extends MediaBrowserService {
 
     @Override
     public void onLoadChildren(String parentId, Result<List<MediaBrowser.MediaItem>> result) {
-        // This integration provides a now-playing controller, not a duplicate
-        // browse/catalog app. The existing V10 projection UI remains the launcher.
-        result.sendResult(Collections.emptyList());
+        // Offer one explicit entry into the existing V10 UI instead of an empty
+        // Controller browse screen or a duplicate media catalog.
+        MediaDescription openV10 = new MediaDescription.Builder()
+                .setMediaId("open_v10")
+                .setTitle("Open CarAsistant V10")
+                .setSubtitle("Open on car display")
+                .build();
+        result.sendResult(Collections.singletonList(
+                new MediaBrowser.MediaItem(openV10, MediaBrowser.MediaItem.FLAG_PLAYABLE)));
+    }
+
+    private void requestV10Open() {
+        Intent open = new Intent(this, V10ControlReceiver.class)
+                .setAction(V10ControlReceiver.ACTION_MEDIA_CONTROLLER_OPEN);
+        sendBroadcast(open);
+        Log.i(TAG, "Controller browse item selected; requested V10 on car display");
     }
 
     @Override
