@@ -591,11 +591,48 @@ public final class V10CarActivity
 
 
     /**
-     * Phase 1: an Android Auto metadata tap returns to CarAsistant V10 itself.
-     * Opening the original player task on display 2 is deliberately deferred to phase 2.
+     * Android Auto metadata taps are routed back into the existing V10 projection
+     * session. Do not returnToLauncher() here: that clears the saved target and hides
+     * the current task, which was the reason the old implementation lost the player.
+     *
+     * Keep transport buttons on the source MediaSession; this path is only for opening
+     * the content. Prefer the currently projected target when it matches the active
+     * media session, otherwise resolve the active source package and project it.
      */
     public void handleOpenActiveMediaOnProjection() {
-        handler.post(this::returnToLauncher);
+        handler.post(() -> {
+            MediaSessionBridge.Snapshot state = MediaSessionBridge.getSnapshot();
+            if (state == null || TextUtils.isEmpty(state.packageName)) {
+                Toast.makeText(this, "Chưa có ứng dụng media đang hoạt động.",
+                        Toast.LENGTH_SHORT).show();
+                return;
+            }
+
+            ComponentName projected = V10SessionStore.getTarget(this);
+            if (projected != null
+                    && state.packageName.equals(projected.getPackageName())
+                    && session != null) {
+                // Restore the existing media task instead of starting a second phone task.
+                activeTarget = projected;
+                appProjectionLayer.setVisibility(View.VISIBLE);
+                launcherLayer.setVisibility(View.GONE);
+                projectionLayer.setVisibility(View.GONE);
+                session.setMediaTarget(projected);
+                return;
+            }
+
+            Intent launch = getPackageManager().getLaunchIntentForPackage(state.packageName);
+            if (launch == null || launch.getComponent() == null) {
+                Toast.makeText(this, "Không tìm thấy màn hình mở của ứng dụng media.",
+                        Toast.LENGTH_SHORT).show();
+                return;
+            }
+
+            // Reuse the projection engine's existing-task preference. It moves the source
+            // task to display 2 where supported and only falls back to a display-specific
+            // launch; it never intentionally launches the player on the phone display.
+            launchProjection(launch.getComponent(), true);
+        });
     }
 
     private void openActiveMediaOnProjection() {
