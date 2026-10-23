@@ -138,7 +138,7 @@ public final class GearheadDockPatcher {
      * ancestor chain and accept known media/player containers.
      */
     private static boolean isMediaInfoClick(View clicked, Context appContext) {
-        if (clicked == null || !isV10MediaRouteActive(appContext)) return false;
+        if (clicked == null) return false;
         // Never steal transport controls: those must keep controlling the active player.
         String clickedName = resourceEntryName(clicked);
         String lowerClicked = normalize(clickableText(clicked) + " "
@@ -157,7 +157,8 @@ public final class GearheadDockPatcher {
             if (containsAny(lower, "media_item_title", "media_title", "media_metadata",
                     "now_playing", "media_card", "media_info", "playback_metadata",
                     "song_title", "album_art", "media_artwork", "track_title",
-                    "media_description", "artist_name", "đang phát", "now playing")) {
+                    "media_description", "artist_name", "đang phát", "now playing")
+                    && isV10MediaRouteActive(appContext)) {
                 log("Media metadata tap matched depth=" + depth + " view="
                         + current.getClass().getName() + " id=" + name);
                 return true;
@@ -166,7 +167,8 @@ public final class GearheadDockPatcher {
             // classify a compact container when its own subtree contains both metadata
             // and artwork, avoiding broad matches on the whole host window.
             if (depth <= 3 && current instanceof ViewGroup
-                    && hasMediaMetadataSubtree((ViewGroup) current, 36, 4)) {
+                    && hasMediaMetadataSubtree((ViewGroup) current, 36, 4)
+                    && isV10MediaRouteActive(appContext)) {
                 log("Media metadata tap matched by subtree depth=" + depth + " view="
                         + current.getClass().getName() + " id=" + name);
                 return true;
