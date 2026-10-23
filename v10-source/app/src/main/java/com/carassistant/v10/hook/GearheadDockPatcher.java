@@ -325,7 +325,7 @@ public final class GearheadDockPatcher {
                     new String[]{"target_package"},
                     null, null, null);
             return cursor != null && cursor.moveToFirst()
-                    && !TextUtils.isEmpty(cursor.getString(0));
+                    && cursor.getString(0) != null && !cursor.getString(0).isEmpty();
         } catch (Throwable error) {
             log("Could not verify selected V10 target; leaving native AA click intact: " + error);
             return false;
