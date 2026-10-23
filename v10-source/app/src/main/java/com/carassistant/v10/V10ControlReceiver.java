@@ -59,12 +59,13 @@ public final class V10ControlReceiver
         }
 
         if (ACTION_STEERING_MEDIA_OPEN.equals(intent.getAction())) {
-            V10CarActivity mediaActivity = V10SessionStore.getCurrentActivity();
-            if (mediaActivity != null) {
-                mediaActivity.handleOpenActiveMediaOnProjection();
-            } else {
-                V10SessionStore.requestMediaOpenOnNextActivity();
-            }
+            // A media-card tap originates in Android Auto's Home/dock process. The
+            // existing V10CarActivity reference may still point to a paused activity,
+            // so calling its media handler here can launch the player on the phone.
+            // Always defer to V10CarActivity.onResume(): GearheadAutoOpen opens the
+            // car activity first, and that resumed V10 activity then runs the same
+            // Home media-card flow.
+            V10SessionStore.requestMediaOpenOnNextActivity();
             return;
         }
 
