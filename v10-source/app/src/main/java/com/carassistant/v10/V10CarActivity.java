@@ -596,7 +596,20 @@ public final class V10CarActivity
      * a separate task-recovery or phone-launch path.
      */
     public void handleOpenActiveMediaOnProjection() {
-        handler.post(this::openActiveMediaOnProjection);
+        // A stale Activity object may survive after the car UI has been paused.
+        // Never launch a media app from that lifecycle state: queue the request
+        // for onResume, when this CarActivity is active on the Android Auto display.
+        if (!resumed) {
+            V10SessionStore.requestMediaOpenOnNextActivity();
+            return;
+        }
+        handler.post(() -> {
+            if (resumed) {
+                openActiveMediaOnProjection();
+            } else {
+                V10SessionStore.requestMediaOpenOnNextActivity();
+            }
+        });
     }
 
     private void openActiveMediaOnProjection() {

@@ -288,7 +288,20 @@ public final class GearheadDockPatcher {
             } else {
                 launchPackage = launch.getPackage();
             }
-        } catch (Throwable ignored) { }
+            // Gearhead can launch a media app with an implicit VIEW/PendingIntent.
+            // In that case getPackage() and getComponent() are both null, so the
+            // old guard silently allowed the native launch to foreground the phone.
+            if (launchPackage == null || launchPackage.isEmpty()) {
+                android.content.pm.ResolveInfo resolved =
+                        appContext.getPackageManager().resolveActivity(
+                                launch, android.content.pm.PackageManager.MATCH_DEFAULT_ONLY);
+                if (resolved != null && resolved.activityInfo != null) {
+                    launchPackage = resolved.activityInfo.packageName;
+                }
+            }
+        } catch (Throwable error) {
+            log("Could not resolve media launch target: " + error);
+        }
         if (launchPackage == null || launchPackage.isEmpty()
                 || GEARHEAD.equals(launchPackage)
                 || appContext.getPackageName().equals(launchPackage)) return false;
