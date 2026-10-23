@@ -591,33 +591,38 @@ public final class V10CarActivity
 
 
     /**
-     * Android Auto metadata taps are routed back into the existing V10 projection
-     * session. Do not returnToLauncher() here: that clears the saved target and hides
-     * the current task, which was the reason the old implementation lost the player.
-     *
-     * Keep transport buttons on the source MediaSession; this path is only for opening
-     * the content. Prefer the currently projected target when it matches the active
-     * media session, otherwise resolve the active source package and project it.
+     * Handles the explicit "open content" request sent by Android Auto's external media
+     * card/bar. That request means: open V10, then restore the app task V10 was projecting.
+     * The active MediaSession is metadata/control state; it is NOT the authority for which
+     * task is currently projected, so never use its package to replace a different target.
      */
     public void handleOpenActiveMediaOnProjection() {
         handler.post(() -> {
-            MediaSessionBridge.Snapshot state = MediaSessionBridge.getSnapshot();
-            if (state == null || TextUtils.isEmpty(state.packageName)) {
-                Toast.makeText(this, "Chưa có ứng dụng media đang hoạt động.",
-                        Toast.LENGTH_SHORT).show();
+            ComponentName projected = V10SessionStore.getTarget(this);
+
+            // Primary path: restore the task already selected for V10 projection. This is
+            // deliberately independent of MediaSessionBridge's current package, since the
+            // session can lag, switch providers, or temporarily report another phone player.
+            if (projected != null && session != null) {
+                activeTarget = projected;
+                projectionLayer.setVisibility(View.GONE);
+                launcherLayer.setVisibility(View.GONE);
+                if (appProjectionLayer != null) {
+                    appProjectionLayer.setVisibility(View.VISIBLE);
+                    appProjectionLayer.bringToFront();
+                }
+                if (floatingVoiceButton != null) floatingVoiceButton.bringToFront();
+                session.setMediaTarget(projected);
                 return;
             }
 
-            ComponentName projected = V10SessionStore.getTarget(this);
-            if (projected != null
-                    && state.packageName.equals(projected.getPackageName())
-                    && session != null) {
-                // Restore the existing media task instead of starting a second phone task.
-                activeTarget = projected;
-                appProjectionLayer.setVisibility(View.VISIBLE);
-                launcherLayer.setVisibility(View.GONE);
-                projectionLayer.setVisibility(View.GONE);
-                session.setMediaTarget(projected);
+            // Fallback only when V10 has no remembered projection target. Use the shared
+            // media session as a discovery source, then ask the projection engine to place
+            // that app on the secondary display.
+            MediaSessionBridge.Snapshot state = MediaSessionBridge.getSnapshot();
+            if (state == null || TextUtils.isEmpty(state.packageName)) {
+                Toast.makeText(this, "Chưa có task chiếu hoặc ứng dụng media đang hoạt động.",
+                        Toast.LENGTH_SHORT).show();
                 return;
             }
 
@@ -627,10 +632,6 @@ public final class V10CarActivity
                         Toast.LENGTH_SHORT).show();
                 return;
             }
-
-            // Reuse the projection engine's existing-task preference. It moves the source
-            // task to display 2 where supported and only falls back to a display-specific
-            // launch; it never intentionally launches the player on the phone display.
             launchProjection(launch.getComponent(), true);
         });
     }
