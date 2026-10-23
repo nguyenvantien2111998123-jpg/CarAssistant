@@ -133,6 +133,22 @@ public final class MediaSessionBridge extends NotificationListenerService {
         }
     }
 
+    public static void play() {
+        MediaController controller = activeController;
+        if (controller != null) {
+            try { controller.getTransportControls().play(); }
+            catch (RuntimeException error) { Log.w(TAG, "Active media session rejected Play", error); }
+        }
+    }
+
+    public static void pause() {
+        MediaController controller = activeController;
+        if (controller != null) {
+            try { controller.getTransportControls().pause(); }
+            catch (RuntimeException error) { Log.w(TAG, "Active media session rejected Pause", error); }
+        }
+    }
+
     public static void togglePlayPause() {
         MediaController controller = activeController;
         if (controller == null) return;
@@ -152,6 +168,17 @@ public final class MediaSessionBridge extends NotificationListenerService {
     public static void skipPrevious() {
         MediaController controller = activeController;
         if (controller != null) controller.getTransportControls().skipToPrevious();
+    }
+
+    /** Seek the active media session to an absolute position in milliseconds. */
+    public static void seekTo(long positionMs) {
+        MediaController controller = activeController;
+        if (controller == null) return;
+        try {
+            controller.getTransportControls().seekTo(Math.max(0L, positionMs));
+        } catch (RuntimeException error) {
+            Log.w(TAG, "Active media session rejected seek request", error);
+        }
     }
 
     /** Seek the active media session by a relative offset in milliseconds. */
@@ -225,7 +252,21 @@ public final class MediaSessionBridge extends NotificationListenerService {
     private void refreshControllers(List<MediaController> controllers) {
         MediaController chosen = null;
         if (controllers != null) {
+            // When V10 is projecting an app, prefer that package's media session.
+            // This prevents a different phone/AA player from being mirrored as V10 media.
+            android.content.ComponentName target = V10SessionStore.getTarget(this);
+            if (target != null) {
+                for (MediaController candidate : controllers) {
+                    if (candidate != null
+                            && target.getPackageName().equals(candidate.getPackageName())
+                            && (candidate.getMetadata() != null || candidate.getPlaybackState() != null)) {
+                        chosen = candidate;
+                        break;
+                    }
+                }
+            }
             for (MediaController candidate : controllers) {
+                if (chosen != null) break;
                 if (candidate == null) continue;
                 PlaybackState state = candidate.getPlaybackState();
                 if (state != null && state.getState() == PlaybackState.STATE_PLAYING) {
@@ -297,6 +338,7 @@ public final class MediaSessionBridge extends NotificationListenerService {
                     controller.getPackageName(), artwork, playing, duration, position);
         }
         Snapshot latest = snapshot;
+        V10MediaBrowserService.refreshIfRunning(this);
         MAIN.post(() -> {
             for (Listener listener : LISTENERS) {
                 try { listener.onMediaChanged(latest); }

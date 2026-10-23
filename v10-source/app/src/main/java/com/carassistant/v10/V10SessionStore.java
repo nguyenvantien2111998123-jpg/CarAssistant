@@ -32,6 +32,7 @@ public final class V10SessionStore {
         if (component == null) editor.remove(TARGET);
         else editor.putString(TARGET, component.flattenToString());
         editor.apply();
+        V10MediaBrowserService.refreshIfRunning(context);
     }
 
     public static ComponentName getTarget(Context context) {
@@ -122,6 +123,7 @@ public final class V10SessionStore {
 
     public static void clearTarget(Context context) {
         prefs(context).edit().remove(TARGET).apply();
+        V10MediaBrowserService.refreshIfRunning(context);
     }
 
     public static void setCurrentActivity(V10CarActivity activity) { currentActivity = activity; }
