@@ -373,13 +373,18 @@ public final class GearheadDockPatcher {
         Context appContext = context;
         if (appContext == null) return;
         try {
-            // Request the Android Auto host to open the CarAsistant CarActivity first.
-            // The receiver records the request so V10 returns to its launcher when resumed.
-            GearheadAutoOpen.requestOpen();
+            // The dock click may be running in a different Gearhead process from
+            // :projection, where CarSystemUiControllerService is available. Route the
+            // open request across processes instead of calling a process-local static
+            // method that can silently have no host classloader.
+            Intent hostRequest = new Intent(GearheadAutoOpen.ACTION_REQUEST_OPEN);
+            hostRequest.setPackage(GEARHEAD);
+            appContext.sendBroadcast(hostRequest);
+
             Intent intent = new Intent("com.carassistant.v10.STEERING_MEDIA_OPEN");
             intent.setPackage("com.carassistant.v10");
             appContext.sendBroadcast(intent);
-            log("Forwarded media metadata tap to CarAsistant V10; source player launch is deferred");
+            log("Forwarded media metadata tap to Gearhead :projection and CarAsistant V10");
         } catch (Throwable error) {
             log("Could not forward media metadata tap: " + error);
         }

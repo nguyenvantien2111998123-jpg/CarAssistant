@@ -1,9 +1,12 @@
 package com.carassistant.v10.hook;
 
+import android.content.BroadcastReceiver;
 import android.content.ComponentName;
 import android.content.Context;
 import android.content.Intent;
 import android.content.res.Resources;
+import android.content.IntentFilter;
+import android.os.Build;
 import android.os.Handler;
 import android.os.Looper;
 import android.os.SystemClock;
@@ -33,6 +36,8 @@ public final class GearheadAutoOpen {
     private static final String GEARHEAD = "com.google.android.projection.gearhead";
     private static final String PACKAGE = "com.carassistant.v10";
     private static final String SERVICE = "com.carassistant.v10.AACastCarService";
+    public static final String ACTION_REQUEST_OPEN =
+            "com.google.android.projection.gearhead.AACAST_REQUEST_OPEN_V10";
     private static final String FACET_BAR_RESOURCE = "gh_coolwalk_vertical_facet_bar";
 
     private static final long OPEN_DELAY_MS = 1000L;
@@ -43,6 +48,15 @@ public final class GearheadAutoOpen {
     private static final Handler MAIN = new Handler(Looper.getMainLooper());
     private static final AtomicBoolean INSTALLED = new AtomicBoolean(false);
     private static final AtomicBoolean OPEN_PENDING = new AtomicBoolean(false);
+    private static final AtomicBoolean REQUEST_RECEIVER_REGISTERED = new AtomicBoolean(false);
+    private static final BroadcastReceiver REQUEST_RECEIVER = new BroadcastReceiver() {
+        @Override public void onReceive(Context context, Intent intent) {
+            if (intent != null && ACTION_REQUEST_OPEN.equals(intent.getAction())) {
+                log("Received cross-process request to open V10 on Android Auto");
+                requestOpen();
+            }
+        }
+    };
     private static volatile long lastSuccessfulOpenElapsed;
     private static volatile ClassLoader hostClassLoader;
 
@@ -54,6 +68,18 @@ public final class GearheadAutoOpen {
         }
         hostClassLoader = classLoader;
         try {
+            // Gearhead's Home/dock UI and :projection launcher can live in different
+            // processes. Register in :projection so clicks from any Gearhead process
+            // can request the car activity through a package-scoped broadcast.
+            XposedHelpers.findAndHookMethod(Application.class, "attach", Context.class,
+                    new XC_MethodHook() {
+                        @Override protected void afterHookedMethod(MethodHookParam param) {
+                            Context context = (Context) param.args[0];
+                            if (context != null && GEARHEAD.equals(context.getPackageName())) {
+                                registerOpenRequestReceiver(context);
+                            }
+                        }
+                    });
             XposedHelpers.findAndHookMethod(
                     LayoutInflater.class,
                     "inflate",
@@ -96,6 +122,24 @@ public final class GearheadAutoOpen {
         } catch (Throwable error) {
             INSTALLED.set(false);
             log("Could not install facet-bar watcher: " + error);
+        }
+    }
+
+    private static void registerOpenRequestReceiver(Context context) {
+        if (context == null || !REQUEST_RECEIVER_REGISTERED.compareAndSet(false, true)) return;
+        try {
+            Context app = context.getApplicationContext() != null
+                    ? context.getApplicationContext() : context;
+            IntentFilter filter = new IntentFilter(ACTION_REQUEST_OPEN);
+            if (Build.VERSION.SDK_INT >= 33) {
+                app.registerReceiver(REQUEST_RECEIVER, filter, Context.RECEIVER_NOT_EXPORTED);
+            } else {
+                app.registerReceiver(REQUEST_RECEIVER, filter);
+            }
+            log("Registered cross-process media-card request receiver");
+        } catch (Throwable error) {
+            REQUEST_RECEIVER_REGISTERED.set(false);
+            log("Could not register media-card request receiver: " + error);
         }
     }
 
