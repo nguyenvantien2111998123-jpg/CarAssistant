@@ -591,49 +591,12 @@ public final class V10CarActivity
 
 
     /**
-     * Handles the explicit "open content" request sent by Android Auto's external media
-     * card/bar. That request means: open V10, then restore the app task V10 was projecting.
-     * The active MediaSession is metadata/control state; it is NOT the authority for which
-     * task is currently projected, so never use its package to replace a different target.
+     * Android Auto's external media card/bar must use the exact same open flow as the
+     * Home media card. Keeping one entry point prevents the external UI from inventing
+     * a separate task-recovery or phone-launch path.
      */
     public void handleOpenActiveMediaOnProjection() {
-        handler.post(() -> {
-            ComponentName projected = V10SessionStore.getTarget(this);
-
-            // Primary path: restore the task already selected for V10 projection. This is
-            // deliberately independent of MediaSessionBridge's current package, since the
-            // session can lag, switch providers, or temporarily report another phone player.
-            if (projected != null && session != null) {
-                activeTarget = projected;
-                projectionLayer.setVisibility(View.GONE);
-                launcherLayer.setVisibility(View.GONE);
-                if (appProjectionLayer != null) {
-                    appProjectionLayer.setVisibility(View.VISIBLE);
-                    appProjectionLayer.bringToFront();
-                }
-                if (floatingVoiceButton != null) floatingVoiceButton.bringToFront();
-                session.setMediaTarget(projected);
-                return;
-            }
-
-            // Fallback only when V10 has no remembered projection target. Use the shared
-            // media session as a discovery source, then ask the projection engine to place
-            // that app on the secondary display.
-            MediaSessionBridge.Snapshot state = MediaSessionBridge.getSnapshot();
-            if (state == null || TextUtils.isEmpty(state.packageName)) {
-                Toast.makeText(this, "Chưa có task chiếu hoặc ứng dụng media đang hoạt động.",
-                        Toast.LENGTH_SHORT).show();
-                return;
-            }
-
-            Intent launch = getPackageManager().getLaunchIntentForPackage(state.packageName);
-            if (launch == null || launch.getComponent() == null) {
-                Toast.makeText(this, "Không tìm thấy màn hình mở của ứng dụng media.",
-                        Toast.LENGTH_SHORT).show();
-                return;
-            }
-            launchProjection(launch.getComponent(), true);
-        });
+        handler.post(this::openActiveMediaOnProjection);
     }
 
     private void openActiveMediaOnProjection() {
