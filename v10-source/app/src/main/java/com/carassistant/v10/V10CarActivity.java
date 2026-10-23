@@ -190,6 +190,9 @@ public final class V10CarActivity
 
         MediaSessionBridge.addListener(mediaSessionListener);
         updateMediaCard(MediaSessionBridge.getSnapshot());
+        if (V10SessionStore.consumePendingMediaOpenRequest()) {
+            handler.post(this::handleOpenActiveMediaOnProjection);
+        }
 
         if (voiceAssistantController == null) {
             voiceAssistantController = new VoiceAssistantController(

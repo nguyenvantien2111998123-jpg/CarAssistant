@@ -60,7 +60,11 @@ public final class V10ControlReceiver
 
         if (ACTION_STEERING_MEDIA_OPEN.equals(intent.getAction())) {
             V10CarActivity mediaActivity = V10SessionStore.getCurrentActivity();
-            if (mediaActivity != null) mediaActivity.handleOpenActiveMediaOnProjection();
+            if (mediaActivity != null) {
+                mediaActivity.handleOpenActiveMediaOnProjection();
+            } else {
+                V10SessionStore.requestMediaOpenOnNextActivity();
+            }
             return;
         }
 

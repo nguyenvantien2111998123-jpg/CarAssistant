@@ -20,6 +20,7 @@ public final class V10SessionStore {
 
     private static volatile V10CarActivity currentActivity;
     private static volatile boolean pendingVoiceRequest;
+    private static volatile boolean pendingMediaOpenRequest;
 
     private V10SessionStore() { }
 
@@ -129,6 +130,12 @@ public final class V10SessionStore {
     public static void setCurrentActivity(V10CarActivity activity) { currentActivity = activity; }
     public static V10CarActivity getCurrentActivity() { return currentActivity; }
     public static void requestVoiceOnNextActivity() { pendingVoiceRequest = true; }
+    public static void requestMediaOpenOnNextActivity() { pendingMediaOpenRequest = true; }
+    public static boolean consumePendingMediaOpenRequest() {
+        boolean pending = pendingMediaOpenRequest;
+        pendingMediaOpenRequest = false;
+        return pending;
+    }
     public static boolean consumePendingVoiceRequest() {
         boolean pending = pendingVoiceRequest;
         pendingVoiceRequest = false;

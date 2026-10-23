@@ -36,8 +36,21 @@ public final class DockStateProvider extends ContentProvider {
         if (!isCallerAllowed()) {
             throw new SecurityException("Only Android Auto may read launcher state");
         }
-        MatrixCursor cursor = new MatrixCursor(new String[]{"visible_until"});
-        cursor.addRow(new Object[]{visibleUntil});
+        android.content.Context context = getContext();
+        String targetPackage = "";
+        boolean v10MediaRouteActive = false;
+        if (context != null) {
+            android.content.ComponentName target = V10SessionStore.getTarget(context);
+            MediaSessionBridge.Snapshot snapshot = MediaSessionBridge.getSnapshot();
+            if (target != null) {
+                targetPackage = target.getPackageName();
+                v10MediaRouteActive = snapshot != null
+                        && targetPackage.equals(snapshot.packageName);
+            }
+        }
+        MatrixCursor cursor = new MatrixCursor(new String[]{
+                "visible_until", "target_package", "v10_media_route_active"});
+        cursor.addRow(new Object[]{visibleUntil, targetPackage, v10MediaRouteActive ? 1 : 0});
         return cursor;
     }
 

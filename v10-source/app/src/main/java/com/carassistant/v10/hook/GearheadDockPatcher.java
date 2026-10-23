@@ -100,7 +100,7 @@ public final class GearheadDockPatcher {
                         @Override
                         protected void beforeHookedMethod(MethodHookParam param) {
                             Object target = param.thisObject;
-                            if (target instanceof View && isMediaInfoClick((View) target)) {
+                            if (target instanceof View && isMediaInfoClick((View) target, patcher.context)) {
                                 // Consume the Android Auto media-card click before its
                                 // native handler can launch the player on the phone.
                                 param.setResult(true);
@@ -137,8 +137,8 @@ public final class GearheadDockPatcher {
      * Resource names differ between Android Auto releases, so inspect a short
      * ancestor chain and accept known media/player containers.
      */
-    private static boolean isMediaInfoClick(View clicked) {
-        if (clicked == null) return false;
+    private static boolean isMediaInfoClick(View clicked, Context appContext) {
+        if (clicked == null || !isV10MediaRouteActive(appContext)) return false;
         // Never steal transport controls: those must keep controlling the active player.
         String clickedName = resourceEntryName(clicked);
         String lowerClicked = normalize(clickableText(clicked) + " "
@@ -223,6 +223,32 @@ public final class GearheadDockPatcher {
             for (int i = 0; i < group.getChildCount() && count[0] < budget; i++) {
                 scanMediaSubtree(group.getChildAt(i), budget, depthLimit, depth + 1,
                         count, metadata, artwork);
+            }
+        }
+    }
+
+
+    /**
+     * The media metadata tap belongs to V10 only when V10's projected target package
+     * matches the active original media session. Otherwise Android Auto handles the tap
+     * natively, preserving direct-in-AA playback behavior.
+     */
+    private static boolean isV10MediaRouteActive(Context appContext) {
+        if (appContext == null) return false;
+        Cursor cursor = null;
+        try {
+            cursor = appContext.getContentResolver().query(
+                    DockStateProvider.STATE_URI,
+                    new String[]{"v10_media_route_active"},
+                    null, null, null);
+            return cursor != null && cursor.moveToFirst()
+                    && cursor.getInt(0) == 1;
+        } catch (Throwable error) {
+            log("Could not verify V10 media route; leaving native AA click intact: " + error);
+            return false;
+        } finally {
+            if (cursor != null) {
+                try { cursor.close(); } catch (Throwable ignored) { }
             }
         }
     }
