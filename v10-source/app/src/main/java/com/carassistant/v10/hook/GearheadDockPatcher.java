@@ -109,6 +109,37 @@ public final class GearheadDockPatcher {
                             }
                         }
                     });
+            // Android Auto may launch the media app through Activity/Instrumentation rather
+            // than View.performClick (e.g. a PendingIntent or host-owned metadata tile).
+            // Intercept only an explicit launch of the exact V10-projected media package.
+            XposedBridge.hookAllMethods(
+                    XposedHelpers.findClass("android.app.Activity", (ClassLoader) null),
+                    "startActivity",
+                    new XC_MethodHook() {
+                        @Override
+                        protected void beforeHookedMethod(MethodHookParam param) {
+                            Intent launch = findIntent(param.args);
+                            if (launch != null && shouldRouteMediaLaunch(patcher.context, launch)) {
+                                param.setResult(null);
+                                patcher.dispatchMediaOpen();
+                                log("Blocked native phone launch from Activity.startActivity; routing to V10 projection");
+                            }
+                        }
+                    });
+            XposedBridge.hookAllMethods(
+                    XposedHelpers.findClass("android.app.Instrumentation", (ClassLoader) null),
+                    "execStartActivity",
+                    new XC_MethodHook() {
+                        @Override
+                        protected void beforeHookedMethod(MethodHookParam param) {
+                            Intent launch = findIntent(param.args);
+                            if (launch != null && shouldRouteMediaLaunch(patcher.context, launch)) {
+                                param.setResult(null);
+                                patcher.dispatchMediaOpen();
+                                log("Blocked native phone launch from Instrumentation; routing to V10 projection");
+                            }
+                        }
+                    });
             XposedBridge.hookAllMethods(
                     XposedHelpers.findClass("android.view.WindowManagerGlobal", (ClassLoader) null),
                     "addView",
@@ -235,6 +266,53 @@ public final class GearheadDockPatcher {
      * matches the active original media session. Otherwise Android Auto handles the tap
      * natively, preserving direct-in-AA playback behavior.
      */
+    private static Intent findIntent(Object[] args) {
+        if (args == null) return null;
+        for (Object arg : args) {
+            if (arg instanceof Intent) return (Intent) arg;
+        }
+        return null;
+    }
+
+    /**
+     * Catch the actual host launch path as a fallback to the view-click hook.
+     * Require an explicit target package matching the active V10 media route so
+     * direct playback of other apps remains native to Android Auto.
+     */
+    private static boolean shouldRouteMediaLaunch(Context appContext, Intent launch) {
+        if (appContext == null || launch == null) return false;
+        String launchPackage = null;
+        try {
+            if (launch.getComponent() != null) {
+                launchPackage = launch.getComponent().getPackageName();
+            } else {
+                launchPackage = launch.getPackage();
+            }
+        } catch (Throwable ignored) { }
+        if (launchPackage == null || launchPackage.isEmpty()
+                || GEARHEAD.equals(launchPackage)
+                || appContext.getPackageName().equals(launchPackage)) return false;
+
+        Cursor cursor = null;
+        try {
+            cursor = appContext.getContentResolver().query(
+                    DockStateProvider.STATE_URI,
+                    new String[]{"target_package", "v10_media_route_active"},
+                    null, null, null);
+            if (cursor == null || !cursor.moveToFirst()) return false;
+            String targetPackage = cursor.getString(0);
+            boolean active = cursor.getInt(1) == 1;
+            return active && launchPackage.equals(targetPackage);
+        } catch (Throwable error) {
+            log("Could not verify media launch route; preserving native launch: " + error);
+            return false;
+        } finally {
+            if (cursor != null) {
+                try { cursor.close(); } catch (Throwable ignored) { }
+            }
+        }
+    }
+
     private static boolean isV10MediaRouteActive(Context appContext) {
         if (appContext == null) return false;
         Cursor cursor = null;
