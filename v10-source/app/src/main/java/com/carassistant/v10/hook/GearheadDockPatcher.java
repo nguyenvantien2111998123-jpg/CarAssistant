@@ -3,6 +3,7 @@ package com.carassistant.v10.hook;
 import android.app.Application;
 import android.content.ContentResolver;
 import android.content.Context;
+import android.content.Intent;
 import android.database.Cursor;
 import android.graphics.Color;
 import android.net.Uri;
@@ -13,6 +14,7 @@ import android.util.Log;
 import android.view.Display;
 import android.view.View;
 import android.view.ViewGroup;
+import android.widget.TextView;
 
 import com.carassistant.v10.DockStateProvider;
 
@@ -91,6 +93,22 @@ public final class GearheadDockPatcher {
                             patcher.main.post(() -> patcher.attachContext(appContext));
                         }
                     });
+            XposedHelpers.findAndHookMethod(
+                    View.class,
+                    "performClick",
+                    new XC_MethodHook() {
+                        @Override
+                        protected void beforeHookedMethod(MethodHookParam param) {
+                            Object target = param.thisObject;
+                            if (target instanceof View && isMediaInfoClick((View) target)) {
+                                // Consume the Android Auto media-card click before its
+                                // native handler can launch the player on the phone.
+                                param.setResult(true);
+                                patcher.dispatchMediaOpen();
+                                log("Consumed media metadata click; forwarding to projected display");
+                            }
+                        }
+                    });
             XposedBridge.hookAllMethods(
                     XposedHelpers.findClass("android.view.WindowManagerGlobal", (ClassLoader) null),
                     "addView",
@@ -111,6 +129,63 @@ public final class GearheadDockPatcher {
             log("Launcher dock hook v2 installed (GhFacetBar + embedded dock)");
         } catch (Throwable t) {
             log("Dock hook unavailable: " + t);
+        }
+    }
+
+    /**
+     * Only forward taps on media metadata/card surfaces, not transport controls.
+     * Resource names differ between Android Auto releases, so inspect a short
+     * ancestor chain and accept known media/player containers.
+     */
+    private static boolean isMediaInfoClick(View clicked) {
+        String clickedName = resourceEntryName(clicked);
+        String lowerClicked = clickedName == null ? "" : clickedName.toLowerCase(java.util.Locale.ROOT);
+        String[] controls = {"play_pause", "playpause", "next", "previous", "skip",
+                "fast_forward", "rewind", "transport", "play_button", "pause_button"};
+        for (String control : controls) {
+            if (lowerClicked.contains(control)) return false;
+        }
+
+        View current = clicked;
+        for (int depth = 0; depth < 6 && current != null; depth++) {
+            String name = resourceEntryName(current);
+            if (name != null) {
+                String lower = name.toLowerCase(java.util.Locale.ROOT);
+                if (lower.contains("media_item_title") || lower.contains("media_title")
+                        || lower.contains("media_metadata") || lower.contains("now_playing")
+                        || lower.contains("media_card") || lower.contains("media_info")
+                        || lower.contains("playback_metadata") || lower.contains("song_title")
+                        || lower.contains("album_art") || lower.contains("media_artwork")) {
+                    return true;
+                }
+                if (depth > 0 && (lower.contains("media") || lower.contains("playback")
+                        || lower.contains("now_playing") || lower.contains("player"))) {
+                    return true;
+                }
+            }
+            Object parent = current.getParent();
+            current = parent instanceof View ? (View) parent : null;
+        }
+        if (clicked instanceof TextView) {
+            CharSequence description = clicked.getContentDescription();
+            if (description != null) {
+                String value = description.toString().toLowerCase(java.util.Locale.ROOT);
+                return value.contains("now playing") || value.contains("đang phát");
+            }
+        }
+        return false;
+    }
+
+    private void dispatchMediaOpen() {
+        Context appContext = context;
+        if (appContext == null) return;
+        try {
+            Intent intent = new Intent("com.carassistant.v10.STEERING_MEDIA_OPEN");
+            intent.setPackage("com.carassistant.v10");
+            appContext.sendBroadcast(intent);
+            log("Forwarded Android Auto media metadata tap to CarAsistant");
+        } catch (Throwable error) {
+            log("Could not forward media metadata tap: " + error);
         }
     }
 

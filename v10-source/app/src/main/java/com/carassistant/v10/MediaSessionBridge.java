@@ -29,6 +29,8 @@ import java.util.concurrent.CopyOnWriteArrayList;
  */
 public final class MediaSessionBridge extends NotificationListenerService {
     private static final String TAG = "CarAssistantMedia";
+    private static final String RESUME_PREFS = "carassistant_media_resume";
+    private static final String LAST_PACKAGE = "last_media_package";
     private static final Handler MAIN = new Handler(Looper.getMainLooper());
     private static final CopyOnWriteArrayList<Listener> LISTENERS = new CopyOnWriteArrayList<>();
 
@@ -81,6 +83,34 @@ public final class MediaSessionBridge extends NotificationListenerService {
         return snapshot;
     }
 
+    /** Package of the last media app with a published session, persisted across AA reconnects. */
+    public static String getLastKnownPackage(Context context) {
+        if (context == null) return null;
+        String value = context.getSharedPreferences(RESUME_PREFS, Context.MODE_PRIVATE)
+                .getString(LAST_PACKAGE, null);
+        return TextUtils.isEmpty(value) ? null : value;
+    }
+
+    /**
+     * Resume only the saved media app's session. Never send Play to an unrelated
+     * player that happened to become active while Android Auto was reconnecting.
+     */
+    public static boolean resumePackage(String expectedPackage) {
+        if (TextUtils.isEmpty(expectedPackage)) return false;
+        MediaController controller = activeController;
+        if (controller == null || !expectedPackage.equals(controller.getPackageName())) return false;
+        PlaybackState state = controller.getPlaybackState();
+        if (state != null && state.getState() == PlaybackState.STATE_PLAYING) return true;
+        try {
+            controller.getTransportControls().play();
+            Log.i(TAG, "Requested resume for last media package " + expectedPackage);
+            return true;
+        } catch (RuntimeException error) {
+            Log.w(TAG, "Last media session rejected Play", error);
+            return false;
+        }
+    }
+
     public static boolean hasAccess(Context context) {
         String enabled = Settings.Secure.getString(
                 context.getContentResolver(), "enabled_notification_listeners");
@@ -114,16 +144,6 @@ public final class MediaSessionBridge extends NotificationListenerService {
         }
     }
 
-    public static void play() {
-        MediaController controller = activeController;
-        if (controller != null) controller.getTransportControls().play();
-    }
-
-    public static void pause() {
-        MediaController controller = activeController;
-        if (controller != null) controller.getTransportControls().pause();
-    }
-
     public static void skipNext() {
         MediaController controller = activeController;
         if (controller != null) controller.getTransportControls().skipToNext();
@@ -132,6 +152,25 @@ public final class MediaSessionBridge extends NotificationListenerService {
     public static void skipPrevious() {
         MediaController controller = activeController;
         if (controller != null) controller.getTransportControls().skipToPrevious();
+    }
+
+    /** Seek the active media session by a relative offset in milliseconds. */
+    public static void seekBy(long offsetMs) {
+        MediaController controller = activeController;
+        if (controller == null || offsetMs == 0L) return;
+        PlaybackState state = controller.getPlaybackState();
+        if (state == null) return;
+        long position = Math.max(0L, state.getPosition());
+        long target = Math.max(0L, position + offsetMs);
+        MediaMetadata metadata = controller.getMetadata();
+        long duration = metadata == null ? 0L
+                : metadata.getLong(MediaMetadata.METADATA_KEY_DURATION);
+        if (duration > 0L) target = Math.min(target, duration);
+        try {
+            controller.getTransportControls().seekTo(target);
+        } catch (RuntimeException error) {
+            Log.w(TAG, "Active media session rejected seek request", error);
+        }
     }
 
     @Override
@@ -188,10 +227,6 @@ public final class MediaSessionBridge extends NotificationListenerService {
         if (controllers != null) {
             for (MediaController candidate : controllers) {
                 if (candidate == null) continue;
-                // Do not select CarAsistant's own published MediaSession. Doing so would
-                // mirror our own session back into itself and repeatedly trigger metadata/state
-                // callbacks whenever Android Auto connects.
-                if (getPackageName().equals(candidate.getPackageName())) continue;
                 PlaybackState state = candidate.getPlaybackState();
                 if (state != null && state.getState() == PlaybackState.STATE_PLAYING) {
                     chosen = candidate;
@@ -233,6 +268,12 @@ public final class MediaSessionBridge extends NotificationListenerService {
         if (controller == null) {
             snapshot = Snapshot.empty();
         } else {
+            try {
+                getSharedPreferences(RESUME_PREFS, Context.MODE_PRIVATE).edit()
+                        .putString(LAST_PACKAGE, controller.getPackageName()).apply();
+            } catch (RuntimeException error) {
+                Log.d(TAG, "Could not persist last media package", error);
+            }
             MediaMetadata metadata = controller.getMetadata();
             PlaybackState state = controller.getPlaybackState();
             String title = metadata == null ? "" : metadata.getString(MediaMetadata.METADATA_KEY_TITLE);

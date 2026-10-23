@@ -167,6 +167,11 @@ public final class V10CarActivity
                 .setCurrentActivity(this);
 
         applyChrome();
+
+        // This activity is created by the Android Auto host when the projection
+        // session opens. Restore only the previously used player, after its media
+        // session has had time to reconnect; never launch it on the phone display.
+        handler.postDelayed(this::resumeRecentMediaOnConnect, 1800L);
     }
 
     @Override
@@ -185,12 +190,6 @@ public final class V10CarActivity
 
         MediaSessionBridge.addListener(mediaSessionListener);
         updateMediaCard(MediaSessionBridge.getSnapshot());
-
-        // Android Auto can deliver the media-item tap while the CarActivity is stopped.
-        // Consume the deferred request only after the car UI and projection layers exist.
-        if (CarAsistantMediaBrowserService.consumePendingRestoreFromMediaTap()) {
-            restoreProjectedTaskFromMediaTap();
-        }
 
         if (voiceAssistantController == null) {
             voiceAssistantController = new VoiceAssistantController(
@@ -424,6 +423,10 @@ public final class V10CarActivity
 
         ComponentName target = V10SessionStore.getTarget(this);
         if (target != null) launchProjection(target);
+
+        if (V10SessionStore.consumePendingVoiceRequest()) {
+            handler.post(this::activateVoiceAssistantFromSteering);
+        }
     }
 
 
@@ -473,12 +476,8 @@ public final class V10CarActivity
         voiceTranscriptView.setBackground(transcriptBg);
         voiceTranscriptView.setElevation(dp(40));
         voiceTranscriptView.setVisibility(View.GONE);
-        // Keep the voice transcript inside the actual projected app window on small
-        // head units (including 7-inch displays) instead of assuming a fixed 420dp width.
-        int windowWidthPx = getResources().getDisplayMetrics().widthPixels;
-        int safeTranscriptWidth = Math.max(dp(180), Math.min(dp(420), windowWidthPx - dp(24)));
         FrameLayout.LayoutParams transcriptParams = new FrameLayout.LayoutParams(
-                safeTranscriptWidth, dp(54), Gravity.TOP | Gravity.CENTER_HORIZONTAL);
+                dp(420), dp(54), Gravity.TOP | Gravity.CENTER_HORIZONTAL);
         transcriptParams.setMargins(dp(12), dp(18), dp(12), 0);
         root.addView(voiceTranscriptView, transcriptParams);
 
@@ -581,14 +580,39 @@ public final class V10CarActivity
             if (ensureMediaAccess()) MediaSessionBridge.skipNext();
         });
 
-        mediaCard.setOnClickListener(v -> {
-            if (ensureMediaAccess()) MediaSessionBridge.togglePlayPause();
-        });
+        mediaCard.setOnClickListener(v -> openActiveMediaOnProjection());
         LinearLayout.LayoutParams mp=new LinearLayout.LayoutParams(0,dp(78),1f);
         mp.setMargins(dp(12),0,0,0);
         bottom.addView(mediaCard,mp);
     }
 
+
+    /** Called from the Android Auto media card and the steering-key bridge. */
+    public void handleOpenActiveMediaOnProjection() {
+        handler.post(this::openActiveMediaOnProjection);
+    }
+
+    private void openActiveMediaOnProjection() {
+        if (!ensureMediaAccess()) return;
+        MediaSessionBridge.Snapshot state = MediaSessionBridge.getSnapshot();
+        if (state == null || TextUtils.isEmpty(state.packageName)) {
+            Toast.makeText(this, "Chưa có ứng dụng media đang hoạt động.",
+                    Toast.LENGTH_SHORT).show();
+            return;
+        }
+        try {
+            Intent launch = getPackageManager().getLaunchIntentForPackage(state.packageName);
+            if (launch == null || launch.getComponent() == null) {
+                Toast.makeText(this, "Không tìm thấy màn hình mở của ứng dụng media.",
+                        Toast.LENGTH_SHORT).show();
+                return;
+            }
+            launchProjection(launch.getComponent(), true);
+        } catch (RuntimeException error) {
+            Toast.makeText(this, "Không thể mở ứng dụng media trên màn hình phụ.",
+                    Toast.LENGTH_SHORT).show();
+        }
+    }
 
     private boolean ensureMediaAccess() {
         if (MediaSessionBridge.hasAccess(this)) return true;
@@ -914,8 +938,11 @@ public final class V10CarActivity
     }
 
 
-private void launchProjection(
-        ComponentName component) {
+private void launchProjection(ComponentName component) {
+    launchProjection(component, false);
+}
+
+private void launchProjection(ComponentName component, boolean preferExistingMediaTask) {
 
     if (keyboardController != null) keyboardController.hide();
 
@@ -958,7 +985,8 @@ private void launchProjection(
      * Start the existing proven V10 projection
      * engine.
      */
-    session.setTarget(component);
+    if (preferExistingMediaTask) session.setMediaTarget(component);
+    else session.setTarget(component);
 }
 
 /**
@@ -1347,27 +1375,6 @@ private void hideFloatingMenu() {
         }
     }
 
-    /**
-     * Called when Android Auto selects the CarAsistant media item.
-     * Reuses the already-running car activity and restores its selected projection;
-     * never launches the phone launcher or a second CarAsistant activity.
-     */
-    public boolean isCarUiResumed() {
-        return resumed && root != null && launcherLayer != null;
-    }
-
-    public void restoreProjectedTaskFromMediaTap() {
-        handler.post(() -> {
-            ComponentName target = activeTarget;
-            if (target == null) target = V10SessionStore.getTarget(this);
-            if (target != null) {
-                launchProjection(target);
-            } else {
-                returnToLauncher();
-            }
-        });
-    }
-
     public void handleControlHome() {
 
         returnToLauncher();
@@ -1407,9 +1414,100 @@ private void hideFloatingMenu() {
         super.onBackPressed();
     }
 
+    private void resumeRecentMediaOnConnect() {
+        if (!resumed) return;
+
+        String lastPackage = MediaSessionBridge.getLastKnownPackage(this);
+        if (lastPackage == null) return;
+
+        MediaSessionBridge.Snapshot current = MediaSessionBridge.getSnapshot();
+        if (current != null && current.playing
+                && lastPackage.equals(current.packageName)) {
+            return;
+        }
+
+        // If Android has already reattached this player's session, request Play
+        // without relaunching the app or disturbing the current projection.
+        if (MediaSessionBridge.resumePackage(lastPackage)) {
+            // Verify playback state on subsequent callbacks; a successful binder
+            // call does not necessarily mean the player actually started playing.
+            handler.postDelayed(() -> retryResumeRecentMedia(lastPackage, 0), 1000L);
+            return;
+        }
+
+        // No matching session yet: launch the saved player only through the
+        // existing secondary-display projection path, never startActivity().
+        Intent launch = getPackageManager().getLaunchIntentForPackage(lastPackage);
+        if (launch == null || launch.getComponent() == null) {
+            android.util.Log.i("CarAssistantMedia",
+                    "Skipping auto-resume; last media app is not installed: " + lastPackage);
+            return;
+        }
+
+        boolean alreadyProjected = activeTarget != null
+                && lastPackage.equals(activeTarget.getPackageName());
+        if (!alreadyProjected) {
+            launchProjection(launch.getComponent());
+        }
+
+        // MediaBrowser/MediaSession creation time varies by app and device.
+        // Retry for up to 12 seconds rather than giving up after one 2.5s attempt.
+        handler.postDelayed(() -> retryResumeRecentMedia(lastPackage, 0), 1000L);
+    }
+
+    private void retryResumeRecentMedia(String expectedPackage, int attempt) {
+        if (!resumed) return;
+
+        MediaSessionBridge.Snapshot current = MediaSessionBridge.getSnapshot();
+        if (current != null && current.playing
+                && expectedPackage.equals(current.packageName)) {
+            android.util.Log.i("CarAssistantMedia",
+                    "Auto-resume confirmed for " + expectedPackage);
+            return;
+        }
+
+        // resumePackage() is package-guarded: it never sends Play to an unrelated app.
+        MediaSessionBridge.resumePackage(expectedPackage);
+
+        if (attempt >= 11) {
+            android.util.Log.w("CarAssistantMedia",
+                    "Auto-resume not confirmed for " + expectedPackage
+                            + "; check Notification Access and the player's resume support");
+            return;
+        }
+
+        handler.postDelayed(
+                () -> retryResumeRecentMedia(expectedPackage, attempt + 1),
+                1000L);
+    }
+
     /** Entry point used by the steering-wheel double-Next command. */
     public void handleSteeringVoiceCommand() {
-        handler.post(this::activateVoiceAssistant);
+        handler.post(() -> {
+            // A double press is an explicit start command, not a toggle: it must
+            // never cancel an already-starting voice session by accident.
+            if (!resumed || voiceAssistantController == null) {
+                V10SessionStore.requestVoiceOnNextActivity();
+                return;
+            }
+            activateVoiceAssistantFromSteering();
+        });
+    }
+
+    private void activateVoiceAssistantFromSteering() {
+        if (voiceAssistantController == null) {
+            V10SessionStore.requestVoiceOnNextActivity();
+            return;
+        }
+        if (checkSelfPermission(Manifest.permission.RECORD_AUDIO)
+                != PackageManager.PERMISSION_GRANTED) {
+            Intent permissionIntent = new Intent(this, V10SettingsActivity.class);
+            permissionIntent.putExtra(V10SettingsActivity.EXTRA_REQUEST_MICROPHONE, true);
+            permissionIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+            startActivity(permissionIntent);
+            return;
+        }
+        voiceAssistantController.startListening();
     }
 
     private void activateVoiceAssistant() {
@@ -1808,42 +1906,11 @@ private void hideFloatingMenu() {
                         Locale.getDefault());
     }
 
-    /**
-     * Adapt fixed dp measurements to the actual projected window, not a guessed
-     * Honda BR-V pixel resolution. Width is the primary breakpoint; short or unusually
-     * shaped head-unit windows get a small secondary correction to protect vertical space.
-     */
-    private float responsiveLayoutScale() {
-        android.util.DisplayMetrics metrics = getResources().getDisplayMetrics();
-        float density = metrics.density > 0f ? metrics.density : 1f;
-        float widthDp = metrics.widthPixels / density;
-        float heightDp = metrics.heightPixels / density;
-
-        float scale;
-        if (widthDp < 600f) scale = 0.86f;
-        else if (widthDp < 720f) scale = 0.91f;
-        else if (widthDp < 840f) scale = 0.96f;
-        else if (widthDp < 1280f) scale = 1.0f;
-        else scale = 1.05f;
-
-        // Compact 800x480-class displays can have little usable height after AA chrome.
-        if (heightDp < 360f) scale *= 0.90f;
-        else if (heightDp < 420f) scale *= 0.94f;
-        else if (heightDp < 500f) scale *= 0.97f;
-
-        float aspect = heightDp > 0f ? widthDp / heightDp : 1.6f;
-        if (aspect > 2.25f && heightDp < 500f) scale *= 0.97f;
-        else if (aspect < 1.40f) scale *= 0.96f;
-
-        return Math.max(0.82f, Math.min(1.05f, scale));
-    }
-
     private int dp(
             float value) {
 
         return Math.round(
                 value *
-                responsiveLayoutScale() *
                 getResources()
                         .getDisplayMetrics()
                         .density);

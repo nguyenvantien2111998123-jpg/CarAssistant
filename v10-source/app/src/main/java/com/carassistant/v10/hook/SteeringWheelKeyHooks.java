@@ -25,7 +25,7 @@ public final class SteeringWheelKeyHooks {
     private static final String VOICE_ACTION = "com.carassistant.v10.STEERING_VOICE";
 
     private static final long DOUBLE_PRESS_WINDOW_MS = 300L;
-    private static final long HOLD_START_MS = 450L;
+    private static final long HOLD_START_MS = 1000L;
     private static final long HOLD_REPEAT_MS = 1000L;
 
     private static final int NEXT = KeyEvent.KEYCODE_MEDIA_NEXT;
@@ -150,9 +150,7 @@ public final class SteeringWheelKeyHooks {
 
                 cancelHoldRunnablesLocked();
                 if (pressedHeld) {
-                    int holdKey = key == NEXT ? FAST_FORWARD : REWIND;
-                    dispatchMediaKey(holdKey, true, pressedDownTime, holdRepeatCount);
-                    XposedBridge.log(TAG + " hold released key=" + key
+                    XposedBridge.log(TAG + " seek hold released key=" + key
                             + " repeats=" + holdRepeatCount);
                 } else if (!pressedIsDoubleTap) {
                     if (key == NEXT) {
@@ -192,22 +190,38 @@ public final class SteeringWheelKeyHooks {
             if (pressedKey != key || pressedHeld || pressedIsDoubleTap) return;
             pressedHeld = true;
             holdRepeatCount = 0;
-            int holdKey = key == NEXT ? FAST_FORWARD : REWIND;
-            XposedBridge.log(TAG + " hold started key=" + key
-                    + " -> media key " + holdKey);
-            dispatchMediaKey(holdKey, false, pressedDownTime, 0);
+            XposedBridge.log(TAG + " hold started key=" + key + " -> seek 15 seconds");
+            requestSeek(key == NEXT ? 1 : -1);
             holdRepeatRunnable = new Runnable() {
                 @Override
                 public void run() {
                     synchronized (LOCK) {
                         if (pressedKey != key || !pressedHeld) return;
                         holdRepeatCount++;
-                        dispatchMediaKey(holdKey, false, pressedDownTime, holdRepeatCount);
+                        requestSeek(key == NEXT ? 1 : -1);
                         MAIN.postDelayed(this, HOLD_REPEAT_MS);
                     }
                 }
             };
             MAIN.postDelayed(holdRepeatRunnable, HOLD_REPEAT_MS);
+        }
+    }
+
+    private static void requestSeek(int direction) {
+        try {
+            Object app = XposedHelpers.callStaticMethod(
+                    XposedHelpers.findClass("android.app.ActivityThread", null),
+                    "currentApplication");
+            if (!(app instanceof Context)) {
+                XposedBridge.log(TAG + " no Gearhead context for seek request");
+                return;
+            }
+            Intent intent = new Intent("com.carassistant.v10.STEERING_MEDIA_SEEK");
+            intent.setPackage(SELF);
+            intent.putExtra("direction", direction);
+            ((Context) app).sendBroadcast(intent);
+        } catch (Throwable error) {
+            XposedBridge.log(TAG + " seek broadcast failed: " + error);
         }
     }
 

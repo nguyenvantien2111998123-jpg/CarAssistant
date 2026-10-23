@@ -5,11 +5,11 @@ import android.os.Build;
 import com.carassistant.v10.AACastDisplay;
 import com.carassistant.v10.hook.DisplayHooks;
 import com.carassistant.v10.hook.GearheadAllow;
+import com.carassistant.v10.hook.GearheadAutoOpen;
 import com.carassistant.v10.hook.GearheadDockPatcher;
-import com.carassistant.v10.hook.GearheadMediaTapProbe;
 import com.carassistant.v10.hook.InputHooks;
 import com.carassistant.v10.hook.OrientationHooks;
-import com.carassistant.v10.hook.SteeringWheelKeyHooks;
+import com.carassistant.v10.hook.SystemMediaKeyHooks;
 import com.carassistant.v10.hook.InstallerSpoof;
 
 import de.robv.android.xposed.IXposedHookLoadPackage;
@@ -39,6 +39,7 @@ public final class AACastBridge implements IXposedHookLoadPackage {
             DisplayHooks.installInputPolicy(param.classLoader);
             OrientationHooks.install(param.classLoader);
             InputHooks.install(param.classLoader);
+            SystemMediaKeyHooks.install(param.classLoader);
             return;
         }
 
@@ -49,8 +50,14 @@ public final class AACastBridge implements IXposedHookLoadPackage {
             if (GEARHEAD.equals(packageName)) {
                 GearheadAllow.install(param.classLoader);
                 GearheadDockPatcher.install();
-                GearheadMediaTapProbe.install(param.classLoader);
-                SteeringWheelKeyHooks.install(param.classLoader);
+
+                // AA Display-style auto-open: only hook the projection process where
+                // the Coolwalk facet bar is inflated and the internal car-app launcher lives.
+                if (param.processName != null
+                        && param.processName.endsWith(":projection")) {
+                    GearheadAutoOpen.install(param.classLoader);
+                }
+                // Media keys are arbitrated in system_server, where AVRCP events are dispatched.
             }
 
             if (Build.VERSION.SDK_INT >= 30) {
@@ -63,7 +70,8 @@ public final class AACastBridge implements IXposedHookLoadPackage {
                     InstallerSpoof.hookInstallSource("getUpdateOwnerPackageName", PLAY);
                 }
             }
-            XposedBridge.log("[AACast] Module loaded in " + packageName);
+            XposedBridge.log("[AACast] Module loaded in " + packageName
+                    + " process=" + param.processName);
         }
     }
 }
