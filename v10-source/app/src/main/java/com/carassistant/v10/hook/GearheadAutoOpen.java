@@ -1,5 +1,6 @@
 package com.carassistant.v10.hook;
 
+import android.app.Application;
 import android.content.BroadcastReceiver;
 import android.content.ComponentName;
 import android.content.Context;
