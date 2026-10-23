@@ -189,7 +189,7 @@ public final class GearheadDockPatcher {
                     "now_playing", "media_card", "media_info", "playback_metadata",
                     "song_title", "album_art", "media_artwork", "track_title",
                     "media_description", "artist_name", "đang phát", "now playing")
-                    && isV10MediaRouteActive(appContext)) {
+                    && isV10MediaRouteSelected(appContext)) {
                 log("Media metadata tap matched depth=" + depth + " view="
                         + current.getClass().getName() + " id=" + name);
                 return true;
@@ -199,7 +199,7 @@ public final class GearheadDockPatcher {
             // and artwork, avoiding broad matches on the whole host window.
             if (depth <= 3 && current instanceof ViewGroup
                     && hasMediaMetadataSubtree((ViewGroup) current, 36, 4)
-                    && isV10MediaRouteActive(appContext)) {
+                    && isV10MediaRouteSelected(appContext)) {
                 log("Media metadata tap matched by subtree depth=" + depth + " view="
                         + current.getClass().getName() + " id=" + name);
                 return true;
@@ -301,10 +301,33 @@ public final class GearheadDockPatcher {
                     null, null, null);
             if (cursor == null || !cursor.moveToFirst()) return false;
             String targetPackage = cursor.getString(0);
-            boolean active = cursor.getInt(1) == 1;
-            return active && launchPackage.equals(targetPackage);
+            // The selected V10 projection target is authoritative here. Do not require
+            // MediaSessionBridge's package snapshot to match: Android Auto may report a
+            // different/stale phone media session while the user taps this target's card.
+            // Requiring the session match allowed Gearhead's native phone launch through.
+            return launchPackage.equals(targetPackage);
         } catch (Throwable error) {
             log("Could not verify media launch route; preserving native launch: " + error);
+            return false;
+        } finally {
+            if (cursor != null) {
+                try { cursor.close(); } catch (Throwable ignored) { }
+            }
+        }
+    }
+
+    private static boolean isV10MediaRouteSelected(Context appContext) {
+        if (appContext == null) return false;
+        Cursor cursor = null;
+        try {
+            cursor = appContext.getContentResolver().query(
+                    DockStateProvider.STATE_URI,
+                    new String[]{"target_package"},
+                    null, null, null);
+            return cursor != null && cursor.moveToFirst()
+                    && !TextUtils.isEmpty(cursor.getString(0));
+        } catch (Throwable error) {
+            log("Could not verify selected V10 target; leaving native AA click intact: " + error);
             return false;
         } finally {
             if (cursor != null) {
