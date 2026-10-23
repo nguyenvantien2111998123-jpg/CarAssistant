@@ -621,6 +621,15 @@ public final class V10CarActivity
             return;
         }
         try {
+            // If the currently projected app is the media session owner, reuse
+            // that exact component; otherwise use the active session package.
+            // This keeps the Home-card action aligned with the session actually
+            // shown in the V10 UI instead of launching an unrelated stale target.
+            ComponentName projected = V10SessionStore.getTarget(this);
+            if (projected != null && state.packageName.equals(projected.getPackageName())) {
+                launchProjection(projected, true);
+                return;
+            }
             Intent launch = getPackageManager().getLaunchIntentForPackage(state.packageName);
             if (launch == null || launch.getComponent() == null) {
                 Toast.makeText(this, "Không tìm thấy màn hình mở của ứng dụng media.",
