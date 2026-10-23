@@ -138,42 +138,93 @@ public final class GearheadDockPatcher {
      * ancestor chain and accept known media/player containers.
      */
     private static boolean isMediaInfoClick(View clicked) {
+        if (clicked == null) return false;
+        // Never steal transport controls: those must keep controlling the active player.
         String clickedName = resourceEntryName(clicked);
-        String lowerClicked = clickedName == null ? "" : clickedName.toLowerCase(java.util.Locale.ROOT);
+        String lowerClicked = normalize(clickableText(clicked) + " "
+                + (clickedName == null ? "" : clickedName));
         String[] controls = {"play_pause", "playpause", "next", "previous", "skip",
-                "fast_forward", "rewind", "transport", "play_button", "pause_button"};
+                "fast_forward", "rewind", "transport", "play_button", "pause_button",
+                "phát", "tạm dừng", "bài tiếp", "bài trước", "next track", "previous track"};
         for (String control : controls) {
             if (lowerClicked.contains(control)) return false;
         }
 
         View current = clicked;
-        for (int depth = 0; depth < 6 && current != null; depth++) {
+        for (int depth = 0; depth < 7 && current != null; depth++) {
             String name = resourceEntryName(current);
-            if (name != null) {
-                String lower = name.toLowerCase(java.util.Locale.ROOT);
-                if (lower.contains("media_item_title") || lower.contains("media_title")
-                        || lower.contains("media_metadata") || lower.contains("now_playing")
-                        || lower.contains("media_card") || lower.contains("media_info")
-                        || lower.contains("playback_metadata") || lower.contains("song_title")
-                        || lower.contains("album_art") || lower.contains("media_artwork")) {
-                    return true;
-                }
-                if (depth > 0 && (lower.contains("media") || lower.contains("playback")
-                        || lower.contains("now_playing") || lower.contains("player"))) {
-                    return true;
-                }
+            String lower = normalize((name == null ? "" : name) + " " + clickableText(current));
+            if (containsAny(lower, "media_item_title", "media_title", "media_metadata",
+                    "now_playing", "media_card", "media_info", "playback_metadata",
+                    "song_title", "album_art", "media_artwork", "track_title",
+                    "media_description", "artist_name", "đang phát", "now playing")) {
+                log("Media metadata tap matched depth=" + depth + " view="
+                        + current.getClass().getName() + " id=" + name);
+                return true;
+            }
+            // Android Auto versions use different resource names. As a fallback, only
+            // classify a compact container when its own subtree contains both metadata
+            // and artwork, avoiding broad matches on the whole host window.
+            if (depth <= 3 && current instanceof ViewGroup
+                    && hasMediaMetadataSubtree((ViewGroup) current, 36, 4)) {
+                log("Media metadata tap matched by subtree depth=" + depth + " view="
+                        + current.getClass().getName() + " id=" + name);
+                return true;
             }
             Object parent = current.getParent();
             current = parent instanceof View ? (View) parent : null;
         }
-        if (clicked instanceof TextView) {
-            CharSequence description = clicked.getContentDescription();
-            if (description != null) {
-                String value = description.toString().toLowerCase(java.util.Locale.ROOT);
-                return value.contains("now playing") || value.contains("đang phát");
+        return false;
+    }
+
+    private static String normalize(String value) {
+        return value == null ? "" : value.toLowerCase(java.util.Locale.ROOT)
+                .replace('-', '_').replace(' ', '_');
+    }
+
+    private static boolean containsAny(String value, String... needles) {
+        for (String needle : needles) if (value.contains(needle)) return true;
+        return false;
+    }
+
+    private static String clickableText(View view) {
+        StringBuilder out = new StringBuilder();
+        try {
+            CharSequence description = view.getContentDescription();
+            if (description != null) out.append(description).append(' ');
+            if (view instanceof TextView) {
+                CharSequence text = ((TextView) view).getText();
+                if (text != null) out.append(text).append(' ');
+            }
+        } catch (Throwable ignored) { }
+        return out.toString();
+    }
+
+    private static boolean hasMediaMetadataSubtree(ViewGroup root, int budget, int depthLimit) {
+        int[] count = {0};
+        boolean[] metadata = {false};
+        boolean[] artwork = {false};
+        scanMediaSubtree(root, budget, depthLimit, 0, count, metadata, artwork);
+        return metadata[0] && artwork[0];
+    }
+
+    private static void scanMediaSubtree(View view, int budget, int depthLimit, int depth,
+            int[] count, boolean[] metadata, boolean[] artwork) {
+        if (view == null || count[0]++ >= budget || depth > depthLimit) return;
+        String name = resourceEntryName(view);
+        String text = normalize((name == null ? "" : name) + " " + clickableText(view));
+        if (containsAny(text, "title", "artist", "album", "track", "song", "now_playing",
+                "media_metadata", "đang_phát")) metadata[0] = true;
+        if (containsAny(text, "artwork", "album_art", "cover", "thumbnail", "media_image")) {
+            artwork[0] = true;
+        }
+        if (view instanceof ViewGroup) {
+            ViewGroup group = (ViewGroup) view;
+            for (int i = 0; i < group.getChildCount() && count[0] < budget; i++) {
+                scanMediaSubtree(group.getChildAt(i), budget, depthLimit, depth + 1,
+                        count, metadata, artwork);
             }
         }
-        return false;
     }
 
     private void dispatchMediaOpen() {
