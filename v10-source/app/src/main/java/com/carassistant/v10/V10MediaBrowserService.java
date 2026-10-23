@@ -6,7 +6,9 @@ import android.media.browse.MediaBrowser;
 import android.service.media.MediaBrowserService;
 import android.media.session.MediaSession;
 import android.media.session.PlaybackState;
+import android.app.PendingIntent;
 import android.content.ComponentName;
+import android.content.Intent;
 import android.content.Context;
 import android.os.Bundle;
 import android.util.Log;
@@ -34,6 +36,13 @@ public final class V10MediaBrowserService extends MediaBrowserService {
         mediaSession = new MediaSession(this, TAG);
         mediaSession.setFlags(MediaSession.FLAG_HANDLES_MEDIA_BUTTONS
                 | MediaSession.FLAG_HANDLES_TRANSPORT_CONTROLS);
+        // Route Android Auto now-playing card taps back through V10.
+        Intent openV10 = new Intent(this, V10ControlReceiver.class)
+                .setAction(V10ControlReceiver.ACTION_MEDIA_CONTROLLER_OPEN);
+        PendingIntent openV10PendingIntent = PendingIntent.getBroadcast(
+                this, 710, openV10,
+                PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
+        mediaSession.setSessionActivity(openV10PendingIntent);
         mediaSession.setCallback(new MediaSession.Callback() {
             @Override public void onPlay() { MediaSessionBridge.play(); }
             @Override public void onPause() { MediaSessionBridge.pause(); }
@@ -48,7 +57,7 @@ public final class V10MediaBrowserService extends MediaBrowserService {
         });
         setSessionToken(mediaSession.getSessionToken());
         refreshFromSnapshot();
-        Log.i(TAG, "Media browser service created");
+        Log.i(TAG, "Media browser service created with V10 session click route");
     }
 
     @Override
@@ -61,6 +70,7 @@ public final class V10MediaBrowserService extends MediaBrowserService {
             return null;
         }
         refreshFromSnapshot();
+        Log.i(TAG, "Android Auto connected; sessionActivity routes taps to V10");
         return new BrowserRoot(ROOT_ID, null);
     }
 

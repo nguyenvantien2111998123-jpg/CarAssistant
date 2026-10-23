@@ -133,7 +133,8 @@ public final class GearheadAutoOpen {
                     ? context.getApplicationContext() : context;
             IntentFilter filter = new IntentFilter(ACTION_REQUEST_OPEN);
             if (Build.VERSION.SDK_INT >= 33) {
-                app.registerReceiver(REQUEST_RECEIVER, filter, Context.RECEIVER_NOT_EXPORTED);
+                // V10 and Gearhead have different UIDs; this custom action must cross that boundary.
+                app.registerReceiver(REQUEST_RECEIVER, filter, Context.RECEIVER_EXPORTED);
             } else {
                 app.registerReceiver(REQUEST_RECEIVER, filter);
             }

@@ -19,6 +19,8 @@ public final class V10ControlReceiver
             "com.carassistant.v10.STEERING_MEDIA_NEXT";
     public static final String ACTION_STEERING_MEDIA_PREVIOUS =
             "com.carassistant.v10.STEERING_MEDIA_PREVIOUS";
+    public static final String ACTION_MEDIA_CONTROLLER_OPEN =
+            "com.carassistant.v10.MEDIA_CONTROLLER_OPEN";
 
     public static final String EXTRA_COMMAND =
             "command";
@@ -29,6 +31,15 @@ public final class V10ControlReceiver
             Intent intent) {
 
         if (intent == null) {
+            return;
+        }
+
+        if (ACTION_MEDIA_CONTROLLER_OPEN.equals(intent.getAction())) {
+            Intent hostRequest = new Intent(
+                    "com.google.android.projection.gearhead.AACAST_REQUEST_OPEN_V10");
+            hostRequest.setPackage("com.google.android.projection.gearhead");
+            context.sendBroadcast(hostRequest);
+            android.util.Log.i("V10MediaBrowser", "Requested V10 open on Android Auto display");
             return;
         }
 
