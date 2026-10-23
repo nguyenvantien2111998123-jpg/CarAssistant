@@ -590,9 +590,12 @@ public final class V10CarActivity
     }
 
 
-    /** Called from the Android Auto media card and the steering-key bridge. */
+    /**
+     * Phase 1: an Android Auto metadata tap returns to CarAsistant V10 itself.
+     * Opening the original player task on display 2 is deliberately deferred to phase 2.
+     */
     public void handleOpenActiveMediaOnProjection() {
-        handler.post(this::openActiveMediaOnProjection);
+        handler.post(this::returnToLauncher);
     }
 
     private void openActiveMediaOnProjection() {

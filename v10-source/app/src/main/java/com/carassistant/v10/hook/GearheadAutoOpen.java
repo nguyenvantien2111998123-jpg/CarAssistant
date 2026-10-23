@@ -108,6 +108,22 @@ public final class GearheadAutoOpen {
         }
     }
 
+    /**
+     * User-initiated request from the Android Auto media card. Unlike the automatic
+     * facet-bar watcher, this intentionally bypasses its cooldown because the user tapped.
+     */
+    public static void requestOpen() {
+        if (hostClassLoader == null) {
+            log("Media-card open request ignored: Android Auto classloader is not ready");
+            return;
+        }
+        if (!OPEN_PENDING.compareAndSet(false, true)) {
+            log("Media-card open request already pending");
+            return;
+        }
+        MAIN.post(() -> attemptOpen(1));
+    }
+
     private static void scheduleOpen(ViewGroup anchor) {
         long now = SystemClock.elapsedRealtime();
         if (now - lastSuccessfulOpenElapsed < OPEN_COOLDOWN_MS) {

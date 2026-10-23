@@ -337,10 +337,13 @@ public final class GearheadDockPatcher {
         Context appContext = context;
         if (appContext == null) return;
         try {
+            // Request the Android Auto host to open the CarAsistant CarActivity first.
+            // The receiver records the request so V10 returns to its launcher when resumed.
+            GearheadAutoOpen.requestOpen();
             Intent intent = new Intent("com.carassistant.v10.STEERING_MEDIA_OPEN");
             intent.setPackage("com.carassistant.v10");
             appContext.sendBroadcast(intent);
-            log("Forwarded Android Auto media metadata tap to CarAsistant");
+            log("Forwarded media metadata tap to CarAsistant V10; source player launch is deferred");
         } catch (Throwable error) {
             log("Could not forward media metadata tap: " + error);
         }
