@@ -54,44 +54,39 @@ public final class GearheadAutoOpen {
         }
         hostClassLoader = classLoader;
         try {
-            XposedHelpers.findAndHookMethod(
-                    LayoutInflater.class,
-                    "inflate",
-                    int.class,
-                    ViewGroup.class,
-                    boolean.class,
-                    new XC_MethodHook() {
-                        @Override
-                        protected void afterHookedMethod(MethodHookParam param) {
-                            try {
-                                int resourceId = (Integer) param.args[0];
-                                LayoutInflater inflater = (LayoutInflater) param.thisObject;
-                                Context context = inflater.getContext();
-                                Resources resources = context.getResources();
-
-                                // Match by the exact resource ID, as AADisplay does. The
-                                // name-based fallback covers contexts with split resources.
-                                int expectedId = resources.getIdentifier(
-                                        FACET_BAR_RESOURCE, "layout", GEARHEAD);
-                                boolean isFacetBar = expectedId != 0
-                                        ? resourceId == expectedId
-                                        : isFacetBarByName(resources, resourceId);
-                                if (!isFacetBar) {
-                                    return;
-                                }
-
-                                Object result = param.getResult();
-                                if (!(result instanceof ViewGroup)) {
-                                    log("Facet bar inflated but returned no ViewGroup");
-                                    return;
-                                }
-                                log("Detected Android Auto Coolwalk facet bar; scheduling auto-open");
-                                scheduleOpen((ViewGroup) result);
-                            } catch (Throwable error) {
-                                log("Facet-bar detection failed safely: " + error);
-                            }
+            // Android Auto changes which LayoutInflater overload it uses between
+            // releases. Hook all overloads, then validate both the resource package/name
+            // and the returned view before scheduling anything.
+            XposedBridge.hookAllMethods(LayoutInflater.class, "inflate", new XC_MethodHook() {
+                @Override
+                protected void afterHookedMethod(MethodHookParam param) {
+                    try {
+                        if (param.args == null || param.args.length == 0
+                                || !(param.args[0] instanceof Integer)) {
+                            return;
                         }
-                    });
+                        int resourceId = (Integer) param.args[0];
+                        Object result = param.getResult();
+                        if (!(result instanceof ViewGroup)) return;
+
+                        LayoutInflater inflater = (LayoutInflater) param.thisObject;
+                        Context context = inflater.getContext();
+                        Resources resources = context.getResources();
+                        int expectedId = resources.getIdentifier(
+                                FACET_BAR_RESOURCE, "layout", GEARHEAD);
+                        boolean isFacetBar = expectedId != 0
+                                ? resourceId == expectedId
+                                : isFacetBarByName(resources, resourceId);
+                        if (!isFacetBar) return;
+
+                        log("Detected Android Auto Coolwalk facet bar (inflate overload "
+                                + param.args.length + "); scheduling auto-open");
+                        scheduleOpen((ViewGroup) result);
+                    } catch (Throwable error) {
+                        log("Facet-bar detection failed safely: " + error);
+                    }
+                }
+            });
             log("Installed AADisplay-style facet-bar watcher in Android Auto projection process");
         } catch (Throwable error) {
             INSTALLED.set(false);
