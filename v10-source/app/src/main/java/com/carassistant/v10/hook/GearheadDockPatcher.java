@@ -101,7 +101,7 @@ public final class GearheadDockPatcher {
                         protected void beforeHookedMethod(MethodHookParam param) {
                             Object target = param.thisObject;
                             if (target instanceof View && isMediaInfoClick((View) target)
-                                    && shouldRouteToV10Media()) {
+                                    && patcher.shouldRouteToV10Media()) {
                                 // Consume the Android Auto media-card click before its
                                 // native handler can launch the player on the phone.
                                 param.setResult(true);
