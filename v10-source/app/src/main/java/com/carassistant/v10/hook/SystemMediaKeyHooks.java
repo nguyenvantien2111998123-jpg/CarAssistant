@@ -253,17 +253,20 @@ public final class SystemMediaKeyHooks {
             List<MediaController> controllers = manager.getActiveSessions(null);
             if (controllers == null || controllers.isEmpty()) return null;
 
-            MediaController chosen = null;
+            MediaController firstWithMetadata = null;
+            MediaController firstAvailable = null;
             for (MediaController candidate : controllers) {
                 if (candidate == null) continue;
+                if (firstAvailable == null) firstAvailable = candidate;
                 PlaybackState state = candidate.getPlaybackState();
                 if (state != null && state.getState() == PlaybackState.STATE_PLAYING) {
                     return candidate;
                 }
-                if (chosen == null && candidate.getMetadata() != null) chosen = candidate;
-                if (chosen == null) chosen = candidate;
+                if (firstWithMetadata == null && candidate.getMetadata() != null) {
+                    firstWithMetadata = candidate;
+                }
             }
-            return chosen;
+            return firstWithMetadata != null ? firstWithMetadata : firstAvailable;
         } catch (SecurityException error) {
             XposedBridge.log(TAG + " cannot inspect active sessions: " + error);
             return null;
