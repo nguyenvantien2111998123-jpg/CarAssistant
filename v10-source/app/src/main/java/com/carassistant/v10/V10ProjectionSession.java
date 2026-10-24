@@ -238,6 +238,16 @@ public final class V10ProjectionSession implements TextureView.SurfaceTextureLis
     @Override public void onSurfaceTextureSizeChanged(SurfaceTexture surface, int width, int height) {
         contentWidth = width;
         contentHeight = height;
+        if (destroyed || target == null || textureView == null || width < 1 || height < 1) return;
+        // Rebind through the same controller path so the existing VirtualDisplay is resized
+        // rather than silently retaining stale geometry after Android Auto changes resolution.
+        try {
+            surfaceManager.attach(surface, width, height);
+            Log.i(TAG, "[RESIZE] layer=" + displayIndex + " display="
+                    + displayController.getDisplayId() + " size=" + width + "x" + height);
+        } catch (Throwable error) {
+            Log.w(TAG, "[RESIZE] ignored safely for layer=" + displayIndex, error);
+        }
     }
 
     @Override public boolean onSurfaceTextureDestroyed(SurfaceTexture surface) {

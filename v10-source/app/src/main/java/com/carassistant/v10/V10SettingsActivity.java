@@ -173,23 +173,47 @@ public final class V10SettingsActivity extends Activity {
                             Manifest.permission.ACCESS_COARSE_LOCATION}, 4101));
             addButton(body, "CẤP QUYỀN MICRO", () ->
                     requestPermissions(new String[]{Manifest.permission.RECORD_AUDIO}, 4102));
-            addButton(body, "MỞ CÀI ĐẶT TRỢ NĂNG ĐỂ BẬT TỰ PHÁT MEDIA", () ->
+            addButton(body, "MỞ TRANG TRỢ NĂNG", () ->
                     startActivity(new Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)));
 
             TextView mediaHint = text(
-                    "Để trợ lý tự chọn kết quả và bấm Phát trong YouTube/Zing MP3, mở Trợ năng và bật dịch vụ “CarAsistant Media Auto Play”. Android yêu cầu người dùng tự bật quyền này; ứng dụng không thể tự cấp.",
+                    "Để tự chọn kết quả và bấm Phát trong YouTube/Zing MP3, bật “CarAsistant Media Auto Play” ở Trợ năng. Android yêu cầu bạn tự bật dịch vụ này.",
                     13, Color.LTGRAY);
             mediaHint.setPadding(dp(4), dp(10), dp(4), dp(8));
             body.addView(mediaHint, params(-1, -2));
 
-            addButton(body, "MỞ CÀI ĐẶT ỨNG DỤNG", () -> {
-                Intent i = new Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
-                        Uri.parse("package:" + getPackageName()));
-                startActivity(i);
+            addButton(body, "CẤP QUYỀN ĐỌC THÔNG TIN MEDIA", () -> {
+                try {
+                    startActivity(new Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS));
+                } catch (Throwable error) {
+                    openAppDetails();
+                }
             });
 
+            TextView notificationHint = text(
+                    "Bật “CarAsistant Media Controller” trong Quyền truy cập thông báo để đọc tên bài hát và điều khiển phiên media. Quay lại đây để cập nhật trạng thái.",
+                    13, Color.LTGRAY);
+            notificationHint.setPadding(dp(4), dp(8), dp(4), dp(8));
+            body.addView(notificationHint, params(-1, -2));
+
+            addButton(body, "MỞ CÀI ĐẶT TỐI ƯU PIN", () -> {
+                try {
+                    startActivity(new Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS));
+                } catch (Throwable error) {
+                    openAppDetails();
+                }
+            });
+
+            TextView batteryHint = text(
+                    "Nếu hệ thống tự dừng trợ lý khi chạy nền, kiểm tra tối ưu pin và cho phép CarAsistant chạy nền nếu máy có tùy chọn này.",
+                    13, Color.LTGRAY);
+            batteryHint.setPadding(dp(4), dp(8), dp(4), dp(8));
+            body.addView(batteryHint, params(-1, -2));
+
+            addButton(body, "MỞ TRANG THÔNG TIN CARASISTANT", this::openAppDetails);
+
             TextView note = text(
-                    "Root/su phải được cấp trong trình quản lý root. LSPosed cần bật module và chọn scope phù hợp. Android không cho ứng dụng tự cấp các quyền đặc biệt này.",
+                    "Root: mở ứng dụng quản lý root (ví dụ Magisk) và cấp quyền su cho CarAsistant khi được hỏi. LSPosed: bật module CarAsistant, chọn scope Android Auto và system_server theo cấu hình module, sau đó khởi động lại nếu vừa đổi scope. Android không cho CarAsistant tự cấp Root/LSPosed hoặc tự bật các quyền đặc biệt.",
                     13, Color.LTGRAY);
             note.setPadding(dp(4), dp(12), dp(4), dp(8));
             body.addView(note, params(-1, -2));
@@ -457,9 +481,41 @@ public final class V10SettingsActivity extends Activity {
     private void refreshStatus() {
         if (permissionStatus == null) return;
         permissionStatus.setText(
-                "Vị trí: " + granted(Manifest.permission.ACCESS_FINE_LOCATION)
-                + "   •   Micro: " + granted(Manifest.permission.RECORD_AUDIO)
-                + "\nRoot/LSPosed: cần kiểm tra riêng trong ứng dụng quản lý tương ứng.");
+                "VỊ TRÍ: " + granted(Manifest.permission.ACCESS_FINE_LOCATION)
+                + "   •   MICRO: " + granted(Manifest.permission.RECORD_AUDIO)
+                + "\nTHÔNG BÁO MEDIA: " + notificationAccessStatus()
+                + "\nTRỢ NĂNG MEDIA AUTO PLAY: " + accessibilityStatus()
+                + "\nPIN: kiểm tra thủ công nếu máy tự dừng chạy nền"
+                + "\nROOT / LSPOSED: kiểm tra trong ứng dụng quản lý tương ứng.");
+    }
+
+    private String notificationAccessStatus() {
+        try {
+            String enabled = Settings.Secure.getString(
+                    getContentResolver(), "enabled_notification_listeners");
+            return enabled != null && enabled.contains(getPackageName())
+                    ? "ĐÃ BẬT" : "CHƯA BẬT";
+        } catch (Throwable ignored) {
+            return "CHƯA XÁC ĐỊNH";
+        }
+    }
+
+    private String accessibilityStatus() {
+        try {
+            String enabled = Settings.Secure.getString(
+                    getContentResolver(), Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES);
+            return enabled != null && enabled.contains(
+                    getPackageName() + "/" + MediaPlaybackAccessibilityService.class.getName())
+                    ? "ĐÃ BẬT" : "CHƯA BẬT";
+        } catch (Throwable ignored) {
+            return "CHƯA XÁC ĐỊNH";
+        }
+    }
+
+    private void openAppDetails() {
+        Intent i = new Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
+                Uri.parse("package:" + getPackageName()));
+        startActivity(i);
     }
 
     private String granted(String permission) {

@@ -88,6 +88,10 @@ public final class SteeringWheelKeyHooks {
                                     + " eventTime=" + event.getEventTime());
 
                             if (event.getKeyCode() == NEXT || event.getKeyCode() == PREVIOUS) {
+                                if (!isV10MediaRouteActive()) {
+                                    // Keep the native path when an independent Android Auto media app owns playback.
+                                    return;
+                                }
                                 arbitrate(event, param);
                             }
                         }
@@ -294,6 +298,31 @@ public final class SteeringWheelKeyHooks {
             ((Context) app).sendBroadcast(intent);
         } catch (Throwable error) {
             XposedBridge.log(TAG + " voice broadcast failed: " + error);
+        }
+    }
+
+    private static boolean isV10MediaRouteActive() {
+        try {
+            Object app = XposedHelpers.callStaticMethod(
+                    XposedHelpers.findClass("android.app.ActivityThread", null), "currentApplication");
+            if (!(app instanceof Context)) return false;
+            android.database.Cursor cursor = null;
+            try {
+                cursor = ((Context) app).getContentResolver().query(
+                        android.net.Uri.parse("content://com.carassistant.v10.launcher.dock/state"),
+                        new String[]{"projection_active", "target_package", "active_media_package"},
+                        null, null, null);
+                if (cursor == null || !cursor.moveToFirst() || cursor.getInt(0) != 1) return false;
+                String targetPackage = cursor.getString(1);
+                String mediaPackage = cursor.getString(2);
+                return targetPackage != null && !targetPackage.isEmpty()
+                        && targetPackage.equals(mediaPackage);
+            } finally {
+                if (cursor != null) try { cursor.close(); } catch (Throwable ignored) { }
+            }
+        } catch (Throwable error) {
+            XposedBridge.log(TAG + " routing state unavailable; preserving native media key path: " + error);
+            return false;
         }
     }
 

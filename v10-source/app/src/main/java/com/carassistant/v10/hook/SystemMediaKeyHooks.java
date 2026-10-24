@@ -72,6 +72,10 @@ public final class SystemMediaKeyHooks {
                             Object value = XposedHelpers.getObjectField(param.thisObject, "mContext");
                             if (value instanceof Context) systemContext = (Context) value;
                         } catch (Throwable ignored) { }
+                        if (!isV10MediaRouteActive()) {
+                            // No matching V10 projection route: leave Android's dispatch untouched.
+                            return;
+                        }
                         // Prevent the normal MediaSession dispatch from skipping a track
                         // before our single/double/hold arbitration completes.
                         param.setResult(null);
@@ -89,6 +93,28 @@ public final class SystemMediaKeyHooks {
         } catch (Throwable error) {
             INSTALLED.set(false);
             XposedBridge.log(TAG + " install failed: " + error);
+        }
+    }
+
+    private static boolean isV10MediaRouteActive() {
+        Context context = systemContext;
+        if (context == null) return false;
+        android.database.Cursor cursor = null;
+        try {
+            cursor = context.getContentResolver().query(
+                    android.net.Uri.parse("content://com.carassistant.v10.launcher.dock/state"),
+                    new String[]{"projection_active", "target_package", "active_media_package"},
+                    null, null, null);
+            if (cursor == null || !cursor.moveToFirst() || cursor.getInt(0) != 1) return false;
+            String targetPackage = cursor.getString(1);
+            String mediaPackage = cursor.getString(2);
+            return targetPackage != null && !targetPackage.isEmpty()
+                    && targetPackage.equals(mediaPackage);
+        } catch (Throwable error) {
+            XposedBridge.log(TAG + " routing state unavailable; preserving native dispatch: " + error);
+            return false;
+        } finally {
+            if (cursor != null) try { cursor.close(); } catch (Throwable ignored) { }
         }
     }
 
