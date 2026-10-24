@@ -47,7 +47,7 @@ final class V10WhiteNoisePlayer {
         short[] buffer = new short[SAMPLES];
         Random random = new Random();
         while (running) {
-            for (int i = 0; i < buffer.length; i++) buffer[i] = (short) random.nextInt(32768);
+            for (int i = 0; i < buffer.length; i++) buffer[i] = (short) (random.nextInt(65536) - 32768);
             AudioTrack current = track;
             if (current == null) return;
             try {
