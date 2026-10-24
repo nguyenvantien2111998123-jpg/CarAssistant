@@ -2,12 +2,17 @@ package com.carassistant.v10.hook;
 
 import android.content.Context;
 import android.content.Intent;
+import android.media.MediaMetadata;
+import android.media.session.MediaController;
+import android.media.session.MediaSessionManager;
+import android.media.session.PlaybackState;
 import android.os.Handler;
 import android.os.Looper;
 import android.os.SystemClock;
 import android.view.KeyEvent;
 
 import java.lang.reflect.Method;
+import java.util.List;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 import de.robv.android.xposed.XC_MethodHook;
@@ -16,8 +21,10 @@ import de.robv.android.xposed.XposedHelpers;
 
 /**
  * Intercepts media keys at the system_server MediaSessionService dispatch point.
- * KeyEvent.dispatch in Gearhead is too late/too narrow for Bluetooth/AVRCP
- * steering-wheel events, which can go straight to the active media session.
+ *
+ * Media-session availability is checked from system_server before consuming a new
+ * key-down. The controller is captured for the whole key gesture so the delayed
+ * single-click and hold actions target the same session that accepted the gesture.
  */
 public final class SystemMediaKeyHooks {
     private static final String TAG = "[AACast SystemMediaKey]";
@@ -31,8 +38,10 @@ public final class SystemMediaKeyHooks {
     private static final Object LOCK = new Object();
     private static final AtomicBoolean INSTALLED = new AtomicBoolean();
 
-    private static Context systemContext;
+    private static volatile Context systemContext;
     private static int pressedKey = KeyEvent.KEYCODE_UNKNOWN;
+    private static MediaController pressedController;
+    private static MediaController pendingNextController;
     private static boolean held;
     private static boolean doubleTap;
     private static boolean pendingNext;
@@ -68,14 +77,16 @@ public final class SystemMediaKeyHooks {
                         if (event == null) return;
                         int key = event.getKeyCode();
                         if (key != NEXT && key != PREVIOUS) return;
+
                         try {
                             Object value = XposedHelpers.getObjectField(param.thisObject, "mContext");
                             if (value instanceof Context) systemContext = (Context) value;
                         } catch (Throwable ignored) { }
-                        // Prevent the normal MediaSession dispatch from skipping a track
-                        // before our single/double/hold arbitration completes.
-                        param.setResult(null);
-                        arbitrate(event);
+
+                        if (handleKeyEvent(event)) {
+                            // The decision is made synchronously while MethodParam is valid.
+                            param.setResult(null);
+                        }
                     }
                 });
                 count++;
@@ -92,80 +103,231 @@ public final class SystemMediaKeyHooks {
         }
     }
 
-    private static void arbitrate(KeyEvent event) {
-        int key = event.getKeyCode();
-        if (event.getAction() == KeyEvent.ACTION_DOWN) {
-            if (event.getRepeatCount() != 0) return;
+    /**
+     * Returns true only when this hook owns the event. A fresh DOWN is passed
+     * through untouched if system_server cannot find an active media controller.
+     */
+    private static boolean handleKeyEvent(KeyEvent event) {
+        final int key = event.getKeyCode();
+        final int action = event.getAction();
+
+        if (action == KeyEvent.ACTION_UP) {
             synchronized (LOCK) {
-                long now = SystemClock.uptimeMillis();
-                if (key == NEXT && pendingNext && now - firstNextUp <= DOUBLE_MS) {
+                if (pressedKey != key) return false;
+                finishPressLocked(key);
+                return true;
+            }
+        }
+
+        if (action != KeyEvent.ACTION_DOWN) return false;
+
+        if (event.getRepeatCount() > 0) {
+            synchronized (LOCK) {
+                // Repeats belonging to a gesture already consumed at initial DOWN
+                // must also be consumed; unrelated repeat events pass through.
+                return pressedKey == key;
+            }
+        }
+
+        // Resolve the double-tap state before querying a new controller: the first
+        // NEXT was already consumed and must not be lost if its session changes.
+        boolean voiceDoubleTap = false;
+        synchronized (LOCK) {
+            if (key == NEXT && pendingNext) {
+                long delta = SystemClock.uptimeMillis() - firstNextUp;
+                if (delta <= DOUBLE_MS) {
                     cancelPendingNextLocked();
                     pressedKey = NEXT;
+                    pressedController = pendingNextController;
+                    pendingNextController = null;
                     doubleTap = true;
                     held = false;
                     cancelHoldLocked();
-                    XposedBridge.log(TAG + " double NEXT -> voice");
-                    send("com.carassistant.v10.STEERING_VOICE", 0);
-                    return;
-                }
-                if (key == NEXT && pendingNext) {
-                    cancelPendingNextLocked();
-                    send("com.carassistant.v10.STEERING_MEDIA_NEXT", 0);
-                }
-                if (pressedKey != KeyEvent.KEYCODE_UNKNOWN) return;
-                pressedKey = key;
-                held = false;
-                doubleTap = false;
-                holdStart = () -> startHold(key);
-                MAIN.postDelayed(holdStart, HOLD_MS);
-            }
-            return;
-        }
-        if (event.getAction() != KeyEvent.ACTION_UP) return;
-        synchronized (LOCK) {
-            if (pressedKey != key) return;
-            cancelHoldLocked();
-            if (held) {
-                XposedBridge.log(TAG + " hold released key=" + key);
-            } else if (!doubleTap) {
-                if (key == NEXT) {
-                    pendingNext = true;
-                    firstNextUp = SystemClock.uptimeMillis();
-                    pendingSingle = () -> {
-                        synchronized (LOCK) {
-                            if (!pendingNext) return;
-                            pendingNext = false;
-                            pendingSingle = null;
-                            send("com.carassistant.v10.STEERING_MEDIA_NEXT", 0);
-                        }
-                    };
-                    MAIN.postDelayed(pendingSingle, DOUBLE_MS);
+                    voiceDoubleTap = true;
                 } else {
-                    send("com.carassistant.v10.STEERING_MEDIA_PREVIOUS", 0);
+                    MediaController expiredController = pendingNextController;
+                    cancelPendingNextLocked();
+                    pendingNextController = null;
+                    dispatchNext(expiredController);
                 }
             }
-            pressedKey = KeyEvent.KEYCODE_UNKNOWN;
+        }
+        if (voiceDoubleTap) {
+            sendVoiceRequest();
+            return true;
+        }
+
+        synchronized (LOCK) {
+            if (pressedKey != KeyEvent.KEYCODE_UNKNOWN) return false;
+        }
+
+        MediaController controller = findActiveController();
+        if (controller == null) {
+            XposedBridge.log(TAG + " no active media session; passing key=" + key);
+            return false;
+        }
+
+        synchronized (LOCK) {
+            // Re-check after the controller lookup to avoid two concurrent DOWNs
+            // claiming the state machine.
+            if (pressedKey != KeyEvent.KEYCODE_UNKNOWN) return false;
+            pressedKey = key;
+            pressedController = controller;
             held = false;
             doubleTap = false;
+            holdStart = () -> startHold(key, controller);
+            MAIN.postDelayed(holdStart, HOLD_MS);
+            return true;
         }
     }
 
-    private static void startHold(int key) {
+    private static void finishPressLocked(int key) {
+        cancelHoldLocked();
+        MediaController controller = pressedController;
+
+        if (!held && !doubleTap) {
+            if (key == NEXT) {
+                pendingNext = true;
+                firstNextUp = SystemClock.uptimeMillis();
+                pendingNextController = controller;
+                pendingSingle = () -> {
+                    MediaController target;
+                    synchronized (LOCK) {
+                        if (!pendingNext) return;
+                        pendingNext = false;
+                        pendingSingle = null;
+                        target = pendingNextController;
+                        pendingNextController = null;
+                    }
+                    dispatchNext(target);
+                };
+                MAIN.postDelayed(pendingSingle, DOUBLE_MS);
+            } else {
+                dispatchPrevious(controller);
+            }
+        }
+
+        pressedKey = KeyEvent.KEYCODE_UNKNOWN;
+        pressedController = null;
+        held = false;
+        doubleTap = false;
+    }
+
+    private static void startHold(int key, MediaController controller) {
         synchronized (LOCK) {
-            if (pressedKey != key || held || doubleTap) return;
+            if (pressedKey != key || pressedController != controller || held || doubleTap) return;
+            if (!supportsSeek(controller)) {
+                // Preserve normal single-key behavior when this player cannot seek.
+                return;
+            }
             held = true;
             XposedBridge.log(TAG + " hold start -> seek " + (key == NEXT ? "+15s" : "-15s"));
-            send("com.carassistant.v10.STEERING_MEDIA_SEEK", key == NEXT ? 1 : -1);
+            dispatchSeek(controller, key == NEXT ? 15000L : -15000L);
             seekRepeat = new Runnable() {
                 @Override public void run() {
                     synchronized (LOCK) {
-                        if (pressedKey != key || !held) return;
-                        send("com.carassistant.v10.STEERING_MEDIA_SEEK", key == NEXT ? 1 : -1);
+                        if (pressedKey != key || pressedController != controller || !held) return;
+                        dispatchSeek(controller, key == NEXT ? 15000L : -15000L);
                         MAIN.postDelayed(this, SEEK_REPEAT_MS);
                     }
                 }
             };
             MAIN.postDelayed(seekRepeat, SEEK_REPEAT_MS);
+        }
+    }
+
+    private static MediaController findActiveController() {
+        Context context = systemContext;
+        if (context == null) return null;
+        try {
+            MediaSessionManager manager = (MediaSessionManager)
+                    context.getSystemService(Context.MEDIA_SESSION_SERVICE);
+            if (manager == null) return null;
+            List<MediaController> controllers = manager.getActiveSessions(null);
+            if (controllers == null || controllers.isEmpty()) return null;
+
+            MediaController chosen = null;
+            for (MediaController candidate : controllers) {
+                if (candidate == null) continue;
+                PlaybackState state = candidate.getPlaybackState();
+                if (state != null && state.getState() == PlaybackState.STATE_PLAYING) {
+                    return candidate;
+                }
+                if (chosen == null && candidate.getMetadata() != null) chosen = candidate;
+                if (chosen == null) chosen = candidate;
+            }
+            return chosen;
+        } catch (SecurityException error) {
+            XposedBridge.log(TAG + " cannot inspect active sessions: " + error);
+            return null;
+        } catch (RuntimeException error) {
+            XposedBridge.log(TAG + " active-session lookup failed: " + error);
+            return null;
+        }
+    }
+
+    private static boolean supportsSeek(MediaController controller) {
+        if (controller == null) return false;
+        try {
+            PlaybackState state = controller.getPlaybackState();
+            return state != null
+                    && (state.getActions() & PlaybackState.ACTION_SEEK_TO) != 0L;
+        } catch (RuntimeException error) {
+            return false;
+        }
+    }
+
+    private static void dispatchNext(MediaController controller) {
+        if (controller == null) return;
+        try {
+            controller.getTransportControls().skipToNext();
+        } catch (RuntimeException error) {
+            XposedBridge.log(TAG + " skipNext failed: " + error);
+        }
+    }
+
+    private static void dispatchPrevious(MediaController controller) {
+        if (controller == null) return;
+        try {
+            controller.getTransportControls().skipToPrevious();
+        } catch (RuntimeException error) {
+            XposedBridge.log(TAG + " skipPrevious failed: " + error);
+        }
+    }
+
+    private static void dispatchSeek(MediaController controller, long offsetMs) {
+        if (controller == null || offsetMs == 0L) return;
+        try {
+            PlaybackState state = controller.getPlaybackState();
+            if (state == null || (state.getActions() & PlaybackState.ACTION_SEEK_TO) == 0L) return;
+            long position = Math.max(0L, state.getPosition());
+            long target = Math.max(0L, position + offsetMs);
+            MediaMetadata metadata = controller.getMetadata();
+            long duration = metadata == null ? 0L
+                    : metadata.getLong(MediaMetadata.METADATA_KEY_DURATION);
+            if (duration > 0L) target = Math.min(target, duration);
+            controller.getTransportControls().seekTo(target);
+        } catch (RuntimeException error) {
+            XposedBridge.log(TAG + " seek failed: " + error);
+        }
+    }
+
+    private static void sendVoiceRequest() {
+        send("com.carassistant.v10.STEERING_VOICE");
+    }
+
+    private static void send(String action) {
+        Context context = systemContext;
+        if (context == null) {
+            XposedBridge.log(TAG + " no system context; dropped " + action);
+            return;
+        }
+        try {
+            Intent intent = new Intent(action);
+            intent.setPackage(SELF);
+            context.sendBroadcast(intent);
+        } catch (Throwable error) {
+            XposedBridge.log(TAG + " broadcast failed " + action + ": " + error);
         }
     }
 
@@ -180,21 +342,5 @@ public final class SystemMediaKeyHooks {
         if (pendingSingle != null) MAIN.removeCallbacks(pendingSingle);
         pendingSingle = null;
         pendingNext = false;
-    }
-
-    private static void send(String action, int direction) {
-        Context context = systemContext;
-        if (context == null) {
-            XposedBridge.log(TAG + " no system context; dropped " + action);
-            return;
-        }
-        try {
-            Intent intent = new Intent(action);
-            intent.setPackage(SELF);
-            if (direction != 0) intent.putExtra("direction", direction);
-            context.sendBroadcast(intent);
-        } catch (Throwable error) {
-            XposedBridge.log(TAG + " broadcast failed " + action + ": " + error);
-        }
     }
 }
