@@ -949,8 +949,8 @@ public final class V10CarActivity
                 failure = error.getMessage();
             }
             final String errorMessage = failure;
-            runOnUiThread(() -> {
-                if (isFinishing() || isDestroyed()) return;
+            handler.post(() -> {
+                if (root == null) return;
                 if (recent.isEmpty()) {
                     String message = errorMessage == null
                             ? "Chưa tìm thấy ứng dụng gần đây. Hãy kiểm tra quyền Root."
