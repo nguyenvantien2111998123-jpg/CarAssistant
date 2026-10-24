@@ -2,6 +2,7 @@
 package com.carassistant.v10;
 
 import android.Manifest;
+import android.app.AlertDialog;
 import android.content.ComponentName;
 import android.content.SharedPreferences;
 import android.os.SystemClock;
@@ -46,12 +47,15 @@ import java.util.Comparator;
 import java.util.Date;
 import java.util.List;
 import java.util.Locale;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 public final class V10CarActivity
         extends CarActivity {
 
     private final Handler handler =
             new Handler(Looper.getMainLooper());
+    private final RootShellSession recentTasksShell = new RootShellSession();
 
     private FrameLayout root;
     private FrameLayout projectionLayer;
@@ -516,7 +520,7 @@ public final class V10CarActivity
         sidebar.addView(voice,sidebarFixedButtonParams());
 
         TextView tasks=sidebarButton("TASKS");
-        tasks.setOnClickListener(v->{});
+        tasks.setOnClickListener(v -> showRecentTasks());
         sidebar.addView(tasks,sidebarFixedButtonParams());
 
         FrameLayout main=new FrameLayout(this);
@@ -910,6 +914,79 @@ public final class V10CarActivity
         // are hidden by launchProjection() while display 2 takes over.
         t.setOnClickListener(v -> launchProjection(app.component));
         return t;
+    }
+
+
+    /**
+     * AADisplay-style recent-task picker. Read task components through the existing
+     * root session, de-duplicate them, and launch the selected component on V10's
+     * projection display rather than opening it on the phone screen.
+     */
+    private void showRecentTasks() {
+        Toast.makeText(this, "Đang đọc danh sách ứng dụng gần đây…", Toast.LENGTH_SHORT).show();
+        RootShellSession.EXEC.execute(() -> {
+            final ArrayList<ComponentName> recent = new ArrayList<>();
+            String failure = null;
+            try {
+                String output = recentTasksShell.run(8,
+                        "/system/bin/dumpsys activity recents 2>/dev/null"
+                        + " | /system/bin/grep -o 'ComponentInfo{[^}]*}'"
+                        + " | /system/bin/head -n 20");
+                Pattern pattern = Pattern.compile("ComponentInfo\\{([^/}]+)/([^}]+)\\}");
+                Matcher matcher = pattern.matcher(output);
+                while (matcher.find() && recent.size() < 12) {
+                    String pkg = matcher.group(1).trim();
+                    String cls = matcher.group(2).trim();
+                    if (pkg.isEmpty() || cls.isEmpty() || getPackageName().equals(pkg)) continue;
+                    ComponentName component = new ComponentName(pkg, cls);
+                    boolean duplicate = false;
+                    for (ComponentName item : recent) {
+                        if (item.getPackageName().equals(pkg)) { duplicate = true; break; }
+                    }
+                    if (!duplicate) recent.add(component);
+                }
+            } catch (Throwable error) {
+                failure = error.getMessage();
+            }
+            final String errorMessage = failure;
+            runOnUiThread(() -> {
+                if (isFinishing() || isDestroyed()) return;
+                if (recent.isEmpty()) {
+                    String message = errorMessage == null
+                            ? "Chưa tìm thấy ứng dụng gần đây. Hãy kiểm tra quyền Root."
+                            : "Không đọc được danh sách task: " + errorMessage;
+                    new AlertDialog.Builder(this)
+                            .setTitle("TASKS GẦN ĐÂY")
+                            .setMessage(message)
+                            .setPositiveButton("ĐÓNG", null)
+                            .show();
+                    return;
+                }
+                String[] labels = new String[recent.size()];
+                for (int i = 0; i < recent.size(); i++) {
+                    ComponentName component = recent.get(i);
+                    CharSequence label = "";
+                    try {
+                        android.content.pm.ActivityInfo info = getPackageManager()
+                                .getActivityInfo(component, 0);
+                        label = info.loadLabel(getPackageManager());
+                    } catch (Throwable ignored) {
+                        try {
+                            label = getPackageManager().getApplicationLabel(
+                                    getPackageManager().getApplicationInfo(component.getPackageName(), 0));
+                        } catch (Throwable ignoredAgain) {
+                            label = component.getPackageName();
+                        }
+                    }
+                    labels[i] = String.valueOf(label);
+                }
+                new AlertDialog.Builder(this)
+                        .setTitle("TASKS GẦN ĐÂY")
+                        .setItems(labels, (dialog, which) -> launchProjection(recent.get(which)))
+                        .setNegativeButton("ĐÓNG", null)
+                        .show();
+            });
+        });
     }
 
 
