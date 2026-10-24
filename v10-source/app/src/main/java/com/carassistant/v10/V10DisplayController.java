@@ -21,6 +21,9 @@ public final class V10DisplayController {
     private android.hardware.display.VirtualDisplay virtualDisplay;
     private Display display;
     private Surface surface;
+    private int surfaceWidth;
+    private int surfaceHeight;
+    private int densityDpi = 160;
     private ComponentName target;
     private boolean launched;
     private boolean destroyed;
@@ -62,9 +65,16 @@ public final class V10DisplayController {
             return false;
         }
         if (virtualDisplay != null && display != null) {
-            replaceSurface(newSurface);
-            virtualDisplay.setSurface(newSurface);
-            return true;
+            try {
+                resizeIfNeeded(width, height, densityDpi);
+                virtualDisplay.setSurface(newSurface);
+                replaceSurface(newSurface);
+                return true;
+            } catch (Throwable error) {
+                Log.w(TAG, "Display rebind/resize failed", error);
+                try { newSurface.release(); } catch (Throwable ignored) { }
+                return false;
+            }
         }
         try {
             DisplayManager manager = (DisplayManager) context.getSystemService(Context.DISPLAY_SERVICE);
@@ -86,6 +96,9 @@ public final class V10DisplayController {
             }
             virtualDisplay = created;
             display = createdDisplay;
+            surfaceWidth = width;
+            surfaceHeight = height;
+            densityDpi = 160;
             replaceSurface(newSurface);
             return true;
         } catch (RuntimeException e) {
@@ -95,12 +108,35 @@ public final class V10DisplayController {
     }
 
     public synchronized void attachSurface(SurfaceTexture texture, int width, int height) {
-        if (destroyed || virtualDisplay == null || texture == null) return;
+        if (destroyed || virtualDisplay == null || texture == null || width < 1 || height < 1) return;
         texture.setDefaultBufferSize(width, height);
         Surface newSurface = new Surface(texture);
-        replaceSurface(newSurface);
-        virtualDisplay.setSurface(newSurface);
+        try {
+            resizeIfNeeded(width, height, densityDpi);
+            virtualDisplay.setSurface(newSurface);
+            replaceSurface(newSurface);
+        } catch (Throwable error) {
+            try { newSurface.release(); } catch (Throwable ignored) { }
+            Log.w(TAG, "Display surface reattach failed", error);
+        }
     }
+
+    /** Resize only when geometry changes; preserves the existing display/task ID. */
+    private void resizeIfNeeded(int width, int height, int dpi) {
+        if (virtualDisplay == null || width < 1 || height < 1) return;
+        int safeDpi = dpi > 0 ? dpi : 160;
+        if (surfaceWidth == width && surfaceHeight == height && densityDpi == safeDpi) return;
+        virtualDisplay.resize(width, height, safeDpi);
+        surfaceWidth = width;
+        surfaceHeight = height;
+        densityDpi = safeDpi;
+        Log.i(TAG, "Resized display index=" + displayIndex + " id=" + getDisplayId()
+                + " size=" + width + "x" + height + " dpi=" + safeDpi);
+    }
+
+    public synchronized int getWidth() { return surfaceWidth; }
+    public synchronized int getHeight() { return surfaceHeight; }
+    public synchronized int getDensityDpi() { return densityDpi; }
 
     public synchronized void detachSurface() {
         if (virtualDisplay != null) {
@@ -300,10 +336,16 @@ public final class V10DisplayController {
         if (destroyed) return;
         destroyed = true;
         if (virtualDisplay != null) {
+            // Detach the producer first so Surface/VirtualDisplay release order is deterministic.
+            try { virtualDisplay.setSurface(null); } catch (Throwable ignored) { }
             try { virtualDisplay.release(); } catch (Throwable ignored) { }
         }
         virtualDisplay = null;
         display = null;
+        surfaceWidth = 0;
+        surfaceHeight = 0;
+        launched = false;
+        target = null;
         releaseSurfaceOnly();
         rootShell.destroy();
         synchronized (V10DisplayController.class) {

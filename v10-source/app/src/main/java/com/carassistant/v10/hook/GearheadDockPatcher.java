@@ -100,7 +100,8 @@ public final class GearheadDockPatcher {
                         @Override
                         protected void beforeHookedMethod(MethodHookParam param) {
                             Object target = param.thisObject;
-                            if (target instanceof View && isMediaInfoClick((View) target)) {
+                            if (target instanceof View && isMediaInfoClick((View) target)
+                                    && shouldRouteToV10Media()) {
                                 // Consume the Android Auto media-card click before its
                                 // native handler can launch the player on the phone.
                                 param.setResult(true);
@@ -174,6 +175,32 @@ public final class GearheadDockPatcher {
             }
         }
         return false;
+    }
+
+    /** Route metadata taps only when V10 projects the same app as the live media session.
+     * Otherwise preserve Android Auto's native click behavior for independent AA players.
+     */
+    private boolean shouldRouteToV10Media() {
+        Context appContext = context;
+        if (appContext == null) return false;
+        android.database.Cursor cursor = null;
+        try {
+            cursor = appContext.getContentResolver().query(
+                    Uri.parse("content://com.carassistant.v10.launcher.dock/state"),
+                    new String[]{"projection_active", "target_package", "active_media_package"},
+                    null, null, null);
+            if (cursor == null || !cursor.moveToFirst()) return false;
+            boolean active = cursor.getInt(0) == 1;
+            String targetPackage = cursor.getString(1);
+            String mediaPackage = cursor.getString(2);
+            return active && targetPackage != null && !targetPackage.isEmpty()
+                    && targetPackage.equals(mediaPackage);
+        } catch (Throwable error) {
+            log("Media-route state unavailable; preserving native Android Auto click: " + error);
+            return false;
+        } finally {
+            if (cursor != null) try { cursor.close(); } catch (Throwable ignored) { }
+        }
     }
 
     private void dispatchMediaOpen() {

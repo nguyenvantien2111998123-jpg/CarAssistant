@@ -36,14 +36,33 @@ public final class DockStateProvider extends ContentProvider {
         if (!isCallerAllowed()) {
             throw new SecurityException("Only Android Auto may read launcher state");
         }
-        MatrixCursor cursor = new MatrixCursor(new String[]{"visible_until"});
-        cursor.addRow(new Object[]{visibleUntil});
+        String targetPackage = null;
+        try {
+            String flattened = getContext().getSharedPreferences("v10_session", 0)
+                    .getString("target_component", null);
+            android.content.ComponentName target = flattened == null ? null
+                    : android.content.ComponentName.unflattenFromString(flattened);
+            if (target != null) targetPackage = target.getPackageName();
+        } catch (Throwable ignored) { }
+        String mediaPackage = null;
+        try {
+            MediaSessionBridge.Snapshot snapshot = MediaSessionBridge.getSnapshot();
+            if (snapshot != null && snapshot.packageName != null
+                    && !snapshot.packageName.isEmpty()) mediaPackage = snapshot.packageName;
+        } catch (Throwable ignored) { }
+        boolean routeMediaClick = targetPackage != null && targetPackage.equals(mediaPackage);
+        MatrixCursor cursor = new MatrixCursor(new String[]{
+                "visible_until", "projection_active", "target_package", "active_media_package"});
+        cursor.addRow(new Object[]{visibleUntil, routeMediaClick ? 1 : 0,
+                targetPackage == null ? "" : targetPackage,
+                mediaPackage == null ? "" : mediaPackage});
         return cursor;
     }
 
     private boolean isCallerAllowed() {
         int callingUid = Binder.getCallingUid();
-        if (callingUid == Process.myUid()) {
+        if (callingUid == Process.myUid() || callingUid == Process.SYSTEM_UID) {
+            // Read-only routing state only; no write operations are exposed by this provider.
             return true;
         }
         String[] packages = getContext().getPackageManager().getPackagesForUid(callingUid);
