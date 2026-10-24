@@ -77,6 +77,7 @@ public final class GearheadDockPatcher {
     private boolean rootsDirty = true;
     private boolean loggedNoDock;
     private boolean loggedRootFailure;
+    private long lastDiagnosticClickElapsed;
 
     private GearheadDockPatcher() {
     }
@@ -100,6 +101,9 @@ public final class GearheadDockPatcher {
                         @Override
                         protected void beforeHookedMethod(MethodHookParam param) {
                             Object target = param.thisObject;
+                            if (target instanceof View) {
+                                patcher.logClickDiagnostic((View) target);
+                            }
                             if (target instanceof View && isMediaInfoClick((View) target, patcher.context)) {
                                 // Consume the Android Auto media-card click before its
                                 // native handler can launch the player on the phone.
@@ -161,6 +165,34 @@ public final class GearheadDockPatcher {
         } catch (Throwable t) {
             log("Dock hook unavailable: " + t);
         }
+    }
+
+    /**
+     * Temporary root-only diagnostic: log a rate-limited view ancestry for clicks in
+     * Gearhead. This identifies the real Coolwalk card/bar click target without
+     * consuming or changing the click, so the next fix can hook the actual callback.
+     */
+    private void logClickDiagnostic(View clicked) {
+        Context appContext = context;
+        if (appContext == null || !GEARHEAD.equals(appContext.getPackageName())) return;
+        long now = SystemClock.elapsedRealtime();
+        if (now - lastDiagnosticClickElapsed < 250L) return;
+        lastDiagnosticClickElapsed = now;
+        StringBuilder chain = new StringBuilder();
+        View current = clicked;
+        for (int depth = 0; depth < 6 && current != null; depth++) {
+            if (depth > 0) chain.append(" <- ");
+            String name = resourceEntryName(current);
+            String text = normalize(clickableText(current));
+            chain.append(depth).append(':').append(current.getClass().getSimpleName())
+                    .append("{id=").append(name == null ? "-" : name)
+                    .append(",clickable=").append(current.isClickable())
+                    .append(",text=").append(text.length() > 72 ? text.substring(0, 72) : text)
+                    .append('}');
+            Object parent = current.getParent();
+            current = parent instanceof View ? (View) parent : null;
+        }
+        log("DIAG_CLICK process-view-chain=" + chain);
     }
 
     /**
