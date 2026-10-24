@@ -133,7 +133,7 @@ public final class SystemMediaKeyHooks {
         // NEXT was already consumed and must not be lost if its session changes.
         boolean voiceDoubleTap = false;
         synchronized (LOCK) {
-            if (key == NEXT && pendingNext) {
+            if (pendingNext && key == NEXT) {
                 long delta = SystemClock.uptimeMillis() - firstNextUp;
                 if (delta <= DOUBLE_MS) {
                     cancelPendingNextLocked();
@@ -150,6 +150,13 @@ public final class SystemMediaKeyHooks {
                     pendingNextController = null;
                     dispatchNext(expiredController);
                 }
+            } else if (pendingNext && key != NEXT) {
+                // A different key breaks the double-Next sequence. Deliver the
+                // first Next once rather than letting a later Next become a false double.
+                MediaController expiredController = pendingNextController;
+                cancelPendingNextLocked();
+                pendingNextController = null;
+                dispatchNext(expiredController);
             }
         }
         if (voiceDoubleTap) {
