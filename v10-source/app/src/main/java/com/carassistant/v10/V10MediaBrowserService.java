@@ -2,6 +2,9 @@ package com.carassistant.v10;
 
 import android.graphics.Bitmap;
 import android.media.MediaMetadata;
+import android.media.AudioManager;
+import android.media.AudioFormat;
+import android.media.AudioTrack;
 import android.media.browse.MediaBrowser;
 import android.media.MediaDescription;
 import android.service.media.MediaBrowserService;
@@ -29,11 +32,14 @@ public final class V10MediaBrowserService extends MediaBrowserService {
     private static volatile V10MediaBrowserService instance;
 
     private MediaSession mediaSession;
+    private V10WhiteNoisePlayer whiteNoisePlayer;
 
     @Override
     public void onCreate() {
         super.onCreate();
         instance = this;
+        whiteNoisePlayer = new V10WhiteNoisePlayer();
+        whiteNoisePlayer.start();
         mediaSession = new MediaSession(this, TAG);
         mediaSession.setFlags(MediaSession.FLAG_HANDLES_MEDIA_BUTTONS
                 | MediaSession.FLAG_HANDLES_TRANSPORT_CONTROLS);
@@ -107,6 +113,10 @@ public final class V10MediaBrowserService extends MediaBrowserService {
             mediaSession.release();
             mediaSession = null;
         }
+        if (whiteNoisePlayer != null) {
+            whiteNoisePlayer.stop();
+            whiteNoisePlayer = null;
+        }
         super.onDestroy();
     }
 
@@ -130,13 +140,18 @@ public final class V10MediaBrowserService extends MediaBrowserService {
 
         if (!matches) {
             mediaSession.setMetadata(new MediaMetadata.Builder()
-                    .putString(MediaMetadata.METADATA_KEY_TITLE, "")
+                    .putString(MediaMetadata.METADATA_KEY_TITLE, "CarAsistant V10")
+                    .putString(MediaMetadata.METADATA_KEY_DISPLAY_TITLE, "CarAsistant V10")
+                    .putString(MediaMetadata.METADATA_KEY_DISPLAY_SUBTITLE, "CarAsistant")
                     .build());
+            long actions = PlaybackState.ACTION_PLAY | PlaybackState.ACTION_PAUSE
+                    | PlaybackState.ACTION_PLAY_PAUSE | PlaybackState.ACTION_SKIP_TO_NEXT
+                    | PlaybackState.ACTION_SKIP_TO_PREVIOUS;
             mediaSession.setPlaybackState(new PlaybackState.Builder()
-                    .setState(PlaybackState.STATE_NONE, 0L, 0f)
-                    .setActions(0L)
+                    .setActions(actions)
+                    .setState(PlaybackState.STATE_PLAYING, 0L, 1f)
                     .build());
-            mediaSession.setActive(false);
+            mediaSession.setActive(true);
             return;
         }
 
@@ -160,9 +175,8 @@ public final class V10MediaBrowserService extends MediaBrowserService {
                 | PlaybackState.ACTION_SKIP_TO_PREVIOUS | PlaybackState.ACTION_SEEK_TO;
         PlaybackState state = new PlaybackState.Builder()
                 .setActions(actions)
-                .setState(snapshot.playing ? PlaybackState.STATE_PLAYING
-                                : PlaybackState.STATE_PAUSED,
-                        Math.max(0L, snapshot.position), snapshot.playing ? 1f : 0f)
+                .setState(PlaybackState.STATE_PLAYING,
+                        Math.max(0L, snapshot.position), 1f)
                 .build();
         mediaSession.setPlaybackState(state);
         mediaSession.setActive(true);
