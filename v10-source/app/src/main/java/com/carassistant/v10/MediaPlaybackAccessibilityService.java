@@ -48,26 +48,26 @@ public final class MediaPlaybackAccessibilityService extends AccessibilityServic
                 } else {
                     root.recycle();
                     root = null;
-                    String command = "DISPLAY_ID=" + displayId + "; PACKAGE=\\\"" + packageName
-                            + "\\\"; TASK_ID=$(/system/bin/dumpsys activity activities 2>/dev/null"
-                            + " | /system/bin/awk -v wantedDisplay=\\\"$DISPLAY_ID\\\" -v wantedPackage=\\\"$PACKAGE\\\" '"
-                            + "/^[[:space:]]*Display #[[:space:]]*[0-9]+/ { d=$0; sub(/^.*Display #[[:space:]]*/, \\\"\\\", d); sub(/[^0-9].*$/, \\\"\\\", d); display=d }"
+                    String command = "DISPLAY_ID=" + displayId + "; PACKAGE=\"" + packageName
+                            + "\"; TASK_ID=$(/system/bin/dumpsys activity activities 2>/dev/null"
+                            + " | /system/bin/awk -v wantedDisplay=\"$DISPLAY_ID\" -v wantedPackage=\"$PACKAGE\" '"
+                            + "/^[[:space:]]*Display #[[:space:]]*[0-9]+/ { d=$0; sub(/^.*Display #[[:space:]]*/, \"\", d); sub(/[^0-9].*$/, \"\", d); display=d }"
                             + " /^[[:space:]]*Task[{]/ { if (taskId ~ /^[0-9]+$/ && taskDisplay == wantedDisplay && taskHasPackage) { print taskId; found=1; exit }"
-                            + " taskId=$0; sub(/^.*#[[:space:]]*/, \\\"\\\", taskId); sub(/[^0-9].*$/, \\\"\\\", taskId); taskDisplay=display; taskHasPackage=0 }"
-                            + " /mDisplayId=/ { d=$0; sub(/^.*mDisplayId=/, \\\"\\\", d); sub(/[^0-9].*$/, \\\"\\\", d); if (d ~ /^[0-9]+$/) taskDisplay=d }"
+                            + " taskId=$0; sub(/^.*#[[:space:]]*/, \"\", taskId); sub(/[^0-9].*$/, \"\", taskId); taskDisplay=display; taskHasPackage=0 }"
+                            + " /mDisplayId=/ { d=$0; sub(/^.*mDisplayId=/, \"\", d); sub(/[^0-9].*$/, \"\", d); if (d ~ /^[0-9]+$/) taskDisplay=d }"
                             + " { if (taskId ~ /^[0-9]+$/ && index($0, wantedPackage) > 0) taskHasPackage=1 }"
                             + " END { if (!found && taskId ~ /^[0-9]+$/ && taskDisplay == wantedDisplay && taskHasPackage) print taskId }'"
                             + " | /system/bin/head -n 1); "
-                            + "case \\\"$TASK_ID\\\" in ''|*[!0-9]*) echo TASK_CLOSE_FAILED; exit 3;; esac; "
+                            + "case \"$TASK_ID\" in ''|*[!0-9]*) echo TASK_CLOSE_FAILED; exit 3;; esac; "
                             + "VERIFY=$(/system/bin/dumpsys activity activities 2>/dev/null | /system/bin/awk"
-                            + " -v wantedId=\\\"#$TASK_ID\\\" -v wantedDisplay=\\\"$DISPLAY_ID\\\" -v wantedPackage=\\\"$PACKAGE\\\" '"
-                            + "/^[[:space:]]*Display #[[:space:]]*[0-9]+/ { d=$0; sub(/^.*Display #[[:space:]]*/, \\\"\\\", d); sub(/[^0-9].*$/, \\\"\\\", d); display=d }"
+                            + " -v wantedId=\"#$TASK_ID\" -v wantedDisplay=\"$DISPLAY_ID\" -v wantedPackage=\"$PACKAGE\" '"
+                            + "/^[[:space:]]*Display #[[:space:]]*[0-9]+/ { d=$0; sub(/^.*Display #[[:space:]]*/, \"\", d); sub(/[^0-9].*$/, \"\", d); display=d }"
                             + " /^[[:space:]]*Task[{]/ { if (taskId == wantedId && taskDisplay == wantedDisplay && taskHasPackage) ok=1;"
-                            + " taskId=$0; sub(/^.*#[[:space:]]*/, \\\"#\\\", taskId); sub(/[^0-9#].*$/, \\\"\\\", taskId); taskDisplay=display; taskHasPackage=0 }"
-                            + " /mDisplayId=/ { d=$0; sub(/^.*mDisplayId=/, \\\"\\\", d); sub(/[^0-9].*$/, \\\"\\\", d); if (d ~ /^[0-9]+$/) taskDisplay=d }"
+                            + " taskId=$0; sub(/^.*#[[:space:]]*/, \"#\", taskId); sub(/[^0-9#].*$/, \"\", taskId); taskDisplay=display; taskHasPackage=0 }"
+                            + " /mDisplayId=/ { d=$0; sub(/^.*mDisplayId=/, \"\", d); sub(/[^0-9].*$/, \"\", d); if (d ~ /^[0-9]+$/) taskDisplay=d }"
                             + " { if (taskId == wantedId && index($0, wantedPackage) > 0) taskHasPackage=1 }"
-                            + " END { if (taskId == wantedId && taskDisplay == wantedDisplay && taskHasPackage) ok=1; if (ok) print \\\"VERIFIED\\\" }'); "
-                            + "if [ \\\"$VERIFY\\\" = VERIFIED ] && /system/bin/am task remove \\\"$TASK_ID\\\" >/dev/null 2>&1; then"
+                            + " END { if (taskId == wantedId && taskDisplay == wantedDisplay && taskHasPackage) ok=1; if (ok) print \"VERIFIED\" }'); "
+                            + "if [ \"$VERIFY\" = VERIFIED ] && /system/bin/am task remove \"$TASK_ID\" >/dev/null 2>&1; then"
                             + " echo TASK_CLOSED; else echo TASK_CLOSE_FAILED; exit 3; fi";
                     String output = closeRootShell.run(12, command);
                     closed = output.contains("TASK_CLOSED");
