@@ -9,11 +9,15 @@ import android.util.Log;
 import android.view.Display;
 import android.view.Surface;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.Map;
+import java.util.Set;
 
 public final class V10DisplayController {
     private static final String TAG = "CarAssistantV10DisplayCore";
     private static final Map<Integer, V10DisplayController> INSTANCES = new HashMap<>();
+    // Only packages this controller has launched into a projection flow may be closed.
+    private final Set<String> managedPackages = new HashSet<>();
     private final int displayIndex;
 
     private final Context context;
@@ -135,6 +139,7 @@ public final class V10DisplayController {
 
     public synchronized void launchNewTask(ComponentName component) {
         if (!isReady() || component == null) return;
+        managedPackages.add(component.getPackageName());
         target = component;
         launched = true;
         final int displayId = display.getDisplayId();
@@ -261,6 +266,7 @@ public final class V10DisplayController {
      */
     public synchronized void launchMediaTaskOnDisplay(ComponentName component) {
         if (!isReady() || component == null) return;
+        managedPackages.add(component.getPackageName());
         target = component;
         launched = true;
         final int displayId = display.getDisplayId();
@@ -289,25 +295,46 @@ public final class V10DisplayController {
      * Never force-stops the package, because the same package may have a phone-side task.
      */
     public void closeTaskOnDisplay(ComponentName component, java.util.function.Consumer<Boolean> callback) {
-        if (!isReady() || component == null) {
+        if (component == null) {
             if (callback != null) callback.accept(false);
             return;
         }
-        final int displayId = display.getDisplayId();
-        final String packageName = shellQuote(component.getPackageName());
+        final String packageNameRaw = component.getPackageName();
+        final int displayId;
+        synchronized (this) {
+            // Fail closed: X may close only a package this controller launched for projection.
+            if (!isReady() || display == null || display.getDisplayId() <= 0
+                    || !managedPackages.contains(packageNameRaw)) {
+                if (callback != null) callback.accept(false);
+                return;
+            }
+            displayId = display.getDisplayId();
+        }
+        final String packageName = shellQuote(packageNameRaw);
+        // Only accept a numeric task ID found under the requested display and containing
+        // the managed package. Any unfamiliar dumpsys layout results in no action.
         final String command = "DISPLAY_ID=" + displayId
                 + "; PACKAGE=" + packageName
                 + "; TASK_ID=$(/system/bin/dumpsys activity activities 2>/dev/null"
                 + " | /system/bin/awk -v wantedDisplay=\"$DISPLAY_ID\" -v wantedPackage=\"$PACKAGE\" '"
-                + "/^[[:space:]]*Display #[[:space:]]*[0-9]+/ { d=$0; sub(/^.*Display #[[:space:]]*/, \"\", d); sub(/[^0-9].*$/, \"\", d); display=d+0 }"
-                + " /^[[:space:]]*Task[{]/ { if (taskId != \"\" && taskDisplay == wantedDisplay && taskHasPackage) { print taskId; done=1; exit }"
+                + "/^[[:space:]]*Display #[[:space:]]*[0-9]+/ { d=$0; sub(/^.*Display #[[:space:]]*/, \"\", d); sub(/[^0-9].*$/, \"\", d); display=d }"
+                + " /^[[:space:]]*Task[{]/ { if (taskId ~ /^[0-9]+$/ && taskDisplay == wantedDisplay && taskHasPackage) { print taskId; found=1; exit }"
                 + " taskId=$0; sub(/^.*#[[:space:]]*/, \"\", taskId); sub(/[^0-9].*$/, \"\", taskId);"
                 + " taskDisplay=display; taskHasPackage=0 }"
-                + " /mDisplayId=/ { d=$0; sub(/^.*mDisplayId=/, \"\", d); sub(/[^0-9].*$/, \"\", d); if (d != \"\") taskDisplay=d+0 }"
-                + " { if (taskId != \"\" && index($0, wantedPackage) > 0) taskHasPackage=1 }"
-                + " END { if (!done && taskId != \"\" && taskDisplay == wantedDisplay && taskHasPackage) print taskId }'"
+                + " /mDisplayId=/ { d=$0; sub(/^.*mDisplayId=/, \"\", d); sub(/[^0-9].*$/, \"\", d); if (d ~ /^[0-9]+$/) taskDisplay=d }"
+                + " { if (taskId ~ /^[0-9]+$/ && index($0, wantedPackage) > 0) taskHasPackage=1 }"
+                + " END { if (!found && taskId ~ /^[0-9]+$/ && taskDisplay == wantedDisplay && taskHasPackage) print taskId }'"
                 + " | /system/bin/head -n 1); "
-                + "if [ -n \"$TASK_ID\" ] && /system/bin/am task remove \"$TASK_ID\" >/dev/null 2>&1; then"
+                + "case \"$TASK_ID\" in ''|*[!0-9]*) echo TASK_CLOSE_FAILED; exit 3;; esac; "
+                + "VERIFY=$(/system/bin/dumpsys activity activities 2>/dev/null | /system/bin/awk"
+                + " -v wantedId=\"#$TASK_ID\" -v wantedDisplay=\"$DISPLAY_ID\" -v wantedPackage=\"$PACKAGE\" '"
+                + "/^[[:space:]]*Display #[[:space:]]*[0-9]+/ { d=$0; sub(/^.*Display #[[:space:]]*/, \"\", d); sub(/[^0-9].*$/, \"\", d); display=d }"
+                + " /^[[:space:]]*Task[{]/ { if (taskId == wantedId && taskDisplay == wantedDisplay && taskHasPackage) ok=1;"
+                + " taskId=$0; sub(/^.*#[[:space:]]*/, \"#\", taskId); sub(/[^0-9#].*$/, \"\", taskId); taskDisplay=display; taskHasPackage=0 }"
+                + " /mDisplayId=/ { d=$0; sub(/^.*mDisplayId=/, \"\", d); sub(/[^0-9].*$/, \"\", d); if (d ~ /^[0-9]+$/) taskDisplay=d }"
+                + " { if (taskId == wantedId && index($0, wantedPackage) > 0) taskHasPackage=1 }"
+                + " END { if (taskId == wantedId && taskDisplay == wantedDisplay && taskHasPackage) ok=1; if (ok) print \"VERIFIED\" }'); "
+                + "if [ \"$VERIFY\" = VERIFIED ] && /system/bin/am task remove \"$TASK_ID\" >/dev/null 2>&1; then"
                 + " echo TASK_CLOSED; else echo TASK_CLOSE_FAILED; exit 3; fi";
         RootShellSession.EXEC.execute(() -> {
             boolean closed = false;
@@ -315,7 +342,7 @@ public final class V10DisplayController {
                 String output = rootShell.run(12, command);
                 closed = output.contains("TASK_CLOSED");
             } catch (Throwable t) {
-                Log.w(TAG, "Could not close the matching projection task", t);
+                Log.w(TAG, "Could not close the verified CarAsistant projection task", t);
             }
             final boolean result = closed;
             new android.os.Handler(android.os.Looper.getMainLooper()).post(() -> {
