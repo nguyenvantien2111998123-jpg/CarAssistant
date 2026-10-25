@@ -299,56 +299,22 @@ public final class V10DisplayController {
             if (callback != null) callback.accept(false);
             return;
         }
-        final String packageNameRaw = component.getPackageName();
+        final String packageName = component.getPackageName();
         final int displayId;
         synchronized (this) {
-            // Fail closed: X may close only a package this controller launched for projection.
+            // Only a package launched by this controller into the projection flow is eligible.
             if (!isReady() || display == null || display.getDisplayId() <= 0
-                    || !managedPackages.contains(packageNameRaw)) {
+                    || !managedPackages.contains(packageName)) {
                 if (callback != null) callback.accept(false);
                 return;
             }
             displayId = display.getDisplayId();
         }
-        final String packageName = shellQuote(packageNameRaw);
-        // Only accept a numeric task ID found under the requested display and containing
-        // the managed package. Any unfamiliar dumpsys layout results in no action.
-        final String command = "DISPLAY_ID=" + displayId
-                + "; PACKAGE=" + packageName
-                + "; TASK_ID=$(/system/bin/dumpsys activity activities 2>/dev/null"
-                + " | /system/bin/awk -v wantedDisplay=\"$DISPLAY_ID\" -v wantedPackage=\"$PACKAGE\" '"
-                + "/^[[:space:]]*Display #[[:space:]]*[0-9]+/ { d=$0; sub(/^.*Display #[[:space:]]*/, \"\", d); sub(/[^0-9].*$/, \"\", d); display=d }"
-                + " /^[[:space:]]*Task[{]/ { if (taskId ~ /^[0-9]+$/ && taskDisplay == wantedDisplay && taskHasPackage) { print taskId; found=1; exit }"
-                + " taskId=$0; sub(/^.*#[[:space:]]*/, \"\", taskId); sub(/[^0-9].*$/, \"\", taskId);"
-                + " taskDisplay=display; taskHasPackage=0 }"
-                + " /mDisplayId=/ { d=$0; sub(/^.*mDisplayId=/, \"\", d); sub(/[^0-9].*$/, \"\", d); if (d ~ /^[0-9]+$/) taskDisplay=d }"
-                + " { if (taskId ~ /^[0-9]+$/ && index($0, wantedPackage) > 0) taskHasPackage=1 }"
-                + " END { if (!found && taskId ~ /^[0-9]+$/ && taskDisplay == wantedDisplay && taskHasPackage) print taskId }'"
-                + " | /system/bin/head -n 1); "
-                + "case \"$TASK_ID\" in ''|*[!0-9]*) echo TASK_CLOSE_FAILED; exit 3;; esac; "
-                + "VERIFY=$(/system/bin/dumpsys activity activities 2>/dev/null | /system/bin/awk"
-                + " -v wantedId=\"#$TASK_ID\" -v wantedDisplay=\"$DISPLAY_ID\" -v wantedPackage=\"$PACKAGE\" '"
-                + "/^[[:space:]]*Display #[[:space:]]*[0-9]+/ { d=$0; sub(/^.*Display #[[:space:]]*/, \"\", d); sub(/[^0-9].*$/, \"\", d); display=d }"
-                + " /^[[:space:]]*Task[{]/ { if (taskId == wantedId && taskDisplay == wantedDisplay && taskHasPackage) ok=1;"
-                + " taskId=$0; sub(/^.*#[[:space:]]*/, \"#\", taskId); sub(/[^0-9#].*$/, \"\", taskId); taskDisplay=display; taskHasPackage=0 }"
-                + " /mDisplayId=/ { d=$0; sub(/^.*mDisplayId=/, \"\", d); sub(/[^0-9].*$/, \"\", d); if (d ~ /^[0-9]+$/) taskDisplay=d }"
-                + " { if (taskId == wantedId && index($0, wantedPackage) > 0) taskHasPackage=1 }"
-                + " END { if (taskId == wantedId && taskDisplay == wantedDisplay && taskHasPackage) ok=1; if (ok) print \"VERIFIED\" }'); "
-                + "if [ \"$VERIFY\" = VERIFIED ] && /system/bin/am task remove \"$TASK_ID\" >/dev/null 2>&1; then"
-                + " echo TASK_CLOSED; else echo TASK_CLOSE_FAILED; exit 3; fi";
-        RootShellSession.EXEC.execute(() -> {
-            boolean closed = false;
-            try {
-                String output = rootShell.run(12, command);
-                closed = output.contains("TASK_CLOSED");
-            } catch (Throwable t) {
-                Log.w(TAG, "Could not close the verified CarAsistant projection task", t);
-            }
-            final boolean result = closed;
-            new android.os.Handler(android.os.Looper.getMainLooper()).post(() -> {
-                if (callback != null) callback.accept(result);
-            });
-        });
+        // The phone's explicitly enabled AccessibilityService must confirm that this exact
+        // package has an accessibility window on the projection display before close is attempted.
+        boolean accepted = MediaPlaybackAccessibilityService.requestCloseProjectedTask(
+                packageName, displayId, callback);
+        if (!accepted && callback != null) callback.accept(false);
     }
 
     private void execute(String command, String message) {
