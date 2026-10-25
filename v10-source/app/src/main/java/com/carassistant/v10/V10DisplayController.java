@@ -284,6 +284,46 @@ public final class V10DisplayController {
         execute(command, "Media task restore failed; attempted projection launch");
     }
 
+    /**
+     * Removes only the task belonging to this controller's projection display.
+     * Never force-stops the package, because the same package may have a phone-side task.
+     */
+    public void closeTaskOnDisplay(ComponentName component, java.util.function.Consumer<Boolean> callback) {
+        if (!isReady() || component == null) {
+            if (callback != null) callback.accept(false);
+            return;
+        }
+        final int displayId = display.getDisplayId();
+        final String packageName = shellQuote(component.getPackageName());
+        final String command = "DISPLAY_ID=" + displayId
+                + "; PACKAGE=" + packageName
+                + "; TASK_ID=$(/system/bin/dumpsys activity activities 2>/dev/null"
+                + " | /system/bin/awk -v wantedDisplay=\"$DISPLAY_ID\" -v wantedPackage=\"$PACKAGE\" '"
+                + "/^[[:space:]]*Display #[[:space:]]*[0-9]+/ { d=\\$0; sub(/^.*Display #[[:space:]]*/, \"\", d); sub(/[^0-9].*$/, \"\", d); display=d+0 }"
+                + " /^[[:space:]]*Task[{]/ { if (taskId != \"\" && taskDisplay == wantedDisplay && taskHasPackage) { print taskId; done=1; exit }"
+                + " taskId=\\$0; sub(/^.*#[[:space:]]*/, \"\", taskId); sub(/[^0-9].*$/, \"\", taskId);"
+                + " taskDisplay=display; taskHasPackage=0 }"
+                + " /mDisplayId=/ { d=\\$0; sub(/^.*mDisplayId=/, \"\", d); sub(/[^0-9].*$/, \"\", d); if (d != \"\") taskDisplay=d+0 }"
+                + " { if (taskId != \"\" && index(\\$0, wantedPackage) > 0) taskHasPackage=1 }"
+                + " END { if (!done && taskId != \"\" && taskDisplay == wantedDisplay && taskHasPackage) print taskId }'"
+                + " | /system/bin/head -n 1); "
+                + "if [ -n \"$TASK_ID\" ] && /system/bin/am task remove \"$TASK_ID\" >/dev/null 2>&1; then"
+                + " echo TASK_CLOSED; else echo TASK_CLOSE_FAILED; exit 3; fi";
+        RootShellSession.EXEC.execute(() -> {
+            boolean closed = false;
+            try {
+                String output = rootShell.run(12, command);
+                closed = output.contains("TASK_CLOSED");
+            } catch (Throwable t) {
+                Log.w(TAG, "Could not close the matching projection task", t);
+            }
+            final boolean result = closed;
+            new android.os.Handler(android.os.Looper.getMainLooper()).post(() -> {
+                if (callback != null) callback.accept(result);
+            });
+        });
+    }
+
     private void execute(String command, String message) {
         RootShellSession.EXEC.execute(() -> {
             try { rootShell.run(10, command); }
