@@ -19,7 +19,6 @@ public final class V10SessionStore {
     private static final String DEFAULT_TV = "voice_default_tv";
 
     private static volatile V10CarActivity currentActivity;
-    private static volatile boolean pendingVoiceRequest;
 
     private V10SessionStore() { }
 
@@ -126,12 +125,6 @@ public final class V10SessionStore {
 
     public static void setCurrentActivity(V10CarActivity activity) { currentActivity = activity; }
     public static V10CarActivity getCurrentActivity() { return currentActivity; }
-    public static void requestVoiceOnNextActivity() { pendingVoiceRequest = true; }
-    public static boolean consumePendingVoiceRequest() {
-        boolean pending = pendingVoiceRequest;
-        pendingVoiceRequest = false;
-        return pending;
-    }
     public static void clearCurrentActivity(V10CarActivity activity) {
         if (currentActivity == activity) currentActivity = null;
     }
