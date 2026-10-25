@@ -1333,20 +1333,31 @@ private void addProjectedTaskRow(ComponentName component) {
 
 private void closeProjectedTask(ComponentName component) {
     if (component == null) return;
-    // Close the task from CarAsistant's projected-task list. Do not force-stop the
-    // package: the same app may also be running on the phone display.
-    projectedTaskHistory.remove(component);
-    if (component.equals(activeTarget)) {
-        if (session != null) {
-            session.hideTask();
-            session.setTarget(null);
-        }
-        V10SessionStore.clearTarget(this);
-        activeTarget = null;
-        if (appProjectionLayer != null) appProjectionLayer.setVisibility(View.GONE);
-        returnToLauncher();
+    if (session == null) {
+        Toast.makeText(this, "Không thể đóng task: phiên chiếu chưa sẵn sàng.", Toast.LENGTH_SHORT).show();
+        return;
     }
-    showTaskSwitcher();
+
+    // Remove the exact Android task only after verifying it belongs to the projection display.
+    // Never force-stop the package because it may also have a separate task on the phone.
+    session.closeTaskOnDisplay(component, closed -> {
+        if (!closed) {
+            Toast.makeText(this,
+                    "Không tìm thấy task này trên màn hình phụ hoặc hệ thống từ chối đóng.",
+                    Toast.LENGTH_LONG).show();
+            return;
+        }
+
+        projectedTaskHistory.remove(component);
+        if (component.equals(activeTarget)) {
+            session.setTarget(null);
+            V10SessionStore.clearTarget(this);
+            activeTarget = null;
+            if (appProjectionLayer != null) appProjectionLayer.setVisibility(View.GONE);
+            returnToLauncher();
+        }
+        showTaskSwitcher();
+    });
 }
 
 private void hideTaskSwitcher() {
