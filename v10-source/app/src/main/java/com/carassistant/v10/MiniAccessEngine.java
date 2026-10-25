@@ -149,10 +149,10 @@ public final class MiniAccessEngine {
                         bitmap.getWidth(), bitmap.getHeight());
                 if (candidate != null && requestStillPending(expectedDisplayId)) {
                     SharedPreferences current = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE);
-                    // Clear pending state before injecting input so the accessibility fallback
-                    // cannot act on the same search result a second time.
-                    current.edit().remove("target_package").remove("query")
-                            .remove("phase").remove("target_display_id").remove("started_at")
+                    // Advance to the Play phase instead of clearing the request.
+                    // The result tap is only step one: the accessibility service must
+                    // still locate and click the actual Play control on the result screen.
+                    current.edit().putString("phase", "play")
                             .putBoolean("mini_engine_active", false).apply();
                     ownsPendingRequest = false;
                     Log.i(TAG, "OCR matched projected search result; tapping display="
