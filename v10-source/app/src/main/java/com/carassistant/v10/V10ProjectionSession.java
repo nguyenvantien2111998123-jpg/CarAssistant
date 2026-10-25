@@ -16,7 +16,6 @@ public final class V10ProjectionSession implements TextureView.SurfaceTextureLis
     private final RootShellSession rootShell = new RootShellSession();
     private TextureView textureView;
     private ComponentName target;
-    private boolean preferExistingMediaTask;
     private boolean destroyed;
     private int contentWidth;
     private int contentHeight;
@@ -39,26 +38,15 @@ public final class V10ProjectionSession implements TextureView.SurfaceTextureLis
     }
 
     public void setTarget(ComponentName component) {
-        setTarget(component, false);
-    }
-
-    /** Reuses the currently running media task when possible instead of opening a new launcher task. */
-    public void setMediaTarget(ComponentName component) {
-        setTarget(component, true);
-    }
-
-    private void setTarget(ComponentName component, boolean preferExistingMediaTask) {
         if (destroyed) return;
         if (component == null) {
             target = null;
-            this.preferExistingMediaTask = false;
             taskSession.clear();
             return;
         }
         boolean changed = target == null || !component.equals(target);
         target = component;
-        this.preferExistingMediaTask = preferExistingMediaTask;
-        if (changed || preferExistingMediaTask) {
+        if (changed) {
             taskSession.setTarget(component);
             if (displayController.isLaunched()) displayController.markNotLaunched();
         }
@@ -66,12 +54,7 @@ public final class V10ProjectionSession implements TextureView.SurfaceTextureLis
     }
 
     private void launchTargetTask() {
-        if (preferExistingMediaTask) {
-            preferExistingMediaTask = false;
-            displayController.launchMediaTaskOnDisplay(target);
-        } else {
-            displayController.launchNewTask(target);
-        }
+        displayController.launchNewTask(target);
     }
 
     public boolean isActive() {
