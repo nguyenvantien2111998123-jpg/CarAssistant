@@ -76,6 +76,9 @@ public final class V10CarActivity
 
     private TextView floatingTouchKey;
     private LinearLayout floatingMenu;
+    private FrameLayout taskSwitcherLayer;
+    private LinearLayout taskSwitcherList;
+    private final ArrayList<ComponentName> projectedTaskHistory = new ArrayList<>();
 
     private boolean floatingDragging;
     private float floatingDownRawX;
@@ -500,7 +503,8 @@ public final class V10CarActivity
         sidebar.addView(voice,sidebarFixedButtonParams());
 
         TextView tasks=sidebarButton("TASKS");
-        tasks.setOnClickListener(v->{});
+        tasks.setContentDescription("Các task đang hoạt động trên màn hình phụ");
+        tasks.setOnClickListener(v->showTaskSwitcher());
         sidebar.addView(tasks,sidebarFixedButtonParams());
 
         FrameLayout main=new FrameLayout(this);
@@ -852,6 +856,7 @@ private void launchProjection(ComponentName component) {
      * engine.
      */
     session.setTarget(component);
+    rememberProjectedTask(component);
 }
 
 /**
@@ -1169,7 +1174,7 @@ private void showFloatingMenu() {
         }
 
         floatingMenu = new LinearLayout(this);
-        floatingMenu.setOrientation(LinearLayout.VERTICAL);
+        floatingMenu.setOrientation(LinearLayout.HORIZONTAL);
         floatingMenu.setPadding(dp(8), dp(8), dp(8), dp(8));
 
         GradientDrawable menuBg = new GradientDrawable();
@@ -1179,18 +1184,23 @@ private void showFloatingMenu() {
         floatingMenu.setBackground(menuBg);
         floatingMenu.setElevation(dp(14));
 
-        addFloatingMenuButton("BACK", () -> {
+        addFloatingMenuButton("‹", "Back", () -> {
             handleControlBack();
             hideFloatingMenu();
         });
 
-        addFloatingMenuButton("HOME", () -> {
+        addFloatingMenuButton("⌂", "Home", () -> {
             handleControlHome();
             hideFloatingMenu();
         });
 
+        addFloatingMenuButton("▣", "Task", () -> {
+            hideFloatingMenu();
+            showTaskSwitcher();
+        });
+
         FrameLayout.LayoutParams params =
-                new FrameLayout.LayoutParams(dp(170), -2,
+                new FrameLayout.LayoutParams(-2, -2,
                         Gravity.TOP | Gravity.END);
         params.setMargins(0, dp(70), dp(18), 0);
         root.addView(floatingMenu, params);
@@ -1198,20 +1208,21 @@ private void showFloatingMenu() {
         floatingTouchKey.bringToFront();
     }
 
-private void addFloatingMenuButton(String label, Runnable action) {
+private void addFloatingMenuButton(String glyph, String label, Runnable action) {
     TextView button = new TextView(this);
-    button.setText(label);
+    button.setText(glyph);
+    button.setContentDescription(label);
     button.setTextColor(Color.WHITE);
-    button.setTextSize(14);
-    button.setGravity(Gravity.CENTER_VERTICAL);
+    button.setTextSize(24);
+    button.setGravity(Gravity.CENTER);
     GradientDrawable bg = new GradientDrawable();
     bg.setColor(Color.rgb(28, 38, 48));
     bg.setCornerRadius(dp(10));
     button.setBackground(bg);
-    button.setPadding(dp(16), 0, dp(16), 0);
+    button.setPadding(dp(10), 0, dp(10), 0);
     button.setOnClickListener(v -> action.run());
-    LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(-1, dp(48));
-    params.setMargins(0, dp(3), 0, dp(3));
+    LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(dp(52), dp(52));
+    params.setMargins(dp(3), 0, dp(3), 0);
     floatingMenu.addView(button, params);
 }
 
@@ -1219,6 +1230,130 @@ private void hideFloatingMenu() {
     if (floatingMenu == null) return;
     root.removeView(floatingMenu);
     floatingMenu = null;
+}
+
+private void rememberProjectedTask(ComponentName component) {
+    if (component == null) return;
+    projectedTaskHistory.remove(component);
+    projectedTaskHistory.add(0, component);
+    while (projectedTaskHistory.size() > 12) {
+        projectedTaskHistory.remove(projectedTaskHistory.size() - 1);
+    }
+}
+
+private void showTaskSwitcher() {
+    if (root == null) return;
+    if (taskSwitcherLayer != null) {
+        root.removeView(taskSwitcherLayer);
+        taskSwitcherLayer = null;
+    }
+
+    taskSwitcherLayer = new FrameLayout(this);
+    taskSwitcherLayer.setBackgroundColor(Color.rgb(10, 14, 19));
+    taskSwitcherLayer.setElevation(dp(30));
+
+    LinearLayout panel = new LinearLayout(this);
+    panel.setOrientation(LinearLayout.VERTICAL);
+    panel.setPadding(dp(18), dp(14), dp(18), dp(14));
+
+    TextView heading = text("TASK TRÊN MÀN HÌNH PHỤ", 18, Color.WHITE);
+    heading.setGravity(Gravity.CENTER_VERTICAL);
+    panel.addView(heading, new LinearLayout.LayoutParams(-1, dp(48)));
+
+    TextView close = text("✕", 22, Color.WHITE);
+    close.setGravity(Gravity.CENTER);
+    close.setContentDescription("Đóng danh sách task");
+    FrameLayout.LayoutParams closeParams = new FrameLayout.LayoutParams(dp(48), dp(48), Gravity.TOP | Gravity.END);
+    panel.addView(close, closeParams);
+    close.setOnClickListener(v -> hideTaskSwitcher());
+
+    ScrollView scroll = new ScrollView(this);
+    taskSwitcherList = new LinearLayout(this);
+    taskSwitcherList.setOrientation(LinearLayout.VERTICAL);
+    scroll.addView(taskSwitcherList, new ScrollView.LayoutParams(-1, -2));
+    panel.addView(scroll, new LinearLayout.LayoutParams(-1, 0, 1f));
+
+    if (projectedTaskHistory.isEmpty() && activeTarget != null) {
+        rememberProjectedTask(activeTarget);
+    }
+
+    if (projectedTaskHistory.isEmpty()) {
+        TextView empty = text("Chưa có task nào được mở qua CarAsistant.", 14, Color.LTGRAY);
+        empty.setGravity(Gravity.CENTER);
+        taskSwitcherList.addView(empty, new LinearLayout.LayoutParams(-1, dp(100)));
+    } else {
+        for (ComponentName component : new ArrayList<>(projectedTaskHistory)) {
+            addProjectedTaskRow(component);
+        }
+    }
+
+    taskSwitcherLayer.addView(panel, new FrameLayout.LayoutParams(-1, -1));
+    root.addView(taskSwitcherLayer, new FrameLayout.LayoutParams(-1, -1));
+    taskSwitcherLayer.bringToFront();
+    if (floatingTouchKey != null) floatingTouchKey.bringToFront();
+}
+
+private void addProjectedTaskRow(ComponentName component) {
+    if (taskSwitcherList == null || component == null) return;
+    LinearLayout row = new LinearLayout(this);
+    row.setOrientation(LinearLayout.HORIZONTAL);
+    row.setGravity(Gravity.CENTER_VERTICAL);
+    row.setPadding(dp(12), dp(6), dp(6), dp(6));
+
+    GradientDrawable rowBg = new GradientDrawable();
+    rowBg.setColor(component.equals(activeTarget) ? Color.rgb(35, 65, 83) : Color.rgb(27, 34, 42));
+    rowBg.setCornerRadius(dp(12));
+    row.setBackground(rowBg);
+
+    TextView appName = text(appLabelForComponent(component), 15, Color.WHITE);
+    appName.setGravity(Gravity.CENTER_VERTICAL);
+    appName.setMaxLines(2);
+    row.addView(appName, new LinearLayout.LayoutParams(0, dp(58), 1f));
+    appName.setOnClickListener(v -> {
+        hideTaskSwitcher();
+        launchProjection(component);
+    });
+
+    TextView close = text("×", 28, Color.WHITE);
+    close.setGravity(Gravity.CENTER);
+    close.setContentDescription("Đóng task " + appLabelForComponent(component));
+    GradientDrawable closeBg = new GradientDrawable();
+    closeBg.setShape(GradientDrawable.OVAL);
+    closeBg.setColor(Color.rgb(180, 54, 54));
+    close.setBackground(closeBg);
+    LinearLayout.LayoutParams closeParams = new LinearLayout.LayoutParams(dp(42), dp(42));
+    closeParams.setMargins(dp(8), 0, 0, 0);
+    row.addView(close, closeParams);
+    close.setOnClickListener(v -> closeProjectedTask(component));
+
+    LinearLayout.LayoutParams rowParams = new LinearLayout.LayoutParams(-1, -2);
+    rowParams.setMargins(0, dp(4), 0, dp(4));
+    taskSwitcherList.addView(row, rowParams);
+}
+
+private void closeProjectedTask(ComponentName component) {
+    if (component == null) return;
+    // Close the task from CarAsistant's projected-task list. Do not force-stop the
+    // package: the same app may also be running on the phone display.
+    projectedTaskHistory.remove(component);
+    if (component.equals(activeTarget)) {
+        if (session != null) {
+            session.hideTask();
+            session.setTarget(null);
+        }
+        V10SessionStore.clearTarget(this);
+        activeTarget = null;
+        if (appProjectionLayer != null) appProjectionLayer.setVisibility(View.GONE);
+        returnToLauncher();
+    }
+    showTaskSwitcher();
+}
+
+private void hideTaskSwitcher() {
+    if (taskSwitcherLayer == null) return;
+    root.removeView(taskSwitcherLayer);
+    taskSwitcherLayer = null;
+    taskSwitcherList = null;
 }
 
     public void handleControlBack() {
@@ -1414,6 +1549,8 @@ private void hideFloatingMenu() {
     @Override
     public void onDestroy() {
 
+        hideTaskSwitcher();
+        hideFloatingMenu();
         if (miniAccessEngine != null) {
             miniAccessEngine.close();
             miniAccessEngine = null;
