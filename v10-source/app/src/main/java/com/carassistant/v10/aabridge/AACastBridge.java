@@ -5,11 +5,9 @@ import android.os.Build;
 import com.carassistant.v10.AACastDisplay;
 import com.carassistant.v10.hook.DisplayHooks;
 import com.carassistant.v10.hook.GearheadAllow;
-import com.carassistant.v10.hook.GearheadAutoOpen;
 import com.carassistant.v10.hook.GearheadDockPatcher;
 import com.carassistant.v10.hook.InputHooks;
 import com.carassistant.v10.hook.OrientationHooks;
-import com.carassistant.v10.hook.SystemMediaKeyHooks;
 import com.carassistant.v10.hook.InstallerSpoof;
 
 import de.robv.android.xposed.IXposedHookLoadPackage;
@@ -39,7 +37,6 @@ public final class AACastBridge implements IXposedHookLoadPackage {
             DisplayHooks.installInputPolicy(param.classLoader);
             OrientationHooks.install(param.classLoader);
             InputHooks.install(param.classLoader);
-            SystemMediaKeyHooks.install(param.classLoader);
             return;
         }
 
@@ -51,13 +48,8 @@ public final class AACastBridge implements IXposedHookLoadPackage {
                 GearheadAllow.install(param.classLoader);
                 GearheadDockPatcher.install();
 
-                // AA Display-style auto-open: only hook the projection process where
-                // the Coolwalk facet bar is inflated and the internal car-app launcher lives.
-                if (param.processName != null
-                        && param.processName.endsWith(":projection")) {
-                    GearheadAutoOpen.install(param.classLoader);
-                }
-                // Media keys are arbitrated in system_server, where AVRCP events are dispatched.
+                // No experimental Gearhead auto-open or steering/media-key interception.
+                // Android Auto projection and display/input hooks remain enabled.
             }
 
             if (Build.VERSION.SDK_INT >= 30) {
