@@ -163,6 +163,7 @@ public final class V10DisplayController {
             Log.w(TAG, "Refusing invalid background VIEW intent");
             return;
         }
+        managedPackages.add(packageName);
         final int displayId = display.getDisplayId();
         final int userId = Process.myUid() / 100000;
         final String command = "/system/bin/am start"
@@ -193,6 +194,7 @@ public final class V10DisplayController {
             Log.w(TAG, "Refusing invalid media VIEW intent");
             return;
         }
+        managedPackages.add(packageName);
         final int displayId = display.getDisplayId();
         final int userId = Process.myUid() / 100000;
         final String quotedPackage = shellQuote(packageName);
@@ -230,6 +232,7 @@ public final class V10DisplayController {
             Log.w(TAG, "Refusing invalid SEARCH intent");
             return;
         }
+        managedPackages.add(packageName);
         final int displayId = display.getDisplayId();
         final int userId = Process.myUid() / 100000;
         final String command = "/system/bin/am start"
@@ -245,6 +248,7 @@ public final class V10DisplayController {
 
     public synchronized void resumeExistingTask(ComponentName component) {
         if (!isReady() || component == null) return;
+        managedPackages.add(component.getPackageName());
         target = component;
         final int displayId = display.getDisplayId();
         final int userId = Process.myUid() / 100000;
