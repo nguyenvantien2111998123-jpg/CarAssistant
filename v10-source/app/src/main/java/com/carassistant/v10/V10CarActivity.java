@@ -70,12 +70,6 @@ public final class V10CarActivity
     private TextView selectedAppLabel;
     private TextView dashboardVoiceButton;
     private TextView floatingVoiceButton;
-    private ImageView mediaArtwork;
-    private TextView mediaTitle;
-    private TextView mediaArtist;
-    private TextView mediaPlayPause;
-    private LinearLayout mediaCard;
-    private final MediaSessionBridge.Listener mediaSessionListener = this::updateMediaCard;
     private TextView voiceTranscriptView;
     private VoiceAssistantController voiceAssistantController;
     private MiniAccessEngine miniAccessEngine;
@@ -168,10 +162,6 @@ public final class V10CarActivity
 
         applyChrome();
 
-        // This activity is created by the Android Auto host when the projection
-        // session opens. Restore only the previously used player, after its media
-        // session has had time to reconnect; never launch it on the phone display.
-        handler.postDelayed(this::resumeRecentMediaOnConnect, 1800L);
     }
 
     @Override
@@ -187,9 +177,6 @@ public final class V10CarActivity
             buildUi();
             attachProjection();
         }
-
-        MediaSessionBridge.addListener(mediaSessionListener);
-        updateMediaCard(MediaSessionBridge.getSnapshot());
 
         if (voiceAssistantController == null) {
             voiceAssistantController = new VoiceAssistantController(
@@ -424,9 +411,6 @@ public final class V10CarActivity
         ComponentName target = V10SessionStore.getTarget(this);
         if (target != null) launchProjection(target);
 
-        if (V10SessionStore.consumePendingVoiceRequest()) {
-            handler.post(this::activateVoiceAssistantFromSteering);
-        }
     }
 
 
@@ -531,122 +515,8 @@ public final class V10CarActivity
         wyn.setOnClickListener(v->{});
         bottom.addView(wyn,new LinearLayout.LayoutParams(dp(78),dp(78)));
 
-        mediaCard = card();
-        mediaCard.setOrientation(LinearLayout.HORIZONTAL);
-        mediaCard.setGravity(Gravity.CENTER_VERTICAL);
-        mediaCard.setPadding(dp(8),dp(5),dp(8),dp(5));
-
-        mediaArtwork = new ImageView(this);
-        mediaArtwork.setScaleType(ImageView.ScaleType.CENTER_CROP);
-        mediaArtwork.setContentDescription("Ảnh bìa media");
-        mediaArtwork.setBackgroundColor(Color.rgb(34,42,50));
-        mediaCard.addView(mediaArtwork,new LinearLayout.LayoutParams(dp(54),dp(54)));
-
-        LinearLayout mediaInfo = new LinearLayout(this);
-        mediaInfo.setOrientation(LinearLayout.VERTICAL);
-        mediaInfo.setGravity(Gravity.CENTER_VERTICAL);
-        mediaInfo.setPadding(dp(10),0,dp(6),0);
-        LinearLayout.LayoutParams infoParams = new LinearLayout.LayoutParams(0,-1,1f);
-        mediaCard.addView(mediaInfo,infoParams);
-
-        mediaTitle = text("Chưa có media đang phát",14,Color.WHITE);
-        mediaTitle.setSingleLine(true);
-        mediaTitle.setEllipsize(TextUtils.TruncateAt.END);
-        mediaInfo.addView(mediaTitle,new LinearLayout.LayoutParams(-1,dp(25)));
-
-        mediaArtist = text("Mở YouTube, Zing MP3 hoặc ứng dụng nghe nhạc",11,Color.LTGRAY);
-        mediaArtist.setSingleLine(true);
-        mediaArtist.setEllipsize(TextUtils.TruncateAt.END);
-        mediaInfo.addView(mediaArtist,new LinearLayout.LayoutParams(-1,dp(20)));
-
-        TextView previous = buttonText("⏮");
-        previous.setContentDescription("Bài trước");
-        mediaCard.addView(previous,new LinearLayout.LayoutParams(dp(38),dp(48)));
-        previous.setOnClickListener(v -> {
-            if (ensureMediaAccess()) MediaSessionBridge.skipPrevious();
-        });
-
-        mediaPlayPause = buttonText("▶");
-        mediaPlayPause.setContentDescription("Phát hoặc tạm dừng");
-        mediaCard.addView(mediaPlayPause,new LinearLayout.LayoutParams(dp(42),dp(48)));
-        mediaPlayPause.setOnClickListener(v -> {
-            if (ensureMediaAccess()) MediaSessionBridge.togglePlayPause();
-        });
-
-        TextView next = buttonText("⏭");
-        next.setContentDescription("Bài tiếp");
-        mediaCard.addView(next,new LinearLayout.LayoutParams(dp(38),dp(48)));
-        next.setOnClickListener(v -> {
-            if (ensureMediaAccess()) MediaSessionBridge.skipNext();
-        });
-
-        mediaCard.setOnClickListener(v -> openActiveMediaOnProjection());
-        LinearLayout.LayoutParams mp=new LinearLayout.LayoutParams(0,dp(78),1f);
-        mp.setMargins(dp(12),0,0,0);
-        bottom.addView(mediaCard,mp);
     }
 
-
-    /** Called from the Android Auto media card and the steering-key bridge. */
-    public void handleOpenActiveMediaOnProjection() {
-        handler.post(this::openActiveMediaOnProjection);
-    }
-
-    private void openActiveMediaOnProjection() {
-        if (!ensureMediaAccess()) return;
-        MediaSessionBridge.Snapshot state = MediaSessionBridge.getSnapshot();
-        if (state == null || TextUtils.isEmpty(state.packageName)) {
-            Toast.makeText(this, "Chưa có ứng dụng media đang hoạt động.",
-                    Toast.LENGTH_SHORT).show();
-            return;
-        }
-        try {
-            Intent launch = getPackageManager().getLaunchIntentForPackage(state.packageName);
-            if (launch == null || launch.getComponent() == null) {
-                Toast.makeText(this, "Không tìm thấy màn hình mở của ứng dụng media.",
-                        Toast.LENGTH_SHORT).show();
-                return;
-            }
-            launchProjection(launch.getComponent(), true);
-        } catch (RuntimeException error) {
-            Toast.makeText(this, "Không thể mở ứng dụng media trên màn hình phụ.",
-                    Toast.LENGTH_SHORT).show();
-        }
-    }
-
-    private boolean ensureMediaAccess() {
-        if (MediaSessionBridge.hasAccess(this)) return true;
-        Toast.makeText(this,
-                "Hãy bật quyền Notification Access cho CarAsistant để đồng bộ media",
-                Toast.LENGTH_LONG).show();
-        MediaSessionBridge.requestAccess(this);
-        return false;
-    }
-
-    private void updateMediaCard(MediaSessionBridge.Snapshot state) {
-        if (mediaTitle == null || mediaArtist == null || mediaPlayPause == null) return;
-        if (!MediaSessionBridge.hasAccess(this)) {
-            mediaTitle.setText("Bật quyền media");
-            mediaArtist.setText("Chạm để cấp quyền đồng bộ trình phát");
-            mediaPlayPause.setText("⚙");
-            if (mediaArtwork != null) mediaArtwork.setImageDrawable(null);
-            return;
-        }
-        if (state == null || TextUtils.isEmpty(state.packageName)) {
-            mediaTitle.setText("Chưa có media đang phát");
-            mediaArtist.setText("Mở YouTube, Zing MP3 hoặc ứng dụng nghe nhạc");
-            mediaPlayPause.setText("▶");
-            if (mediaArtwork != null) mediaArtwork.setImageDrawable(null);
-            return;
-        }
-        mediaTitle.setText(TextUtils.isEmpty(state.title) ? "Đang phát media" : state.title);
-        mediaArtist.setText(TextUtils.isEmpty(state.artist) ? state.packageName : state.artist);
-        mediaPlayPause.setText(state.playing ? "⏸" : "▶");
-        if (mediaArtwork != null) {
-            if (state.artwork != null) mediaArtwork.setImageBitmap(state.artwork);
-            else mediaArtwork.setImageDrawable(null);
-        }
-    }
 
     private void buildAppPanel() {
 
@@ -939,10 +809,6 @@ public final class V10CarActivity
 
 
 private void launchProjection(ComponentName component) {
-    launchProjection(component, false);
-}
-
-private void launchProjection(ComponentName component, boolean preferExistingMediaTask) {
 
     if (keyboardController != null) keyboardController.hide();
 
@@ -985,8 +851,7 @@ private void launchProjection(ComponentName component, boolean preferExistingMed
      * Start the existing proven V10 projection
      * engine.
      */
-    if (preferExistingMediaTask) session.setMediaTarget(component);
-    else session.setTarget(component);
+    session.setTarget(component);
 }
 
 /**
@@ -1414,102 +1279,6 @@ private void hideFloatingMenu() {
         super.onBackPressed();
     }
 
-    private void resumeRecentMediaOnConnect() {
-        if (!resumed) return;
-
-        String lastPackage = MediaSessionBridge.getLastKnownPackage(this);
-        if (lastPackage == null) return;
-
-        MediaSessionBridge.Snapshot current = MediaSessionBridge.getSnapshot();
-        if (current != null && current.playing
-                && lastPackage.equals(current.packageName)) {
-            return;
-        }
-
-        // If Android has already reattached this player's session, request Play
-        // without relaunching the app or disturbing the current projection.
-        if (MediaSessionBridge.resumePackage(lastPackage)) {
-            // Verify playback state on subsequent callbacks; a successful binder
-            // call does not necessarily mean the player actually started playing.
-            handler.postDelayed(() -> retryResumeRecentMedia(lastPackage, 0), 1000L);
-            return;
-        }
-
-        // No matching session yet: launch the saved player only through the
-        // existing secondary-display projection path, never startActivity().
-        Intent launch = getPackageManager().getLaunchIntentForPackage(lastPackage);
-        if (launch == null || launch.getComponent() == null) {
-            android.util.Log.i("CarAssistantMedia",
-                    "Skipping auto-resume; last media app is not installed: " + lastPackage);
-            return;
-        }
-
-        boolean alreadyProjected = activeTarget != null
-                && lastPackage.equals(activeTarget.getPackageName());
-        if (!alreadyProjected) {
-            launchProjection(launch.getComponent());
-        }
-
-        // MediaBrowser/MediaSession creation time varies by app and device.
-        // Retry for up to 12 seconds rather than giving up after one 2.5s attempt.
-        handler.postDelayed(() -> retryResumeRecentMedia(lastPackage, 0), 1000L);
-    }
-
-    private void retryResumeRecentMedia(String expectedPackage, int attempt) {
-        if (!resumed) return;
-
-        MediaSessionBridge.Snapshot current = MediaSessionBridge.getSnapshot();
-        if (current != null && current.playing
-                && expectedPackage.equals(current.packageName)) {
-            android.util.Log.i("CarAssistantMedia",
-                    "Auto-resume confirmed for " + expectedPackage);
-            return;
-        }
-
-        // resumePackage() is package-guarded: it never sends Play to an unrelated app.
-        MediaSessionBridge.resumePackage(expectedPackage);
-
-        if (attempt >= 11) {
-            android.util.Log.w("CarAssistantMedia",
-                    "Auto-resume not confirmed for " + expectedPackage
-                            + "; check Notification Access and the player's resume support");
-            return;
-        }
-
-        handler.postDelayed(
-                () -> retryResumeRecentMedia(expectedPackage, attempt + 1),
-                1000L);
-    }
-
-    /** Entry point used by the steering-wheel double-Next command. */
-    public void handleSteeringVoiceCommand() {
-        handler.post(() -> {
-            // A double press is an explicit start command, not a toggle: it must
-            // never cancel an already-starting voice session by accident.
-            if (!resumed || voiceAssistantController == null) {
-                V10SessionStore.requestVoiceOnNextActivity();
-                return;
-            }
-            activateVoiceAssistantFromSteering();
-        });
-    }
-
-    private void activateVoiceAssistantFromSteering() {
-        if (voiceAssistantController == null) {
-            V10SessionStore.requestVoiceOnNextActivity();
-            return;
-        }
-        if (checkSelfPermission(Manifest.permission.RECORD_AUDIO)
-                != PackageManager.PERMISSION_GRANTED) {
-            Intent permissionIntent = new Intent(this, V10SettingsActivity.class);
-            permissionIntent.putExtra(V10SettingsActivity.EXTRA_REQUEST_MICROPHONE, true);
-            permissionIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
-            startActivity(permissionIntent);
-            return;
-        }
-        voiceAssistantController.startListening();
-    }
-
     private void activateVoiceAssistant() {
         if (voiceAssistantController == null) {
             Toast.makeText(this, "Trợ lý giọng nói chưa sẵn sàng.", Toast.LENGTH_SHORT).show();
@@ -1613,7 +1382,6 @@ private void hideFloatingMenu() {
     @Override
     public void onPause() {
 
-        MediaSessionBridge.removeListener(mediaSessionListener);
         if (keyboardController != null) keyboardController.hide();
         if (voiceAssistantController != null) voiceAssistantController.cancelListening();
         resumed = false;
