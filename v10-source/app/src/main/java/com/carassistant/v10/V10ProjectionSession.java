@@ -172,6 +172,22 @@ public final class V10ProjectionSession implements TextureView.SurfaceTextureLis
         }
     }
 
+    /** Closes a specific package task only when it is confirmed on this projection display. */
+    public void closeTaskOnDisplay(ComponentName component, java.util.function.Consumer<Boolean> callback) {
+        if (destroyed || component == null) {
+            if (callback != null) callback.accept(false);
+            return;
+        }
+        displayController.closeTaskOnDisplay(component, closed -> {
+            if (closed && component.equals(target)) {
+                target = null;
+                taskSession.clear();
+                displayController.markNotLaunched();
+            }
+            if (callback != null) callback.accept(closed);
+        });
+    }
+
     public void hideTask() {
         if (target == null || !displayController.isReady()) return;
         taskSession.hidden();
