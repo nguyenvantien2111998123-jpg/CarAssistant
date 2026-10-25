@@ -431,6 +431,15 @@ public final class MediaPlaybackAccessibilityService extends AccessibilityServic
                         + " displayId=" + targetDisplayId);
                 return;
             }
+            // MiniAccessEngine can select a result through OCR and change the phase
+            // to "play" without generating an AccessibilityEvent. In that path this
+            // polling runnable is the hand-off point that must start Play-control polling.
+            if ("play".equals(phase)) {
+                automationHandler.removeCallbacks(searchRetry);
+                automationHandler.removeCallbacks(playRetry);
+                automationHandler.post(playRetry);
+                return;
+            }
             if (!"search".equals(phase)) {
                 automationHandler.postDelayed(this, 1000L);
                 return;
