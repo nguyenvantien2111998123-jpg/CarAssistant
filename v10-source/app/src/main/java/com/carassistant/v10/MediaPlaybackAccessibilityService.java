@@ -23,59 +23,47 @@ public final class MediaPlaybackAccessibilityService extends AccessibilityServic
     private final RootShellSession closeRootShell = new RootShellSession();
 
     /**
-     * Route close requests through the phone's explicitly enabled AccessibilityService.
-     * Returns false only when no service is connected; callbacks are always delivered on main.
+     * Route a close request from the projection controller through the explicitly enabled
+     * phone AccessibilityService. The caller has already checked that this package was
+     * launched by CarAsistant into the managed projection flow.
      */
-    public static boolean requestCloseProjectedTask(
+    static boolean requestCloseProjectedTask(
             String packageName, int displayId, java.util.function.Consumer<Boolean> callback) {
         MediaPlaybackAccessibilityService service = activeService;
-        if (service == null) return false;
-        service.closeProjectedTaskFromAccessibility(packageName, displayId, callback);
+        if (service == null || packageName == null
+                || !packageName.matches("[A-Za-z0-9_]+(\\.[A-Za-z0-9_]+)+")
+                || packageName.equals(service.getPackageName())
+                || displayId <= 0) {
+            return false;
+        }
+        service.closePhoneAppAndProjection(packageName, callback);
         return true;
     }
 
-    private void closeProjectedTaskFromAccessibility(
-            String packageName, int displayId, java.util.function.Consumer<Boolean> callback) {
+    /**
+     * Accessibility owns the phone-side close request. Do not parse dumpsys output or
+     * remove an arbitrary ActivityManager task ID: on multi-display ROMs that can select
+     * the wrong task and make System UI flash. The controller detaches the projected
+     * surface as soon as this request is accepted; force-stop then closes the exact
+     * managed package on the phone and clears its projected task as part of the same
+     * package-level operation.
+     */
+    private void closePhoneAppAndProjection(
+            String packageName, java.util.function.Consumer<Boolean> callback) {
         automationHandler.post(() -> {
             boolean closed = false;
-            AccessibilityNodeInfo root = null;
             try {
-                // Critical guard: accessibility must see this package on the exact projection display.
-                root = findRootForPackage(packageName, displayId);
-                if (root == null) {
-                    Log.w(TAG, "Refusing close: no matching accessibility window for "
-                            + packageName + " on display " + displayId);
-                } else {
-                    root.recycle();
-                    root = null;
-                    String command = "DISPLAY_ID=" + displayId + "; PACKAGE=\"" + packageName
-                            + "\"; TASK_ID=$(/system/bin/dumpsys activity activities 2>/dev/null"
-                            + " | /system/bin/awk -v wantedDisplay=\"$DISPLAY_ID\" -v wantedPackage=\"$PACKAGE\" '"
-                            + "/^[[:space:]]*Display #[[:space:]]*[0-9]+/ { d=$0; sub(/^.*Display #[[:space:]]*/, \"\", d); sub(/[^0-9].*$/, \"\", d); display=d }"
-                            + " /^[[:space:]]*Task[{]/ { if (taskId ~ /^[0-9]+$/ && taskDisplay == wantedDisplay && taskHasPackage) { print taskId; found=1; exit }"
-                            + " taskId=$0; sub(/^.*#[[:space:]]*/, \"\", taskId); sub(/[^0-9].*$/, \"\", taskId); taskDisplay=display; taskHasPackage=0 }"
-                            + " /mDisplayId=/ { d=$0; sub(/^.*mDisplayId=/, \"\", d); sub(/[^0-9].*$/, \"\", d); if (d ~ /^[0-9]+$/) taskDisplay=d }"
-                            + " { if (taskId ~ /^[0-9]+$/ && index($0, wantedPackage) > 0) taskHasPackage=1 }"
-                            + " END { if (!found && taskId ~ /^[0-9]+$/ && taskDisplay == wantedDisplay && taskHasPackage) print taskId }'"
-                            + " | /system/bin/head -n 1); "
-                            + "case \"$TASK_ID\" in ''|*[!0-9]*) echo TASK_CLOSE_FAILED; exit 3;; esac; "
-                            + "VERIFY=$(/system/bin/dumpsys activity activities 2>/dev/null | /system/bin/awk"
-                            + " -v wantedId=\"#$TASK_ID\" -v wantedDisplay=\"$DISPLAY_ID\" -v wantedPackage=\"$PACKAGE\" '"
-                            + "/^[[:space:]]*Display #[[:space:]]*[0-9]+/ { d=$0; sub(/^.*Display #[[:space:]]*/, \"\", d); sub(/[^0-9].*$/, \"\", d); display=d }"
-                            + " /^[[:space:]]*Task[{]/ { if (taskId == wantedId && taskDisplay == wantedDisplay && taskHasPackage) ok=1;"
-                            + " taskId=$0; sub(/^.*#[[:space:]]*/, \"#\", taskId); sub(/[^0-9#].*$/, \"\", taskId); taskDisplay=display; taskHasPackage=0 }"
-                            + " /mDisplayId=/ { d=$0; sub(/^.*mDisplayId=/, \"\", d); sub(/[^0-9].*$/, \"\", d); if (d ~ /^[0-9]+$/) taskDisplay=d }"
-                            + " { if (taskId == wantedId && index($0, wantedPackage) > 0) taskHasPackage=1 }"
-                            + " END { if (taskId == wantedId && taskDisplay == wantedDisplay && taskHasPackage) ok=1; if (ok) print \"VERIFIED\" }'); "
-                            + "if [ \"$VERIFY\" = VERIFIED ] && /system/bin/am task remove \"$TASK_ID\" >/dev/null 2>&1; then"
-                            + " echo TASK_CLOSED; else echo TASK_CLOSE_FAILED; exit 3; fi";
-                    String output = closeRootShell.run(12, command);
-                    closed = output.contains("TASK_CLOSED");
-                }
+                int userId = android.os.Process.myUid() / 100000;
+                String quotedPackage = "'" + packageName.replace("'", "'\\''") + "'";
+                String command = "/system/bin/am force-stop --user " + userId + " "
+                        + quotedPackage + "; RESULT=$?; "
+                        + "if [ \"$RESULT\" -eq 0 ]; then echo APP_CLOSE_ACCEPTED; "
+                        + "else echo APP_CLOSE_FAILED; exit 3; fi";
+                String output = closeRootShell.run(10, command);
+                closed = output.contains("APP_CLOSE_ACCEPTED");
+                if (!closed) Log.w(TAG, "Phone-side close was not accepted for " + packageName);
             } catch (Throwable error) {
-                Log.w(TAG, "Accessibility-mediated projected task close failed safely", error);
-            } finally {
-                if (root != null) root.recycle();
+                Log.w(TAG, "Accessibility-mediated phone app close failed for " + packageName, error);
             }
             final boolean result = closed;
             new Handler(Looper.getMainLooper()).post(() -> {
@@ -83,6 +71,7 @@ public final class MediaPlaybackAccessibilityService extends AccessibilityServic
             });
         });
     }
+
     private static final String TAG = "CarAsstMediaA11y";
     private static final String PREFS = "media_autoplay";
     private static final long MAX_PENDING_MS = 30_000L;
