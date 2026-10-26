@@ -133,25 +133,52 @@ public final class MediaSessionBridge extends NotificationListenerService {
         }
     }
 
+    public static void play() {
+        MediaController controller = activeController;
+        if (controller == null) return;
+        try {
+            controller.getTransportControls().play();
+        } catch (RuntimeException error) {
+            Log.w(TAG, "Active media session rejected Play", error);
+        }
+    }
+
+    public static void pause() {
+        MediaController controller = activeController;
+        if (controller == null) return;
+        try {
+            controller.getTransportControls().pause();
+        } catch (RuntimeException error) {
+            Log.w(TAG, "Active media session rejected Pause", error);
+        }
+    }
+
     public static void togglePlayPause() {
         MediaController controller = activeController;
         if (controller == null) return;
         PlaybackState state = controller.getPlaybackState();
-        if (state != null && state.getState() == PlaybackState.STATE_PLAYING) {
-            controller.getTransportControls().pause();
-        } else {
-            controller.getTransportControls().play();
-        }
+        if (state != null && state.getState() == PlaybackState.STATE_PLAYING) pause();
+        else play();
     }
 
     public static void skipNext() {
         MediaController controller = activeController;
-        if (controller != null) controller.getTransportControls().skipToNext();
+        if (controller == null) return;
+        try {
+            controller.getTransportControls().skipToNext();
+        } catch (RuntimeException error) {
+            Log.w(TAG, "Active media session rejected Next", error);
+        }
     }
 
     public static void skipPrevious() {
         MediaController controller = activeController;
-        if (controller != null) controller.getTransportControls().skipToPrevious();
+        if (controller == null) return;
+        try {
+            controller.getTransportControls().skipToPrevious();
+        } catch (RuntimeException error) {
+            Log.w(TAG, "Active media session rejected Previous", error);
+        }
     }
 
     /** Seek the active media session by a relative offset in milliseconds. */
@@ -161,12 +188,19 @@ public final class MediaSessionBridge extends NotificationListenerService {
         PlaybackState state = controller.getPlaybackState();
         if (state == null) return;
         long position = Math.max(0L, state.getPosition());
-        long target = Math.max(0L, position + offsetMs);
-        MediaMetadata metadata = controller.getMetadata();
-        long duration = metadata == null ? 0L
-                : metadata.getLong(MediaMetadata.METADATA_KEY_DURATION);
-        if (duration > 0L) target = Math.min(target, duration);
+        seekTo(Math.max(0L, position + offsetMs));
+    }
+
+    /** Seek to an absolute position, clamped to the active item's duration when known. */
+    public static void seekTo(long requestedPositionMs) {
+        MediaController controller = activeController;
+        if (controller == null) return;
         try {
+            long target = Math.max(0L, requestedPositionMs);
+            MediaMetadata metadata = controller.getMetadata();
+            long duration = metadata == null ? 0L
+                    : metadata.getLong(MediaMetadata.METADATA_KEY_DURATION);
+            if (duration > 0L) target = Math.min(target, duration);
             controller.getTransportControls().seekTo(target);
         } catch (RuntimeException error) {
             Log.w(TAG, "Active media session rejected seek request", error);
