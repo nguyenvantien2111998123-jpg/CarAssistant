@@ -305,6 +305,7 @@ public final class V10DisplayController {
         }
         final String packageName = component.getPackageName();
         final int displayId;
+        final boolean isActiveProjection;
         synchronized (this) {
             // Only a package launched by this controller into the projection flow is eligible.
             if (!isReady() || display == null || display.getDisplayId() <= 0
@@ -313,17 +314,19 @@ public final class V10DisplayController {
                 return;
             }
             displayId = display.getDisplayId();
+            isActiveProjection = component.equals(target);
         }
         // The package is eligible only because this controller launched it into the
         // projection flow. Route the close through the phone AccessibilityService; once
-        // accepted, detach the projection surface immediately so the two actions overlap.
+        // accepted, detach only if this package is the currently projected target. Closing
+        // a historical task must not blank a different app that is currently being projected.
         boolean accepted = MediaPlaybackAccessibilityService.requestCloseProjectedTask(
                 packageName, displayId, callback);
         if (!accepted) {
             if (callback != null) callback.accept(false);
             return;
         }
-        detachSurface();
+        if (isActiveProjection) detachSurface();
     }
 
     private void execute(String command, String message) {
