@@ -183,6 +183,10 @@ public final class V10ProjectionSession implements TextureView.SurfaceTextureLis
                 target = null;
                 taskSession.clear();
                 displayController.markNotLaunched();
+            } else if (!closed && component.equals(target)) {
+                // Roll back the surface detach if the phone-side Accessibility/root
+                // request failed, so a failed close does not leave a black projection.
+                attachCurrentSurface();
             }
             if (callback != null) callback.accept(closed);
         });
