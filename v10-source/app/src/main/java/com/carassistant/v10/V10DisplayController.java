@@ -314,11 +314,16 @@ public final class V10DisplayController {
             }
             displayId = display.getDisplayId();
         }
-        // The phone's explicitly enabled AccessibilityService must confirm that this exact
-        // package has an accessibility window on the projection display before close is attempted.
+        // The package is eligible only because this controller launched it into the
+        // projection flow. Route the close through the phone AccessibilityService; once
+        // accepted, detach the projection surface immediately so the two actions overlap.
         boolean accepted = MediaPlaybackAccessibilityService.requestCloseProjectedTask(
                 packageName, displayId, callback);
-        if (!accepted && callback != null) callback.accept(false);
+        if (!accepted) {
+            if (callback != null) callback.accept(false);
+            return;
+        }
+        detachSurface();
     }
 
     private void execute(String command, String message) {
