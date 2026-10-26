@@ -69,6 +69,12 @@ public final class V10CarActivity
     private ComponentName selectedAppTarget;
     private TextView selectedAppLabel;
     private TextView dashboardVoiceButton;
+    private ImageView mediaArtwork;
+    private TextView mediaTitle;
+    private TextView mediaArtist;
+    private TextView mediaPlayPause;
+    private LinearLayout mediaCard;
+    private final MediaSessionBridge.Listener mediaSessionListener = this::updateMediaCard;
     private TextView floatingVoiceButton;
     private TextView voiceTranscriptView;
     private VoiceAssistantController voiceAssistantController;
@@ -180,6 +186,9 @@ public final class V10CarActivity
             buildUi();
             attachProjection();
         }
+
+        MediaSessionBridge.addListener(mediaSessionListener);
+        updateMediaCard(MediaSessionBridge.getSnapshot());
 
         if (voiceAssistantController == null) {
             voiceAssistantController = new VoiceAssistantController(
@@ -519,8 +528,198 @@ public final class V10CarActivity
         wyn.setOnClickListener(v->{});
         bottom.addView(wyn,new LinearLayout.LayoutParams(dp(78),dp(78)));
 
+        mediaCard = card();
+        mediaCard.setOrientation(LinearLayout.HORIZONTAL);
+        mediaCard.setGravity(Gravity.CENTER_VERTICAL);
+        mediaCard.setPadding(dp(8),dp(5),dp(8),dp(5));
+
+        mediaArtwork = new ImageView(this);
+        mediaArtwork.setScaleType(ImageView.ScaleType.CENTER_CROP);
+        mediaArtwork.setContentDescription("Ảnh bìa media");
+        mediaArtwork.setBackgroundColor(Color.rgb(34,42,50));
+        mediaCard.addView(mediaArtwork,new LinearLayout.LayoutParams(dp(54),dp(54)));
+
+        LinearLayout mediaInfo = new LinearLayout(this);
+        mediaInfo.setOrientation(LinearLayout.VERTICAL);
+        mediaInfo.setGravity(Gravity.CENTER_VERTICAL);
+        mediaInfo.setPadding(dp(10),0,dp(6),0);
+        LinearLayout.LayoutParams infoParams = new LinearLayout.LayoutParams(0,-1,1f);
+        mediaCard.addView(mediaInfo,infoParams);
+
+        mediaTitle = text("Chưa có media đang phát",14,Color.WHITE);
+        mediaTitle.setSingleLine(true);
+        mediaTitle.setEllipsize(TextUtils.TruncateAt.END);
+        mediaInfo.addView(mediaTitle,new LinearLayout.LayoutParams(-1,dp(25)));
+
+        mediaArtist = text("Mở YouTube, Zing MP3 hoặc ứng dụng nghe nhạc",11,Color.LTGRAY);
+        mediaArtist.setSingleLine(true);
+        mediaArtist.setEllipsize(TextUtils.TruncateAt.END);
+        mediaInfo.addView(mediaArtist,new LinearLayout.LayoutParams(-1,dp(20)));
+
+        TextView previous = buttonText("⏮");
+        previous.setContentDescription("Bài trước");
+        mediaCard.addView(previous,new LinearLayout.LayoutParams(dp(34),dp(48)));
+        previous.setOnClickListener(v -> {
+            if (ensureMediaAccess()) MediaSessionBridge.skipPrevious();
+        });
+
+        TextView rewind = buttonText("↶15");
+        rewind.setTextSize(10);
+        rewind.setContentDescription("Tua lùi 15 giây");
+        mediaCard.addView(rewind,new LinearLayout.LayoutParams(dp(36),dp(48)));
+        rewind.setOnClickListener(v -> {
+            if (ensureMediaAccess()) MediaSessionBridge.seekBy(-15000L);
+        });
+
+        mediaPlayPause = buttonText("▶");
+        mediaPlayPause.setContentDescription("Phát hoặc tạm dừng");
+        mediaCard.addView(mediaPlayPause,new LinearLayout.LayoutParams(dp(42),dp(48)));
+        mediaPlayPause.setOnClickListener(v -> {
+            if (ensureMediaAccess()) MediaSessionBridge.togglePlayPause();
+        });
+
+        TextView forward = buttonText("15↷");
+        forward.setTextSize(10);
+        forward.setContentDescription("Tua tới 15 giây");
+        mediaCard.addView(forward,new LinearLayout.LayoutParams(dp(36),dp(48)));
+        forward.setOnClickListener(v -> {
+            if (ensureMediaAccess()) MediaSessionBridge.seekBy(15000L);
+        });
+
+        TextView next = buttonText("⏭");
+        next.setContentDescription("Bài tiếp");
+        mediaCard.addView(next,new LinearLayout.LayoutParams(dp(34),dp(48)));
+        next.setOnClickListener(v -> {
+            if (ensureMediaAccess()) MediaSessionBridge.skipNext();
+        });
+
+        View.OnClickListener openPlayer = v -> openActiveMediaOnProjection();
+        mediaArtwork.setOnClickListener(openPlayer);
+        mediaTitle.setOnClickListener(openPlayer);
+        mediaArtist.setOnClickListener(openPlayer);
+        mediaCard.setOnClickListener(openPlayer);
+        LinearLayout.LayoutParams mp=new LinearLayout.LayoutParams(0,dp(78),1f);
+        mp.setMargins(dp(12),0,0,0);
+        bottom.addView(mediaCard,mp);
     }
 
+
+    /** Called from the Android Auto media card and the steering-key bridge. */
+    public void handleOpenActiveMediaOnProjection() {
+        handler.post(this::openActiveMediaOnProjection);
+    }
+
+    private void openActiveMediaOnProjection() {
+        if (!ensureMediaAccess()) return;
+        MediaSessionBridge.Snapshot state = MediaSessionBridge.getSnapshot();
+        if (state == null || TextUtils.isEmpty(state.packageName)) {
+            Toast.makeText(this, "Chưa có ứng dụng media đang hoạt động.",
+                    Toast.LENGTH_SHORT).show();
+            return;
+        }
+        try {
+            Intent launch = getPackageManager().getLaunchIntentForPackage(state.packageName);
+            if (launch == null || launch.getComponent() == null) {
+                Toast.makeText(this, "Không tìm thấy màn hình mở của ứng dụng media.",
+                        Toast.LENGTH_SHORT).show();
+                return;
+            }
+            launchProjection(launch.getComponent(), true);
+        } catch (RuntimeException error) {
+            Toast.makeText(this, "Không thể mở ứng dụng media trên màn hình phụ.",
+                    Toast.LENGTH_SHORT).show();
+        }
+    }
+
+    private boolean ensureMediaAccess() {
+        if (MediaSessionBridge.hasAccess(this)) return true;
+        Toast.makeText(this,
+                "Hãy bật quyền Notification Access cho CarAsistant để đồng bộ media",
+                Toast.LENGTH_LONG).show();
+        MediaSessionBridge.requestAccess(this);
+        return false;
+    }
+
+    private void updateMediaCard(MediaSessionBridge.Snapshot state) {
+        if (mediaTitle == null || mediaArtist == null || mediaPlayPause == null) return;
+        if (!MediaSessionBridge.hasAccess(this)) {
+            mediaTitle.setText("Bật quyền media");
+            mediaArtist.setText("Chạm để cấp quyền đồng bộ trình phát");
+            mediaPlayPause.setText("⚙");
+            if (mediaArtwork != null) mediaArtwork.setImageDrawable(null);
+            return;
+        }
+        if (state == null || TextUtils.isEmpty(state.packageName)) {
+            mediaTitle.setText("Chưa có media đang phát");
+            mediaArtist.setText("Mở YouTube, Zing MP3 hoặc ứng dụng nghe nhạc");
+            mediaPlayPause.setText("▶");
+            if (mediaArtwork != null) mediaArtwork.setImageDrawable(null);
+            return;
+        }
+        mediaTitle.setText(TextUtils.isEmpty(state.title) ? "Đang phát media" : state.title);
+        mediaArtist.setText(TextUtils.isEmpty(state.artist) ? state.packageName : state.artist);
+        mediaPlayPause.setText(state.playing ? "⏸" : "▶");
+        if (mediaArtwork != null) {
+            if (state.artwork != null) mediaArtwork.setImageBitmap(state.artwork);
+            else mediaArtwork.setImageDrawable(null);
+        }
+    }
+
+    private void openActiveMediaOnProjection() {
+        if (!ensureMediaAccess()) return;
+        MediaSessionBridge.Snapshot state = MediaSessionBridge.getSnapshot();
+        if (state == null || TextUtils.isEmpty(state.packageName)) {
+            Toast.makeText(this, "Chưa có ứng dụng media đang hoạt động.",
+                    Toast.LENGTH_SHORT).show();
+            return;
+        }
+        try {
+            Intent launch = getPackageManager().getLaunchIntentForPackage(state.packageName);
+            if (launch == null || launch.getComponent() == null) {
+                Toast.makeText(this, "Không tìm thấy màn hình mở của ứng dụng media.",
+                        Toast.LENGTH_SHORT).show();
+                return;
+            }
+            launchProjection(launch.getComponent());
+        } catch (RuntimeException error) {
+            Toast.makeText(this, "Không thể mở ứng dụng media trên màn hình phụ.",
+                    Toast.LENGTH_SHORT).show();
+        }
+    }
+
+    private boolean ensureMediaAccess() {
+        if (MediaSessionBridge.hasAccess(this)) return true;
+        Toast.makeText(this,
+                "Hãy bật quyền Notification Access cho CarAsistant để đồng bộ media",
+                Toast.LENGTH_LONG).show();
+        MediaSessionBridge.requestAccess(this);
+        return false;
+    }
+
+    private void updateMediaCard(MediaSessionBridge.Snapshot state) {
+        if (mediaTitle == null || mediaArtist == null || mediaPlayPause == null) return;
+        if (!MediaSessionBridge.hasAccess(this)) {
+            mediaTitle.setText("Bật quyền media");
+            mediaArtist.setText("Chạm để cấp quyền đồng bộ trình phát");
+            mediaPlayPause.setText("⚙");
+            if (mediaArtwork != null) mediaArtwork.setImageDrawable(null);
+            return;
+        }
+        if (state == null || TextUtils.isEmpty(state.packageName)) {
+            mediaTitle.setText("Chưa có media đang phát");
+            mediaArtist.setText("Mở YouTube, Zing MP3 hoặc ứng dụng nghe nhạc");
+            mediaPlayPause.setText("▶");
+            if (mediaArtwork != null) mediaArtwork.setImageDrawable(null);
+            return;
+        }
+        mediaTitle.setText(TextUtils.isEmpty(state.title) ? "Đang phát media" : state.title);
+        mediaArtist.setText(TextUtils.isEmpty(state.artist) ? state.packageName : state.artist);
+        mediaPlayPause.setText(state.playing ? "⏸" : "▶");
+        if (mediaArtwork != null) {
+            if (state.artwork != null) mediaArtwork.setImageBitmap(state.artwork);
+            else mediaArtwork.setImageDrawable(null);
+        }
+    }
 
     private void buildAppPanel() {
 
@@ -1527,6 +1726,8 @@ private void hideTaskSwitcher() {
 
     @Override
     public void onPause() {
+
+        MediaSessionBridge.removeListener(mediaSessionListener);
 
         if (keyboardController != null) keyboardController.hide();
         if (voiceAssistantController != null) voiceAssistantController.cancelListening();
