@@ -1244,8 +1244,10 @@ private void hideApps() {
                                 floatingDragging = true;
                             }
                             if (floatingDragging) {
-                                int width = projectionLayer.getWidth();
-                                int height = projectionLayer.getHeight();
+                                // The floating key is a child of root, so clamp its margins
+                                // against the same coordinate space used by its FrameLayout.LayoutParams.
+                                int width = root.getWidth();
+                                int height = root.getHeight();
                                 int keySize = dp(58);
                                 int right = Math.round(floatingStartX - dx);
                                 int top = Math.round(floatingStartY + dy);
