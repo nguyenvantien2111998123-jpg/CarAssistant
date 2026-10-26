@@ -624,62 +624,6 @@ public final class V10CarActivity
                         Toast.LENGTH_SHORT).show();
                 return;
             }
-            launchProjection(launch.getComponent(), true);
-        } catch (RuntimeException error) {
-            Toast.makeText(this, "Không thể mở ứng dụng media trên màn hình phụ.",
-                    Toast.LENGTH_SHORT).show();
-        }
-    }
-
-    private boolean ensureMediaAccess() {
-        if (MediaSessionBridge.hasAccess(this)) return true;
-        Toast.makeText(this,
-                "Hãy bật quyền Notification Access cho CarAsistant để đồng bộ media",
-                Toast.LENGTH_LONG).show();
-        MediaSessionBridge.requestAccess(this);
-        return false;
-    }
-
-    private void updateMediaCard(MediaSessionBridge.Snapshot state) {
-        if (mediaTitle == null || mediaArtist == null || mediaPlayPause == null) return;
-        if (!MediaSessionBridge.hasAccess(this)) {
-            mediaTitle.setText("Bật quyền media");
-            mediaArtist.setText("Chạm để cấp quyền đồng bộ trình phát");
-            mediaPlayPause.setText("⚙");
-            if (mediaArtwork != null) mediaArtwork.setImageDrawable(null);
-            return;
-        }
-        if (state == null || TextUtils.isEmpty(state.packageName)) {
-            mediaTitle.setText("Chưa có media đang phát");
-            mediaArtist.setText("Mở YouTube, Zing MP3 hoặc ứng dụng nghe nhạc");
-            mediaPlayPause.setText("▶");
-            if (mediaArtwork != null) mediaArtwork.setImageDrawable(null);
-            return;
-        }
-        mediaTitle.setText(TextUtils.isEmpty(state.title) ? "Đang phát media" : state.title);
-        mediaArtist.setText(TextUtils.isEmpty(state.artist) ? state.packageName : state.artist);
-        mediaPlayPause.setText(state.playing ? "⏸" : "▶");
-        if (mediaArtwork != null) {
-            if (state.artwork != null) mediaArtwork.setImageBitmap(state.artwork);
-            else mediaArtwork.setImageDrawable(null);
-        }
-    }
-
-    private void openActiveMediaOnProjection() {
-        if (!ensureMediaAccess()) return;
-        MediaSessionBridge.Snapshot state = MediaSessionBridge.getSnapshot();
-        if (state == null || TextUtils.isEmpty(state.packageName)) {
-            Toast.makeText(this, "Chưa có ứng dụng media đang hoạt động.",
-                    Toast.LENGTH_SHORT).show();
-            return;
-        }
-        try {
-            Intent launch = getPackageManager().getLaunchIntentForPackage(state.packageName);
-            if (launch == null || launch.getComponent() == null) {
-                Toast.makeText(this, "Không tìm thấy màn hình mở của ứng dụng media.",
-                        Toast.LENGTH_SHORT).show();
-                return;
-            }
             launchProjection(launch.getComponent());
         } catch (RuntimeException error) {
             Toast.makeText(this, "Không thể mở ứng dụng media trên màn hình phụ.",
