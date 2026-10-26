@@ -147,7 +147,6 @@ public final class CarAssistantMediaBrowserService extends MediaBrowserServiceCo
         Bitmap artwork = safeArtwork(state.artwork);
         if (artwork != null) {
             metadata.putBitmap(MediaMetadataCompat.METADATA_KEY_ALBUM_ART, artwork);
-            metadata.putBitmap(MediaMetadataCompat.METADATA_KEY_ART, artwork);
         }
         mediaSession.setMetadata(metadata.build());
 
@@ -184,8 +183,8 @@ public final class CarAssistantMediaBrowserService extends MediaBrowserServiceCo
         try {
             int width = source.getWidth();
             int height = source.getHeight();
-            if (width <= 512 && height <= 512) return source;
-            float scale = Math.min(512f / width, 512f / height);
+            if (width <= 384 && height <= 384) return source;
+            float scale = Math.min(384f / width, 384f / height);
             return Bitmap.createScaledBitmap(source,
                     Math.max(1, Math.round(width * scale)),
                     Math.max(1, Math.round(height * scale)), true);
