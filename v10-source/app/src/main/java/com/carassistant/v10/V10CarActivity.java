@@ -1343,7 +1343,7 @@ private void closeProjectedTask(ComponentName component) {
     session.closeTaskOnDisplay(component, closed -> {
         if (!closed) {
             Toast.makeText(this,
-                    "Không tìm thấy task này trên màn hình phụ hoặc hệ thống từ chối đóng.",
+                    "Không thể đóng ứng dụng; CarAsistant đã giữ lại task trong danh sách.",
                     Toast.LENGTH_LONG).show();
             return;
         }
