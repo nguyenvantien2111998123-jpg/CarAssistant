@@ -50,7 +50,8 @@ public final class MediaPlaybackAccessibilityService extends AccessibilityServic
      */
     private void closePhoneAppAndProjection(
             String packageName, java.util.function.Consumer<Boolean> callback) {
-        automationHandler.post(() -> {
+        // Do not run a blocking root-shell command on the Accessibility/main thread.
+        RootShellSession.EXEC.execute(() -> {
             boolean closed = false;
             try {
                 int userId = android.os.Process.myUid() / 100000;
