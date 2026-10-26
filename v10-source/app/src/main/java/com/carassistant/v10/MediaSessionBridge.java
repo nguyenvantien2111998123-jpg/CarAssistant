@@ -133,6 +133,22 @@ public final class MediaSessionBridge extends NotificationListenerService {
         }
     }
 
+    /** Explicit Play command used by the Android Auto media proxy. */
+    public static void play() {
+        MediaController controller = activeController;
+        if (controller == null) return;
+        try { controller.getTransportControls().play(); }
+        catch (RuntimeException error) { Log.w(TAG, "Active media session rejected Play", error); }
+    }
+
+    /** Explicit Pause command used by the Android Auto media proxy. */
+    public static void pause() {
+        MediaController controller = activeController;
+        if (controller == null) return;
+        try { controller.getTransportControls().pause(); }
+        catch (RuntimeException error) { Log.w(TAG, "Active media session rejected Pause", error); }
+    }
+
     public static void togglePlayPause() {
         MediaController controller = activeController;
         if (controller == null) return;
