@@ -153,9 +153,16 @@ public final class GearheadDockPatcher {
         View current = clicked;
         boolean metadataSurface = false;
         for (int depth = 0; depth < 6 && current != null; depth++) {
-            // The media card's TappableRegion is marked by MediaPlayerFragment.e(View);
-            // this is more reliable than guessing resource names across AA releases.
-            if (mediaInfoRegions.containsKey(current)) metadataSurface = true;
+            // Detect the actual Coolwalk metadata hit target directly as well as
+            // the regions marked by the version-specific bind hook. If the bind hook
+            // signature changes, a TappableRegion ancestor must still be intercepted
+            // before Gearhead opens its native "CarAsistant Media" browser screen.
+            String className = current.getClass().getName();
+            if (mediaInfoRegions.containsKey(current)
+                    || "com.google.android.apps.auto.components.coolwalk.focusring.TappableRegion"
+                    .equals(className)) {
+                metadataSurface = true;
+            }
             String name = resourceEntryName(current);
             if (name != null) {
                 String lower = name.toLowerCase(java.util.Locale.ROOT);
