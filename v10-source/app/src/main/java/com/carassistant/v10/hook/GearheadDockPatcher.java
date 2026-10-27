@@ -199,16 +199,58 @@ public final class GearheadDockPatcher {
         return false;
     }
 
+    /**
+     * Route the media-card tap through Gearhead's own Car App launcher, as used
+     * by AADisplay's AaUiHook. This lets Gearhead resolve AACastCarService from
+     * the installed manifest and call getCarActivity(), instead of opening the
+     * media browser UI or launching the phone Activity.
+     */
     private void dispatchMediaOpen() {
         Context appContext = context;
         if (appContext == null) return;
         try {
-            Intent intent = new Intent("com.carassistant.v10.STEERING_MEDIA_OPEN");
-            intent.setPackage("com.carassistant.v10");
-            appContext.sendBroadcast(intent);
-            log("Forwarded Android Auto media metadata tap to CarAsistant");
+            ClassLoader loader = appContext.getClassLoader();
+            Class<?> controller = XposedHelpers.findClassIfExists(
+                    "com.google.android.projection.gearhead.service.CarSystemUiControllerService",
+                    loader);
+            if (controller == null) {
+                throw new ClassNotFoundException("CarSystemUiControllerService not found");
+            }
+
+            Method launcher = null;
+            for (Class<?> type = controller; type != null && launcher == null;
+                    type = type.getSuperclass()) {
+                for (Method method : type.getDeclaredMethods()) {
+                    if (Modifier.isStatic(method.getModifiers())
+                            && "a".equals(method.getName())
+                            && method.getParameterTypes().length == 1
+                            && Intent.class.equals(method.getParameterTypes()[0])) {
+                        launcher = method;
+                        break;
+                    }
+                }
+            }
+            if (launcher == null) {
+                throw new NoSuchMethodException(
+                        "Gearhead CarSystemUiControllerService.a(Intent) not found");
+            }
+
+            launcher.setAccessible(true);
+            Intent carAppIntent = new Intent();
+            carAppIntent.setComponent(new android.content.ComponentName(
+                    "com.carassistant.v10", "com.carassistant.v10.AACastCarService"));
+            carAppIntent.putExtra("android.intent.extra.PACKAGE_NAME", "com.carassistant.v10");
+            launcher.invoke(null, carAppIntent);
+            log("Media-card tap routed to Gearhead Car App launcher; requested AACastCarService.getCarActivity()");
         } catch (Throwable error) {
-            log("Could not forward media metadata tap: " + error);
+            log("Gearhead Car App launch failed; forwarding fallback event: " + error);
+            try {
+                Intent fallback = new Intent("com.carassistant.v10.STEERING_MEDIA_OPEN");
+                fallback.setPackage("com.carassistant.v10");
+                appContext.sendBroadcast(fallback);
+            } catch (Throwable broadcastError) {
+                log("Could not forward fallback media-open event: " + broadcastError);
+            }
         }
     }
 
