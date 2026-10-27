@@ -158,9 +158,10 @@ public final class GearheadDockPatcher {
             // signature changes, a TappableRegion ancestor must still be intercepted
             // before Gearhead opens its native "CarAsistant Media" browser screen.
             String className = current.getClass().getName();
-            if (mediaInfoRegions.containsKey(current)
-                    || "com.google.android.apps.auto.components.coolwalk.focusring.TappableRegion"
-                    .equals(className)) {
+            // Do not classify every generic TappableRegion as metadata: Gearhead also
+            // uses this wrapper for unrelated controls. Only regions identified while
+            // binding the media card may be consumed here.
+            if (mediaInfoRegions.containsKey(current)) {
                 metadataSurface = true;
             }
             String name = resourceEntryName(current);
@@ -273,9 +274,10 @@ public final class GearheadDockPatcher {
                             }
 
                             private boolean patcherIsMetadataRegion(View view) {
-                                return mediaInfoRegions.containsKey(view)
-                                        || "com.google.android.apps.auto.components.coolwalk.focusring.TappableRegion"
-                                        .equals(view.getClass().getName());
+                                // Match the same filtered set used by the base View hook.
+                                // Never swallow every TappableRegion click: some builds use
+                                // the class for controls and other tappable UI.
+                                return mediaInfoRegions.containsKey(view);
                             }
                         });
                 log("Hooked concrete Coolwalk TappableRegion.performClick()");
@@ -296,8 +298,12 @@ public final class GearheadDockPatcher {
         if (root == null) return;
         if ("com.google.android.apps.auto.components.coolwalk.focusring.TappableRegion"
                 .equals(root.getClass().getName())) {
-            mediaInfoRegions.put(root, Boolean.TRUE);
-            log("Registered Coolwalk media tappable region id=" + resourceEntryName(root));
+            if (containsTransportControl(root)) {
+                mediaInfoRegions.remove(root);
+            } else {
+                mediaInfoRegions.put(root, Boolean.TRUE);
+                log("Registered Coolwalk media metadata region id=" + resourceEntryName(root));
+            }
         }
         if (root instanceof ViewGroup) {
             ViewGroup group = (ViewGroup) root;
@@ -305,6 +311,43 @@ public final class GearheadDockPatcher {
                 markMediaInfoRegions(group.getChildAt(i));
             }
         }
+    }
+
+    /**
+     * A TappableRegion is eligible for media-metadata interception only when its
+     * subtree does not contain a transport/seek control. This keeps Play/Pause,
+     * Next/Previous and seek actions owned by Android Auto's media session.
+     */
+    private boolean containsTransportControl(View view) {
+        if (view == null) return false;
+        String name = resourceEntryName(view);
+        if (name != null) {
+            String lower = name.toLowerCase(java.util.Locale.ROOT);
+            String[] controls = {"play_pause", "playpause", "play_button", "pause_button",
+                    "next", "previous", "skip", "fast_forward", "rewind", "transport",
+                    "seek_bar", "seekbar", "progress"};
+            for (String control : controls) {
+                if (lower.contains(control)) return true;
+            }
+        }
+        if (view instanceof TextView) {
+            CharSequence description = view.getContentDescription();
+            if (description != null) {
+                String lower = description.toString().toLowerCase(java.util.Locale.ROOT);
+                String[] controls = {"play", "pause", "next", "previous", "skip",
+                        "forward", "rewind", "seek", "tua", "phát", "dừng", "tiếp"};
+                for (String control : controls) {
+                    if (lower.contains(control)) return true;
+                }
+            }
+        }
+        if (view instanceof ViewGroup) {
+            ViewGroup group = (ViewGroup) view;
+            for (int i = 0; i < group.getChildCount(); i++) {
+                if (containsTransportControl(group.getChildAt(i))) return true;
+            }
+        }
+        return false;
     }
 
     /** Vòng lặp lease: ẩn dock khi active, khôi phục khi hết hạn. */
