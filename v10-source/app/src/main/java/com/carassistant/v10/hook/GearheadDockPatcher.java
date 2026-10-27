@@ -138,39 +138,39 @@ public final class GearheadDockPatcher {
      * ancestor chain and accept known media/player containers.
      */
     private static boolean isMediaInfoClick(View clicked) {
-        String clickedName = resourceEntryName(clicked);
-        String lowerClicked = clickedName == null ? "" : clickedName.toLowerCase(java.util.Locale.ROOT);
-        String[] controls = {"play_pause", "playpause", "next", "previous", "skip",
-                "fast_forward", "rewind", "transport", "play_button", "pause_button"};
-        for (String control : controls) {
-            if (lowerClicked.contains(control)) return false;
-        }
-
+        // Reject transport-control ancestry as well as the clicked child itself.
+        // Some AA versions place the icon inside a generic media container, so
+        // checking only the clicked view would accidentally consume Play/Next.
+        String[] controls = {"play_pause", "playpause", "play_button", "pause_button",
+                "next", "previous", "skip", "fast_forward", "rewind", "transport",
+                "seek_bar", "seekbar", "progress"};
         View current = clicked;
+        boolean metadataSurface = false;
         for (int depth = 0; depth < 6 && current != null; depth++) {
             String name = resourceEntryName(current);
             if (name != null) {
                 String lower = name.toLowerCase(java.util.Locale.ROOT);
+                for (String control : controls) {
+                    if (lower.contains(control)) return false;
+                }
                 if (lower.contains("media_item_title") || lower.contains("media_title")
                         || lower.contains("media_metadata") || lower.contains("now_playing")
-                        || lower.contains("media_card") || lower.contains("media_info")
-                        || lower.contains("playback_metadata") || lower.contains("song_title")
-                        || lower.contains("album_art") || lower.contains("media_artwork")) {
-                    return true;
-                }
-                if (depth > 0 && (lower.contains("media") || lower.contains("playback")
-                        || lower.contains("now_playing") || lower.contains("player"))) {
-                    return true;
+                        || lower.contains("media_info") || lower.contains("playback_metadata")
+                        || lower.contains("song_title") || lower.contains("album_art")
+                        || lower.contains("media_artwork")) {
+                    metadataSurface = true;
                 }
             }
             Object parent = current.getParent();
             current = parent instanceof View ? (View) parent : null;
         }
+        if (metadataSurface) return true;
         if (clicked instanceof TextView) {
             CharSequence description = clicked.getContentDescription();
             if (description != null) {
                 String value = description.toString().toLowerCase(java.util.Locale.ROOT);
-                return value.contains("now playing") || value.contains("đang phát");
+                return value.contains("now playing") || value.contains("đang phát")
+                        || value.contains("currently playing");
             }
         }
         return false;
@@ -201,6 +201,13 @@ public final class GearheadDockPatcher {
         context = newContext.getApplicationContext() != null
                 ? newContext.getApplicationContext()
                 : newContext;
+        try {
+            android.content.pm.PackageInfo info = context.getPackageManager().getPackageInfo(GEARHEAD, 0);
+            log("Gearhead media hook diagnostics: Android Auto version=" + info.versionName
+                    + " versionCode=" + info.getLongVersionCode());
+        } catch (Throwable error) {
+            log("Could not read Android Auto version: " + error.getClass().getSimpleName());
+        }
         main.post(this::tick);
     }
 
