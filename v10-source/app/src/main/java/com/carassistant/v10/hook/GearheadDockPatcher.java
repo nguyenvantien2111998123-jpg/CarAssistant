@@ -1,6 +1,8 @@
 package com.carassistant.v10.hook;
 
 import android.app.Application;
+import android.app.Activity;
+import android.view.KeyEvent;
 import android.content.ContentResolver;
 import android.content.Context;
 import android.content.Intent;
@@ -20,6 +22,7 @@ import com.carassistant.v10.DockStateProvider;
 
 import java.lang.reflect.Field;
 import java.lang.reflect.Modifier;
+import java.lang.reflect.Method;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.IdentityHashMap;
@@ -81,6 +84,9 @@ public final class GearheadDockPatcher {
     private boolean rootsDirty = true;
     private boolean loggedNoDock;
     private boolean loggedRootFailure;
+    private final Set<String> diagnosedClasses = Collections.newSetFromMap(
+            new java.util.concurrent.ConcurrentHashMap<String, Boolean>());
+    private boolean navigationDiagnosticsInstalled;
 
     private GearheadDockPatcher() {
     }
@@ -218,6 +224,7 @@ public final class GearheadDockPatcher {
         context = newContext.getApplicationContext() != null
                 ? newContext.getApplicationContext()
                 : newContext;
+        installNavigationDiagnostics();
         installMediaCardClickHook(context.getClassLoader());
         try {
             android.content.pm.PackageInfo info = context.getPackageManager().getPackageInfo(GEARHEAD, 0);
@@ -227,6 +234,108 @@ public final class GearheadDockPatcher {
             log("Could not read Android Auto version: " + error.getClass().getSimpleName());
         }
         main.post(this::tick);
+    }
+
+    /**
+     * Temporary, read-only diagnostics for identifying Gearhead's actual media
+     * navigation owner before implementing any navigation override. This hook
+     * records runtime Activity transitions and signatures of relevant loaded
+     * Gearhead classes; it deliberately does not change navigation behavior.
+     */
+    private void installNavigationDiagnostics() {
+        if (navigationDiagnosticsInstalled) return;
+        navigationDiagnosticsInstalled = true;
+        try {
+            XposedHelpers.findAndHookMethod(Activity.class, "onResume",
+                    new XC_MethodHook() {
+                        @Override
+                        protected void afterHookedMethod(MethodHookParam param) {
+                            try {
+                                Activity activity = (Activity) param.thisObject;
+                                if (activity.getPackageName().equals(GEARHEAD)) {
+                                    log("NAVDIAG ACTIVITY_RESUMED class="
+                                            + activity.getClass().getName()
+                                            + " taskId=" + activity.getTaskId()
+                                            + " finishing=" + activity.isFinishing());
+                                }
+                            } catch (Throwable ignored) { }
+                        }
+                    });
+            XposedHelpers.findAndHookMethod(Activity.class, "dispatchKeyEvent",
+                    android.view.KeyEvent.class, new XC_MethodHook() {
+                        @Override
+                        protected void beforeHookedMethod(MethodHookParam param) {
+                            try {
+                                Activity activity = (Activity) param.thisObject;
+                                KeyEvent event = (KeyEvent) param.args[0];
+                                if (event != null && event.getKeyCode() == KeyEvent.KEYCODE_BACK
+                                        && event.getAction() == KeyEvent.ACTION_UP
+                                        && GEARHEAD.equals(activity.getPackageName())) {
+                                    log("NAVDIAG BACK_KEY activity="
+                                            + activity.getClass().getName());
+                                }
+                            } catch (Throwable ignored) { }
+                        }
+                    });
+            // Discover relevant obfuscated classes as Gearhead loads them. Only
+            // class names/signatures are logged; no method is invoked or modified.
+            XposedHelpers.findAndHookMethod(ClassLoader.class, "loadClass",
+                    String.class, boolean.class, new XC_MethodHook() {
+                        @Override
+                        protected void afterHookedMethod(MethodHookParam param) {
+                            try {
+                                Object result = param.getResult();
+                                if (!(result instanceof Class)) return;
+                                Class<?> type = (Class<?>) result;
+                                String name = type.getName();
+                                if (!name.startsWith("com.google.android.apps.auto.")) return;
+                                String lower = name.toLowerCase(java.util.Locale.ROOT);
+                                if (!(lower.contains("media") || lower.contains("player")
+                                        || lower.contains("dashboard") || lower.contains("navigator")
+                                        || lower.contains("navigation") || lower.contains("router")
+                                        || lower.contains("back") || lower.contains("fragment")
+                                        || lower.contains("activity") || lower.contains("carapp"))) return;
+                                if (!diagnosedClasses.add(name)) return;
+                                logClassSignatures(type);
+                            } catch (Throwable ignored) { }
+                        }
+                    });
+            log("NAVDIAG installed: read-only Activity/back/class-signature tracing enabled");
+        } catch (Throwable error) {
+            log("NAVDIAG install failed: " + error.getClass().getSimpleName()
+                    + ": " + error.getMessage());
+        }
+    }
+
+    private void logClassSignatures(Class<?> type) {
+        try {
+            Method[] methods = type.getDeclaredMethods();
+            StringBuilder out = new StringBuilder();
+            out.append("NAVDIAG CLASS ").append(type.getName())
+                    .append(" methods=").append(methods.length);
+            int emitted = 0;
+            for (Method method : methods) {
+                String name = method.getName().toLowerCase(java.util.Locale.ROOT);
+                if (!(name.contains("navigate") || name.contains("nav") || name.contains("media")
+                        || name.contains("player") || name.contains("back") || name.contains("pop")
+                        || name.contains("open") || name.contains("show") || name.contains("launch")
+                        || name.contains("route") || name.contains("fragment") || name.contains("task")
+                        || name.equals("e") || name.equals("f"))) continue;
+                out.append(" | ").append(Modifier.toString(method.getModifiers())).append(' ')
+                        .append(method.getName()).append('(');
+                Class<?>[] params = method.getParameterTypes();
+                for (int i = 0; i < params.length; i++) {
+                    if (i > 0) out.append(',');
+                    out.append(params[i].getSimpleName());
+                }
+                out.append("):").append(method.getReturnType().getSimpleName());
+                if (++emitted >= 16) break;
+            }
+            log(out.toString());
+        } catch (Throwable error) {
+            log("NAVDIAG CLASS " + type.getName() + " signatureError="
+                    + error.getClass().getSimpleName());
+        }
     }
 
     /**
