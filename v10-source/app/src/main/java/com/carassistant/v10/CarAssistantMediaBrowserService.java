@@ -63,6 +63,13 @@ public final class CarAssistantMediaBrowserService extends MediaBrowserServiceCo
             @Override public void onSkipToPrevious() { MediaSessionBridge.skipPrevious(); }
             @Override public void onFastForward() { MediaSessionBridge.seekBy(SEEK_STEP_MS); }
             @Override public void onRewind() { MediaSessionBridge.seekBy(-SEEK_STEP_MS); }
+            @Override public void onCustomAction(String action, Bundle extras) {
+                if ("com.carassistant.v10.MEDIA_REWIND_15".equals(action)) {
+                    MediaSessionBridge.seekBy(-SEEK_STEP_MS);
+                } else if ("com.carassistant.v10.MEDIA_FORWARD_15".equals(action)) {
+                    MediaSessionBridge.seekBy(SEEK_STEP_MS);
+                }
+            }
             @Override public void onSeekTo(long position) {
                 MediaSessionBridge.seekTo(position);
             }
@@ -162,10 +169,18 @@ public final class CarAssistantMediaBrowserService extends MediaBrowserServiceCo
                     : PlaybackStateCompat.STATE_PAUSED);
             float speed = hasMedia && snapshot.playing ? 1.0f : 0.0f;
             long position = hasMedia ? Math.max(0L, snapshot.position) : 0L;
-            session.setPlaybackState(new PlaybackStateCompat.Builder()
+            PlaybackStateCompat.Builder playback = new PlaybackStateCompat.Builder()
                     .setActions(actions)
-                    .setState(state, position, speed, SystemClock.elapsedRealtime())
-                    .build());
+                    .setState(state, position, speed, SystemClock.elapsedRealtime());
+            // Keep the compact AA widget's standard three slots intact. Expose
+            // explicit ±15-second actions to controllers that support expanded/custom actions.
+            playback.addCustomAction(new PlaybackStateCompat.CustomAction.Builder(
+                    "com.carassistant.v10.MEDIA_REWIND_15", "Lùi 15 giây",
+                    android.R.drawable.ic_media_rew).build());
+            playback.addCustomAction(new PlaybackStateCompat.CustomAction.Builder(
+                    "com.carassistant.v10.MEDIA_FORWARD_15", "Tiến 15 giây",
+                    android.R.drawable.ic_media_ff).build());
+            session.setPlaybackState(playback.build());
             Log.i(TAG, "Published media session: available=" + hasMedia
                     + ", state=" + state + ", title="
                     + (hasMedia ? nonEmpty(snapshot.title, "Đang phát media") : "<none>"));
