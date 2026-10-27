@@ -127,6 +127,7 @@ public final class CarAssistantMediaBrowserService extends MediaBrowserServiceCo
                     && !snapshot.packageName.isEmpty();
             MediaMetadataCompat.Builder metadata = new MediaMetadataCompat.Builder();
             if (hasMedia) {
+                metadata.putString(MediaMetadataCompat.METADATA_KEY_MEDIA_ID, ITEM_ID);
                 metadata.putString(MediaMetadataCompat.METADATA_KEY_TITLE,
                         nonEmpty(snapshot.title, "Đang phát media"));
                 metadata.putString(MediaMetadataCompat.METADATA_KEY_ARTIST,
@@ -165,6 +166,9 @@ public final class CarAssistantMediaBrowserService extends MediaBrowserServiceCo
                     .setActions(actions)
                     .setState(state, position, speed, SystemClock.elapsedRealtime())
                     .build());
+            Log.i(TAG, "Published media session: available=" + hasMedia
+                    + ", state=" + state + ", title="
+                    + (hasMedia ? nonEmpty(snapshot.title, "Đang phát media") : "<none>"));
         } catch (RuntimeException error) {
             Log.w(TAG, "Could not publish active media session", error);
         }
