@@ -3,6 +3,7 @@ package com.carassistant.v10;
 import android.content.BroadcastReceiver;
 import android.content.Context;
 import android.content.Intent;
+import android.util.Log;
 
 public final class V10ControlReceiver
         extends BroadcastReceiver {
@@ -23,7 +24,16 @@ public final class V10ControlReceiver
 
         if ("com.carassistant.v10.STEERING_MEDIA_OPEN".equals(intent.getAction())) {
             V10CarActivity mediaActivity = V10SessionStore.getCurrentActivity();
-            if (mediaActivity != null) mediaActivity.handleShowCarAsistantOnProjection();
+            if (mediaActivity != null) {
+                Log.i("CarAssistantMediaProxy", "Media metadata tap received; routing to active V10 projection");
+                mediaActivity.handleShowCarAsistantOnProjection();
+            } else {
+                // Do not launch the phone launcher/settings as a substitute for the car UI.
+                // Preserve the request so the dashboard is restored if Gearhead recreates V10CarActivity.
+                V10SessionStore.requestShowDashboard();
+                Log.w("CarAssistantMediaProxy",
+                        "Media metadata tap received but V10CarActivity is not active; dashboard request queued");
+            }
             return;
         }
 
