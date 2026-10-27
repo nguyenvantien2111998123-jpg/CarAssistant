@@ -73,6 +73,10 @@ public final class GearheadDockPatcher {
 
     private volatile Context context;
     private volatile long visibleUntil;
+    // Exact Coolwalk media-card tappable regions discovered in Gearhead 17.9.664044.
+    private final Map<View, Boolean> mediaInfoRegions =
+            Collections.synchronizedMap(new WeakHashMap<>());
+    private boolean mediaCardClickHookInstalled;
     private boolean leaseActive;
     private boolean rootsDirty = true;
     private boolean loggedNoDock;
@@ -100,7 +104,7 @@ public final class GearheadDockPatcher {
                         @Override
                         protected void beforeHookedMethod(MethodHookParam param) {
                             Object target = param.thisObject;
-                            if (target instanceof View && isMediaInfoClick((View) target)) {
+                            if (target instanceof View && patcher.isMediaInfoClick((View) target)) {
                                 // Consume the Android Auto media-card click before its
                                 // native handler can launch the player on the phone.
                                 param.setResult(true);
@@ -137,7 +141,7 @@ public final class GearheadDockPatcher {
      * Resource names differ between Android Auto releases, so inspect a short
      * ancestor chain and accept known media/player containers.
      */
-    private static boolean isMediaInfoClick(View clicked) {
+    private boolean isMediaInfoClick(View clicked) {
         // Reject transport-control ancestry as well as the clicked child itself.
         // Some AA versions place the icon inside a generic media container, so
         // checking only the clicked view would accidentally consume Play/Next.
@@ -147,6 +151,9 @@ public final class GearheadDockPatcher {
         View current = clicked;
         boolean metadataSurface = false;
         for (int depth = 0; depth < 6 && current != null; depth++) {
+            // The media card's TappableRegion is marked by MediaPlayerFragment.e(View);
+            // this is more reliable than guessing resource names across AA releases.
+            if (mediaInfoRegions.containsKey(current)) metadataSurface = true;
             String name = resourceEntryName(current);
             if (name != null) {
                 String lower = name.toLowerCase(java.util.Locale.ROOT);
@@ -201,6 +208,7 @@ public final class GearheadDockPatcher {
         context = newContext.getApplicationContext() != null
                 ? newContext.getApplicationContext()
                 : newContext;
+        installMediaCardClickHook(context.getClassLoader());
         try {
             android.content.pm.PackageInfo info = context.getPackageManager().getPackageInfo(GEARHEAD, 0);
             log("Gearhead media hook diagnostics: Android Auto version=" + info.versionName
@@ -209,6 +217,55 @@ public final class GearheadDockPatcher {
             log("Could not read Android Auto version: " + error.getClass().getSimpleName());
         }
         main.post(this::tick);
+    }
+
+    /**
+     * Android Auto 17.9.664044 wires the Coolwalk media card in
+     * MediaPlayerFragment.e(View). Mark its TappableRegion views at bind time,
+     * then consume only clicks on those regions. Transport buttons use separate
+     * button classes and are deliberately left to Gearhead.
+     */
+    private void installMediaCardClickHook(ClassLoader loader) {
+        if (mediaCardClickHookInstalled) return;
+        try {
+            XposedHelpers.findAndHookMethod(
+                    "com.google.android.apps.auto.components.system.dashboard.media.MediaPlayerFragment",
+                    loader,
+                    "e",
+                    View.class,
+                    new XC_MethodHook() {
+                        @Override
+                        protected void afterHookedMethod(MethodHookParam param) {
+                            if (param.args.length > 0 && param.args[0] instanceof View) {
+                                patcherMarkMediaRegions((View) param.args[0]);
+                            }
+                        }
+
+                        private void patcherMarkMediaRegions(View root) {
+                            GearheadDockPatcher.this.markMediaInfoRegions(root);
+                        }
+                    });
+            mediaCardClickHookInstalled = true;
+            log("Hooked Coolwalk MediaPlayerFragment.e(View) for exact metadata-region discovery");
+        } catch (Throwable error) {
+            log("Exact Coolwalk media-card hook unavailable: "
+                    + error.getClass().getSimpleName() + ": " + error.getMessage());
+        }
+    }
+
+    private void markMediaInfoRegions(View root) {
+        if (root == null) return;
+        if ("com.google.android.apps.auto.components.coolwalk.focusring.TappableRegion"
+                .equals(root.getClass().getName())) {
+            mediaInfoRegions.put(root, Boolean.TRUE);
+            log("Registered Coolwalk media tappable region id=" + resourceEntryName(root));
+        }
+        if (root instanceof ViewGroup) {
+            ViewGroup group = (ViewGroup) root;
+            for (int i = 0; i < group.getChildCount(); i++) {
+                markMediaInfoRegions(group.getChildAt(i));
+            }
+        }
     }
 
     /** Vòng lặp lease: ẩn dock khi active, khôi phục khi hết hạn. */
