@@ -186,6 +186,9 @@ public final class V10CarActivity
             buildUi();
             attachProjection();
         }
+        if (V10SessionStore.consumeShowDashboardRequest()) {
+            handler.post(this::handleShowCarAsistantOnProjection);
+        }
 
         MediaSessionBridge.addListener(mediaSessionListener);
         updateMediaCard(MediaSessionBridge.getSnapshot());
@@ -611,7 +614,8 @@ public final class V10CarActivity
     public void handleShowCarAsistantOnProjection() {
         handler.post(() -> {
             if (root == null || launcherLayer == null || dashboard == null || appPanel == null) {
-                // The CarActivity may be between lifecycle states; let onResume rebuild it.
+                // Preserve the request if Gearhead is recreating the projection activity.
+                V10SessionStore.requestShowDashboard();
                 return;
             }
             hideTaskSwitcher();
