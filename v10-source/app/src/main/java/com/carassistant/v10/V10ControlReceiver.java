@@ -21,6 +21,12 @@ public final class V10ControlReceiver
             return;
         }
 
+        if ("com.carassistant.v10.STEERING_MEDIA_OPEN".equals(intent.getAction())) {
+            V10CarActivity mediaActivity = V10SessionStore.getCurrentActivity();
+            if (mediaActivity != null) mediaActivity.handleShowCarAsistantOnProjection();
+            return;
+        }
+
         if (!ACTION.equals(
                 intent.getAction())) {
             return;
