@@ -254,6 +254,36 @@ public final class GearheadDockPatcher {
                             GearheadDockPatcher.this.markMediaInfoRegions(root);
                         }
                     });
+            // Hook the concrete click target too: some Gearhead builds override
+            // View.performClick() in TappableRegion, bypassing the base View hook.
+            try {
+                XposedHelpers.findAndHookMethod(
+                        "com.google.android.apps.auto.components.coolwalk.focusring.TappableRegion",
+                        loader,
+                        "performClick",
+                        new XC_MethodHook() {
+                            @Override
+                            protected void beforeHookedMethod(MethodHookParam param) {
+                                Object target = param.thisObject;
+                                if (target instanceof View && patcherIsMetadataRegion((View) target)) {
+                                    param.setResult(true);
+                                    dispatchMediaOpen();
+                                    log("Consumed concrete TappableRegion click; forwarding to V10 dashboard");
+                                }
+                            }
+
+                            private boolean patcherIsMetadataRegion(View view) {
+                                return mediaInfoRegions.containsKey(view)
+                                        || "com.google.android.apps.auto.components.coolwalk.focusring.TappableRegion"
+                                        .equals(view.getClass().getName());
+                            }
+                        });
+                log("Hooked concrete Coolwalk TappableRegion.performClick()");
+            } catch (Throwable directHookError) {
+                log("Concrete TappableRegion click hook unavailable: "
+                        + directHookError.getClass().getSimpleName() + ": "
+                        + directHookError.getMessage());
+            }
             mediaCardClickHookInstalled = true;
             log("Hooked Coolwalk MediaPlayerFragment.e(View) for exact metadata-region discovery");
         } catch (Throwable error) {
