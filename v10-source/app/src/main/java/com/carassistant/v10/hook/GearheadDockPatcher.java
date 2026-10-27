@@ -4,7 +4,6 @@ import android.app.Application;
 import android.content.ContentResolver;
 import android.content.Context;
 import android.content.Intent;
-import android.content.pm.ResolveInfo;
 import android.database.Cursor;
 import android.graphics.Color;
 import android.net.Uri;
@@ -114,7 +113,8 @@ public final class GearheadDockPatcher {
                             }
                         }
                     });
-            installMediaBrowserSourceFilter();
+            // Keep CarAssistantMediaBrowserService discoverable by Gearhead.
+            // Hide any duplicate source entry at the UI layer instead of filtering this service.
             XposedBridge.hookAllMethods(
                     XposedHelpers.findClass("android.view.WindowManagerGlobal", (ClassLoader) null),
                     "addView",
@@ -219,63 +219,6 @@ public final class GearheadDockPatcher {
             log("Could not read Android Auto version: " + error.getClass().getSimpleName());
         }
         main.post(this::tick);
-    }
-
-    /**
-     * Hide only CarAsistant's browsable media-app entry from Gearhead's source
-     * discovery. Do not stop or deactivate its MediaSession: transport controls
-     * continue to use the active session independently of this service query.
-     */
-    private static void installMediaBrowserSourceFilter() {
-        try {
-            XposedBridge.hookAllMethods(
-                    XposedHelpers.findClass("android.app.ApplicationPackageManager", null),
-                    "queryIntentServices",
-                    new XC_MethodHook() {
-                        @Override
-                        protected void afterHookedMethod(MethodHookParam param) {
-                            try {
-                                if (param.args.length < 1
-                                        || !(param.args[0] instanceof Intent)
-                                        || ! "android.media.browse.MediaBrowserService".equals(
-                                                ((Intent) param.args[0]).getAction())) {
-                                    return;
-                                }
-                                Object result = param.getResult();
-                                if (!(result instanceof List)) return;
-                                List<?> services = (List<?>) result;
-                                ArrayList<Object> filtered = new ArrayList<>(services.size());
-                                boolean removed = false;
-                                for (Object item : services) {
-                                    if (item instanceof ResolveInfo) {
-                                        ResolveInfo info = (ResolveInfo) item;
-                                        if (info.serviceInfo != null
-                                                && "com.carassistant.v10".equals(
-                                                        info.serviceInfo.packageName)
-                                                && info.serviceInfo.name != null
-                                                && info.serviceInfo.name.endsWith(
-                                                        "CarAssistantMediaBrowserService")) {
-                                            removed = true;
-                                            continue;
-                                        }
-                                    }
-                                    filtered.add(item);
-                                }
-                                if (removed) {
-                                    param.setResult(filtered);
-                                    log("Filtered CarAsistant MediaBrowserService from Gearhead source discovery; MediaSession remains active");
-                                }
-                            } catch (Throwable error) {
-                                log("Media source filter skipped safely: "
-                                        + error.getClass().getSimpleName());
-                            }
-                        }
-                    });
-            log("Installed Gearhead MediaBrowserService source filter");
-        } catch (Throwable error) {
-            log("MediaBrowserService source filter unavailable: "
-                    + error.getClass().getSimpleName() + ": " + error.getMessage());
-        }
     }
 
     /**
