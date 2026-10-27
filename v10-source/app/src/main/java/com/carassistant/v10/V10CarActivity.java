@@ -604,6 +604,24 @@ public final class V10CarActivity
     }
 
 
+    /**
+     * Route the Android Auto media metadata tap back to the CarAsistant V10 dashboard.
+     * This deliberately does not launch the source player application.
+     */
+    public void handleShowCarAsistantOnProjection() {
+        handler.post(() -> {
+            if (root == null || launcherLayer == null || dashboard == null || appPanel == null) {
+                // The CarActivity may be between lifecycle states; let onResume rebuild it.
+                return;
+            }
+            hideTaskSwitcher();
+            hideFloatingMenu();
+            returnToLauncher();
+            if (launcherLayer != null) launcherLayer.bringToFront();
+            if (dashboard != null) dashboard.bringToFront();
+        });
+    }
+
     /** Called from the Android Auto media card and the steering-key bridge. */
     public void handleOpenActiveMediaOnProjection() {
         handler.post(this::openActiveMediaOnProjection);
