@@ -455,7 +455,11 @@ public final class GearheadDockPatcher {
         if (root == null) return;
         if ("com.google.android.apps.auto.components.coolwalk.focusring.TappableRegion"
                 .equals(root.getClass().getName())) {
-            if (containsTransportControl(root)) {
+            // Do not reject a metadata hit target merely because Gearhead nests
+            // transport controls elsewhere inside the same card container. The
+            // old subtree-wide test could discard the title/artwork target and
+            // leave Gearhead's native media-browser click handler in control.
+            if (isTransportControlRegion(root) || !containsMediaText(root)) {
                 mediaInfoRegions.remove(root);
             } else {
                 mediaInfoRegions.put(root, Boolean.TRUE);
@@ -470,10 +474,51 @@ public final class GearheadDockPatcher {
         }
     }
 
+    /** Reject a region only when the region itself identifies a transport action. */
+    private boolean isTransportControlRegion(View view) {
+        String name = resourceEntryName(view);
+        if (name != null) {
+            String lower = name.toLowerCase(java.util.Locale.ROOT);
+            String[] controls = {"play_pause", "playpause", "play_button", "pause_button",
+                    "next", "previous", "skip", "fast_forward", "rewind", "transport",
+                    "seek_bar", "seekbar", "progress"};
+            for (String control : controls) {
+                if (lower.contains(control)) return true;
+            }
+        }
+        CharSequence description = view.getContentDescription();
+        if (description != null) {
+            String lower = description.toString().toLowerCase(java.util.Locale.ROOT);
+            String[] controls = {"play", "pause", "next", "previous", "skip",
+                    "forward", "rewind", "seek", "phát", "dừng", "tiếp"};
+            for (String control : controls) {
+                if (lower.contains(control)) return true;
+            }
+        }
+        return false;
+    }
+
+    /** Metadata hit regions normally contain title/artist TextViews, unlike icon buttons. */
+    private boolean containsMediaText(View view) {
+        if (view instanceof TextView) {
+            CharSequence text = ((TextView) view).getText();
+            if (text != null && text.toString().trim().length() > 0
+                    && !isTransportControlRegion(view)) {
+                return true;
+            }
+        }
+        if (view instanceof ViewGroup) {
+            ViewGroup group = (ViewGroup) view;
+            for (int i = 0; i < group.getChildCount(); i++) {
+                if (containsMediaText(group.getChildAt(i))) return true;
+            }
+        }
+        return false;
+    }
+
     /**
-     * A TappableRegion is eligible for media-metadata interception only when its
-     * subtree does not contain a transport/seek control. This keeps Play/Pause,
-     * Next/Previous and seek actions owned by Android Auto's media session.
+     * Legacy subtree helper retained for click classification of an already
+     * identified target; this is not used to discard an entire metadata region.
      */
     private boolean containsTransportControl(View view) {
         if (view == null) return false;
