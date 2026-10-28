@@ -9,6 +9,7 @@ import com.carassistant.v10.AACastDisplay;
 import com.carassistant.v10.hook.DisplayHooks;
 import com.carassistant.v10.hook.GearheadAllow;
 import com.carassistant.v10.hook.GearheadDockPatcher;
+import com.carassistant.v10.hook.GearheadAutoOpen;
 import com.carassistant.v10.hook.InputHooks;
 import com.carassistant.v10.hook.OrientationHooks;
 import com.carassistant.v10.hook.InstallerSpoof;
@@ -112,6 +113,14 @@ public final class AACastBridge implements IXposedHookLoadPackage {
                 // immediately before Application.onCreate via Instrumentation.
                 if (GEARHEAD_PROJECTION.equals(param.processName)) {
                     installGearheadProjectionUiHook(param.classLoader, param.processName);
+                    // Automatically request V10CarActivity through Gearhead's Car App
+                    // launcher once the connected-car Coolwalk facet bar is inflated.
+                    try {
+                        GearheadAutoOpen.install(param.classLoader);
+                        XposedBridge.log("[AACastBridge] GearheadAutoOpen installed for AA connect");
+                    } catch (Throwable t) {
+                        XposedBridge.log("[AACastBridge] GearheadAutoOpen install FAILED: " + t);
+                    }
                 }
 
                 // No experimental Gearhead auto-open or steering/media-key interception.
