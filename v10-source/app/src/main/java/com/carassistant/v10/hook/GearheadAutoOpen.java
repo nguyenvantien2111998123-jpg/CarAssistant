@@ -31,7 +31,12 @@ public final class GearheadAutoOpen {
     private static final String GEARHEAD = "com.google.android.projection.gearhead";
     private static final String PACKAGE = "com.carassistant.v10";
     private static final String SERVICE = "com.carassistant.v10.AACastCarService";
-    private static final String FACET_BAR_RESOURCE = "gh_coolwalk_vertical_facet_bar";
+    // Same three facet-bar layout variants monitored by AADisplay's AaUiHook.
+    private static final String[] FACET_BAR_RESOURCES = {
+            "gh_coolwalk_vertical_facet_bar",
+            "gh_coolwalk_facet_bar",
+            "gh_coolwalk_facet_bar_rhd"
+    };
 
     private static final long OPEN_DELAY_MS = 1000L;
     private static final long RETRY_DELAY_MS = 1200L;
@@ -61,12 +66,7 @@ public final class GearheadAutoOpen {
                                 LayoutInflater inflater = (LayoutInflater) param.thisObject;
                                 Context context = inflater.getContext();
                                 Resources resources = context.getResources();
-                                int expectedId = resources.getIdentifier(
-                                        FACET_BAR_RESOURCE, "layout", GEARHEAD);
-                                boolean facetBar = expectedId != 0
-                                        ? resourceId == expectedId
-                                        : isFacetBarByName(resources, resourceId);
-                                if (!facetBar) return;
+                                if (!isFacetBar(resources, resourceId)) return;
 
                                 Object result = param.getResult();
                                 if (!(result instanceof ViewGroup)) {
@@ -87,13 +87,29 @@ public final class GearheadAutoOpen {
         }
     }
 
-    private static boolean isFacetBarByName(Resources resources, int resourceId) {
+    private static boolean isFacetBar(Resources resources, int resourceId) {
         try {
-            return FACET_BAR_RESOURCE.equals(resources.getResourceEntryName(resourceId))
-                    && GEARHEAD.equals(resources.getResourcePackageName(resourceId));
+            String entryName = resources.getResourceEntryName(resourceId);
+            if (!GEARHEAD.equals(resources.getResourcePackageName(resourceId))) return false;
+            for (String candidate : FACET_BAR_RESOURCES) {
+                if (!candidate.equals(entryName)) continue;
+                int expectedId = resources.getIdentifier(candidate, "layout", GEARHEAD);
+                // If Gearhead resolves the named resource, require the exact ID;
+                // otherwise the exact entry-name + package check is the fallback.
+                return expectedId == 0 || expectedId == resourceId;
+            }
         } catch (Throwable ignored) {
-            return false;
+            // Some OEM/AA builds hide resource names; use resolved IDs below.
         }
+        try {
+            for (String candidate : FACET_BAR_RESOURCES) {
+                int expectedId = resources.getIdentifier(candidate, "layout", GEARHEAD);
+                if (expectedId != 0 && expectedId == resourceId) return true;
+            }
+        } catch (Throwable ignored) {
+            // Version-specific resource lookup must never crash Gearhead.
+        }
+        return false;
     }
 
     private static void scheduleOpen(ViewGroup anchor) {
