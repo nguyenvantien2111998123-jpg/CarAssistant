@@ -101,6 +101,8 @@ public final class GearheadDockPatcher {
         // A failure in WindowManager or layout diagnostics must not disable media-card taps.
         patcher.installMediaListenerHook();
 
+        // AADisplay-style isolation: each hook can fail independently without
+        // preventing the remaining UI hooks from being installed.
         try {
             XposedHelpers.findAndHookMethod(Application.class, "attach", Context.class,
                     new XC_MethodHook() {
@@ -110,6 +112,11 @@ public final class GearheadDockPatcher {
                             patcher.main.post(() -> patcher.attachContext(appContext));
                         }
                     });
+        } catch (Throwable t) {
+            log("Application.attach hook unavailable: " + t);
+        }
+
+        try {
             XposedHelpers.findAndHookMethod(
                     View.class,
                     "performClick",
@@ -118,14 +125,17 @@ public final class GearheadDockPatcher {
                         protected void beforeHookedMethod(MethodHookParam param) {
                             Object target = param.thisObject;
                             if (target instanceof View && patcher.isMediaInfoClick((View) target)) {
-                                // Consume the Android Auto media-card click before its
-                                // native handler can launch the player on the phone.
                                 param.setResult(true);
                                 patcher.dispatchMediaOpen();
                                 log("Consumed media metadata click; forwarding to projected display");
                             }
                         }
                     });
+        } catch (Throwable t) {
+            log("View.performClick hook unavailable: " + t);
+        }
+
+        try {
             // Keep CarAssistantMediaBrowserService discoverable by Gearhead.
             // Hide any duplicate source entry at the UI layer instead of filtering this service.
             XposedBridge.hookAllMethods(
@@ -145,13 +155,18 @@ public final class GearheadDockPatcher {
                             }
                         }
                     });
-            // Read-only layout tracing. Reuse the existing addView hook above; do not install a second one.
-            DiagnosticLayoutInflaterHook.install();
-            patcher.main.post(patcher::refreshRoots);
-            log("Launcher dock hook v2 installed (GhFacetBar + embedded dock)");
         } catch (Throwable t) {
-            log("Dock hook unavailable: " + t);
+            log("WindowManagerGlobal.addView hook unavailable: " + t);
         }
+
+        try {
+            DiagnosticLayoutInflaterHook.install();
+        } catch (Throwable t) {
+            log("DiagnosticLayoutInflaterHook unavailable: " + t);
+        }
+
+        patcher.main.post(patcher::refreshRoots);
+        log("Launcher dock hook v2 installed (GhFacetBar + embedded dock)");
     }
 
     /**
