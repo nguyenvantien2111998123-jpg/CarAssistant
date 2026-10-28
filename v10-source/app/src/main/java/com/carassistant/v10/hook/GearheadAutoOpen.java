@@ -48,6 +48,7 @@ public final class GearheadAutoOpen {
     private static final AtomicBoolean OPEN_PENDING = new AtomicBoolean(false);
     private static volatile long lastSuccessfulOpenElapsed;
     private static volatile ClassLoader hostClassLoader;
+    private static volatile Method startMethod;
 
     private GearheadAutoOpen() {}
 
@@ -55,6 +56,18 @@ public final class GearheadAutoOpen {
         if (classLoader == null || !INSTALLED.compareAndSet(false, true)) return;
         hostClassLoader = classLoader;
         try {
+            // Resolve Gearhead's Car App launcher once during hook setup, as AADisplay
+            // resolves CarSystemUiControllerService.a(Intent) in loadDexClass().
+            Class<?> controller = XposedHelpers.findClassIfExists(
+                    "com.google.android.projection.gearhead.service.CarSystemUiControllerService",
+                    classLoader);
+            if (controller != null) {
+                startMethod = findLauncherMethod(controller);
+            }
+            if (startMethod == null) {
+                log("CarSystemUiControllerService.a(Intent) was not resolved at install time; "
+                        + "will retry resolution when auto-open is triggered");
+            }
             XposedHelpers.findAndHookMethod(
                     LayoutInflater.class, "inflate",
                     int.class, ViewGroup.class, boolean.class,
@@ -122,15 +135,18 @@ public final class GearheadAutoOpen {
 
     private static void attemptOpen(int attempt) {
         try {
-            ClassLoader loader = hostClassLoader;
-            if (loader == null) throw new IllegalStateException("Gearhead classloader unavailable");
-            Class<?> controller = XposedHelpers.findClassIfExists(
-                    "com.google.android.projection.gearhead.service.CarSystemUiControllerService",
-                    loader);
-            if (controller == null) throw new ClassNotFoundException("CarSystemUiControllerService not found");
-            Method launcher = findLauncherMethod(controller);
-            if (launcher == null) throw new NoSuchMethodException("Static a(Intent) launcher not found");
-
+            Method launcher = startMethod;
+            if (launcher == null) {
+                ClassLoader loader = hostClassLoader;
+                if (loader == null) throw new IllegalStateException("Gearhead classloader unavailable");
+                Class<?> controller = XposedHelpers.findClassIfExists(
+                        "com.google.android.projection.gearhead.service.CarSystemUiControllerService",
+                        loader);
+                if (controller == null) throw new ClassNotFoundException("CarSystemUiControllerService not found");
+                launcher = findLauncherMethod(controller);
+                if (launcher == null) throw new NoSuchMethodException("Static a(Intent) launcher not found");
+                startMethod = launcher;
+            }
             launcher.setAccessible(true);
             Intent intent = new Intent();
             intent.setComponent(new ComponentName(PACKAGE, SERVICE));
