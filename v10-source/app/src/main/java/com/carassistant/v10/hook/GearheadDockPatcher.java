@@ -402,9 +402,21 @@ public final class GearheadDockPatcher {
                     View.class,
                     new XC_MethodHook() {
                         @Override
+                        protected void beforeHookedMethod(MethodHookParam param) {
+                            log("MEDIACLICKDIAG MediaPlayerFragment.e(View) entered arg0="
+                                    + (param.args.length > 0 && param.args[0] != null
+                                    ? param.args[0].getClass().getName() : "null"));
+                        }
+
+                        @Override
                         protected void afterHookedMethod(MethodHookParam param) {
                             if (param.args.length > 0 && param.args[0] instanceof View) {
-                                patcherMarkMediaRegions((View) param.args[0]);
+                                View root = (View) param.args[0];
+                                log("MEDIACLICKDIAG MediaPlayerFragment.e(View) completed root="
+                                        + root.getClass().getName() + " id=" + resourceEntryName(root)
+                                        + " childCount=" + (root instanceof ViewGroup
+                                        ? ((ViewGroup) root).getChildCount() : 0));
+                                patcherMarkMediaRegions(root);
                             }
                         }
 
@@ -423,10 +435,20 @@ public final class GearheadDockPatcher {
                             @Override
                             protected void beforeHookedMethod(MethodHookParam param) {
                                 Object target = param.thisObject;
-                                if (target instanceof View && patcherIsMetadataRegion((View) target)) {
+                                if (!(target instanceof View)) return;
+                                View view = (View) target;
+                                boolean metadata = patcherIsMetadataRegion(view);
+                                log("MEDIACLICKDIAG TappableRegion.performClick id="
+                                        + resourceEntryName(view)
+                                        + " desc=" + view.getContentDescription()
+                                        + " size=" + view.getWidth() + "x" + view.getHeight()
+                                        + " markedMetadata=" + metadata
+                                        + " containsMediaText=" + containsMediaText(view)
+                                        + " transportRegion=" + isTransportControlRegion(view));
+                                if (metadata) {
                                     param.setResult(true);
+                                    log("MEDIACLICKDIAG consumed TappableRegion click; dispatching V10 open");
                                     dispatchMediaOpen();
-                                    log("Consumed concrete TappableRegion click; forwarding to V10 dashboard");
                                 }
                             }
 
@@ -459,11 +481,19 @@ public final class GearheadDockPatcher {
             // transport controls elsewhere inside the same card container. The
             // old subtree-wide test could discard the title/artwork target and
             // leave Gearhead's native media-browser click handler in control.
-            if (isTransportControlRegion(root) || !containsMediaText(root)) {
+            boolean transport = isTransportControlRegion(root);
+            boolean hasMediaText = containsMediaText(root);
+            log("MEDIACLICKDIAG inspect TappableRegion id=" + resourceEntryName(root)
+                    + " desc=" + root.getContentDescription()
+                    + " childCount=" + (root instanceof ViewGroup
+                    ? ((ViewGroup) root).getChildCount() : 0)
+                    + " containsMediaText=" + hasMediaText
+                    + " transportRegion=" + transport);
+            if (transport || !hasMediaText) {
                 mediaInfoRegions.remove(root);
             } else {
                 mediaInfoRegions.put(root, Boolean.TRUE);
-                log("Registered Coolwalk media metadata region id=" + resourceEntryName(root));
+                log("MEDIACLICKDIAG registered media metadata region id=" + resourceEntryName(root));
             }
         }
         if (root instanceof ViewGroup) {
