@@ -210,7 +210,7 @@ public final class GearheadDockPatcher {
                                         metadata = containsMediaText(clicked)
                                                 && !isTransportControlRegion(clicked);
                                     }
-                                    if (metadata && !patcher.isTransportControlRegion(clicked)) {
+                                    if (metadata && !isTransportControlRegion(clicked)) {
                                         log("MEDIACLICK listener intercepted metadata target="
                                                 + clicked.getClass().getName()
                                                 + " id=" + resourceEntryName(clicked));
