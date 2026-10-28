@@ -207,32 +207,32 @@ public final class GearheadDockPatcher {
      */
     private void dispatchMediaOpen() {
         Context appContext = context;
-        if (appContext == null) return;
+        if (appContext == null) {
+            log("Media-card tap ignored: Gearhead application context is not ready");
+            return;
+        }
         try {
+            // Match AADisplay Beta: resolve the exact static a(Intent) launcher,
+            // then pass the CarActivityService component and owning package.
             ClassLoader loader = appContext.getClassLoader();
-            Class<?> controller = XposedHelpers.findClassIfExists(
+            Class<?> controller = XposedHelpers.findClass(
                     "com.google.android.projection.gearhead.service.CarSystemUiControllerService",
                     loader);
-            if (controller == null) {
-                throw new ClassNotFoundException("CarSystemUiControllerService not found");
-            }
-
             Method launcher = null;
             for (Class<?> type = controller; type != null && launcher == null;
                     type = type.getSuperclass()) {
-                for (Method method : type.getDeclaredMethods()) {
-                    if (Modifier.isStatic(method.getModifiers())
-                            && "a".equals(method.getName())
-                            && method.getParameterTypes().length == 1
-                            && Intent.class.equals(method.getParameterTypes()[0])) {
-                        launcher = method;
-                        break;
+                try {
+                    Method candidate = type.getDeclaredMethod("a", Intent.class);
+                    if (Modifier.isStatic(candidate.getModifiers())) {
+                        launcher = candidate;
                     }
+                } catch (NoSuchMethodException ignored) {
+                    // Continue up the hierarchy, matching the resolved Gearhead method.
                 }
             }
             if (launcher == null) {
                 throw new NoSuchMethodException(
-                        "Gearhead CarSystemUiControllerService.a(Intent) not found");
+                        "CarSystemUiControllerService static a(Intent) not found");
             }
 
             launcher.setAccessible(true);
@@ -240,8 +240,9 @@ public final class GearheadDockPatcher {
             carAppIntent.setComponent(new android.content.ComponentName(
                     "com.carassistant.v10", "com.carassistant.v10.AACastCarService"));
             carAppIntent.putExtra("android.intent.extra.PACKAGE_NAME", "com.carassistant.v10");
+            log("Media-card tap detected; invoking Gearhead Car App launcher for AACastCarService");
             launcher.invoke(null, carAppIntent);
-            log("Media-card tap routed to Gearhead Car App launcher; requested AACastCarService.getCarActivity()");
+            log("Gearhead Car App launcher invoked for AACastCarService; service returns V10CarActivity");
         } catch (Throwable error) {
             log("Gearhead Car App launch failed; forwarding fallback event: " + error);
             try {
