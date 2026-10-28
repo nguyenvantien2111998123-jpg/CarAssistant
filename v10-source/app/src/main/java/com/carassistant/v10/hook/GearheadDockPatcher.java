@@ -67,6 +67,8 @@ public final class GearheadDockPatcher {
 
     private final Handler main = new Handler(Looper.getMainLooper());
     private final Set<View> roots = Collections.newSetFromMap(new WeakHashMap<>());
+    // Read-only diagnostics: log each Window root once, without adding another addView hook.
+    private final Set<View> diagnosedRoots = Collections.newSetFromMap(new WeakHashMap<>());
     private final IdentityHashMap<View, ViewSnapshot> hidden = new IdentityHashMap<>();
     private final IdentityHashMap<ViewGroup, View> covered = new IdentityHashMap<>();
     private final IdentityHashMap<ViewGroup, FullscreenSnapshot> fullscreen =
@@ -132,11 +134,14 @@ public final class GearheadDockPatcher {
                                 patcher.main.post(() -> {
                                     patcher.roots.add(view);
                                     patcher.rootsDirty = true;
+                                    patcher.logRootDiagnostic(view);
                                     patcher.attachContext(view.getContext());
                                 });
                             }
                         }
                     });
+            // Read-only layout tracing. Reuse the existing addView hook above; do not install a second one.
+            DiagnosticLayoutInflaterHook.install();
             patcher.main.post(patcher::refreshRoots);
             log("Launcher dock hook v2 installed (GhFacetBar + embedded dock)");
         } catch (Throwable t) {
@@ -574,7 +579,9 @@ public final class GearheadDockPatcher {
                 for (String name : names) {
                     Object root = XposedHelpers.callMethod(global, "getRootView", name);
                     if (root instanceof View) {
-                        roots.add((View) root);
+                        View rootView = (View) root;
+                        roots.add(rootView);
+                        logRootDiagnostic(rootView);
                     }
                 }
             }
@@ -583,6 +590,23 @@ public final class GearheadDockPatcher {
                 loggedRootFailure = true;
                 log("Existing roots unavailable; using addView hook: " + t);
             }
+        }
+    }
+
+    /** Log Window roots separately from descendant containers; never modifies their UI. */
+    private void logRootDiagnostic(View root) {
+        if (root == null || !diagnosedRoots.add(root)) return;
+        try {
+            Display display = root.getDisplay();
+            String displayInfo = display == null ? "unknown"
+                    : display.getDisplayId() + ":" + display.getName();
+            log("LAYOUTDIAG ROOT class=" + root.getClass().getName()
+                    + " attached=" + root.isAttachedToWindow()
+                    + " size=" + root.getWidth() + "x" + root.getHeight()
+                    + " display=" + displayInfo
+                    + " context=" + root.getContext().getClass().getName());
+        } catch (Throwable error) {
+            log("LAYOUTDIAG ROOT log failed: " + error.getClass().getSimpleName());
         }
     }
 
