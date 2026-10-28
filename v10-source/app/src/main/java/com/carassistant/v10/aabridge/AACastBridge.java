@@ -31,6 +31,12 @@ public final class AACastBridge implements IXposedHookLoadPackage {
     public void handleLoadPackage(XC_LoadPackage.LoadPackageParam param) {
         String packageName = param.packageName;
 
+        // Earliest module-entry trace: proves LSPosed reached this package/process
+        // even if a later hook installation throws or diagnostic filters omit other tags.
+        XposedBridge.log("[AACastBridge] handleLoadPackage package=" + packageName
+                + " process=" + param.processName
+                + " loader=" + String.valueOf(param.classLoader));
+
         // ---- system_server ----
         if ("android".equals(packageName)) {
             DisplayHooks.installDisplayFlags(param.classLoader);
@@ -45,8 +51,21 @@ public final class AACastBridge implements IXposedHookLoadPackage {
             InstallerSpoof.hookLegacy(param.classLoader, PLAY);
 
             if (GEARHEAD.equals(packageName)) {
-                GearheadAllow.install(param.classLoader);
-                GearheadDockPatcher.install();
+                XposedBridge.log("[AACastBridge] installing GearheadAllow process="
+                        + param.processName);
+                try {
+                    GearheadAllow.install(param.classLoader);
+                    XposedBridge.log("[AACastBridge] GearheadAllow.install returned");
+                } catch (Throwable t) {
+                    XposedBridge.log("[AACastBridge] GearheadAllow.install FAILED: " + t);
+                }
+                try {
+                    XposedBridge.log("[AACastBridge] calling GearheadDockPatcher.install");
+                    GearheadDockPatcher.install();
+                    XposedBridge.log("[AACastBridge] GearheadDockPatcher.install returned");
+                } catch (Throwable t) {
+                    XposedBridge.log("[AACastBridge] GearheadDockPatcher.install FAILED: " + t);
+                }
 
                 // No experimental Gearhead auto-open or steering/media-key interception.
                 // Android Auto projection and display/input hooks remain enabled.
