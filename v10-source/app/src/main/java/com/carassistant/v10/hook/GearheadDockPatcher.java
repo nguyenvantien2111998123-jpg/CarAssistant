@@ -96,6 +96,11 @@ public final class GearheadDockPatcher {
     /** Cài hook theo dõi root view + vòng lặp lease. */
     public static void install() {
         GearheadDockPatcher patcher = new GearheadDockPatcher();
+
+        // Install the listener-level route independently of the dock/root hooks.
+        // A failure in WindowManager or layout diagnostics must not disable media-card taps.
+        patcher.installMediaListenerHook();
+
         try {
             XposedHelpers.findAndHookMethod(Application.class, "attach", Context.class,
                     new XC_MethodHook() {
@@ -147,6 +152,70 @@ public final class GearheadDockPatcher {
         } catch (Throwable t) {
             log("Dock hook unavailable: " + t);
         }
+    }
+
+    /**
+     * AADisplay-style listener interception: wrap the actual listener installed by
+     * Gearhead, then decide at click time (after the view tree is attached) whether
+     * the target is the metadata surface. This avoids relying only on performClick(),
+     * which is not the callback Gearhead necessarily uses for its focus-ring targets.
+     */
+    private void installMediaListenerHook() {
+        try {
+            XposedHelpers.findAndHookMethod(
+                    View.class,
+                    "setOnClickListener",
+                    View.OnClickListener.class,
+                    new XC_MethodHook() {
+                        @Override
+                        protected void beforeHookedMethod(MethodHookParam param) {
+                            Object target = param.thisObject;
+                            Object supplied = param.args[0];
+                            if (!(target instanceof View) || !(supplied instanceof View.OnClickListener)
+                                    || supplied instanceof MediaClickForwarder) {
+                                return;
+                            }
+                            View view = (View) target;
+                            String className = view.getClass().getName();
+                            if (!className.equals(
+                                    "com.google.android.apps.auto.components.coolwalk.focusring.TappableRegion")
+                                    && !className.equals(
+                                    "com.google.android.apps.auto.components.metadataview.MetadataView")) {
+                                return;
+                            }
+
+                            final View.OnClickListener original = (View.OnClickListener) supplied;
+                            param.args[0] = new MediaClickForwarder() {
+                                @Override
+                                public void onClick(View clicked) {
+                                    boolean metadata = patcher.isMediaInfoClick(clicked);
+                                    if (!metadata && clicked != null
+                                            && clicked.getClass().getName().equals(
+                                            "com.google.android.apps.auto.components.coolwalk.focusring.TappableRegion")) {
+                                        metadata = patcher.containsMediaText(clicked)
+                                                && !patcher.isTransportControlRegion(clicked);
+                                    }
+                                    if (metadata && !patcher.isTransportControlRegion(clicked)) {
+                                        log("MEDIACLICK listener intercepted metadata target="
+                                                + clicked.getClass().getName()
+                                                + " id=" + patcher.resourceEntryName(clicked));
+                                        patcher.dispatchMediaOpen();
+                                        return;
+                                    }
+                                    // Preserve Gearhead's original behavior for all non-metadata clicks.
+                                    original.onClick(clicked);
+                                }
+                            };
+                        }
+                    });
+            log("MEDIACLICK listener-level hook installed for Gearhead TappableRegion/MetadataView");
+        } catch (Throwable error) {
+            log("MEDIACLICK listener-level hook unavailable: "
+                    + error.getClass().getSimpleName() + ": " + error.getMessage());
+        }
+    }
+
+    private interface MediaClickForwarder extends View.OnClickListener {
     }
 
     /**
