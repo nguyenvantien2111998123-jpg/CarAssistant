@@ -33,7 +33,8 @@ public final class DiagnosticLogCollector {
     private static final int MAX_MATCHED_LINES = 8000;
     private static final String[] TOKENS = {
             "LAYOUTDIAG", "LayoutDiag", "AACastDock", "AACast Dock",
-            "GearheadDockPatcher", "DiagnosticLayoutInflaterHook"
+            "GearheadDockPatcher", "DiagnosticLayoutInflaterHook", "MEDIACLICKDIAG",
+            "MediaPlayerFragment", "TappableRegion", "MetadataView.performClick"
     };
 
     private DiagnosticLogCollector() { }
