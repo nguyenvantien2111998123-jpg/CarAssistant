@@ -188,18 +188,18 @@ public final class GearheadDockPatcher {
                             param.args[0] = new MediaClickForwarder() {
                                 @Override
                                 public void onClick(View clicked) {
-                                    boolean metadata = patcher.isMediaInfoClick(clicked);
+                                    boolean metadata = isMediaInfoClick(clicked);
                                     if (!metadata && clicked != null
                                             && clicked.getClass().getName().equals(
                                             "com.google.android.apps.auto.components.coolwalk.focusring.TappableRegion")) {
-                                        metadata = patcher.containsMediaText(clicked)
-                                                && !patcher.isTransportControlRegion(clicked);
+                                        metadata = containsMediaText(clicked)
+                                                && !isTransportControlRegion(clicked);
                                     }
                                     if (metadata && !patcher.isTransportControlRegion(clicked)) {
                                         log("MEDIACLICK listener intercepted metadata target="
                                                 + clicked.getClass().getName()
-                                                + " id=" + patcher.resourceEntryName(clicked));
-                                        patcher.dispatchMediaOpen();
+                                                + " id=" + resourceEntryName(clicked));
+                                        dispatchMediaOpen();
                                         return;
                                     }
                                     // Preserve Gearhead's original behavior for all non-metadata clicks.
