@@ -40,7 +40,7 @@ public final class AACastBridge implements IXposedHookLoadPackage {
             ClassLoader classLoader, String processName) {
         final XC_MethodHook.Unhook[] bootstrap = new XC_MethodHook.Unhook[1];
         try {
-            XposedHelpers.findAndHookMethod(
+            bootstrap[0] = XposedHelpers.findAndHookMethod(
                     Instrumentation.class,
                     "callApplicationOnCreate",
                     Application.class,
