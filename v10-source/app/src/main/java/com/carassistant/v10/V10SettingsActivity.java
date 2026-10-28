@@ -182,6 +182,14 @@ public final class V10SettingsActivity extends Activity {
             mediaHint.setPadding(dp(4), dp(10), dp(4), dp(8));
             body.addView(mediaHint, params(-1, -2));
 
+            TextView logHint = text(
+                    "Sau khi kết nối Android Auto và tái hiện tình huống cần kiểm tra, quay lại đây rồi chạm nút dưới. CarAsistant sẽ tự đọc logcat bằng quyền root, chỉ lọc log chẩn đoán Gearhead/LSPosed liên quan và mở bảng chia sẻ tệp log.",
+                    13, Color.LTGRAY);
+            logHint.setPadding(dp(4), dp(8), dp(4), dp(8));
+            body.addView(logHint, params(-1, -2));
+            addButton(body, "THU LOG CHẨN ĐOÁN & CHIA SẺ", () ->
+                    DiagnosticLogCollector.collectAndShare(this));
+
             addButton(body, "MỞ CÀI ĐẶT ỨNG DỤNG", () -> {
                 Intent i = new Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
                         Uri.parse("package:" + getPackageName()));
