@@ -169,6 +169,14 @@ public final class GearheadDockPatcher {
             // signature changes, a TappableRegion ancestor must still be intercepted
             // before Gearhead opens its native "CarAsistant Media" browser screen.
             String className = current.getClass().getName();
+            // Android Auto 17.9.664044 inflates the metadata surface as a dedicated
+            // MetadataView. The media card may not pass through MediaPlayerFragment.e(View)
+            // on this release, so recognize this concrete metadata ancestor as a fallback.
+            // Transport controls live in the playback template and are rejected below.
+            if (className.equals(
+                    "com.google.android.apps.auto.components.metadataview.MetadataView")) {
+                metadataSurface = true;
+            }
             // Do not classify every generic TappableRegion as metadata: Gearhead also
             // uses this wrapper for unrelated controls. Only regions identified while
             // binding the media card may be consumed here.
@@ -394,6 +402,10 @@ public final class GearheadDockPatcher {
      */
     private void installMediaCardClickHook(ClassLoader loader) {
         if (mediaCardClickHookInstalled) return;
+        boolean anyHookInstalled = false;
+
+        // Keep binder and click-target hooks independent. A changed binder signature
+        // must not prevent direct metadata click hooks from being installed.
         try {
             XposedHelpers.findAndHookMethod(
                     "com.google.android.apps.auto.components.system.dashboard.media.MediaPlayerFragment",
@@ -416,61 +428,96 @@ public final class GearheadDockPatcher {
                                         + root.getClass().getName() + " id=" + resourceEntryName(root)
                                         + " childCount=" + (root instanceof ViewGroup
                                         ? ((ViewGroup) root).getChildCount() : 0));
-                                patcherMarkMediaRegions(root);
+                                markMediaInfoRegions(root);
                             }
-                        }
-
-                        private void patcherMarkMediaRegions(View root) {
-                            GearheadDockPatcher.this.markMediaInfoRegions(root);
                         }
                     });
-            // Hook the concrete click target too: some Gearhead builds override
-            // View.performClick() in TappableRegion, bypassing the base View hook.
-            try {
-                XposedHelpers.findAndHookMethod(
-                        "com.google.android.apps.auto.components.coolwalk.focusring.TappableRegion",
-                        loader,
-                        "performClick",
-                        new XC_MethodHook() {
-                            @Override
-                            protected void beforeHookedMethod(MethodHookParam param) {
-                                Object target = param.thisObject;
-                                if (!(target instanceof View)) return;
-                                View view = (View) target;
-                                boolean metadata = patcherIsMetadataRegion(view);
-                                log("MEDIACLICKDIAG TappableRegion.performClick id="
-                                        + resourceEntryName(view)
-                                        + " desc=" + view.getContentDescription()
-                                        + " size=" + view.getWidth() + "x" + view.getHeight()
-                                        + " markedMetadata=" + metadata
-                                        + " containsMediaText=" + containsMediaText(view)
-                                        + " transportRegion=" + isTransportControlRegion(view));
-                                if (metadata) {
-                                    param.setResult(true);
-                                    log("MEDIACLICKDIAG consumed TappableRegion click; dispatching V10 open");
-                                    dispatchMediaOpen();
-                                }
-                            }
-
-                            private boolean patcherIsMetadataRegion(View view) {
-                                // Match the same filtered set used by the base View hook.
-                                // Never swallow every TappableRegion click: some builds use
-                                // the class for controls and other tappable UI.
-                                return mediaInfoRegions.containsKey(view);
-                            }
-                        });
-                log("Hooked concrete Coolwalk TappableRegion.performClick()");
-            } catch (Throwable directHookError) {
-                log("Concrete TappableRegion click hook unavailable: "
-                        + directHookError.getClass().getSimpleName() + ": "
-                        + directHookError.getMessage());
-            }
-            mediaCardClickHookInstalled = true;
-            log("Hooked Coolwalk MediaPlayerFragment.e(View) for exact metadata-region discovery");
+            anyHookInstalled = true;
+            log("MEDIACLICKDIAG installed MediaPlayerFragment.e(View) binder hook");
         } catch (Throwable error) {
-            log("Exact Coolwalk media-card hook unavailable: "
+            log("MEDIACLICKDIAG MediaPlayerFragment binder hook unavailable: "
                     + error.getClass().getSimpleName() + ": " + error.getMessage());
         }
+
+        try {
+            XposedHelpers.findAndHookMethod(
+                    "com.google.android.apps.auto.components.coolwalk.focusring.TappableRegion",
+                    loader,
+                    "performClick",
+                    new XC_MethodHook() {
+                        @Override
+                        protected void beforeHookedMethod(MethodHookParam param) {
+                            Object target = param.thisObject;
+                            if (!(target instanceof View)) return;
+                            View view = (View) target;
+                            boolean metadata = mediaInfoRegions.containsKey(view)
+                                    || isMetadataViewOrChild(view);
+                            log("MEDIACLICKDIAG TappableRegion.performClick id="
+                                    + resourceEntryName(view)
+                                    + " desc=" + view.getContentDescription()
+                                    + " size=" + view.getWidth() + "x" + view.getHeight()
+                                    + " markedMetadata=" + metadata
+                                    + " containsMediaText=" + containsMediaText(view)
+                                    + " transportRegion=" + isTransportControlRegion(view));
+                            if (metadata && !isTransportControlRegion(view)) {
+                                param.setResult(true);
+                                log("MEDIACLICKDIAG consumed metadata TappableRegion click; dispatching V10 open");
+                                dispatchMediaOpen();
+                            }
+                        }
+                    });
+            anyHookInstalled = true;
+            log("MEDIACLICKDIAG installed concrete TappableRegion.performClick hook");
+        } catch (Throwable error) {
+            log("MEDIACLICKDIAG TappableRegion click hook unavailable: "
+                    + error.getClass().getSimpleName() + ": " + error.getMessage());
+        }
+
+        // Some AA versions may route the click directly through MetadataView rather
+        // than the fragment binder. Hook it independently and leave playback controls alone.
+        try {
+            XposedHelpers.findAndHookMethod(
+                    "com.google.android.apps.auto.components.metadataview.MetadataView",
+                    loader,
+                    "performClick",
+                    new XC_MethodHook() {
+                        @Override
+                        protected void beforeHookedMethod(MethodHookParam param) {
+                            Object target = param.thisObject;
+                            if (!(target instanceof View)) return;
+                            View view = (View) target;
+                            if (isTransportControlRegion(view)) return;
+                            log("MEDIACLICKDIAG MetadataView.performClick size="
+                                    + view.getWidth() + "x" + view.getHeight()
+                                    + " desc=" + view.getContentDescription());
+                            param.setResult(true);
+                            log("MEDIACLICKDIAG consumed MetadataView click; dispatching V10 open");
+                            dispatchMediaOpen();
+                        }
+                    });
+            anyHookInstalled = true;
+            log("MEDIACLICKDIAG installed concrete MetadataView.performClick hook");
+        } catch (Throwable error) {
+            log("MEDIACLICKDIAG MetadataView click hook unavailable: "
+                    + error.getClass().getSimpleName() + ": " + error.getMessage());
+        }
+
+        mediaCardClickHookInstalled = anyHookInstalled;
+        log("MEDIACLICKDIAG media click hook installation finished; anyHookInstalled="
+                + anyHookInstalled);
+    }
+
+    private boolean isMetadataViewOrChild(View view) {
+        View current = view;
+        for (int depth = 0; depth < 8 && current != null; depth++) {
+            if (current.getClass().getName().equals(
+                    "com.google.android.apps.auto.components.metadataview.MetadataView")) {
+                return true;
+            }
+            Object parent = current.getParent();
+            current = parent instanceof View ? (View) parent : null;
+        }
+        return false;
     }
 
     private void markMediaInfoRegions(View root) {
