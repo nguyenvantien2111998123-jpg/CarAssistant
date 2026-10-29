@@ -1,6 +1,7 @@
 package com.carassistant.v10.hook;
 
 import android.app.Activity;
+import android.content.Context;
 import android.content.ComponentName;
 import android.content.ContentResolver;
 import android.content.Context;
@@ -87,7 +88,22 @@ public final class GearheadMediaPopup {
                     }
                 }
             });
-            log("Installed Activity lifecycle hooks for Gearhead media popup");
+            try {
+                Class<?> windowManagerGlobal = XposedHelpers.findClass(
+                        "android.view.WindowManagerGlobal", null);
+                XposedBridge.hookAllMethods(windowManagerGlobal, "addView", new XC_MethodHook() {
+                    @Override protected void afterHookedMethod(MethodHookParam param) {
+                        if (param.args.length > 0 && param.args[0] instanceof View) {
+                            View root = (View) param.args[0];
+                            MAIN.post(() -> attachRoot(root, null));
+                        }
+                    }
+                });
+                log("Installed WindowManagerGlobal.addView hook for car UI roots");
+            } catch (Throwable error) {
+                log("Window root hook unavailable; Activity fallback remains: " + error);
+            }
+            log("Installed Gearhead media popup hooks");
         } catch (Throwable error) {
             INSTALLED.set(false);
             log("Unable to install Activity lifecycle hooks: " + error);
@@ -104,17 +120,32 @@ public final class GearheadMediaPopup {
                 log("Skip popup: Gearhead decor is not a ViewGroup");
                 return;
             }
+            attachRoot(decor, activity);
+        } catch (Throwable error) {
+            log("Popup attach failed safely: " + error);
+        }
+    }
+
+    /** Attach to the actual WindowManager root, including roots not owned by an Activity. */
+    private static void attachRoot(View root, Activity owner) {
+        if (!(root instanceof ViewGroup)) return;
+        Context context = root.getContext();
+        try {
+            if (!GEARHEAD.equals(context.getPackageName())) return;
             PopupController controller;
             synchronized (CONTROLLERS) {
-                controller = CONTROLLERS.get(decor);
+                controller = CONTROLLERS.get(root);
                 if (controller == null) {
-                    controller = new PopupController(activity, (ViewGroup) decor);
-                    CONTROLLERS.put(decor, controller);
+                    controller = new PopupController(context, (ViewGroup) root, owner);
+                    CONTROLLERS.put(root, controller);
+                    log("Popup attached to root=" + root.getClass().getName()
+                            + " context=" + context.getClass().getName()
+                            + " owner=" + (owner == null ? "<window-root>" : owner.getClass().getName()));
                 }
             }
             controller.resume();
         } catch (Throwable error) {
-            log("Popup attach failed safely: " + error);
+            log("Window root popup attach failed safely: " + error);
         }
     }
 
@@ -136,9 +167,9 @@ public final class GearheadMediaPopup {
         private int y;
         private String lastPackage = "";
 
-        PopupController(Activity activity, ViewGroup decor) {
-            this.activity = activity;
-            this.context = activity;
+        PopupController(Context context, ViewGroup decor, Activity owner) {
+            this.activity = owner;
+            this.context = context;
             this.decor = decor;
             SharedPreferences prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE);
             x = prefs.getInt(PREF_X, dp(32));
@@ -198,7 +229,7 @@ public final class GearheadMediaPopup {
             metadata.addView(artist, new LinearLayout.LayoutParams(-1, dp(18)));
 
             metadata.setOnTouchListener((view, event) -> handleDrag(event));
-            metadata.setContentDescription("Giữ và kéo để di chuyển popup media");
+            metadata.setContentDescription("Giữ và kéo để di chuyển popup media; chạm để mở CarAsistant V10");
 
             addControl("⏮", "Bài trước", "previous", dp(32));
             addControl("↶15", "Tua lùi 15 giây", "rewind", dp(38));
@@ -240,11 +271,13 @@ public final class GearheadMediaPopup {
                 dragDownY = event.getRawY();
                 dragStartX = x;
                 dragStartY = y;
+                dragged = false;
                 return true;
             }
             if (event.getActionMasked() == MotionEvent.ACTION_MOVE) {
                 int dx = Math.round(event.getRawX() - dragDownX);
                 int dy = Math.round(event.getRawY() - dragDownY);
+                if (Math.abs(dx) > dp(7) || Math.abs(dy) > dp(7)) dragged = true;
                 x = Math.max(0, Math.min(Math.max(0, overlay.getWidth() - card.getWidth()), dragStartX + dx));
                 y = Math.max(0, Math.min(Math.max(0, overlay.getHeight() - card.getHeight()), dragStartY + dy));
                 updatePosition();
@@ -254,6 +287,9 @@ public final class GearheadMediaPopup {
                     || event.getActionMasked() == MotionEvent.ACTION_CANCEL) {
                 context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit()
                         .putInt(PREF_X, x).putInt(PREF_Y, y).apply();
+                if (event.getActionMasked() == MotionEvent.ACTION_UP && !dragged) {
+                    openCarApp();
+                }
                 return true;
             }
             return true;
@@ -261,6 +297,7 @@ public final class GearheadMediaPopup {
 
         private float dragDownX;
         private float dragDownY;
+        private boolean dragged;
         private int dragStartX;
         private int dragStartY;
 
@@ -272,6 +309,38 @@ public final class GearheadMediaPopup {
             params.topMargin = y;
             params.gravity = Gravity.TOP | Gravity.LEFT;
             card.setLayoutParams(params);
+        }
+
+        private void openCarApp() {
+            try {
+                ClassLoader loader = context.getClassLoader();
+                Class<?> controller = XposedHelpers.findClass(
+                        "com.google.android.projection.gearhead.service.CarSystemUiControllerService",
+                        loader);
+                java.lang.reflect.Method launcher = null;
+                for (Class<?> type = controller; type != null && launcher == null;
+                        type = type.getSuperclass()) {
+                    for (java.lang.reflect.Method method : type.getDeclaredMethods()) {
+                        if (java.lang.reflect.Modifier.isStatic(method.getModifiers())
+                                && "a".equals(method.getName())
+                                && method.getParameterTypes().length == 1
+                                && Intent.class.equals(method.getParameterTypes()[0])) {
+                            launcher = method;
+                            break;
+                        }
+                    }
+                }
+                if (launcher == null) throw new NoSuchMethodException("Car App launcher a(Intent)");
+                launcher.setAccessible(true);
+                Intent intent = new Intent();
+                intent.setComponent(new ComponentName(
+                        "com.carassistant.v10", "com.carassistant.v10.AACastCarService"));
+                intent.putExtra("android.intent.extra.PACKAGE_NAME", "com.carassistant.v10");
+                launcher.invoke(null, intent);
+                log("Popup metadata tapped; Gearhead Car App launcher invoked for V10");
+            } catch (Throwable error) {
+                log("Popup could not open V10 Car App through Gearhead: " + error);
+            }
         }
 
         private void sendControl(String command) {
@@ -298,7 +367,7 @@ public final class GearheadMediaPopup {
         }
 
         private void poll() {
-            if (!resumed || activity.isFinishing()) return;
+            if (!resumed || (activity != null && activity.isFinishing())) return;
             if (queryInFlight.compareAndSet(false, true)) {
                 QUERY_EXECUTOR.execute(() -> {
                     MediaState state = readState();

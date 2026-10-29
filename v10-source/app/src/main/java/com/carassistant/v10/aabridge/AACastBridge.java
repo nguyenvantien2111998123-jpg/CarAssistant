@@ -70,14 +70,8 @@ public final class AACastBridge implements IXposedHookLoadPackage {
                                     XposedBridge.log("[AACastBridge] GearheadAutoOpen install failed: "
                                             + Log.getStackTraceString(error));
                                 }
-                                try {
-                                    GearheadDockPatcher.install();
-                                    XposedBridge.log("[AACastBridge] GearheadDockPatcher installed from "
-                                            + "Instrumentation.callApplicationOnCreate");
-                                } catch (Throwable error) {
-                                    XposedBridge.log("[AACastBridge] GearheadDockPatcher install failed: "
-                                            + Log.getStackTraceString(error));
-                                }
+                                // Dock and media-card interaction hooks are installed in :car,
+                                // the process that owns the car-facing Gearhead UI.
                             } catch (Throwable error) {
                                 XposedBridge.log("[AACastBridge] projection UI hook installation failed: "
                                         + Log.getStackTraceString(error));
@@ -117,6 +111,13 @@ public final class AACastBridge implements IXposedHookLoadPackage {
                                         + processName + " application="
                                         + param.args[0].getClass().getName());
                                 GearheadMediaPopup.install();
+                                try {
+                                    GearheadDockPatcher.install();
+                                    XposedBridge.log("[AACastBridge] GearheadDockPatcher installed in car UI process");
+                                } catch (Throwable error) {
+                                    XposedBridge.log("[AACastBridge] GearheadDockPatcher install failed in car process: "
+                                            + Log.getStackTraceString(error));
+                                }
                             } catch (Throwable error) {
                                 XposedBridge.log("[AACastBridge] GearheadMediaPopup install failed: "
                                         + Log.getStackTraceString(error));
