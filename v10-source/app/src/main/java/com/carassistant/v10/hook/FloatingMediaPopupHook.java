@@ -104,7 +104,7 @@ public final class FloatingMediaPopupHook {
             header.addView(labels,new LinearLayout.LayoutParams(0,-2,1));
             collapse=label("−",22);collapse.setGravity(Gravity.CENTER);header.addView(collapse,new LinearLayout.LayoutParams(dp(30),dp(38)));
             TextView close=label("×",20);close.setGravity(Gravity.CENTER);header.addView(close,new LinearLayout.LayoutParams(dp(28),dp(38)));
-            card.addView(header);header.setOnTouchListener(this::drag);
+            card.addView(header);grip.setOnTouchListener(this::drag);
             titleText.setOnClickListener(v->openV10());artistText.setOnClickListener(v->openV10());
             collapse.setOnClickListener(v->{collapsed=!collapsed;refresh();});close.setOnClickListener(v->layer.setVisibility(View.GONE));
             seek=new SeekBar(c);seek.setMax(1000);card.addView(seek,new LinearLayout.LayoutParams(-1,dp(25)));
