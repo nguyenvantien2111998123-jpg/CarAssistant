@@ -101,6 +101,10 @@ public final class GearheadDockPatcher {
         // A failure in WindowManager or layout diagnostics must not disable media-card taps.
         patcher.installMediaListenerHook();
 
+        // Keep the Gearhead floating media UI isolated from existing dock and click hooks.
+        try { FloatingMediaPopupHook.install(); }
+        catch (Throwable error) { log("Floating media popup unavailable: " + error); }
+
         // AADisplay-style isolation: each hook can fail independently without
         // preventing the remaining UI hooks from being installed.
         try {
