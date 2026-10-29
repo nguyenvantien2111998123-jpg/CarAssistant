@@ -15,7 +15,7 @@ public final class MediaSessionEntryActivity extends Activity {
         try {
             V10CarActivity projection = V10SessionStore.getCurrentActivity();
             if (projection != null) {
-                projection.handleShowCarAsistantOnProjection();
+                projection.handleOpenActiveMediaOnProjection();
             } else {
                 Log.i("CarAssistantMediaProxy",
                         "Projection is not active; leaving phone UI untouched");
