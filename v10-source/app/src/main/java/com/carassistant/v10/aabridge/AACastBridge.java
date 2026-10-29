@@ -52,14 +52,14 @@ public final class AACastBridge implements IXposedHookLoadPackage {
                 GearheadAllow.install(param.classLoader);
                 GearheadDockPatcher.install();
 
-                // AA Display-style auto-open: only hook the projection process where
-                // the Coolwalk facet bar is inflated and the internal car-app launcher lives.
+                // Install narrowly-filtered metadata listener routing in every
+                // Gearhead process because AA releases can move media UI between processes.
+                GearheadMediaCardHook.install(param.classLoader);
+
+                // The Coolwalk facet-bar watcher belongs only to the projection UI process.
                 if (param.processName != null
                         && param.processName.endsWith(":projection")) {
                     GearheadAutoOpen.install(param.classLoader);
-                    GearheadMediaCardHook.install(param.classLoader);
-                    XposedBridge.log("[AACast] Media metadata click hook requested for "
-                            + param.processName);
                 }
                 // Media keys are arbitrated in system_server, where AVRCP events are dispatched.
             }
