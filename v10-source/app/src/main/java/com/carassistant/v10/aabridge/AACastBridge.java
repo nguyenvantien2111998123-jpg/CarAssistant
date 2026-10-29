@@ -7,6 +7,7 @@ import com.carassistant.v10.hook.DisplayHooks;
 import com.carassistant.v10.hook.GearheadAllow;
 import com.carassistant.v10.hook.GearheadAutoOpen;
 import com.carassistant.v10.hook.GearheadDockPatcher;
+import com.carassistant.v10.hook.GearheadMediaCardHook;
 import com.carassistant.v10.hook.InputHooks;
 import com.carassistant.v10.hook.OrientationHooks;
 import com.carassistant.v10.hook.SystemMediaKeyHooks;
@@ -56,6 +57,9 @@ public final class AACastBridge implements IXposedHookLoadPackage {
                 if (param.processName != null
                         && param.processName.endsWith(":projection")) {
                     GearheadAutoOpen.install(param.classLoader);
+                    GearheadMediaCardHook.install(param.classLoader);
+                    XposedBridge.log("[AACast] Media metadata click hook requested for "
+                            + param.processName);
                 }
                 // Media keys are arbitrated in system_server, where AVRCP events are dispatched.
             }
