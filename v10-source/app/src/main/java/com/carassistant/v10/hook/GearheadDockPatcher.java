@@ -101,6 +101,14 @@ public final class GearheadDockPatcher {
         // A failure in WindowManager or layout diagnostics must not disable media-card taps.
         patcher.installMediaListenerHook();
 
+        // Add a draggable media overlay inside Gearhead's own view hierarchy.
+        // Keep this independent from the legacy dock and metadata-click hooks.
+        try {
+            GearheadMediaPopup.install();
+        } catch (Throwable error) {
+            log("GearheadMediaPopup installation failed safely: " + error);
+        }
+
         // AADisplay-style isolation: each hook can fail independently without
         // preventing the remaining UI hooks from being installed.
         try {

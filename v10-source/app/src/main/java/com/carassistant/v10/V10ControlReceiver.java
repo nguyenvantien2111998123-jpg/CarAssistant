@@ -13,12 +13,29 @@ public final class V10ControlReceiver
     public static final String EXTRA_COMMAND =
             "command";
 
+    public static final String ACTION_MEDIA_POPUP_CONTROL =
+            "com.carassistant.v10.MEDIA_POPUP_CONTROL";
+
     @Override
     public void onReceive(
             Context context,
             Intent intent) {
 
         if (intent == null) {
+            return;
+        }
+
+        if (ACTION_MEDIA_POPUP_CONTROL.equals(intent.getAction())) {
+            String mediaCommand = intent.getStringExtra(EXTRA_COMMAND);
+            if (mediaCommand == null) return;
+            switch (mediaCommand) {
+                case "toggle": MediaSessionBridge.togglePlayPause(); break;
+                case "previous": MediaSessionBridge.skipPrevious(); break;
+                case "next": MediaSessionBridge.skipNext(); break;
+                case "rewind": MediaSessionBridge.seekBy(-15000L); break;
+                case "forward": MediaSessionBridge.seekBy(15000L); break;
+                default: Log.w("CarAssistantMediaPopup", "Unknown popup command: " + mediaCommand); break;
+            }
             return;
         }
 

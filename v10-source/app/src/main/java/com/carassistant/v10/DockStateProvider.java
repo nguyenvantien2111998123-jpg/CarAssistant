@@ -36,8 +36,22 @@ public final class DockStateProvider extends ContentProvider {
         if (!isCallerAllowed()) {
             throw new SecurityException("Only Android Auto may read launcher state");
         }
-        MatrixCursor cursor = new MatrixCursor(new String[]{"visible_until"});
-        cursor.addRow(new Object[]{visibleUntil});
+        // Gearhead reads this cursor from its background executor. The snapshot is
+        // served by the app process, so the host overlay never needs notification access.
+        MediaSessionBridge.Snapshot media = MediaSessionBridge.getSnapshot();
+        MatrixCursor cursor = new MatrixCursor(new String[]{
+                "visible_until", "media_title", "media_artist", "media_package",
+                "media_playing", "media_position", "media_duration"
+        });
+        cursor.addRow(new Object[]{
+                visibleUntil,
+                media == null ? "" : media.title,
+                media == null ? "" : media.artist,
+                media == null ? "" : media.packageName,
+                media != null && media.playing ? 1 : 0,
+                media == null ? 0L : media.position,
+                media == null ? 0L : media.duration
+        });
         return cursor;
     }
 
