@@ -22,6 +22,21 @@ public final class V10ControlReceiver
             return;
         }
 
+        if ("com.carassistant.v10.FLOATING_MEDIA_CONTROL".equals(intent.getAction())) {
+            String command = intent.getStringExtra("command");
+            if (command == null) return;
+            switch (command) {
+                case "play_pause": MediaSessionBridge.togglePlayPause(); break;
+                case "next": MediaSessionBridge.skipNext(); break;
+                case "previous": MediaSessionBridge.skipPrevious(); break;
+                case "seek_back": MediaSessionBridge.seekBy(-15000L); break;
+                case "seek_forward": MediaSessionBridge.seekBy(15000L); break;
+                case "seek_to": MediaSessionBridge.seekTo(intent.getLongExtra("position", 0L)); break;
+                default: break;
+            }
+            return;
+        }
+
         if ("com.carassistant.v10.STEERING_MEDIA_OPEN".equals(intent.getAction())) {
             V10CarActivity mediaActivity = V10SessionStore.getCurrentActivity();
             if (mediaActivity != null) {
