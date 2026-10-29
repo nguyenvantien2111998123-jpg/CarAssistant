@@ -7,6 +7,7 @@ import com.carassistant.v10.hook.DisplayHooks;
 import com.carassistant.v10.hook.GearheadAllow;
 import com.carassistant.v10.hook.GearheadAutoOpen;
 import com.carassistant.v10.hook.GearheadDockPatcher;
+import com.carassistant.v10.hook.GearheadMediaCardHook;
 import com.carassistant.v10.hook.InputHooks;
 import com.carassistant.v10.hook.OrientationHooks;
 import com.carassistant.v10.hook.SystemMediaKeyHooks;
@@ -51,8 +52,11 @@ public final class AACastBridge implements IXposedHookLoadPackage {
                 GearheadAllow.install(param.classLoader);
                 GearheadDockPatcher.install();
 
-                // AA Display-style auto-open: only hook the projection process where
-                // the Coolwalk facet bar is inflated and the internal car-app launcher lives.
+                // Install narrowly-filtered metadata listener routing in every
+                // Gearhead process because AA releases can move media UI between processes.
+                GearheadMediaCardHook.install(param.classLoader);
+
+                // The Coolwalk facet-bar watcher belongs only to the projection UI process.
                 if (param.processName != null
                         && param.processName.endsWith(":projection")) {
                     GearheadAutoOpen.install(param.classLoader);

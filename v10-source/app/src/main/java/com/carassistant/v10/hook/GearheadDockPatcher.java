@@ -93,22 +93,6 @@ public final class GearheadDockPatcher {
                             patcher.main.post(() -> patcher.attachContext(appContext));
                         }
                     });
-            XposedHelpers.findAndHookMethod(
-                    View.class,
-                    "performClick",
-                    new XC_MethodHook() {
-                        @Override
-                        protected void beforeHookedMethod(MethodHookParam param) {
-                            Object target = param.thisObject;
-                            if (target instanceof View && isMediaInfoClick((View) target)) {
-                                // Consume the Android Auto media-card click before its
-                                // native handler can launch the player on the phone.
-                                param.setResult(true);
-                                patcher.dispatchMediaOpen();
-                                log("Consumed media metadata click; forwarding to projected display");
-                            }
-                        }
-                    });
             XposedBridge.hookAllMethods(
                     XposedHelpers.findClass("android.view.WindowManagerGlobal", (ClassLoader) null),
                     "addView",
