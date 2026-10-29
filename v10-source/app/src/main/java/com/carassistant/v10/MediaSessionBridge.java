@@ -333,6 +333,7 @@ public final class MediaSessionBridge extends NotificationListenerService {
                     TextUtils.isEmpty(artist) ? controller.getPackageName() : artist,
                     controller.getPackageName(), artwork, playing, duration, position);
         }
+        publishFloatingMediaUpdate(snapshot);
         Snapshot latest = snapshot;
         MAIN.post(() -> {
             for (Listener listener : LISTENERS) {
@@ -340,6 +341,23 @@ public final class MediaSessionBridge extends NotificationListenerService {
                 catch (RuntimeException error) { Log.w(TAG, "Media UI callback failed", error); }
             }
         });
+    }
+
+
+    private void publishFloatingMediaUpdate(Snapshot current) {
+        if (current == null) return;
+        try {
+            Intent update = new Intent("com.carassistant.v10.FLOATING_MEDIA_UPDATE");
+            update.setPackage("com.google.android.projection.gearhead");
+            update.putExtra("title", current.title);
+            update.putExtra("artist", current.artist);
+            update.putExtra("playing", current.playing);
+            update.putExtra("duration", current.duration);
+            update.putExtra("position", current.position);
+            sendBroadcast(update);
+        } catch (RuntimeException error) {
+            Log.d(TAG, "Gearhead floating update deferred", error);
+        }
     }
 
     private void clearActiveController() {
