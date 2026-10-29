@@ -49,17 +49,17 @@ public final class AACastBridge implements IXposedHookLoadPackage {
             InstallerSpoof.hookLegacy(param.classLoader, PLAY);
 
             if (GEARHEAD.equals(packageName)) {
+                // Keep compatibility hooks process-wide, but limit view/window hooks to
+                // the actual projection UI process to avoid disturbing other AA processes.
                 GearheadAllow.install(param.classLoader);
-                GearheadDockPatcher.install();
 
-                // Install narrowly-filtered metadata listener routing in every
-                // Gearhead process because AA releases can move media UI between processes.
-                GearheadMediaCardHook.install(param.classLoader);
-
-                // The Coolwalk facet-bar watcher belongs only to the projection UI process.
-                if (param.processName != null
-                        && param.processName.endsWith(":projection")) {
+                boolean projectionProcess = param.processName != null
+                        && param.processName.endsWith(":projection");
+                if (projectionProcess) {
+                    GearheadDockPatcher.install();
+                    GearheadMediaCardHook.install(param.classLoader);
                     GearheadAutoOpen.install(param.classLoader);
+                    XposedBridge.log("[AACast] Projection-only UI hooks installed");
                 }
                 // Media keys are arbitrated in system_server, where AVRCP events are dispatched.
             }

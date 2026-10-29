@@ -561,9 +561,17 @@ public final class V10CarActivity
 
         TextView previous = buttonText("⏮");
         previous.setContentDescription("Bài trước");
-        mediaCard.addView(previous,new LinearLayout.LayoutParams(dp(38),dp(48)));
+        mediaCard.addView(previous,new LinearLayout.LayoutParams(dp(34),dp(48)));
         previous.setOnClickListener(v -> {
             if (ensureMediaAccess()) MediaSessionBridge.skipPrevious();
+        });
+
+        TextView rewind = buttonText("↶15");
+        rewind.setTextSize(10);
+        rewind.setContentDescription("Tua lùi 15 giây");
+        mediaCard.addView(rewind,new LinearLayout.LayoutParams(dp(36),dp(48)));
+        rewind.setOnClickListener(v -> {
+            if (ensureMediaAccess()) MediaSessionBridge.seekBy(-15000L);
         });
 
         mediaPlayPause = buttonText("▶");
@@ -573,14 +581,26 @@ public final class V10CarActivity
             if (ensureMediaAccess()) MediaSessionBridge.togglePlayPause();
         });
 
+        TextView forward = buttonText("15↷");
+        forward.setTextSize(10);
+        forward.setContentDescription("Tua tới 15 giây");
+        mediaCard.addView(forward,new LinearLayout.LayoutParams(dp(36),dp(48)));
+        forward.setOnClickListener(v -> {
+            if (ensureMediaAccess()) MediaSessionBridge.seekBy(15000L);
+        });
+
         TextView next = buttonText("⏭");
         next.setContentDescription("Bài tiếp");
-        mediaCard.addView(next,new LinearLayout.LayoutParams(dp(38),dp(48)));
+        mediaCard.addView(next,new LinearLayout.LayoutParams(dp(34),dp(48)));
         next.setOnClickListener(v -> {
             if (ensureMediaAccess()) MediaSessionBridge.skipNext();
         });
 
-        mediaCard.setOnClickListener(v -> openActiveMediaOnProjection());
+        View.OnClickListener openPlayer = v -> openActiveMediaOnProjection();
+        mediaArtwork.setOnClickListener(openPlayer);
+        mediaTitle.setOnClickListener(openPlayer);
+        mediaArtist.setOnClickListener(openPlayer);
+        mediaCard.setOnClickListener(openPlayer);
         LinearLayout.LayoutParams mp=new LinearLayout.LayoutParams(0,dp(78),1f);
         mp.setMargins(dp(12),0,0,0);
         bottom.addView(mediaCard,mp);
