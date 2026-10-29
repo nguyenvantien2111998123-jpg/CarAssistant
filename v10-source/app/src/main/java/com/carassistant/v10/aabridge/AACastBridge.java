@@ -57,9 +57,26 @@ public final class AACastBridge implements IXposedHookLoadPackage {
                                 XposedBridge.log("[AACastBridge] projection UI bootstrap fired process="
                                         + processName + " application="
                                         + param.args[0].getClass().getName());
-                                GearheadDockPatcher.install();
-                                XposedBridge.log("[AACastBridge] GearheadDockPatcher installed from "
-                                        + "Instrumentation.callApplicationOnCreate");
+                                // Mirror AADisplay's lifecycle: install projection UI hooks
+                                // synchronously in callApplicationOnCreate, before Gearhead
+                                // inflates its connected-car UI. Keep each hook isolated so one
+                                // unsupported AA method cannot prevent the other hook from loading.
+                                try {
+                                    GearheadAutoOpen.install(classLoader);
+                                    XposedBridge.log("[AACastBridge] GearheadAutoOpen installed from "
+                                            + "Instrumentation.callApplicationOnCreate");
+                                } catch (Throwable error) {
+                                    XposedBridge.log("[AACastBridge] GearheadAutoOpen install failed: "
+                                            + Log.getStackTraceString(error));
+                                }
+                                try {
+                                    GearheadDockPatcher.install();
+                                    XposedBridge.log("[AACastBridge] GearheadDockPatcher installed from "
+                                            + "Instrumentation.callApplicationOnCreate");
+                                } catch (Throwable error) {
+                                    XposedBridge.log("[AACastBridge] GearheadDockPatcher install failed: "
+                                            + Log.getStackTraceString(error));
+                                }
                             } catch (Throwable error) {
                                 XposedBridge.log("[AACastBridge] projection UI hook installation failed: "
                                         + Log.getStackTraceString(error));
@@ -113,14 +130,9 @@ public final class AACastBridge implements IXposedHookLoadPackage {
                 // immediately before Application.onCreate via Instrumentation.
                 if (GEARHEAD_PROJECTION.equals(param.processName)) {
                     installGearheadProjectionUiHook(param.classLoader, param.processName);
-                    // Automatically request V10CarActivity through Gearhead's Car App
-                    // launcher once the connected-car Coolwalk facet bar is inflated.
-                    try {
-                        GearheadAutoOpen.install(param.classLoader);
-                        XposedBridge.log("[AACastBridge] GearheadAutoOpen installed for AA connect");
-                    } catch (Throwable t) {
-                        XposedBridge.log("[AACastBridge] GearheadAutoOpen install FAILED: " + t);
-                    }
+                    // GearheadAutoOpen is installed by the one-shot
+                    // callApplicationOnCreate bootstrap above, matching AADisplay's
+                    // hook lifecycle and ensuring the projection Application is ready.
                 }
 
                 // No experimental Gearhead auto-open or steering/media-key interception.
