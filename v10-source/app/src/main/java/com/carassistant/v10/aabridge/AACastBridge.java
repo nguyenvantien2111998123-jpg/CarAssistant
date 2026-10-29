@@ -9,6 +9,7 @@ import com.carassistant.v10.AACastDisplay;
 import com.carassistant.v10.hook.DisplayHooks;
 import com.carassistant.v10.hook.GearheadAllow;
 import com.carassistant.v10.hook.GearheadDockPatcher;
+import com.carassistant.v10.hook.GearheadMediaPopup;
 import com.carassistant.v10.hook.GearheadAutoOpen;
 import com.carassistant.v10.hook.InputHooks;
 import com.carassistant.v10.hook.OrientationHooks;
@@ -93,6 +94,43 @@ public final class AACastBridge implements IXposedHookLoadPackage {
         }
     }
 
+    /**
+     * The car-facing Gearhead UI is hosted in the dedicated :car process on
+     * supported Android Auto builds. Install only the draggable popup there;
+     * the :projection process is phone/projection plumbing and is not the target
+     * surface for a car-screen overlay.
+     */
+    private static void installGearheadCarUiHook(
+            ClassLoader classLoader, String processName) {
+        final XC_MethodHook.Unhook[] bootstrap = new XC_MethodHook.Unhook[1];
+        try {
+            bootstrap[0] = XposedHelpers.findAndHookMethod(
+                    Instrumentation.class,
+                    "callApplicationOnCreate",
+                    Application.class,
+                    new XC_MethodHook() {
+                        @Override
+                        protected void beforeHookedMethod(MethodHookParam param) {
+                            if (bootstrap[0] != null) bootstrap[0].unhook();
+                            try {
+                                XposedBridge.log("[AACastBridge] car UI bootstrap fired process="
+                                        + processName + " application="
+                                        + param.args[0].getClass().getName());
+                                GearheadMediaPopup.install();
+                            } catch (Throwable error) {
+                                XposedBridge.log("[AACastBridge] GearheadMediaPopup install failed: "
+                                        + Log.getStackTraceString(error));
+                            }
+                        }
+                    });
+            XposedBridge.log("[AACastBridge] registered car UI popup bootstrap process="
+                    + processName);
+        } catch (Throwable error) {
+            XposedBridge.log("[AACastBridge] cannot register car UI popup bootstrap: "
+                    + Log.getStackTraceString(error));
+        }
+    }
+
     @Override
     public void handleLoadPackage(XC_LoadPackage.LoadPackageParam param) {
         String packageName = param.packageName;
@@ -130,9 +168,12 @@ public final class AACastBridge implements IXposedHookLoadPackage {
                 // immediately before Application.onCreate via Instrumentation.
                 if (GEARHEAD_PROJECTION.equals(param.processName)) {
                     installGearheadProjectionUiHook(param.classLoader, param.processName);
-                    // GearheadAutoOpen is installed by the one-shot
-                    // callApplicationOnCreate bootstrap above, matching AADisplay's
-                    // hook lifecycle and ensuring the projection Application is ready.
+                    // GearheadAutoOpen and dock/media metadata hooks remain scoped to
+                    // the existing projection process to avoid changing other paths.
+                } else if ((GEARHEAD + ":car").equals(param.processName)) {
+                    // Attach the free-position media popup to the car-facing Gearhead
+                    // view tree, not the phone-side projection UI.
+                    installGearheadCarUiHook(param.classLoader, param.processName);
                 }
 
                 // No experimental Gearhead auto-open or steering/media-key interception.
