@@ -398,10 +398,14 @@ public final class V10SettingsActivity extends Activity {
                 && grantResults[0] == PackageManager.PERMISSION_GRANTED;
         if (returnAfterMicPermission && granted) {
             finish();
+            return;
         } else if (returnAfterMicPermission) {
             returnAfterMicPermission = false;
         }
-    }
+        if (requestCode == 4101 && hasRuntimePermissions()
+                && !MediaSessionBridge.hasAccess(this)) {
+            openNotificationAccessSettings();
+        }
 
     private void refreshOrientationStatus() {
         if (orientationStatus == null) return;
