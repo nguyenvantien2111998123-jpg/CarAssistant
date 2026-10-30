@@ -408,10 +408,6 @@ public final class V10CarActivity
                     }));
         }
 
-        if (V10SessionStore.consumeVoiceOnNextActivity(this)) {
-            handler.post(this::handleSteeringVoiceCommand);
-        }
-
         loadApps();
         rebuildDock();
 
@@ -1594,32 +1590,6 @@ private void hideTaskSwitcher() {
         }
 
         super.onBackPressed();
-    }
-
-    /** True only while this Car App is the resumed car-screen surface. */
-    public boolean isResumedForSteering() { return resumed; }
-
-    /** Explicit start entry point for the steering-wheel double-Next gesture. */
-    public void handleSteeringVoiceCommand() {
-        handler.post(() -> {
-            if (!resumed || voiceAssistantController == null) {
-                V10SessionStore.requestVoiceOnNextActivity(this);
-                return;
-            }
-            // Clear a queued request before starting so onResume cannot start it twice.
-            V10SessionStore.consumeVoiceOnNextActivity(this);
-            if (checkSelfPermission(Manifest.permission.RECORD_AUDIO)
-                    != PackageManager.PERMISSION_GRANTED) {
-                V10SessionStore.requestVoiceOnNextActivity(this);
-                Intent permissionIntent = new Intent(this, V10SettingsActivity.class);
-                permissionIntent.putExtra(V10SettingsActivity.EXTRA_REQUEST_MICROPHONE, true);
-                permissionIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
-                startActivity(permissionIntent);
-                return;
-            }
-            // Double-press is an explicit start, not toggle: never cancel an active session.
-            voiceAssistantController.startListening();
-        });
     }
 
     private void activateVoiceAssistant() {

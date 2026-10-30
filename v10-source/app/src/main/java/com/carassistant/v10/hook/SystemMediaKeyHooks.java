@@ -2,12 +2,15 @@ package com.carassistant.v10.hook;
 
 import android.content.Context;
 import android.content.Intent;
+import android.media.MediaSessionManager;
+import android.media.session.MediaController;
 import android.os.Handler;
 import android.os.Looper;
 import android.os.SystemClock;
 import android.view.KeyEvent;
 
 import java.lang.reflect.Method;
+import java.util.List;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 import de.robv.android.xposed.XC_MethodHook;
@@ -16,8 +19,8 @@ import de.robv.android.xposed.XposedHelpers;
 
 /**
  * Routes steering-wheel media keys before Android's normal MediaSession dispatch.
- * Single NEXT/PREVIOUS and long-hold seek retain the existing CarAsistant media
- * behavior; double NEXT requests the V10 voice assistant.
+ * The hook only consumes NEXT/PREVIOUS while CarAsistant's own MediaSession is active.
+ * Other media players retain Android's original hardware-key behavior.
  */
 public final class SystemMediaKeyHooks {
     private static final String TAG = "[AACast SystemMediaKey]";
@@ -31,7 +34,7 @@ public final class SystemMediaKeyHooks {
     private static final Object LOCK = new Object();
     private static final AtomicBoolean INSTALLED = new AtomicBoolean();
 
-    private static Context systemContext;
+    private static volatile Context systemContext;
     private static int pressedKey = KeyEvent.KEYCODE_UNKNOWN;
     private static boolean held;
     private static boolean doubleTap;
@@ -65,11 +68,11 @@ public final class SystemMediaKeyHooks {
                         if (event == null) return;
                         int key = event.getKeyCode();
                         if (key != NEXT && key != PREVIOUS) return;
-                        try {
-                            Object value = XposedHelpers.getObjectField(param.thisObject, "mContext");
-                            if (value instanceof Context) systemContext = (Context) value;
-                        } catch (Throwable ignored) { }
-                        // Prevent premature track skip until tap/hold arbitration completes.
+                        Context context = getSystemContext(param.thisObject);
+                        if (context == null || !isCarAsistantSessionActive(context)) return;
+
+                        // Only consume while our own Android Auto media session is active.
+                        // If ownership cannot be verified, let Android handle the key normally.
                         param.setResult(null);
                         arbitrate(event);
                     }
@@ -81,12 +84,44 @@ public final class SystemMediaKeyHooks {
                 XposedBridge.log(TAG + " no compatible dispatchMediaKeyEvent entry point");
             } else {
                 XposedBridge.log(TAG + " installed on " + count
-                        + " system media dispatch method(s)");
+                        + " dispatch method(s), gated by active CarAsistant MediaSession");
             }
         } catch (Throwable error) {
             INSTALLED.set(false);
             XposedBridge.log(TAG + " install failed: " + error);
         }
+    }
+
+    private static Context getSystemContext(Object service) {
+        Context current = systemContext;
+        if (current != null) return current;
+        try {
+            Object value = XposedHelpers.getObjectField(service, "mContext");
+            if (value instanceof Context) {
+                systemContext = (Context) value;
+                return systemContext;
+            }
+        } catch (Throwable error) {
+            XposedBridge.log(TAG + " cannot read MediaSessionService context: " + error);
+        }
+        return null;
+    }
+
+    private static boolean isCarAsistantSessionActive(Context context) {
+        try {
+            MediaSessionManager manager = (MediaSessionManager)
+                    context.getSystemService(Context.MEDIA_SESSION_SERVICE);
+            if (manager == null) return false;
+            List<MediaController> sessions = manager.getActiveSessions(null);
+            if (sessions == null) return false;
+            for (MediaController controller : sessions) {
+                if (controller != null && SELF.equals(controller.getPackageName())) return true;
+            }
+        } catch (Throwable error) {
+            // Fail open: never steal a key if active-session ownership is uncertain.
+            XposedBridge.log(TAG + " active-session check unavailable; Android handles key: " + error);
+        }
+        return false;
     }
 
     private static void arbitrate(KeyEvent event) {
@@ -95,13 +130,15 @@ public final class SystemMediaKeyHooks {
             if (event.getRepeatCount() != 0) return;
             synchronized (LOCK) {
                 long now = SystemClock.uptimeMillis();
-                if (key == NEXT && pendingNext && now - firstNextUp <= DOUBLE_MS) {
+                if (key == NEXT && pendingNext && now - firstNextUp >= 0
+                        && now - firstNextUp <= DOUBLE_MS) {
                     cancelPendingNextLocked();
                     pressedKey = NEXT;
                     doubleTap = true;
                     held = false;
                     cancelHoldLocked();
                     send("com.carassistant.v10.STEERING_VOICE", 0);
+                    XposedBridge.log(TAG + " double NEXT -> V10 voice assistant");
                     return;
                 }
                 if (key == NEXT && pendingNext) {
@@ -122,7 +159,7 @@ public final class SystemMediaKeyHooks {
             if (pressedKey != key) return;
             cancelHoldLocked();
             if (held) {
-                // Seek was emitted on hold start and once per second until release.
+                // Seek was emitted at hold start and once per second until release.
             } else if (!doubleTap) {
                 if (key == NEXT) {
                     pendingNext = true;
