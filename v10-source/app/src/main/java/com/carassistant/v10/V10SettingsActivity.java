@@ -37,6 +37,9 @@ public final class V10SettingsActivity extends Activity {
     private TextView orientationStatus;
     private LinearLayout defaultVoiceAppChoices;
     private TextView defaultVoiceAppStatus;
+    private TextView permissionGuideStatus;
+    private TextView permissionGuideAction;
+    private boolean permissionRequestInFlight;
     private String selectedDefaultVoiceCategory = "navigation";
     private final RootShellSession orientationShell = new RootShellSession();
     private final ArrayList<ResolveInfo> availableApps = new ArrayList<>();
@@ -50,6 +53,7 @@ public final class V10SettingsActivity extends Activity {
         returnAfterMicPermission = getIntent().getBooleanExtra(EXTRA_REQUEST_MICROPHONE, false);
         loadAvailableApps();
         buildUi();
+        if (!returnAfterMicPermission) getWindow().getDecorView().post(this::startFirstLaunchPermissionFlow);
         if (returnAfterMicPermission) {
             if (checkSelfPermission(Manifest.permission.RECORD_AUDIO)
                     == PackageManager.PERMISSION_GRANTED) {
@@ -64,6 +68,7 @@ public final class V10SettingsActivity extends Activity {
     @Override protected void onResume() {
         super.onResume();
         refreshStatus();
+        refreshPermissionGuide();
         rebuildFavoriteAppChoices();
         rebuildBackgroundAppChoices();
         refreshOrientationStatus();
@@ -72,23 +77,28 @@ public final class V10SettingsActivity extends Activity {
     private void buildUi() {
         ScrollView scroll = new ScrollView(this);
         scroll.setFillViewport(true);
-        scroll.setBackgroundColor(Color.rgb(7, 9, 12));
+        scroll.setBackgroundColor(Color.rgb(10, 14, 20));
 
         list = new LinearLayout(this);
         list.setOrientation(LinearLayout.VERTICAL);
-        list.setPadding(dp(16), dp(14), dp(16), dp(18));
+        list.setPadding(dp(18), dp(20), dp(18), dp(24));
         scroll.addView(list);
         setContentView(scroll);
 
-        TextView title = text("CAR ASSISTANT · SETUPS", 22, Color.WHITE);
+        TextView title = text("CarAsistant", 27, Color.WHITE);
         title.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
-        list.addView(title, params(-1, dp(52)));
+        list.addView(title, params(-1, dp(42)));
+        TextView eyebrow = text("TRUNG TÂM ĐIỀU KHIỂN & CÀI ĐẶT", 11, Color.rgb(91, 190, 207));
+        eyebrow.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
+        list.addView(eyebrow, params(-1, dp(24)));
 
         TextView intro = text(
-                "Cài đặt nhanh cho giao diện CarAssistant trên điện thoại. Chạm từng mục để mở chi tiết; chạm lần nữa để thu gọn.",
-                14, Color.LTGRAY);
+                "Quản lý quyền, ứng dụng mặc định và cấu hình màn hình chiếu tại một nơi.",
+                14, Color.rgb(183, 194, 207));
         intro.setPadding(0, 0, 0, dp(12));
         list.addView(intro, params(-1, -2));
+
+        addPermissionGuideCard();
 
         addSection("NỀN HOME", "Chọn ứng dụng chạy ở lớp nền", body -> {
             selectedBackground = text("", 14, Color.LTGRAY);
@@ -162,7 +172,7 @@ public final class V10SettingsActivity extends Activity {
             rebuildDefaultVoiceAppChoices();
         });
 
-        addSection("QUYỀN VÀ CHẨN ĐOÁN", "Vị trí, micro, cài đặt ứng dụng, Root/LSPosed", body -> {
+        addSection("QUYỀN & CHẨN ĐOÁN", "Theo dõi quyền hệ thống và trạng thái tích hợp", body -> {
             permissionStatus = text("", 14, Color.WHITE);
             permissionStatus.setPadding(dp(12), dp(10), dp(12), dp(10));
             permissionStatus.setBackgroundColor(Color.rgb(22, 27, 33));
@@ -173,8 +183,8 @@ public final class V10SettingsActivity extends Activity {
                             Manifest.permission.ACCESS_COARSE_LOCATION}, 4101));
             addButton(body, "CẤP QUYỀN MICRO", () ->
                     requestPermissions(new String[]{Manifest.permission.RECORD_AUDIO}, 4102));
-            addButton(body, "MỞ CÀI ĐẶT TRỢ NĂNG ĐỂ BẬT TỰ PHÁT MEDIA", () ->
-                    startActivity(new Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)));
+            addButton(body, "MỞ QUYỀN TRỢ NĂNG MEDIA AUTO PLAY", this::openAccessibilitySettings);
+            addButton(body, "MỞ QUYỀN TRUY CẬP THÔNG BÁO / MEDIA", this::openNotificationAccessSettings);
 
             TextView mediaHint = text(
                     "Để trợ lý tự chọn kết quả và bấm Phát trong YouTube/Zing MP3, mở Trợ năng và bật dịch vụ “CarAsistant Media Auto Play”. Android yêu cầu người dùng tự bật quyền này; ứng dụng không thể tự cấp.",
@@ -203,7 +213,7 @@ public final class V10SettingsActivity extends Activity {
     private void addSection(String heading, String subtitle, SectionBuilder builder) {
         LinearLayout section = new LinearLayout(this);
         section.setOrientation(LinearLayout.VERTICAL);
-        section.setBackgroundColor(Color.rgb(16, 20, 25));
+        section.setBackgroundColor(Color.rgb(17, 25, 34));
         LinearLayout.LayoutParams sectionParams = params(-1, -2);
         sectionParams.setMargins(0, dp(5), 0, dp(5));
         list.addView(section, sectionParams);
@@ -212,7 +222,7 @@ public final class V10SettingsActivity extends Activity {
         header.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
         header.setPadding(dp(14), dp(12), dp(12), dp(12));
         header.setGravity(Gravity.CENTER_VERTICAL);
-        header.setBackgroundColor(Color.rgb(29, 35, 42));
+        header.setBackgroundColor(Color.rgb(27, 39, 51));
         section.addView(header, params(-1, -2));
 
         LinearLayout body = new LinearLayout(this);
@@ -380,8 +390,10 @@ public final class V10SettingsActivity extends Activity {
     @Override
     public void onRequestPermissionsResult(int requestCode, String[] permissions, int[] grantResults) {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults);
-        if (requestCode != 4102) return;
+        if (requestCode != 4102 && requestCode != 4101) return;
+        permissionRequestInFlight = false;
         refreshStatus();
+        refreshPermissionGuide();
         boolean granted = grantResults.length > 0
                 && grantResults[0] == PackageManager.PERMISSION_GRANTED;
         if (returnAfterMicPermission && granted) {
@@ -454,12 +466,119 @@ public final class V10SettingsActivity extends Activity {
         super.onDestroy();
     }
 
+
+    private void addPermissionGuideCard() {
+        LinearLayout card = new LinearLayout(this);
+        card.setOrientation(LinearLayout.VERTICAL);
+        card.setPadding(dp(15), dp(14), dp(15), dp(14));
+        card.setBackgroundColor(Color.rgb(22, 43, 54));
+        LinearLayout.LayoutParams cp = params(-1, -2);
+        cp.setMargins(0, dp(8), 0, dp(14));
+        list.addView(card, cp);
+
+        TextView heading = text("THIẾT LẬP BAN ĐẦU", 13, Color.rgb(105, 215, 224));
+        heading.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
+        card.addView(heading, params(-1, dp(24)));
+        permissionGuideStatus = text("", 14, Color.WHITE);
+        permissionGuideStatus.setPadding(0, dp(5), 0, dp(10));
+        card.addView(permissionGuideStatus, params(-1, -2));
+        permissionGuideAction = text("", 14, Color.WHITE);
+        permissionGuideAction.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
+        permissionGuideAction.setGravity(Gravity.CENTER);
+        permissionGuideAction.setBackgroundColor(Color.rgb(25, 125, 145));
+        LinearLayout.LayoutParams ap = params(-1, dp(48));
+        ap.setMargins(0, dp(3), 0, 0);
+        card.addView(permissionGuideAction, ap);
+        permissionGuideAction.setOnClickListener(v -> runNextPermissionStep());
+        refreshPermissionGuide();
+    }
+
+    private void startFirstLaunchPermissionFlow() {
+        if (isFinishing() || permissionRequestInFlight) return;
+        android.content.SharedPreferences prefs = getPreferences(MODE_PRIVATE);
+        if (prefs.getBoolean("permission_setup_started", false)) return;
+        prefs.edit().putBoolean("permission_setup_started", true).apply();
+        if (!hasRuntimePermissions()) requestRuntimePermissions();
+        else if (!MediaSessionBridge.hasAccess(this)) openNotificationAccessSettings();
+        else if (!hasMediaAccessibilityAccess()) openAccessibilitySettings();
+    }
+
+    private boolean hasRuntimePermissions() {
+        return checkSelfPermission(Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED
+                && checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED;
+    }
+
+    private void requestRuntimePermissions() {
+        ArrayList<String> missing = new ArrayList<>();
+        if (checkSelfPermission(Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED)
+            missing.add(Manifest.permission.RECORD_AUDIO);
+        if (checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION) != PackageManager.PERMISSION_GRANTED)
+            missing.add(Manifest.permission.ACCESS_FINE_LOCATION);
+        if (!missing.isEmpty()) {
+            permissionRequestInFlight = true;
+            requestPermissions(missing.toArray(new String[0]), 4101);
+        }
+    }
+
+    private boolean hasMediaAccessibilityAccess() {
+        String enabled = Settings.Secure.getString(getContentResolver(),
+                Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES);
+        if (enabled == null) return false;
+        String expected = new ComponentName(this, MediaPlaybackAccessibilityService.class).flattenToString();
+        for (String item : enabled.split(":")) {
+            ComponentName component = ComponentName.unflattenFromString(item);
+            if (component != null && expected.equals(component.flattenToString())) return true;
+        }
+        return false;
+    }
+
+    private void openNotificationAccessSettings() {
+        try {
+            startActivity(new Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS));
+        } catch (RuntimeException error) {
+            startActivity(new Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
+                    Uri.parse("package:" + getPackageName())));
+        }
+    }
+
+    private void openAccessibilitySettings() {
+        startActivity(new Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS));
+    }
+
+    private void runNextPermissionStep() {
+        if (!hasRuntimePermissions()) requestRuntimePermissions();
+        else if (!MediaSessionBridge.hasAccess(this)) openNotificationAccessSettings();
+        else if (!hasMediaAccessibilityAccess()) openAccessibilitySettings();
+        else new android.app.AlertDialog.Builder(this)
+                .setTitle("Quyền cơ bản đã đủ")
+                .setMessage("Các quyền Android cần thiết đã được bật. Root và LSPosed cần được cấp/bật riêng trong ứng dụng quản lý tương ứng.")
+                .setPositiveButton("ĐÃ HIỂU", null).show();
+    }
+
+    private void refreshPermissionGuide() {
+        if (permissionGuideStatus == null || permissionGuideAction == null) return;
+        boolean runtime = hasRuntimePermissions();
+        boolean notification = MediaSessionBridge.hasAccess(this);
+        boolean accessibility = hasMediaAccessibilityAccess();
+        permissionGuideStatus.setText(
+                "Vị trí & micro: " + (runtime ? "ĐÃ CẤP" : "CẦN CẤP")
+                + "\nTruy cập thông báo / Media Session: " + (notification ? "ĐÃ CẤP" : "CẦN BẬT")
+                + "\nTrợ năng Media Auto Play: " + (accessibility ? "ĐÃ BẬT" : "TÙY CHỌN – CẦN BẬT")
+                + "\nRoot / LSPosed: bật thủ công trong ứng dụng quản lý root và LSPosed.");
+        permissionGuideAction.setText(!runtime ? "CẤP QUYỀN VỊ TRÍ & MICRO"
+                : !notification ? "MỞ CÀI ĐẶT TRUY CẬP MEDIA"
+                : !accessibility ? "MỞ CÀI ĐẶT TRỢ NĂNG"
+                : "KIỂM TRA HƯỚNG DẪN ROOT / LSPOSED");
+    }
+
     private void refreshStatus() {
         if (permissionStatus == null) return;
         permissionStatus.setText(
                 "Vị trí: " + granted(Manifest.permission.ACCESS_FINE_LOCATION)
                 + "   •   Micro: " + granted(Manifest.permission.RECORD_AUDIO)
-                + "\nRoot/LSPosed: cần kiểm tra riêng trong ứng dụng quản lý tương ứng.");
+                + "\nThông báo/media: " + (MediaSessionBridge.hasAccess(this) ? "ĐÃ CẤP" : "CÒN THIẾU")
+                + "   •   Trợ năng: " + (hasMediaAccessibilityAccess() ? "ĐÃ CẤP" : "CÒN THIẾU")
+                + "\nRoot/LSPosed: kiểm tra riêng trong ứng dụng quản lý tương ứng.");
     }
 
     private String granted(String permission) {
