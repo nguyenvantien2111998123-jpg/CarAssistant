@@ -1570,6 +1570,11 @@ private void hideTaskSwitcher() {
         super.onBackPressed();
     }
 
+    /** Called by the LSPosed steering-key bridge when Next is double-pressed. */
+    public void handleSteeringVoice() {
+        runOnUiThread(this::activateVoiceAssistant);
+    }
+
     private void activateVoiceAssistant() {
         if (voiceAssistantController == null) {
             Toast.makeText(this, "Trợ lý giọng nói chưa sẵn sàng.", Toast.LENGTH_SHORT).show();
