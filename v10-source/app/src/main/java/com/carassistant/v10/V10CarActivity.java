@@ -1572,7 +1572,7 @@ private void hideTaskSwitcher() {
 
     /** Called by the LSPosed steering-key bridge when Next is double-pressed. */
     public void handleSteeringVoice() {
-        runOnUiThread(this::activateVoiceAssistant);
+        handler.post(this::activateVoiceAssistant);
     }
 
     private void activateVoiceAssistant() {
