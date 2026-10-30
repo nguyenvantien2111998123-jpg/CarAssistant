@@ -8,6 +8,7 @@ import com.carassistant.v10.hook.GearheadAllow;
 import com.carassistant.v10.hook.GearheadDockPatcher;
 import com.carassistant.v10.hook.InputHooks;
 import com.carassistant.v10.hook.OrientationHooks;
+import com.carassistant.v10.hook.SystemMediaKeyHooks;
 import com.carassistant.v10.hook.InstallerSpoof;
 
 import de.robv.android.xposed.IXposedHookLoadPackage;
@@ -37,6 +38,9 @@ public final class AACastBridge implements IXposedHookLoadPackage {
             DisplayHooks.installInputPolicy(param.classLoader);
             OrientationHooks.install(param.classLoader);
             InputHooks.install(param.classLoader);
+            // Capture AVRCP steering-wheel media keys at the system media-session
+            // dispatch point so single/double/hold gestures can be distinguished.
+            SystemMediaKeyHooks.install(param.classLoader);
             return;
         }
 
