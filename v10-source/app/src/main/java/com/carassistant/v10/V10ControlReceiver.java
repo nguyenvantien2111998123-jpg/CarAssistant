@@ -42,10 +42,11 @@ public final class V10ControlReceiver
         if ("com.carassistant.v10.STEERING_VOICE".equals(action)) {
             V10SessionStore.requestVoiceOnNextActivity(context);
             V10CarActivity activity = V10SessionStore.getCurrentActivity();
-            if (activity != null) {
+            if (activity != null && activity.isResumedForSteering()) {
                 activity.handleSteeringVoiceCommand();
             } else {
-                // Ask Gearhead's car-side hook to launch the registered V10 Car App.
+                // If V10 is paused behind Android Auto's media screen, bring its Car App
+                // forward; the persisted voice request is consumed on the next onResume.
                 Intent open = new Intent("com.carassistant.v10.action.OPEN_CAR_APP_FROM_MEDIA");
                 open.setPackage("com.google.android.projection.gearhead");
                 try { context.sendBroadcast(open); }

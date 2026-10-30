@@ -1596,6 +1596,9 @@ private void hideTaskSwitcher() {
         super.onBackPressed();
     }
 
+    /** True only while this Car App is the resumed car-screen surface. */
+    public boolean isResumedForSteering() { return resumed; }
+
     /** Explicit start entry point for the steering-wheel double-Next gesture. */
     public void handleSteeringVoiceCommand() {
         handler.post(() -> {
