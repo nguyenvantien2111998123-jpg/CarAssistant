@@ -36,6 +36,7 @@ public final class MediaSessionBridge extends NotificationListenerService {
 
     private static volatile Snapshot snapshot = Snapshot.empty();
     private static volatile MediaController activeController;
+    private MediaSession mirrorSession;
     private MediaSessionManager manager;
     private MediaSessionManager.OnActiveSessionsChangedListener sessionsListener;
     private MediaController.Callback controllerCallback;
@@ -174,14 +175,11 @@ public final class MediaSessionBridge extends NotificationListenerService {
         if (controller != null) controller.getTransportControls().skipToPrevious();
     }
 
-    /** Seek the active media session by a relative offset in milliseconds. */
-    public static void seekBy(long offsetMs) {
+    /** Seek the active media session to an absolute position in milliseconds. */
+    public static void seekTo(long positionMs) {
         MediaController controller = activeController;
-        if (controller == null || offsetMs == 0L) return;
-        PlaybackState state = controller.getPlaybackState();
-        if (state == null) return;
-        long position = Math.max(0L, state.getPosition());
-        long target = Math.max(0L, position + offsetMs);
+        if (controller == null) return;
+        long target = Math.max(0L, positionMs);
         MediaMetadata metadata = controller.getMetadata();
         long duration = metadata == null ? 0L
                 : metadata.getLong(MediaMetadata.METADATA_KEY_DURATION);
@@ -193,9 +191,91 @@ public final class MediaSessionBridge extends NotificationListenerService {
         }
     }
 
+    /** Seek the active media session by a relative offset in milliseconds. */
+    public static void seekBy(long offsetMs) {
+        MediaController controller = activeController;
+        if (controller == null || offsetMs == 0L) return;
+        PlaybackState state = controller.getPlaybackState();
+        if (state == null) return;
+        seekTo(Math.max(0L, state.getPosition() + offsetMs));
+    }
+
+    private void ensureMirrorSession() {
+        if (mirrorSession != null) return;
+        mirrorSession = new MediaSession(this, "CarAsistant Media Controller");
+        mirrorSession.setFlags(MediaSession.FLAG_HANDLES_MEDIA_BUTTONS
+                | MediaSession.FLAG_HANDLES_TRANSPORT_CONTROLS);
+        mirrorSession.setCallback(new MediaSession.Callback() {
+            @Override public void onPlay() { MediaSessionBridge.play(); }
+            @Override public void onPause() { MediaSessionBridge.pause(); }
+            @Override public void onSkipToNext() { MediaSessionBridge.skipNext(); }
+            @Override public void onSkipToPrevious() { MediaSessionBridge.skipPrevious(); }
+            @Override public void onFastForward() { MediaSessionBridge.seekBy(15000L); }
+            @Override public void onRewind() { MediaSessionBridge.seekBy(-15000L); }
+            @Override public void onSeekTo(long position) { MediaSessionBridge.seekTo(position); }
+            @Override public void onStop() { MediaSessionBridge.pause(); }
+        }, MAIN);
+    }
+
+    private void updateMirrorSession(Snapshot state) {
+        MediaSession session = mirrorSession;
+        if (session == null) return;
+        boolean hasPlayer = state != null && !TextUtils.isEmpty(state.packageName);
+        if (!hasPlayer) {
+            session.setMetadata(null);
+            session.setPlaybackState(new PlaybackState.Builder()
+                    .setActions(PlaybackState.ACTION_PLAY | PlaybackState.ACTION_PAUSE
+                            | PlaybackState.ACTION_PLAY_PAUSE)
+                    .setState(PlaybackState.STATE_NONE, 0L, 0f)
+                    .build());
+            session.setActive(false);
+            return;
+        }
+
+        MediaMetadata.Builder metadata = new MediaMetadata.Builder()
+                .putString(MediaMetadata.METADATA_KEY_TITLE,
+                        TextUtils.isEmpty(state.title) ? "Đang phát media" : state.title)
+                .putString(MediaMetadata.METADATA_KEY_ARTIST,
+                        TextUtils.isEmpty(state.artist) ? state.packageName : state.artist)
+                .putString(MediaMetadata.METADATA_KEY_ALBUM, state.packageName)
+                .putLong(MediaMetadata.METADATA_KEY_DURATION, Math.max(0L, state.duration));
+        Bitmap artwork = safeMirrorArtwork(state.artwork);
+        if (artwork != null) metadata.putBitmap(MediaMetadata.METADATA_KEY_ALBUM_ART, artwork);
+        session.setMetadata(metadata.build());
+
+        long actions = PlaybackState.ACTION_PLAY | PlaybackState.ACTION_PAUSE
+                | PlaybackState.ACTION_PLAY_PAUSE | PlaybackState.ACTION_SKIP_TO_NEXT
+                | PlaybackState.ACTION_SKIP_TO_PREVIOUS | PlaybackState.ACTION_SEEK_TO
+                | PlaybackState.ACTION_FAST_FORWARD | PlaybackState.ACTION_REWIND
+                | PlaybackState.ACTION_STOP;
+        session.setPlaybackState(new PlaybackState.Builder()
+                .setActions(actions)
+                .setState(state.playing ? PlaybackState.STATE_PLAYING : PlaybackState.STATE_PAUSED,
+                        Math.max(0L, state.position), state.playing ? 1f : 0f)
+                .build());
+        session.setActive(true);
+    }
+
+    private static Bitmap safeMirrorArtwork(Bitmap source) {
+        if (source == null || source.isRecycled()) return null;
+        try {
+            int width = source.getWidth();
+            int height = source.getHeight();
+            if (width <= 384 && height <= 384) return source;
+            float scale = Math.min(384f / width, 384f / height);
+            return Bitmap.createScaledBitmap(source,
+                    Math.max(1, Math.round(width * scale)),
+                    Math.max(1, Math.round(height * scale)), true);
+        } catch (RuntimeException error) {
+            Log.w(TAG, "Could not prepare mirrored media artwork", error);
+            return null;
+        }
+    }
+
     @Override
     public void onListenerConnected() {
         super.onListenerConnected();
+        ensureMirrorSession();
         try {
             manager = (MediaSessionManager) getSystemService(Context.MEDIA_SESSION_SERVICE);
             if (manager == null) return;
@@ -219,7 +299,27 @@ public final class MediaSessionBridge extends NotificationListenerService {
             catch (RuntimeException ignored) { }
         }
         clearActiveController();
+        releaseMirrorSession();
         super.onListenerDisconnected();
+    }
+
+    @Override
+    public void onDestroy() {
+        releaseMirrorSession();
+        super.onDestroy();
+    }
+
+    private void releaseMirrorSession() {
+        MediaSession session = mirrorSession;
+        mirrorSession = null;
+        if (session != null) {
+            try {
+                session.setActive(false);
+                session.release();
+            } catch (RuntimeException error) {
+                Log.w(TAG, "Could not release mirrored media session", error);
+            }
+        }
     }
 
     @Override
@@ -246,7 +346,7 @@ public final class MediaSessionBridge extends NotificationListenerService {
         MediaController chosen = null;
         if (controllers != null) {
             for (MediaController candidate : controllers) {
-                if (candidate == null) continue;
+                if (candidate == null || getPackageName().equals(candidate.getPackageName())) continue;
                 PlaybackState state = candidate.getPlaybackState();
                 if (state != null && state.getState() == PlaybackState.STATE_PLAYING) {
                     chosen = candidate;
@@ -318,6 +418,7 @@ public final class MediaSessionBridge extends NotificationListenerService {
         }
         Snapshot latest = snapshot;
         MAIN.post(() -> {
+            updateMirrorSession(latest);
             for (Listener listener : LISTENERS) {
                 try { listener.onMediaChanged(latest); }
                 catch (RuntimeException error) { Log.w(TAG, "Media UI callback failed", error); }
