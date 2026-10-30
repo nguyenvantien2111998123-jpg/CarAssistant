@@ -13,6 +13,7 @@ import com.carassistant.v10.hook.GearheadMediaPopup;
 import com.carassistant.v10.hook.GearheadAutoOpen;
 import com.carassistant.v10.hook.InputHooks;
 import com.carassistant.v10.hook.OrientationHooks;
+import com.carassistant.v10.hook.SystemMediaKeyHooks;
 import com.carassistant.v10.hook.InstallerSpoof;
 
 import de.robv.android.xposed.IXposedHookLoadPackage;
@@ -148,6 +149,9 @@ public final class AACastBridge implements IXposedHookLoadPackage {
             DisplayHooks.installInputPolicy(param.classLoader);
             OrientationHooks.install(param.classLoader);
             InputHooks.install(param.classLoader);
+            // Intercept steering-wheel NEXT/PREVIOUS before MediaSession dispatch
+            // so double-Next can invoke V10 voice without skipping a track first.
+            SystemMediaKeyHooks.install(param.classLoader);
             return;
         }
 

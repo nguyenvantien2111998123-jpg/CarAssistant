@@ -17,6 +17,7 @@ public final class V10SessionStore {
     private static final String DEFAULT_MUSIC = "voice_default_music";
     private static final String DEFAULT_VIDEO = "voice_default_video";
     private static final String DEFAULT_TV = "voice_default_tv";
+    private static final String VOICE_REQUESTED = "steering_voice_requested";
 
     private static volatile V10CarActivity currentActivity;
     private static volatile boolean showDashboardRequested;
@@ -118,6 +119,20 @@ public final class V10SessionStore {
         if ("video".equals(category)) return DEFAULT_VIDEO;
         if ("tv".equals(category)) return DEFAULT_TV;
         return null;
+    }
+
+    /** Persist a steering-wheel voice request until the car UI is resumed. */
+    public static void requestVoiceOnNextActivity(Context context) {
+        if (context == null) return;
+        prefs(context).edit().putBoolean(VOICE_REQUESTED, true).apply();
+    }
+
+    public static boolean consumeVoiceOnNextActivity(Context context) {
+        if (context == null) return false;
+        SharedPreferences preferences = prefs(context);
+        boolean requested = preferences.getBoolean(VOICE_REQUESTED, false);
+        if (requested) preferences.edit().remove(VOICE_REQUESTED).apply();
+        return requested;
     }
 
     public static void clearTarget(Context context) {

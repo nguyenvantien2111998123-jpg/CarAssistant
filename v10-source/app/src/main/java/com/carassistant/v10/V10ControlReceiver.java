@@ -25,7 +25,38 @@ public final class V10ControlReceiver
             return;
         }
 
-        if (ACTION_MEDIA_POPUP_CONTROL.equals(intent.getAction())) {
+        String action = intent.getAction();
+        if ("com.carassistant.v10.STEERING_MEDIA_NEXT".equals(action)) {
+            MediaSessionBridge.skipNext();
+            return;
+        }
+        if ("com.carassistant.v10.STEERING_MEDIA_PREVIOUS".equals(action)) {
+            MediaSessionBridge.skipPrevious();
+            return;
+        }
+        if ("com.carassistant.v10.STEERING_MEDIA_SEEK".equals(action)) {
+            int direction = intent.getIntExtra("direction", 0);
+            if (direction != 0) MediaSessionBridge.seekBy(direction > 0 ? 15000L : -15000L);
+            return;
+        }
+        if ("com.carassistant.v10.STEERING_VOICE".equals(action)) {
+            V10SessionStore.requestVoiceOnNextActivity(context);
+            V10CarActivity activity = V10SessionStore.getCurrentActivity();
+            if (activity != null) {
+                activity.handleSteeringVoiceCommand();
+            } else {
+                // Ask Gearhead's car-side hook to launch the registered V10 Car App.
+                Intent open = new Intent("com.carassistant.v10.action.OPEN_CAR_APP_FROM_MEDIA");
+                open.setPackage("com.google.android.projection.gearhead");
+                try { context.sendBroadcast(open); }
+                catch (RuntimeException error) {
+                    Log.w("CarAssistantSteering", "Could not request V10 Car App", error);
+                }
+            }
+            return;
+        }
+
+        if (ACTION_MEDIA_POPUP_CONTROL.equals(action)) {
             String mediaCommand = intent.getStringExtra(EXTRA_COMMAND);
             if (mediaCommand == null) return;
             switch (mediaCommand) {
