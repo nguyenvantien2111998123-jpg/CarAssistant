@@ -1,14 +1,9 @@
 package com.carassistant.v10.hook;
 
 import android.app.Application;
-import android.content.ComponentName;
-import android.content.ContentResolver;
 import android.content.Context;
-import android.database.Cursor;
 import android.media.session.MediaController;
 import android.media.session.MediaSessionManager;
-import android.net.Uri;
-import android.os.SystemClock;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -30,11 +25,6 @@ public final class GearheadMediaSessionFilter {
     private static final String TAG = "[AACast MediaPriority]";
     private static final String V10_PACKAGE = "com.carassistant.v10";
     private static final String GEARHEAD = "com.google.android.projection.gearhead";
-    private static final String STATE_URI =
-            "content://com.carassistant.v10.launcher.dock/state";
-    private static final long LEASE_MAX_AGE_MS = 3000L;
-
-    private static volatile Context appContext;
     private static volatile boolean installed;
 
     private GearheadMediaSessionFilter() {
@@ -50,8 +40,6 @@ public final class GearheadMediaSessionFilter {
                         protected void afterHookedMethod(MethodHookParam param) {
                             Context context = (Context) param.args[0];
                             if (context != null && GEARHEAD.equals(context.getPackageName())) {
-                                Context application = context.getApplicationContext();
-                                appContext = application != null ? application : context;
                                 installSessionHooks();
                             }
                         }
@@ -103,11 +91,12 @@ public final class GearheadMediaSessionFilter {
     }
 
     /**
-     * Keep normal Android Auto sources unless the V10 projection lease is live
-     * and V10's mirrored session is actually present in the same session list.
+     * Whenever V10 publishes its mirrored session, make it the sole session
+     * visible to Android Auto. This covers phone-launched players and players
+     * launched through V10, regardless of whether a projection lease is active.
      */
     private static Object filterIfV10OwnsProjection(Object value) {
-        if (!(value instanceof List) || !hasLiveProjectionLease()) return value;
+        if (!(value instanceof List)) return value;
 
         List<?> sessions = (List<?>) value;
         boolean hasV10Session = false;
@@ -127,38 +116,9 @@ public final class GearheadMediaSessionFilter {
                 filtered.add((MediaController) item);
             }
         }
-        XposedBridge.log(TAG + " V10 projection active; filtered Gearhead session list "
+        XposedBridge.log(TAG + " V10 mirror active; filtered Gearhead session list "
                 + sessions.size() + " -> " + filtered.size());
         return filtered;
     }
 
-    private static boolean hasLiveProjectionLease() {
-        Context context = appContext;
-        if (context == null) return false;
-
-        Cursor cursor = null;
-        try {
-            ContentResolver resolver = context.getContentResolver();
-            cursor = resolver.query(Uri.parse(STATE_URI),
-                    new String[]{"visible_until"}, null, null, null);
-            if (cursor == null || !cursor.moveToFirst()) return false;
-
-            long until = cursor.getLong(0);
-            long now = SystemClock.uptimeMillis();
-            return until > now && until - now <= LEASE_MAX_AGE_MS;
-        } catch (SecurityException error) {
-            XposedBridge.log(TAG + " cannot read V10 projection lease: " + error);
-            return false;
-        } catch (RuntimeException error) {
-            XposedBridge.log(TAG + " projection lease read failed: " + error);
-            return false;
-        } finally {
-            if (cursor != null) {
-                try {
-                    cursor.close();
-                } catch (RuntimeException ignored) {
-                }
-            }
-        }
-    }
 }
