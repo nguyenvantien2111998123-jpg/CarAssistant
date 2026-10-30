@@ -34,6 +34,10 @@ public final class CarAssistantMediaBrowserService extends MediaBrowserServiceCo
     private static final String TAG = "CarAssistantMediaProxy";
     private static final String ROOT_ID = "carassistant.media.root";
     private static final String ITEM_ID = "carassistant.media.active";
+    private static final String ACTION_OPEN_CAR_APP =
+            "com.carassistant.v10.action.OPEN_CAR_APP_FROM_MEDIA";
+    private static final String GEARHEAD_PACKAGE =
+            "com.google.android.projection.gearhead";
     private static final long SEEK_STEP_MS = 15_000L;
     private static final int ARTWORK_MAX_EDGE = 384;
 
@@ -57,7 +61,12 @@ public final class CarAssistantMediaBrowserService extends MediaBrowserServiceCo
             @Override public void onPlay() { MediaSessionBridge.play(); }
             @Override public void onPause() { MediaSessionBridge.pause(); }
             @Override public void onPlayFromMediaId(String mediaId, Bundle extras) {
-                if (ITEM_ID.equals(mediaId)) MediaSessionBridge.play();
+                if (ITEM_ID.equals(mediaId)) {
+                    // Selecting the now-playing item on the CarAsistant Media browse page
+                    // is the user's explicit request to return to the V10 Car App.
+                    MediaSessionBridge.play();
+                    requestCarAppOnGearhead();
+                }
             }
             @Override public void onSkipToNext() { MediaSessionBridge.skipNext(); }
             @Override public void onSkipToPrevious() { MediaSessionBridge.skipPrevious(); }
@@ -79,6 +88,16 @@ public final class CarAssistantMediaBrowserService extends MediaBrowserServiceCo
         MediaSessionBridge.addListener(this);
         listenerRegistered = true;
         publish(MediaSessionBridge.getSnapshot());
+    }
+
+    private void requestCarAppOnGearhead() {
+        try {
+            Intent request = new Intent(ACTION_OPEN_CAR_APP);
+            request.setPackage(GEARHEAD_PACKAGE);
+            sendBroadcast(request);
+        } catch (RuntimeException error) {
+            Log.w(TAG, "Could not request CarAsistant V10 from Gearhead", error);
+        }
     }
 
     @Override

@@ -3,12 +3,15 @@ package com.carassistant.v10.hook;
 import android.app.Application;
 import android.app.Activity;
 import android.view.KeyEvent;
+import android.content.BroadcastReceiver;
 import android.content.ContentResolver;
 import android.content.Context;
 import android.content.Intent;
+import android.content.IntentFilter;
 import android.database.Cursor;
 import android.graphics.Color;
 import android.net.Uri;
+import android.os.Build;
 import android.os.Handler;
 import android.os.Looper;
 import android.os.SystemClock;
@@ -78,6 +81,8 @@ public final class GearheadDockPatcher {
 
     private volatile Context context;
     private volatile long visibleUntil;
+    private boolean mediaOpenReceiverRegistered;
+    private BroadcastReceiver mediaOpenReceiver;
     // Exact Coolwalk media-card tappable regions discovered in Gearhead 17.9.664044.
     private final Map<View, Boolean> mediaInfoRegions =
             Collections.synchronizedMap(new WeakHashMap<>());
@@ -365,6 +370,7 @@ public final class GearheadDockPatcher {
                 ? newContext.getApplicationContext()
                 : newContext;
         installNavigationDiagnostics();
+        installMediaOpenRequestReceiver(context);
         installMediaCardClickHook(context.getClassLoader());
         try {
             android.content.pm.PackageInfo info = context.getPackageManager().getPackageInfo(GEARHEAD, 0);
@@ -374,6 +380,39 @@ public final class GearheadDockPatcher {
             log("Could not read Android Auto version: " + error.getClass().getSimpleName());
         }
         main.post(this::tick);
+    }
+
+    /**
+     * Receives an explicit request from CarAsistant's MediaBrowser callbacks.
+     * The receiver lives in Gearhead's :car process so the existing Car App
+     * launcher is invoked by the host process, not by a phone-side Activity.
+     */
+    private void installMediaOpenRequestReceiver(Context appContext) {
+        if (mediaOpenReceiverRegistered) return;
+        mediaOpenReceiver = new BroadcastReceiver() {
+            @Override
+            public void onReceive(Context receiverContext, Intent intent) {
+                if (intent == null || !"com.carassistant.v10.action.OPEN_CAR_APP_FROM_MEDIA"
+                        .equals(intent.getAction())) return;
+                log("Received CarAsistant media browse selection; opening AACastCarService");
+                dispatchMediaOpen();
+            }
+        };
+        try {
+            IntentFilter filter = new IntentFilter(
+                    "com.carassistant.v10.action.OPEN_CAR_APP_FROM_MEDIA");
+            if (Build.VERSION.SDK_INT >= 33) {
+                appContext.registerReceiver(mediaOpenReceiver, filter, Context.RECEIVER_EXPORTED);
+            } else {
+                appContext.registerReceiver(mediaOpenReceiver, filter);
+            }
+            mediaOpenReceiverRegistered = true;
+            log("CarAsistant media-to-Car-App request receiver registered in Gearhead");
+        } catch (Throwable error) {
+            mediaOpenReceiver = null;
+            log("Could not register CarAsistant media request receiver: "
+                    + error.getClass().getSimpleName() + ": " + error.getMessage());
+        }
     }
 
     /**
