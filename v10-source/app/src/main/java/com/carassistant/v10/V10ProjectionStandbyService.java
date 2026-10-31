@@ -127,7 +127,10 @@ public final class V10ProjectionStandbyService extends Service {
                 getSharedPreferences(RESUME_PREFS, MODE_PRIVATE);
         String mediaPackage = prefs.getString("last_media_package", "");
         String title = prefs.getString("resume_title", "");
-        if (!TextUtils.isEmpty(mediaPackage) && !TextUtils.isEmpty(title)) {
+        boolean checkpointValid = prefs.getBoolean("resume_valid", false)
+                && System.currentTimeMillis() - prefs.getLong("resume_saved_at", 0L)
+                < 7L * 24L * 60L * 60L * 1000L;
+        if (checkpointValid && !TextUtils.isEmpty(mediaPackage) && !TextUtils.isEmpty(title)) {
             ComponentName mediaComponent = launchComponentForPackage(mediaPackage);
             if (mediaComponent != null) return mediaComponent;
         }
@@ -143,8 +146,7 @@ public final class V10ProjectionStandbyService extends Service {
         if (TextUtils.isEmpty(packageName) || !isInstalled(packageName)) return null;
         Intent launch = getPackageManager().getLaunchIntentForPackage(packageName);
         if (launch == null) return null;
-        ComponentName component = launch.getComponent();
-        return component != null ? component : new ComponentName(packageName, "");
+        return launch.getComponent();
     }
 
     private boolean isInstalled(String packageName) {
@@ -163,7 +165,7 @@ public final class V10ProjectionStandbyService extends Service {
         String title = prefs.getString("resume_title", "");
         long position = Math.max(0L, prefs.getLong("resume_position", 0L));
         boolean wasPlaying = prefs.getBoolean("resume_was_playing", false);
-        if (!wasPlaying || TextUtils.isEmpty(title)
+        if (!prefs.getBoolean("resume_valid", false) || !wasPlaying || TextUtils.isEmpty(title)
                 || !target.getPackageName().equals(mediaPackage)) {
             return;
         }
