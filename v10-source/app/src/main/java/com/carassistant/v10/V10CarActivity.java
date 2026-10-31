@@ -97,6 +97,7 @@ public final class V10CarActivity
     private TextView date;
 
     private boolean resumed;
+    private boolean resumeRequestedForConnection;
 
     private ComponentName activeTarget;
 
@@ -133,6 +134,15 @@ public final class V10CarActivity
                         launchBackgroundProjection(backgroundTarget);
                     } else if (backgroundTarget == null && activeBackgroundTarget != null) {
                         stopBackgroundProjection();
+                    }
+
+                    // Restore the last projected media only after the selected app is live
+                    // on the actual Android Auto secondary display.
+                    if (!resumeRequestedForConnection && activeTarget != null
+                            && session != null && session.isActive()) {
+                        resumeRequestedForConnection = true;
+                        MediaPlaybackAccessibilityService.requestResume(
+                                V10CarActivity.this, activeTarget.getPackageName(), session.getDisplayId());
                     }
 
                     handler.postDelayed(
@@ -1698,6 +1708,8 @@ private void hideTaskSwitcher() {
     public void onStop() {
 
         resumed = false;
+        resumeRequestedForConnection = false;
+        MediaSessionBridge.persistCurrentResumeSnapshot(this, true);
 
         handler.removeCallbacks(
                 clockTicker);
