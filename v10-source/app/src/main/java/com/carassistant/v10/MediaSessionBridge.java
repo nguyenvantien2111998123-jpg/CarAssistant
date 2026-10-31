@@ -48,6 +48,7 @@ public final class MediaSessionBridge extends NotificationListenerService {
 
     private static volatile Snapshot snapshot = Snapshot.empty();
     private static volatile MediaController activeController;
+    private static volatile MediaController checkpointController;
     private static volatile long lastCheckpointPosition;
     private static volatile long lastCheckpointDuration;
     private MediaSession mirrorSession;
@@ -166,7 +167,10 @@ public final class MediaSessionBridge extends NotificationListenerService {
     /** Apply the saved position and explicit autoplay preference to the matching player only. */
     public static boolean applyCheckpoint(Context context, String expectedPackage, boolean autoplay) {
         if (context == null || TextUtils.isEmpty(expectedPackage)) return false;
-        MediaController controller = activeController;
+        MediaController controller = checkpointController;
+        if (controller == null || !expectedPackage.equals(controller.getPackageName())) {
+            controller = activeController;
+        }
         if (controller == null || !expectedPackage.equals(controller.getPackageName())) return false;
         try {
             android.content.SharedPreferences prefs =
@@ -461,10 +465,16 @@ public final class MediaSessionBridge extends NotificationListenerService {
     private void refreshControllers(List<MediaController> controllers) {
         MediaController chosen = null;
         MediaController savedCandidate = null;
+        MediaController checkpointCandidate = null;
+        String checkpointPackage = getCheckpointPackage(this);
+        if (checkpointPackage == null) checkpointPackage = getLastKnownPackage(this);
         String lastPackage = getLastKnownPackage(this);
         if (controllers != null) {
             for (MediaController candidate : controllers) {
                 if (candidate == null || getPackageName().equals(candidate.getPackageName())) continue;
+                if (checkpointPackage != null && checkpointPackage.equals(candidate.getPackageName())) {
+                    checkpointCandidate = candidate;
+                }
                 PlaybackState state = candidate.getPlaybackState();
                 if (state != null && state.getState() == PlaybackState.STATE_PLAYING) {
                     chosen = candidate;
@@ -506,6 +516,7 @@ public final class MediaSessionBridge extends NotificationListenerService {
                 catch (RuntimeException error) { Log.w(TAG, "Cannot observe media controller", error); }
             }
         }
+        checkpointController = checkpointCandidate;
         publish(chosen);
     }
 
