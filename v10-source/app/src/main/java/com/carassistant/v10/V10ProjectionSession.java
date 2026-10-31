@@ -49,7 +49,16 @@ public final class V10ProjectionSession implements TextureView.SurfaceTextureLis
         target = component;
         if (changed) {
             taskSession.setTarget(component);
-            if (displayController.isLaunched()) displayController.markNotLaunched();
+            // If the headless AA-connect restore already launched this exact component
+            // on display 1, attaching V10 must reuse that task instead of marking it
+            // stopped and launching a second copy.
+            ComponentName existingDisplayTarget = displayController.getTarget();
+            boolean sameRestoredTask = displayController.isReady()
+                    && displayController.isLaunched()
+                    && component.equals(existingDisplayTarget);
+            if (displayController.isLaunched() && !sameRestoredTask) {
+                displayController.markNotLaunched();
+            }
         }
         attachCurrentSurface();
     }
