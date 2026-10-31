@@ -1746,6 +1746,7 @@ private void hideTaskSwitcher() {
         V10SessionStore
                 .clearCurrentActivity(
                         this);
+        V10ProjectionStandbyService.onCarActivityDestroyed();
 
         root = null;
         textureView = null;
