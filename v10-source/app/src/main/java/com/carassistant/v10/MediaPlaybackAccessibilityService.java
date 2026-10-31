@@ -463,7 +463,13 @@ public final class MediaPlaybackAccessibilityService extends AccessibilityServic
             Bundle args = new Bundle();
             args.putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, query);
             if (node.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, args)) {
-                node.performAction(AccessibilityNodeInfo.ACTION_IME_ENTER);
+                RootShellSession.EXEC.execute(() -> {
+                    try {
+                        closeRootShell.run(5, "input keyevent 66");
+                    } catch (RuntimeException error) {
+                        Log.w(TAG, "Could not submit saved media search with Enter", error);
+                    }
+                });
                 return true;
             }
         }
