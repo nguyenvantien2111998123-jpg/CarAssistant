@@ -30,11 +30,23 @@ public final class DockStateProvider extends ContentProvider {
 
     @Override
     public Cursor query(Uri uri, String[] projection, String selection, String[] selectionArgs, String sortOrder) {
-        if (!"/state".equals(uri.getPath())) {
+        if (!"/state".equals(uri.getPath()) && !"/media_resume".equals(uri.getPath())) {
             return null;
         }
         if (!isCallerAllowed()) {
             throw new SecurityException("Only Android Auto may read launcher state");
+        }
+        if ("/media_resume".equals(uri.getPath())) {
+            android.content.SharedPreferences prefs = getContext().getSharedPreferences(
+                    "carassistant_media_resume", android.content.Context.MODE_PRIVATE);
+            MatrixCursor cursor = new MatrixCursor(new String[]{
+                    "resume_valid", "resume_was_playing", "resume_saved_at"});
+            cursor.addRow(new Object[]{
+                    prefs.getInt("resume_valid", prefs.getBoolean("resume_valid", false) ? 1 : 0),
+                    prefs.getInt("resume_was_playing", prefs.getBoolean("resume_was_playing", false) ? 1 : 0),
+                    prefs.getLong("resume_saved_at", 0L)
+            });
+            return cursor;
         }
         MatrixCursor cursor = new MatrixCursor(new String[]{"visible_until"});
         cursor.addRow(new Object[]{visibleUntil});
