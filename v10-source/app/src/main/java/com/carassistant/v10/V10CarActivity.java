@@ -986,25 +986,15 @@ private void restoreLastMediaOnCarDisplay() {
     projectionLayer.setVisibility(View.GONE);
     appProjectionLayer.setVisibility(View.VISIBLE);
     launcherLayer.setVisibility(View.GONE);
-    session.restoreMediaTask(component);
-
-    boolean autoplay = getSharedPreferences(MEDIA_AUTOPLAY_PREFS, MODE_PRIVATE)
-            .getBoolean(MEDIA_AUTOPLAY_ENABLED, true);
-    final String expectedPackage = packageName;
-    final long startedAt = android.os.SystemClock.uptimeMillis();
-    Runnable applyCheckpoint = new Runnable() {
-        @Override public void run() {
-            if (!resumed) return;
-            if (MediaSessionBridge.applyCheckpoint(V10CarActivity.this, expectedPackage, autoplay)) return;
-            if (android.os.SystemClock.uptimeMillis() - startedAt < 20_000L) {
-                handler.postDelayed(this, 1000L);
-            } else {
-                Log.w("CarAssistantMedia", "Media session did not reconnect for " + expectedPackage
-                        + "; restored app task but could not apply seek/play state");
-            }
-        }
-    };
-    handler.postDelayed(applyCheckpoint, 1800L);
+    V10DisplayController controller = V10DisplayController.get(this, 1);
+    if (controller.isReady() && controller.isLaunched()
+            && component.equals(controller.getTarget())) {
+        // AA connection service already restored this exact task. Rebind the V10
+        // TextureView to its display; do not relaunch or re-seek from the old checkpoint.
+        session.setTarget(component);
+    } else {
+        session.restoreMediaTask(component);
+    }
 }
 
 private void launchProjection(ComponentName component) {

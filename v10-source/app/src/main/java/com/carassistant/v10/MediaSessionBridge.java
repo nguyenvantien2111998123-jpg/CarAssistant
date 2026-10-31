@@ -42,6 +42,7 @@ public final class MediaSessionBridge extends NotificationListenerService {
     private static final String CHECKPOINT_PLAYING = "checkpoint_playing";
     private static final String CHECKPOINT_UPDATED_AT = "checkpoint_updated_at";
     private static final String CHECKPOINT_SPEED = "checkpoint_speed";
+    private static final String CHECKPOINT_ELAPSED_REALTIME = "checkpoint_elapsed_realtime";
     public static final String ACTION_VOICE_ASSISTANT =
             "com.carassistant.v10.MEDIA_VOICE_ASSISTANT";
     private static final Handler MAIN = new Handler(Looper.getMainLooper());
@@ -142,6 +143,7 @@ public final class MediaSessionBridge extends NotificationListenerService {
                     .putLong(CHECKPOINT_POSITION, position)
                     .putBoolean(CHECKPOINT_PLAYING, playing)
                     .putFloat(CHECKPOINT_SPEED, speed)
+                    .putLong(CHECKPOINT_ELAPSED_REALTIME, android.os.SystemClock.elapsedRealtime())
                     .putLong(CHECKPOINT_UPDATED_AT, System.currentTimeMillis())
                     .commit();
             Log.d(TAG, "Saved rolling checkpoint for " + packageName
@@ -178,11 +180,13 @@ public final class MediaSessionBridge extends NotificationListenerService {
         long position = Math.max(0L, prefs.getLong(CHECKPOINT_POSITION, 0L));
         long duration = Math.max(0L, prefs.getLong(CHECKPOINT_DURATION, 0L));
         boolean wasPlaying = prefs.getBoolean(CHECKPOINT_PLAYING, false);
-        long savedAt = prefs.getLong(CHECKPOINT_UPDATED_AT, 0L);
+        long savedElapsed = prefs.getLong(CHECKPOINT_ELAPSED_REALTIME, 0L);
         float speed = prefs.getFloat(CHECKPOINT_SPEED, 1f);
-        if (wasPlaying && savedAt > 0L && speed > 0f) {
-            long elapsed = Math.max(0L, System.currentTimeMillis() - savedAt);
-            elapsed = Math.min(elapsed, CHECKPOINT_INTERVAL_MS);
+        long nowElapsed = android.os.SystemClock.elapsedRealtime();
+        // elapsedRealtime resets on reboot. Only extrapolate within the same boot;
+        // never count time when the car has been off and the phone had no power.
+        if (wasPlaying && savedElapsed > 0L && nowElapsed >= savedElapsed && speed > 0f) {
+            long elapsed = Math.min(nowElapsed - savedElapsed, CHECKPOINT_INTERVAL_MS);
             position += (long) (elapsed * speed);
         }
         return duration > 0L ? Math.min(position, duration) : position;

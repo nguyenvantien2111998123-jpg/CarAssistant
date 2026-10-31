@@ -53,9 +53,9 @@ public final class AACastBridge implements IXposedHookLoadPackage {
                 GearheadAllow.install(param.classLoader);
                 GearheadMediaSessionFilter.install();
                 GearheadDockPatcher.install();
+                GearheadMediaAutoRestore.install(param.classLoader);
 
-                // No experimental Gearhead auto-open or steering/media-key interception.
-                // Android Auto projection and display/input hooks remain enabled.
+                // Restore media on AA connection without opening the V10 Car App UI.
             }
 
             if (Build.VERSION.SDK_INT >= 30) {
