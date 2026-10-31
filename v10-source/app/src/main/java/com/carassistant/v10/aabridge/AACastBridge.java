@@ -54,10 +54,10 @@ public final class AACastBridge implements IXposedHookLoadPackage {
                 GearheadAllow.install(param.classLoader);
                 GearheadMediaSessionFilter.install();
                 GearheadDockPatcher.install();
-                if (param.processName != null
-                        && param.processName.endsWith(":projection")) {
-                    GearheadMediaAutoRestore.install(param.classLoader);
-                }
+                // Gearhead process names vary across Android Auto releases and device builds.
+                // Install the lightweight inflater watcher in every Gearhead process; it only
+                // fires when the actual Coolwalk facet-bar layout is inflated.
+                GearheadMediaAutoRestore.install(param.classLoader);
 
                 // Restore media on AA connection without opening the V10 Car App UI.
             }
