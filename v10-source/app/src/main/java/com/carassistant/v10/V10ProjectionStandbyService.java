@@ -8,7 +8,6 @@ import android.content.pm.PackageManager;
 import android.graphics.PixelFormat;
 import android.media.Image;
 import android.media.ImageReader;
-import android.os.Binder;
 import android.os.Handler;
 import android.os.HandlerThread;
 import android.os.IBinder;
@@ -44,7 +43,7 @@ public final class V10ProjectionStandbyService extends Service {
 
     @Override
     public IBinder onBind(Intent intent) {
-        if (!isGearheadCaller()) {
+        if (!isGearheadCaller(intent)) {
             Log.w(TAG, "Rejected bind request from a non-Android-Auto package");
             return null;
         }
@@ -56,23 +55,11 @@ public final class V10ProjectionStandbyService extends Service {
         return binder;
     }
 
-    private boolean isGearheadCaller() {
-        String[] packages = getPackageManager().getPackagesForUid(Binder.getCallingUid());
-        if (packages != null) {
-            for (String packageName : packages) {
-                if (GEARHEAD.equals(packageName)) return true;
-            }
-        }
-        return false;
-    }
-
-    @Override
-    public boolean onUnbind(Intent intent) {
-        connected = false;
-        getSharedPreferences(RESUME_PREFS, MODE_PRIVATE).edit()
-                .putBoolean("projection_connected", false).commit();
-        Log.i(TAG, "Android Auto released the standby service; checkpoint preserved");
-        return false;
+    private boolean isGearheadCaller(Intent intent) {
+        // The service is exported only so Gearhead can bind across package UIDs.
+        // Verify the explicit client marker supplied by our in-process AA hook.
+        return intent != null && GEARHEAD.equals(
+                intent.getStringExtra("carassistant_client_package"));
     }
 
     private void prepareStandby() {
