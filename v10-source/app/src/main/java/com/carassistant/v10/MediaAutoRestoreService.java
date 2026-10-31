@@ -4,96 +4,97 @@ import android.app.Notification;
 import android.app.NotificationChannel;
 import android.app.NotificationManager;
 import android.app.Service;
-import android.content.ComponentName;
 import android.content.Intent;
-import android.graphics.SurfaceTexture;
 import android.os.Build;
 import android.os.Handler;
 import android.os.IBinder;
 import android.os.Looper;
+import android.os.SystemClock;
 import android.util.Log;
-import android.view.Surface;
 
-/** Headless media restore started by the Gearhead connection hook, without opening V10 UI. */
+/**
+ * Android Auto connection coordinator for the CarAsistant Media controller.
+ *
+ * It never launches a third-party activity and never creates a VirtualDisplay.
+ * It restores the saved position through the source app's existing MediaSession,
+ * while CarAsistant's own MediaSession remains the media surface shown by Android Auto.
+ */
 public final class MediaAutoRestoreService extends Service {
-    public static final String ACTION_RESTORE = "com.carassistant.v10.action.RESTORE_MEDIA_ON_AA_CONNECT";
-    private static final String TAG = "CarAssistantAutoRestore";
+    public static final String ACTION_RESTORE =
+            "com.carassistant.v10.action.RESTORE_MEDIA_ON_AA_CONNECT";
+    private static final String TAG = "CarAssistantMediaResume";
     private static final String CHANNEL = "carassistant_media_restore";
     private static final int NOTIFICATION_ID = 4038;
-    private static final int DISPLAY_WIDTH = 1280, DISPLAY_HEIGHT = 720;
-    private static final long RETRY_MS = 1000L, RETRY_WINDOW_MS = 25000L;
-    private final Handler handler = new Handler(Looper.getMainLooper());
-    private SurfaceTexture headlessTexture;
-    private String restoringPackage;
-    private long restoreStartedAt;
-    private boolean displayPrepared;
+    private static final long RETRY_MS = 1000L;
+    private static final long RETRY_WINDOW_MS = 25000L;
 
-    private final Runnable applyCheckpoint = new Runnable() {
+    private final Handler handler = new Handler(Looper.getMainLooper());
+    private long startedAt;
+    private String expectedPackage;
+
+    private final Runnable restoreCheckpoint = new Runnable() {
         @Override public void run() {
-            if (restoringPackage == null) return;
-            boolean autoplay = getSharedPreferences("media_autoplay", MODE_PRIVATE).getBoolean("enabled", true);
-            if (MediaSessionBridge.applyCheckpoint(MediaAutoRestoreService.this, restoringPackage, autoplay)) {
-                Log.i(TAG, "Checkpoint applied after AA connection; autoplay=" + autoplay);
+            if (expectedPackage == null) {
+                stopSelf();
                 return;
             }
-            if (android.os.SystemClock.uptimeMillis() - restoreStartedAt < RETRY_WINDOW_MS)
+            boolean autoplay = getSharedPreferences("media_autoplay", MODE_PRIVATE)
+                    .getBoolean("enabled", true);
+            if (MediaSessionBridge.applyCheckpoint(
+                    MediaAutoRestoreService.this, expectedPackage, autoplay)) {
+                Log.i(TAG, "CarAsistant Media resumed saved source=" + expectedPackage
+                        + ", autoplay=" + autoplay);
+                stopSelf();
+                return;
+            }
+            if (SystemClock.uptimeMillis() - startedAt < RETRY_WINDOW_MS) {
                 handler.postDelayed(this, RETRY_MS);
-            else Log.w(TAG, "Media session did not reconnect in time for " + restoringPackage);
+            } else {
+                Log.w(TAG, "Saved MediaSession unavailable on AA connection: " + expectedPackage);
+                stopSelf();
+            }
         }
     };
 
     @Override public void onCreate() {
         super.onCreate();
         if (Build.VERSION.SDK_INT >= 26) {
-            NotificationManager nm = getSystemService(NotificationManager.class);
-            if (nm != null) nm.createNotificationChannel(new NotificationChannel(
-                    CHANNEL, "CarAsistant media restore", NotificationManager.IMPORTANCE_LOW));
+            NotificationManager manager = getSystemService(NotificationManager.class);
+            if (manager != null) manager.createNotificationChannel(new NotificationChannel(
+                    CHANNEL, "CarAsistant media controller", NotificationManager.IMPORTANCE_LOW));
             startForeground(NOTIFICATION_ID, new Notification.Builder(this, CHANNEL)
-                    .setSmallIcon(R.drawable.ic_aacast).setContentTitle("CarAsistant")
-                    .setContentText("Đang duy trì phiên media trên Android Auto").setOngoing(true).build());
+                    .setSmallIcon(R.drawable.ic_aacast)
+                    .setContentTitle("CarAsistant Media")
+                    .setContentText("Đang khôi phục nội dung đã lưu trên Android Auto")
+                    .setOngoing(true).build());
         } else {
             startForeground(NOTIFICATION_ID, new Notification.Builder(this)
-                    .setSmallIcon(R.drawable.ic_aacast).setContentTitle("CarAsistant")
-                    .setContentText("Đang duy trì phiên media trên Android Auto").setOngoing(true).build());
+                    .setSmallIcon(R.drawable.ic_aacast)
+                    .setContentTitle("CarAsistant Media")
+                    .setContentText("Đang khôi phục nội dung đã lưu trên Android Auto")
+                    .setOngoing(true).build());
         }
     }
 
     @Override public int onStartCommand(Intent intent, int flags, int startId) {
-        if (intent == null || ACTION_RESTORE.equals(intent.getAction())) prepareAndRestore();
-        return START_STICKY;
-    }
-
-    private void prepareAndRestore() {
-        String packageName = MediaSessionBridge.getCheckpointPackage(this);
-        if (packageName == null) packageName = MediaSessionBridge.getLastKnownPackage(this);
-        if (packageName == null || getPackageName().equals(packageName)) return;
-        Intent launch = getPackageManager().getLaunchIntentForPackage(packageName);
-        if (launch == null || launch.getComponent() == null) {
-            Log.w(TAG, "Saved media app has no launcher activity: " + packageName); return;
+        handler.removeCallbacks(restoreCheckpoint);
+        expectedPackage = MediaSessionBridge.getCheckpointPackage(this);
+        if (expectedPackage == null) expectedPackage = MediaSessionBridge.getLastKnownPackage(this);
+        if (expectedPackage == null || getPackageName().equals(expectedPackage)) {
+            Log.i(TAG, "No external media checkpoint to resume");
+            stopSelf(startId);
+            return START_NOT_STICKY;
         }
-        V10DisplayController controller = V10DisplayController.get(this, 1);
-        if (!controller.isReady()) {
-            try {
-                headlessTexture = new SurfaceTexture(0);
-                headlessTexture.setDefaultBufferSize(DISPLAY_WIDTH, DISPLAY_HEIGHT);
-                displayPrepared = controller.ensureDisplay(new Surface(headlessTexture), DISPLAY_WIDTH, DISPLAY_HEIGHT);
-            } catch (Throwable error) { Log.e(TAG, "Could not create headless projection display", error); return; }
-        } else displayPrepared = true;
-        if (!displayPrepared) { Log.e(TAG, "Virtual display creation failed"); return; }
-        restoringPackage = packageName;
-        restoreStartedAt = android.os.SystemClock.uptimeMillis();
-        ComponentName target = launch.getComponent();
-        if (!controller.isLaunched() || !target.equals(controller.getTarget()))
-            controller.launchMediaTaskOnDisplay(target);
-        handler.removeCallbacks(applyCheckpoint);
-        handler.postDelayed(applyCheckpoint, 1800L);
-        Log.i(TAG, "AA connected: restored " + packageName + " on V10 display " + controller.getDisplayId());
+        startedAt = SystemClock.uptimeMillis();
+        Log.i(TAG, "Android Auto connected; waiting for saved source session " + expectedPackage);
+        handler.post(restoreCheckpoint);
+        return START_NOT_STICKY;
     }
 
     @Override public void onDestroy() {
-        handler.removeCallbacks(applyCheckpoint);
-        if (headlessTexture != null) { try { headlessTexture.release(); } catch (Throwable ignored) { } headlessTexture = null; }
+        handler.removeCallbacks(restoreCheckpoint);
         super.onDestroy();
     }
+
     @Override public IBinder onBind(Intent intent) { return null; }
 }
