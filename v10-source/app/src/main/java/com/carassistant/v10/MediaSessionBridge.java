@@ -34,6 +34,7 @@ public final class MediaSessionBridge extends NotificationListenerService {
     private static final String LAST_PACKAGE = "last_media_package";
     // A single rolling checkpoint: each minute replaces these keys; no history is retained.
     private static final long CHECKPOINT_INTERVAL_MS = 60_000L;
+    private static final String CHECKPOINT_PACKAGE = "checkpoint_package";
     private static final String CHECKPOINT_TITLE = "checkpoint_title";
     private static final String CHECKPOINT_ARTIST = "checkpoint_artist";
     private static final String CHECKPOINT_DURATION = "checkpoint_duration";
@@ -47,6 +48,8 @@ public final class MediaSessionBridge extends NotificationListenerService {
 
     private static volatile Snapshot snapshot = Snapshot.empty();
     private static volatile MediaController activeController;
+    private static volatile long lastCheckpointPosition;
+    private static volatile long lastCheckpointDuration;
     private MediaSession mirrorSession;
     private MediaSessionManager manager;
     private MediaSessionManager.OnActiveSessionsChangedListener sessionsListener;
@@ -122,11 +125,14 @@ public final class MediaSessionBridge extends NotificationListenerService {
             long duration = metadata == null ? 0L :
                     Math.max(0L, metadata.getLong(MediaMetadata.METADATA_KEY_DURATION));
             long position = state == null ? 0L : Math.max(0L, state.getPosition());
+            lastCheckpointPosition = position;
+            lastCheckpointDuration = duration;
             boolean playing = state != null
                     && state.getState() == PlaybackState.STATE_PLAYING;
             // commit() makes this minute's checkpoint durable before the next interval.
             getSharedPreferences(RESUME_PREFS, Context.MODE_PRIVATE).edit()
                     .putString(LAST_PACKAGE, packageName)
+                    .putString(CHECKPOINT_PACKAGE, packageName)
                     .putString(CHECKPOINT_TITLE, title == null ? "" : title)
                     .putString(CHECKPOINT_ARTIST, artist == null ? "" : artist)
                     .putLong(CHECKPOINT_DURATION, duration)
@@ -147,6 +153,34 @@ public final class MediaSessionBridge extends NotificationListenerService {
         String value = context.getSharedPreferences(RESUME_PREFS, Context.MODE_PRIVATE)
                 .getString(LAST_PACKAGE, null);
         return TextUtils.isEmpty(value) ? null : value;
+    }
+
+    /** Package associated with the newest complete checkpoint. */
+    public static String getCheckpointPackage(Context context) {
+        if (context == null) return null;
+        String value = context.getSharedPreferences(RESUME_PREFS, Context.MODE_PRIVATE)
+                .getString(CHECKPOINT_PACKAGE, null);
+        return TextUtils.isEmpty(value) ? null : value;
+    }
+
+    /** Apply the saved position and explicit autoplay preference to the matching player only. */
+    public static boolean applyCheckpoint(String expectedPackage, boolean autoplay) {
+        if (TextUtils.isEmpty(expectedPackage)) return false;
+        MediaController controller = activeController;
+        if (controller == null || !expectedPackage.equals(controller.getPackageName())) return false;
+        try {
+            long position = lastCheckpointPosition;
+            long duration = lastCheckpointDuration;
+            if (position > 0L) controller.getTransportControls().seekTo(
+                    duration > 0L ? Math.min(position, duration) : position);
+            if (autoplay) controller.getTransportControls().play();
+            else controller.getTransportControls().pause();
+            Log.i(TAG, "Applied checkpoint; autoplay=" + autoplay + ", position=" + position);
+            return true;
+        } catch (RuntimeException error) {
+            Log.w(TAG, "Could not apply media checkpoint", error);
+            return false;
+        }
     }
 
     /**
@@ -360,6 +394,7 @@ public final class MediaSessionBridge extends NotificationListenerService {
                     new ComponentName(this, MediaSessionBridge.class)));
             updateMirrorSession(snapshot);
             MAIN.removeCallbacks(checkpointTask);
+            saveCurrentCheckpoint();
             MAIN.postDelayed(checkpointTask, CHECKPOINT_INTERVAL_MS);
             Log.i(TAG, "Notification access connected; media checkpoint scheduled every 60 seconds");
         } catch (SecurityException error) {
