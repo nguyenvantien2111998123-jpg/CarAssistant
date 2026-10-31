@@ -77,6 +77,7 @@ public final class GearheadDockPatcher {
     private boolean rootsDirty = true;
     private boolean loggedNoDock;
     private boolean loggedRootFailure;
+    private boolean projectionConnected;
 
     private GearheadDockPatcher() {
     }
@@ -121,6 +122,28 @@ public final class GearheadDockPatcher {
                                     patcher.roots.add(view);
                                     patcher.rootsDirty = true;
                                     patcher.attachContext(view.getContext());
+                                    if (isAndroidAutoDisplay(view)) {
+                                        patcher.dispatchProjectionState(true);
+                                    }
+                                });
+                            }
+                        }
+                    });
+            XposedBridge.hookAllMethods(
+                    XposedHelpers.findClass("android.view.WindowManagerGlobal", (ClassLoader) null),
+                    "removeView",
+                    new XC_MethodHook() {
+                        @Override
+                        protected void afterHookedMethod(MethodHookParam param) {
+                            if (param.args.length > 0 && param.args[0] instanceof View) {
+                                View view = (View) param.args[0];
+                                patcher.main.post(() -> {
+                                    patcher.roots.remove(view);
+                                    patcher.main.postDelayed(() -> {
+                                        if (!patcher.hasAndroidAutoDisplay()) {
+                                            patcher.dispatchProjectionState(false);
+                                        }
+                                    }, 2500L);
                                 });
                             }
                         }
@@ -177,15 +200,54 @@ public final class GearheadDockPatcher {
     }
 
     private void dispatchMediaOpen() {
+        // Ask Gearhead to open the CarAsistant CarActivity. The phone-side standby
+        // service has already prepared the same display/task; V10CarActivity rebinds it.
+        GearheadCarAppLauncher.open();
         Context appContext = context;
         if (appContext == null) return;
         try {
             Intent intent = new Intent("com.carassistant.v10.STEERING_MEDIA_OPEN");
             intent.setPackage("com.carassistant.v10");
             appContext.sendBroadcast(intent);
-            log("Forwarded Android Auto media metadata tap to CarAsistant");
+            log("Forwarded media-card tap to the prepared CarAsistant projection");
         } catch (Throwable error) {
-            log("Could not forward media metadata tap: " + error);
+            log("Could not forward media metadata click: " + error);
+        }
+    }
+
+    private static boolean isAndroidAutoDisplay(View view) {
+        if (view == null || view.getDisplay() == null) return false;
+        android.view.Display display = view.getDisplay();
+        if (display.getDisplayId() <= 0) return false;
+        String name = display.getName();
+        return name != null && (name.contains("GhFacetBar")
+                || name.contains("TemplateNavigationService")
+                || name.toLowerCase(java.util.Locale.ROOT).contains("gearhead"));
+    }
+
+    private boolean hasAndroidAutoDisplay() {
+        for (View root : new ArrayList<>(roots)) {
+            if (root != null && root.isAttachedToWindow() && isAndroidAutoDisplay(root)) return true;
+        }
+        return false;
+    }
+
+    private void dispatchProjectionState(boolean connected) {
+        if (projectionConnected == connected) return;
+        projectionConnected = connected;
+        Context appContext = context;
+        if (appContext == null) return;
+        try {
+            String action = connected
+                    ? "com.carassistant.v10.PROJECTION_CONNECTED"
+                    : "com.carassistant.v10.PROJECTION_DISCONNECTED";
+            Intent intent = new Intent(action);
+            intent.setPackage("com.carassistant.v10");
+            appContext.sendBroadcast(intent);
+            log(connected ? "Android Auto display detected; preparing phone-side projection"
+                    : "Android Auto display removed; closing standby service");
+        } catch (Throwable error) {
+            log("Could not notify phone-side projection service: " + error);
         }
     }
 
@@ -277,6 +339,9 @@ public final class GearheadDockPatcher {
                     Object root = XposedHelpers.callMethod(global, "getRootView", name);
                     if (root instanceof View) {
                         roots.add((View) root);
+                        if (isAndroidAutoDisplay((View) root)) {
+                            dispatchProjectionState(true);
+                        }
                     }
                 }
             }
