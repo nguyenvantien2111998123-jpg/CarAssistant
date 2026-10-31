@@ -130,6 +130,12 @@ public final class MediaSessionBridge extends NotificationListenerService {
             long duration = metadata == null ? 0L :
                     Math.max(0L, metadata.getLong(MediaMetadata.METADATA_KEY_DURATION));
             long position = state == null ? 0L : Math.max(0L, state.getPosition());
+            if (state != null && state.getState() == PlaybackState.STATE_PLAYING
+                    && state.getPlaybackSpeed() > 0f && state.getLastPositionUpdateTime() > 0L) {
+                long stateAge = Math.max(0L, android.os.SystemClock.elapsedRealtime()
+                        - state.getLastPositionUpdateTime());
+                position += (long) (stateAge * state.getPlaybackSpeed());
+            }
             lastCheckpointPosition = position;
             lastCheckpointDuration = duration;
             boolean playing = state != null
