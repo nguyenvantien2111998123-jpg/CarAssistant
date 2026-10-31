@@ -49,12 +49,12 @@ public final class GearheadMediaAutoRestore {
                         try {
                             if (Build.VERSION.SDK_INT >= 26) context.startForegroundService(restore);
                             else context.startService(restore);
-                            log("Detected Android Auto connection; requested headless media restore");
+                            log("Detected Android Auto connection; requested saved-session resume in CarAsistant Media");
                         } catch (Throwable error) { log("Could not start restore service: " + error); }
                     } catch (Throwable error) { log("Connection detection failed safely: " + error); }
                 }
             });
-            log("Coolwalk watcher installed; V10 UI will not be auto-opened");
+            log("Coolwalk watcher installed; controller resumes without launching external app UI");
         } catch (Throwable error) { INSTALLED.set(false); log("Could not install watcher: " + error); }
     }
     private static void log(String message) { XposedBridge.log(TAG + " " + message); }
