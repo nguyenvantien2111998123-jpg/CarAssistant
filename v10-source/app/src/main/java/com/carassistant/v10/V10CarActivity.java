@@ -98,7 +98,6 @@ public final class V10CarActivity
     private TextView date;
 
     private boolean resumed;
-    private boolean mediaRestoreStarted;
     private static final String MEDIA_AUTOPLAY_PREFS = "media_autoplay";
     private static final String MEDIA_AUTOPLAY_ENABLED = "enabled";
 
@@ -190,11 +189,6 @@ public final class V10CarActivity
             buildUi();
             attachProjection();
         }
-        if (!mediaRestoreStarted) {
-            mediaRestoreStarted = true;
-            handler.postDelayed(this::restoreLastMediaOnCarDisplay, 1400L);
-        }
-
         MediaSessionBridge.addListener(mediaSessionListener);
         updateMediaCard(MediaSessionBridge.getSnapshot());
 
@@ -962,40 +956,6 @@ public final class V10CarActivity
         keyboardController.start();
     }
 
-
-/**
- * V10CarActivity is entered by Android Auto's Car App host. Restore the last player
- * only on projection display 1; never launch this media app on the phone display.
- */
-private void restoreLastMediaOnCarDisplay() {
-    if (!resumed || session == null) return;
-    if (!MediaSessionBridge.hasAccess(this)) return;
-
-    String packageName = MediaSessionBridge.getCheckpointPackage(this);
-    if (packageName == null) packageName = MediaSessionBridge.getLastKnownPackage(this);
-    if (packageName == null || packageName.equals(getPackageName())) return;
-
-    Intent launch = getPackageManager().getLaunchIntentForPackage(packageName);
-    if (launch == null || launch.getComponent() == null) {
-        Log.w("CarAssistantMedia", "Saved media app is not launchable: " + packageName);
-        return;
-    }
-
-    ComponentName component = launch.getComponent();
-    activeTarget = component;
-    projectionLayer.setVisibility(View.GONE);
-    appProjectionLayer.setVisibility(View.VISIBLE);
-    launcherLayer.setVisibility(View.GONE);
-    V10DisplayController controller = V10DisplayController.get(this, 1);
-    if (controller.isReady() && controller.isLaunched()
-            && component.equals(controller.getTarget())) {
-        // AA connection service already restored this exact task. Rebind the V10
-        // TextureView to its display; do not relaunch or re-seek from the old checkpoint.
-        session.setTarget(component);
-    } else {
-        session.restoreMediaTask(component);
-    }
-}
 
 private void launchProjection(ComponentName component) {
 
