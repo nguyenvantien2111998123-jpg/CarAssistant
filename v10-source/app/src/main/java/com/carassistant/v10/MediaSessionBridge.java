@@ -13,6 +13,7 @@ import android.media.session.PlaybackState;
 import android.graphics.Bitmap;
 import android.os.Handler;
 import android.os.Looper;
+import android.os.SystemClock;
 import android.provider.Settings;
 import android.text.TextUtils;
 import android.service.notification.NotificationListenerService;
@@ -40,6 +41,13 @@ public final class MediaSessionBridge extends NotificationListenerService {
     private MediaSessionManager manager;
     private MediaSessionManager.OnActiveSessionsChangedListener sessionsListener;
     private MediaController.Callback controllerCallback;
+
+    private final Runnable resumeSnapshotTicker = new Runnable() {
+        @Override public void run() {
+            persistResumeSnapshot();
+            MAIN.postDelayed(this, 1000L);
+        }
+    };
 
     public interface Listener {
         void onMediaChanged(Snapshot snapshot);
@@ -109,6 +117,60 @@ public final class MediaSessionBridge extends NotificationListenerService {
         } catch (RuntimeException error) {
             Log.w(TAG, "Last media session rejected Play", error);
             return false;
+        }
+    }
+
+    /** Seek only when the active controller belongs to the restored app. */
+    public static boolean seekToPackage(String expectedPackage, long positionMs) {
+        if (TextUtils.isEmpty(expectedPackage)) return false;
+        MediaController controller = activeController;
+        if (controller == null || !expectedPackage.equals(controller.getPackageName())) return false;
+        try {
+            long target = Math.max(0L, positionMs);
+            MediaMetadata metadata = controller.getMetadata();
+            long duration = metadata == null ? 0L
+                    : metadata.getLong(MediaMetadata.METADATA_KEY_DURATION);
+            if (duration > 0L) target = Math.min(target, duration);
+            controller.getTransportControls().seekTo(target);
+            return true;
+        } catch (RuntimeException error) {
+            Log.w(TAG, "Restored media session rejected seek", error);
+            return false;
+        }
+    }
+
+    private void persistResumeSnapshot() {
+        if (!getSharedPreferences(RESUME_PREFS, MODE_PRIVATE)
+                .getBoolean("projection_connected", false)) return;
+        MediaController controller = activeController;
+        if (controller == null) return;
+        try {
+            MediaMetadata metadata = controller.getMetadata();
+            PlaybackState state = controller.getPlaybackState();
+            String title = metadata == null ? "" : metadata.getString(MediaMetadata.METADATA_KEY_TITLE);
+            String artist = metadata == null ? "" : metadata.getString(MediaMetadata.METADATA_KEY_ARTIST);
+            long duration = metadata == null ? 0L
+                    : metadata.getLong(MediaMetadata.METADATA_KEY_DURATION);
+            long position = state == null ? 0L : Math.max(0L, state.getPosition());
+            boolean playing = state != null && state.getState() == PlaybackState.STATE_PLAYING;
+            if (playing && state.getLastPositionUpdateTime() > 0L) {
+                long elapsed = Math.max(0L, SystemClock.elapsedRealtime()
+                        - state.getLastPositionUpdateTime());
+                position += (long) (elapsed * state.getPlaybackSpeed());
+            }
+            if (duration > 0L) position = Math.min(position, duration);
+            getSharedPreferences(RESUME_PREFS, MODE_PRIVATE).edit()
+                    .putString(LAST_PACKAGE, controller.getPackageName())
+                    .putString("resume_title", TextUtils.isEmpty(title) ? "" : title)
+                    .putString("resume_artist", TextUtils.isEmpty(artist) ? "" : artist)
+                    .putLong("resume_duration", Math.max(0L, duration))
+                    .putLong("resume_position", Math.max(0L, position))
+                    .putBoolean("resume_was_playing", playing)
+                    .putBoolean("resume_valid", !TextUtils.isEmpty(title))
+                    .putLong("resume_saved_at", System.currentTimeMillis())
+                    .apply();
+        } catch (RuntimeException error) {
+            Log.w(TAG, "Could not persist playback checkpoint", error);
         }
     }
 
@@ -284,6 +346,8 @@ public final class MediaSessionBridge extends NotificationListenerService {
                     sessionsListener, new ComponentName(this, MediaSessionBridge.class));
             refreshControllers(manager.getActiveSessions(
                     new ComponentName(this, MediaSessionBridge.class)));
+            MAIN.removeCallbacks(resumeSnapshotTicker);
+            MAIN.post(resumeSnapshotTicker);
             Log.i(TAG, "Notification access connected");
         } catch (SecurityException error) {
             Log.w(TAG, "Notification access is not granted", error);
@@ -294,6 +358,8 @@ public final class MediaSessionBridge extends NotificationListenerService {
 
     @Override
     public void onListenerDisconnected() {
+        MAIN.removeCallbacks(resumeSnapshotTicker);
+        persistResumeSnapshot();
         if (manager != null && sessionsListener != null) {
             try { manager.removeOnActiveSessionsChangedListener(sessionsListener); }
             catch (RuntimeException ignored) { }
@@ -305,6 +371,8 @@ public final class MediaSessionBridge extends NotificationListenerService {
 
     @Override
     public void onDestroy() {
+        MAIN.removeCallbacks(resumeSnapshotTicker);
+        persistResumeSnapshot();
         releaseMirrorSession();
         super.onDestroy();
     }
