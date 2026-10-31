@@ -57,8 +57,6 @@ public final class V10ProjectionStandbyService extends Service {
     }
 
     private boolean isGearheadCaller() {
-        String callingPackage = getCallingPackage();
-        if (GEARHEAD.equals(callingPackage)) return true;
         String[] packages = getPackageManager().getPackagesForUid(Binder.getCallingUid());
         if (packages != null) {
             for (String packageName : packages) {
@@ -201,9 +199,8 @@ public final class V10ProjectionStandbyService extends Service {
                 this, mediaPackage, title, displayId, position);
         main.postDelayed(() -> {
             if (!connected || displayController == null || !displayController.isReady()) return;
-            boolean accepted = displayController.launchMediaViewIntentOnDisplay(mediaPackage, uri);
-            Log.i(TAG, "Restoration search dispatched on display " + displayId
-                    + "; accepted=" + accepted);
+            displayController.launchMediaViewIntentOnDisplay(mediaPackage, uri);
+            Log.i(TAG, "Restoration search dispatched on display " + displayId);
         }, 1100L);
     }
 
