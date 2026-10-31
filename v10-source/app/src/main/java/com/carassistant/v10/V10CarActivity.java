@@ -1022,15 +1022,21 @@ private void launchProjection(ComponentName component) {
         String packageName = prefs.getString("resume_media_package",
                 prefs.getString("last_media_package", ""));
         String title = prefs.getString("resume_title", "");
+        String artist = prefs.getString("resume_artist", "");
         long position = Math.max(0L, prefs.getLong("resume_position", 0L));
         if (TextUtils.isEmpty(packageName) || TextUtils.isEmpty(title)) return;
+        String query = title;
+        if (!TextUtils.isEmpty(artist) && !artist.equalsIgnoreCase(packageName)
+                && !artist.equalsIgnoreCase(title)) {
+            query = title + " " + artist;
+        }
 
         Intent launch = getPackageManager().getLaunchIntentForPackage(packageName);
         if (launch == null || launch.getComponent() == null) return;
         String category = com.carassistant.v10.voice.MediaSearchUriBuilder
                 .isYouTubeVideoPackage(packageName) ? "video" : "music";
         String uri = com.carassistant.v10.voice.MediaSearchUriBuilder
-                .build(packageName, title, category);
+                .build(packageName, query, category);
         if (TextUtils.isEmpty(uri)) {
             android.util.Log.w("CarAssistantMedia", "No safe restore search URI for " + packageName);
             return;
@@ -1039,9 +1045,9 @@ private void launchProjection(ComponentName component) {
         resumeCheckpointAttempted = true;
         ComponentName target = launch.getComponent();
         launchProjection(target);
-        dispatchMediaSearchOnProjection(target, uri, title, position);
+        dispatchMediaSearchOnProjection(target, uri, query, position);
         android.util.Log.i("CarAssistantMedia", "Restoring saved media on projection: "
-                + packageName + " / " + title + " @ " + position + "ms");
+                + packageName + " / " + query + " @ " + position + "ms");
     }
 
 /**
