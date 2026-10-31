@@ -32,6 +32,14 @@ public final class MediaSessionBridge extends NotificationListenerService {
     private static final String TAG = "CarAssistantMedia";
     private static final String RESUME_PREFS = "carassistant_media_resume";
     private static final String LAST_PACKAGE = "last_media_package";
+    // A single rolling checkpoint: each minute replaces these keys; no history is retained.
+    private static final long CHECKPOINT_INTERVAL_MS = 60_000L;
+    private static final String CHECKPOINT_TITLE = "checkpoint_title";
+    private static final String CHECKPOINT_ARTIST = "checkpoint_artist";
+    private static final String CHECKPOINT_DURATION = "checkpoint_duration";
+    private static final String CHECKPOINT_POSITION = "checkpoint_position";
+    private static final String CHECKPOINT_PLAYING = "checkpoint_playing";
+    private static final String CHECKPOINT_UPDATED_AT = "checkpoint_updated_at";
     public static final String ACTION_VOICE_ASSISTANT =
             "com.carassistant.v10.MEDIA_VOICE_ASSISTANT";
     private static final Handler MAIN = new Handler(Looper.getMainLooper());
@@ -43,6 +51,12 @@ public final class MediaSessionBridge extends NotificationListenerService {
     private MediaSessionManager manager;
     private MediaSessionManager.OnActiveSessionsChangedListener sessionsListener;
     private MediaController.Callback controllerCallback;
+    private final Runnable checkpointTask = new Runnable() {
+        @Override public void run() {
+            saveCurrentCheckpoint();
+            if (manager != null) MAIN.postDelayed(this, CHECKPOINT_INTERVAL_MS);
+        }
+    };
 
     public interface Listener {
         void onMediaChanged(Snapshot snapshot);
@@ -85,6 +99,46 @@ public final class MediaSessionBridge extends NotificationListenerService {
 
     public static Snapshot getSnapshot() {
         return snapshot;
+    }
+
+    /**
+     * Persist one rolling media checkpoint every 60 seconds. The same preference keys
+     * are overwritten on each run, so only the newest checkpoint is retained.
+     */
+    private void saveCurrentCheckpoint() {
+        MediaController controller = activeController;
+        if (controller == null) return; // Keep the last valid checkpoint if the player disappears.
+        try {
+            MediaMetadata metadata = controller.getMetadata();
+            PlaybackState state = controller.getPlaybackState();
+            String packageName = controller.getPackageName();
+            String title = metadata == null ? "" :
+                    metadata.getString(MediaMetadata.METADATA_KEY_TITLE);
+            String artist = metadata == null ? "" :
+                    metadata.getString(MediaMetadata.METADATA_KEY_ARTIST);
+            if (TextUtils.isEmpty(artist) && metadata != null) {
+                artist = metadata.getString(MediaMetadata.METADATA_KEY_ALBUM_ARTIST);
+            }
+            long duration = metadata == null ? 0L :
+                    Math.max(0L, metadata.getLong(MediaMetadata.METADATA_KEY_DURATION));
+            long position = state == null ? 0L : Math.max(0L, state.getPosition());
+            boolean playing = state != null
+                    && state.getState() == PlaybackState.STATE_PLAYING;
+            // commit() makes this minute's checkpoint durable before the next interval.
+            getSharedPreferences(RESUME_PREFS, Context.MODE_PRIVATE).edit()
+                    .putString(LAST_PACKAGE, packageName)
+                    .putString(CHECKPOINT_TITLE, title == null ? "" : title)
+                    .putString(CHECKPOINT_ARTIST, artist == null ? "" : artist)
+                    .putLong(CHECKPOINT_DURATION, duration)
+                    .putLong(CHECKPOINT_POSITION, position)
+                    .putBoolean(CHECKPOINT_PLAYING, playing)
+                    .putLong(CHECKPOINT_UPDATED_AT, System.currentTimeMillis())
+                    .commit();
+            Log.d(TAG, "Saved rolling checkpoint for " + packageName
+                    + " at " + position + "ms; playing=" + playing);
+        } catch (RuntimeException error) {
+            Log.w(TAG, "Could not save media checkpoint", error);
+        }
     }
 
     /** Package of the last media app with a published session, persisted across AA reconnects. */
@@ -305,7 +359,9 @@ public final class MediaSessionBridge extends NotificationListenerService {
             refreshControllers(manager.getActiveSessions(
                     new ComponentName(this, MediaSessionBridge.class)));
             updateMirrorSession(snapshot);
-            Log.i(TAG, "Notification access connected; persistent CarAsistant media session active");
+            MAIN.removeCallbacks(checkpointTask);
+            MAIN.postDelayed(checkpointTask, CHECKPOINT_INTERVAL_MS);
+            Log.i(TAG, "Notification access connected; media checkpoint scheduled every 60 seconds");
         } catch (SecurityException error) {
             Log.w(TAG, "Notification access is not granted", error);
         } catch (RuntimeException error) {
@@ -315,6 +371,7 @@ public final class MediaSessionBridge extends NotificationListenerService {
 
     @Override
     public void onListenerDisconnected() {
+        MAIN.removeCallbacks(checkpointTask);
         if (manager != null && sessionsListener != null) {
             try { manager.removeOnActiveSessionsChangedListener(sessionsListener); }
             catch (RuntimeException ignored) { }
@@ -326,6 +383,7 @@ public final class MediaSessionBridge extends NotificationListenerService {
 
     @Override
     public void onDestroy() {
+        MAIN.removeCallbacks(checkpointTask);
         releaseMirrorSession();
         super.onDestroy();
     }
