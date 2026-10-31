@@ -133,7 +133,6 @@ public final class MediaAutoRestoreService extends Service {
     }
 
     private void prepareAccessibilityRecovery() {
-        if (!TextUtils.isEmpty(MediaSessionBridge.getCheckpointMediaUri(this))) return;
         String query = joinTitleArtist(MediaSessionBridge.getCheckpointTitle(this),
                 MediaSessionBridge.getCheckpointArtist(this));
         if (TextUtils.isEmpty(query)) return;
@@ -149,7 +148,7 @@ public final class MediaAutoRestoreService extends Service {
     private void clearRecoveryAssist() {
         getSharedPreferences("media_autoplay", MODE_PRIVATE).edit()
                 .remove("target_package").remove("query").remove("phase")
-                .remove("target_display_id").remove("started_at").apply();
+                .remove("target_display_id").remove("started_at").remove("search_submitted_at").apply();
     }
 
     private static String joinTitleArtist(String title, String artist) {
