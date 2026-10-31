@@ -2,6 +2,10 @@ package com.carassistant.v10.hook;
 
 import android.app.Application;
 import android.content.Context;
+import android.content.BroadcastReceiver;
+import android.content.Intent;
+import android.content.IntentFilter;
+import android.os.Build;
 import android.database.Cursor;
 import android.net.Uri;
 import android.view.LayoutInflater;
@@ -32,6 +36,7 @@ public final class GearheadAutoResumeHook {
 
     private static final AtomicBoolean CHECK_IN_FLIGHT = new AtomicBoolean(false);
     private static volatile Context appContext;
+    private static final AtomicBoolean RECEIVER_REGISTERED = new AtomicBoolean(false);
 
     private GearheadAutoResumeHook() { }
 
@@ -44,6 +49,7 @@ public final class GearheadAutoResumeHook {
                             if (candidate != null && GEARHEAD.equals(candidate.getPackageName())) {
                                 appContext = candidate.getApplicationContext() != null
                                         ? candidate.getApplicationContext() : candidate;
+                                registerOpenReceiver(appContext);
                             }
                         }
                     });
@@ -69,6 +75,30 @@ public final class GearheadAutoResumeHook {
             XposedBridge.log(TAG + " installed in Gearhead projection process");
         } catch (Throwable error) {
             XposedBridge.log(TAG + " install failed: " + error);
+        }
+    }
+
+    private static void registerOpenReceiver(Context context) {
+        if (!RECEIVER_REGISTERED.compareAndSet(false, true)) return;
+        try {
+            BroadcastReceiver receiver = new BroadcastReceiver() {
+                @Override public void onReceive(Context receiverContext, Intent intent) {
+                    if (intent != null
+                            && "com.carassistant.v10.OPEN_CAR_APP".equals(intent.getAction())) {
+                        XposedBridge.log(TAG + " received CarAsistant media voice/open request");
+                        GearheadCarAppLauncher.open();
+                    }
+                }
+            };
+            IntentFilter filter = new IntentFilter("com.carassistant.v10.OPEN_CAR_APP");
+            if (Build.VERSION.SDK_INT >= 33) {
+                context.registerReceiver(receiver, filter, Context.RECEIVER_EXPORTED);
+            } else {
+                context.registerReceiver(receiver, filter);
+            }
+        } catch (Throwable error) {
+            RECEIVER_REGISTERED.set(false);
+            XposedBridge.log(TAG + " could not register CarAsistant open receiver: " + error);
         }
     }
 
