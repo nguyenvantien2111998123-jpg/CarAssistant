@@ -5,6 +5,7 @@ import android.os.Build;
 import com.carassistant.v10.AACastDisplay;
 import com.carassistant.v10.hook.DisplayHooks;
 import com.carassistant.v10.hook.GearheadAllow;
+import com.carassistant.v10.hook.GearheadMediaAutoRestore;
 import com.carassistant.v10.hook.GearheadDockPatcher;
 import com.carassistant.v10.hook.GearheadMediaSessionFilter;
 import com.carassistant.v10.hook.InputHooks;
