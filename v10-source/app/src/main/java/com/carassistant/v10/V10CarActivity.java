@@ -97,6 +97,9 @@ public final class V10CarActivity
     private TextView date;
 
     private boolean resumed;
+    private boolean mediaRestoreStarted;
+    private static final String MEDIA_AUTOPLAY_PREFS = "media_autoplay";
+    private static final String MEDIA_AUTOPLAY_ENABLED = "enabled";
 
     private ComponentName activeTarget;
 
@@ -185,6 +188,10 @@ public final class V10CarActivity
         if (root == null) {
             buildUi();
             attachProjection();
+        }
+        if (!mediaRestoreStarted) {
+            mediaRestoreStarted = true;
+            handler.postDelayed(this::restoreLastMediaOnCarDisplay, 1400L);
         }
 
         MediaSessionBridge.addListener(mediaSessionListener);
@@ -954,6 +961,50 @@ public final class V10CarActivity
         keyboardController.start();
     }
 
+
+/**
+ * V10CarActivity is entered by Android Auto's Car App host. Restore the last player
+ * only on projection display 1; never launch this media app on the phone display.
+ */
+private void restoreLastMediaOnCarDisplay() {
+    if (isFinishing() || session == null || !session.isActive()) return;
+    if (!MediaSessionBridge.hasAccess(this)) return;
+
+    String packageName = MediaSessionBridge.getCheckpointPackage(this);
+    if (packageName == null) packageName = MediaSessionBridge.getLastKnownPackage(this);
+    if (packageName == null || packageName.equals(getPackageName())) return;
+
+    Intent launch = getPackageManager().getLaunchIntentForPackage(packageName);
+    if (launch == null || launch.getComponent() == null) {
+        Log.w("CarAssistantMedia", "Saved media app is not launchable: " + packageName);
+        return;
+    }
+
+    ComponentName component = launch.getComponent();
+    activeTarget = component;
+    projectionLayer.setVisibility(View.GONE);
+    appProjectionLayer.setVisibility(View.VISIBLE);
+    launcherLayer.setVisibility(View.GONE);
+    session.restoreMediaTask(component);
+
+    boolean autoplay = getSharedPreferences(MEDIA_AUTOPLAY_PREFS, MODE_PRIVATE)
+            .getBoolean(MEDIA_AUTOPLAY_ENABLED, true);
+    final String expectedPackage = packageName;
+    final long startedAt = android.os.SystemClock.uptimeMillis();
+    Runnable applyCheckpoint = new Runnable() {
+        @Override public void run() {
+            if (isFinishing() || isDestroyed()) return;
+            if (MediaSessionBridge.applyCheckpoint(expectedPackage, autoplay)) return;
+            if (android.os.SystemClock.uptimeMillis() - startedAt < 20_000L) {
+                handler.postDelayed(this, 1000L);
+            } else {
+                Log.w("CarAssistantMedia", "Media session did not reconnect for " + expectedPackage
+                        + "; restored app task but could not apply seek/play state");
+            }
+        }
+    };
+    handler.postDelayed(applyCheckpoint, 1800L);
+}
 
 private void launchProjection(ComponentName component) {
 
