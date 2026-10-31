@@ -164,14 +164,16 @@ public final class MediaSessionBridge extends NotificationListenerService {
     }
 
     /** Apply the saved position and explicit autoplay preference to the matching player only. */
-    public static boolean applyCheckpoint(String expectedPackage, boolean autoplay) {
-        if (TextUtils.isEmpty(expectedPackage)) return false;
+    public static boolean applyCheckpoint(Context context, String expectedPackage, boolean autoplay) {
+        if (context == null || TextUtils.isEmpty(expectedPackage)) return false;
         MediaController controller = activeController;
         if (controller == null || !expectedPackage.equals(controller.getPackageName())) return false;
         try {
-            long position = lastCheckpointPosition;
-            long duration = lastCheckpointDuration;
-            if (position > 0L) controller.getTransportControls().seekTo(
+            android.content.SharedPreferences prefs =
+                    context.getSharedPreferences(RESUME_PREFS, Context.MODE_PRIVATE);
+            long position = Math.max(0L, prefs.getLong(CHECKPOINT_POSITION, 0L));
+            long duration = Math.max(0L, prefs.getLong(CHECKPOINT_DURATION, 0L));
+            controller.getTransportControls().seekTo(
                     duration > 0L ? Math.min(position, duration) : position);
             if (autoplay) controller.getTransportControls().play();
             else controller.getTransportControls().pause();
