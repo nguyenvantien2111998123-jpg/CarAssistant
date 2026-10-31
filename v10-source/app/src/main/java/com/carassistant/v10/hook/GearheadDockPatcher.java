@@ -12,6 +12,7 @@ import android.os.Looper;
 import android.os.SystemClock;
 import android.util.Log;
 import android.view.Display;
+import android.view.LayoutInflater;
 import android.view.View;
 import android.view.ViewGroup;
 import android.widget.TextView;
@@ -70,6 +71,7 @@ public final class GearheadDockPatcher {
             new IdentityHashMap<>();
     private final ExecutorService providerExecutor = Executors.newSingleThreadExecutor();
     private final AtomicBoolean readInFlight = new AtomicBoolean();
+    private final AtomicBoolean autoOpenCheckInFlight = new AtomicBoolean();
 
     private volatile Context context;
     private volatile long visibleUntil;
@@ -107,6 +109,20 @@ public final class GearheadDockPatcher {
                                 patcher.dispatchMediaOpen();
                                 log("Consumed media metadata click; forwarding to projected display");
                             }
+                        }
+                    });
+            // Mirror AADisplay's AaUiHook: auto-open the CarActivity only after
+            // Gearhead inflates its home facet bar and a durable playing checkpoint exists.
+            XposedHelpers.findAndHookMethod(LayoutInflater.class, "inflate",
+                    int.class, ViewGroup.class, boolean.class, new XC_MethodHook() {
+                        @Override
+                        protected void afterHookedMethod(MethodHookParam param) {
+                            if (!(param.args[0] instanceof Integer)) return;
+                            Object inflater = param.thisObject;
+                            if (!(inflater instanceof LayoutInflater)) return;
+                            LayoutInflater layoutInflater = (LayoutInflater) inflater;
+                            patcher.onFacetBarInflated(layoutInflater.getContext(),
+                                    (Integer) param.args[0]);
                         }
                     });
             XposedBridge.hookAllMethods(
@@ -174,6 +190,55 @@ public final class GearheadDockPatcher {
             }
         }
         return false;
+    }
+
+    private void onFacetBarInflated(Context inflaterContext, int layoutResource) {
+        Context appContext = context;
+        if (appContext == null || inflaterContext == null) return;
+        try {
+            String name = inflaterContext.getResources().getResourceEntryName(layoutResource);
+            if (!("gh_coolwalk_vertical_facet_bar".equals(name)
+                    || "gh_coolwalk_facet_bar".equals(name)
+                    || "gh_coolwalk_facet_bar_rhd".equals(name))) return;
+        } catch (RuntimeException ignored) {
+            return;
+        }
+        if (!autoOpenCheckInFlight.compareAndSet(false, true)) return;
+        main.postDelayed(() -> providerExecutor.execute(() -> {
+            boolean shouldResume = hasDurablePlayingCheckpoint();
+            main.post(() -> {
+                autoOpenCheckInFlight.set(false);
+                if (shouldResume) {
+                    log("Android Auto facet bar inflated with a saved playing checkpoint; opening CarAsistant");
+                    GearheadCarAppLauncher.open();
+                }
+            });
+        }), 1000L);
+    }
+
+    private boolean hasDurablePlayingCheckpoint() {
+        Context appContext = context;
+        if (appContext == null) return false;
+        Cursor cursor = null;
+        try {
+            Uri uri = Uri.parse("content://" + DockStateProvider.AUTHORITY + "/media_resume");
+            cursor = appContext.getContentResolver().query(uri,
+                    new String[]{"resume_valid", "resume_was_playing", "resume_saved_at"},
+                    null, null, null);
+            if (cursor == null || !cursor.moveToFirst()) return false;
+            boolean valid = cursor.getInt(0) == 1;
+            boolean wasPlaying = cursor.getInt(1) == 1;
+            long savedAt = cursor.getLong(2);
+            return valid && wasPlaying && savedAt > 0L
+                    && System.currentTimeMillis() - savedAt < 7L * 24L * 60L * 60L * 1000L;
+        } catch (Throwable error) {
+            log("Could not read media resume checkpoint from CarAsistant: " + error);
+            return false;
+        } finally {
+            if (cursor != null) {
+                try { cursor.close(); } catch (RuntimeException ignored) { }
+            }
+        }
     }
 
     private void dispatchMediaOpen() {
