@@ -6,6 +6,7 @@ import com.carassistant.v10.AACastDisplay;
 import com.carassistant.v10.hook.DisplayHooks;
 import com.carassistant.v10.hook.GearheadAllow;
 import com.carassistant.v10.hook.GearheadCarAppLauncher;
+import com.carassistant.v10.hook.GearheadAutoResumeHook;
 import com.carassistant.v10.hook.GearheadDockPatcher;
 import com.carassistant.v10.hook.GearheadMediaSessionFilter;
 import com.carassistant.v10.hook.InputHooks;
@@ -52,9 +53,14 @@ public final class AACastBridge implements IXposedHookLoadPackage {
 
             if (GEARHEAD.equals(packageName)) {
                 GearheadAllow.install(param.classLoader);
-                GearheadCarAppLauncher.install(param.classLoader);
                 GearheadMediaSessionFilter.install();
                 GearheadDockPatcher.install();
+                // AADisplay's AaUiHook runs in Gearhead's :projection process and
+                // launches its CarActivity after the facet bar is inflated.
+                if ((GEARHEAD + ":projection").equals(param.processName)) {
+                    GearheadCarAppLauncher.install(param.classLoader);
+                    GearheadAutoResumeHook.install(param.classLoader);
+                }
 
                 // No experimental Gearhead auto-open or steering/media-key interception.
                 // Android Auto projection and display/input hooks remain enabled.
