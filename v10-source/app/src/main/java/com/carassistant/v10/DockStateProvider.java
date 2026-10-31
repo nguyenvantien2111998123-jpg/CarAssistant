@@ -42,8 +42,8 @@ public final class DockStateProvider extends ContentProvider {
             MatrixCursor cursor = new MatrixCursor(new String[]{
                     "resume_valid", "resume_was_playing", "resume_saved_at"});
             cursor.addRow(new Object[]{
-                    prefs.getInt("resume_valid", prefs.getBoolean("resume_valid", false) ? 1 : 0),
-                    prefs.getInt("resume_was_playing", prefs.getBoolean("resume_was_playing", false) ? 1 : 0),
+                    prefs.getBoolean("resume_valid", false) ? 1 : 0,
+                    prefs.getBoolean("resume_was_playing", false) ? 1 : 0,
                     prefs.getLong("resume_saved_at", 0L)
             });
             return cursor;
