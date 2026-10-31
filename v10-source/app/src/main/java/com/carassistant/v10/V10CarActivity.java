@@ -187,6 +187,7 @@ public final class V10CarActivity
     public void onResume() {
 
         super.onResume();
+        MediaSessionBridge.setProjectionConnected(this, true);
 
         resumed = true;
 
@@ -1710,6 +1711,7 @@ private void hideTaskSwitcher() {
         resumed = false;
         resumeRequestedForConnection = false;
         MediaSessionBridge.persistCurrentResumeSnapshot(this, true);
+        MediaSessionBridge.setProjectionConnected(this, false);
 
         handler.removeCallbacks(
                 clockTicker);
