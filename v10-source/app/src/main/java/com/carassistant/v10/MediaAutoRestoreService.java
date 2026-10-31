@@ -87,7 +87,6 @@ public final class MediaAutoRestoreService extends Service {
             return START_NOT_STICKY;
         }
         startedAt = SystemClock.uptimeMillis();
-        prepareAccessibilityRecovery();
         Log.i(TAG, "Android Auto connected; restoring phone app=" + expectedPackage);
         handler.post(restoreCheckpoint);
         return START_NOT_STICKY;
@@ -109,7 +108,10 @@ public final class MediaAutoRestoreService extends Service {
                     return;
                 } catch (RuntimeException error) {
                     Log.w(TAG, "Saved media URI not accepted; trying app search", error);
+                    prepareAccessibilityRecovery();
                 }
+            } else {
+                prepareAccessibilityRecovery();
             }
             String query = joinTitleArtist(title, artist);
             if (!TextUtils.isEmpty(query)) {
