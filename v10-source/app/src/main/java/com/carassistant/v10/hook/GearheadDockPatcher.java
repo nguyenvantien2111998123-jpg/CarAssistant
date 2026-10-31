@@ -2,6 +2,7 @@ package com.carassistant.v10.hook;
 
 import android.app.Application;
 import android.content.ContentResolver;
+import android.content.ComponentName;
 import android.content.Context;
 import android.content.Intent;
 import android.database.Cursor;
@@ -19,6 +20,7 @@ import android.widget.TextView;
 import com.carassistant.v10.DockStateProvider;
 
 import java.lang.reflect.Field;
+import java.lang.reflect.Method;
 import java.lang.reflect.Modifier;
 import java.util.ArrayList;
 import java.util.Collections;
@@ -180,13 +182,38 @@ public final class GearheadDockPatcher {
         Context appContext = context;
         if (appContext == null) return;
         try {
-            Intent intent = new Intent("com.carassistant.v10.STEERING_MEDIA_OPEN");
-            intent.setPackage("com.carassistant.v10");
-            appContext.sendBroadcast(intent);
-            log("Forwarded Android Auto media metadata tap to CarAsistant");
+            ClassLoader loader = appContext.getClassLoader();
+            Class<?> controller = XposedHelpers.findClassIfExists(
+                    "com.google.android.projection.gearhead.service.CarSystemUiControllerService",
+                    loader);
+            Method launcher = findCarAppLauncher(controller);
+            if (launcher == null) {
+                throw new NoSuchMethodException("Gearhead Car App launcher unavailable");
+            }
+            launcher.setAccessible(true);
+            Intent intent = new Intent();
+            intent.setComponent(new ComponentName(
+                    "com.carassistant.v10", "com.carassistant.v10.AACastCarService"));
+            intent.putExtra("android.intent.extra.PACKAGE_NAME", "com.carassistant.v10");
+            launcher.invoke(null, intent);
+            log("Opened CarAsistant V10 from Android Auto media metadata click");
         } catch (Throwable error) {
-            log("Could not forward media metadata tap: " + error);
+            log("Could not open V10 from media metadata click: " + error);
         }
+    }
+
+    private static Method findCarAppLauncher(Class<?> controller) {
+        for (Class<?> type = controller; type != null; type = type.getSuperclass()) {
+            for (Method method : type.getDeclaredMethods()) {
+                if (Modifier.isStatic(method.getModifiers())
+                        && "a".equals(method.getName())
+                        && method.getParameterTypes().length == 1
+                        && Intent.class.equals(method.getParameterTypes()[0])) {
+                    return method;
+                }
+            }
+        }
+        return null;
     }
 
     private static void log(String message) {
