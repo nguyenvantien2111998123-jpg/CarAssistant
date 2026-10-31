@@ -29,6 +29,7 @@ public final class V10ProjectionStandbyService extends Service {
     private static final int HEIGHT = 720;
     private static final int NOTIFICATION_ID = 3491;
     private static final String CHANNEL_ID = "projection_standby";
+    private static volatile V10ProjectionStandbyService instance;
 
     private V10DisplayController displayController;
     private ImageReader imageReader;
@@ -40,6 +41,7 @@ public final class V10ProjectionStandbyService extends Service {
     @Override
     public void onCreate() {
         super.onCreate();
+        instance = this;
         createNotificationChannel();
         startForeground(NOTIFICATION_ID, buildNotification());
         displayController = V10DisplayController.get(getApplicationContext(), DISPLAY_INDEX);
@@ -93,7 +95,7 @@ public final class V10ProjectionStandbyService extends Service {
     }
 
     private boolean ensureStandbyDisplay() {
-        if (displayController == null || displayController.isReady()) return displayController != null;
+        if (displayController == null) return false;
         if (imageReader == null) {
             try {
                 imageReader = ImageReader.newInstance(WIDTH, HEIGHT, PixelFormat.RGBA_8888, 2);
@@ -224,8 +226,17 @@ public final class V10ProjectionStandbyService extends Service {
         imageReader = null;
     }
 
+    /** Rebinds the display to its hidden sink when the car-side activity is dismissed. */
+    public static void onCarActivityStopped() {
+        V10ProjectionStandbyService service = instance;
+        if (service != null && service.connected) {
+            service.main.post(service::ensureStandbyDisplay);
+        }
+    }
+
     @Override
     public void onDestroy() {
+        if (instance == this) instance = null;
         connected = false;
         getSharedPreferences(RESUME_PREFS, MODE_PRIVATE).edit()
                 .putBoolean("projection_connected", false).apply();
