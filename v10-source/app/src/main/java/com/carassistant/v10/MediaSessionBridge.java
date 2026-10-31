@@ -130,6 +130,26 @@ public final class MediaSessionBridge extends NotificationListenerService {
         }
     }
 
+    /** Seek only when the restored app's own media session is the selected controller. */
+    public static boolean seekToPackage(String expectedPackage, long positionMs) {
+        if (TextUtils.isEmpty(expectedPackage)) return false;
+        MediaController controller = activeController;
+        if (controller == null || !expectedPackage.equals(controller.getPackageName())) return false;
+        try {
+            long target = Math.max(0L, positionMs);
+            MediaMetadata metadata = controller.getMetadata();
+            long duration = metadata == null ? 0L
+                    : metadata.getLong(MediaMetadata.METADATA_KEY_DURATION);
+            if (duration > 0L) target = Math.min(target, duration);
+            controller.getTransportControls().seekTo(target);
+            Log.i(TAG, "Restored " + expectedPackage + " to " + target + "ms");
+            return true;
+        } catch (RuntimeException error) {
+            Log.w(TAG, "Restored media session rejected seek", error);
+            return false;
+        }
+    }
+
     public static boolean hasAccess(Context context) {
         String enabled = Settings.Secure.getString(
                 context.getContentResolver(), "enabled_notification_listeners");
