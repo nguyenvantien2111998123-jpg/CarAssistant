@@ -25,8 +25,20 @@ public final class V10ControlReceiver
         String action = intent.getAction();
         if ("com.carassistant.v10.STEERING_VOICE".equals(action)) {
             V10CarActivity activity = V10SessionStore.getCurrentActivity();
-            if (activity != null) activity.handleSteeringVoice();
-            else Log.w("CarAssistantSteering", "V10 activity is not active; voice request ignored");
+            if (activity != null) {
+                activity.handleSteeringVoice();
+            } else {
+                context.getSharedPreferences("media_autoplay", Context.MODE_PRIVATE)
+                        .edit().putBoolean("voice_pending", true).apply();
+                Intent open = new Intent("com.carassistant.v10.OPEN_CAR_APP")
+                        .setPackage("com.google.android.projection.gearhead");
+                try {
+                    context.sendBroadcast(open);
+                    Log.i("CarAssistantSteering", "Queued voice request and asked Gearhead to open CarAsistant");
+                } catch (RuntimeException error) {
+                    Log.w("CarAssistantSteering", "Could not open CarAsistant from media voice action", error);
+                }
+            }
             return;
         }
         if ("com.carassistant.v10.STEERING_MEDIA_NEXT".equals(action)) {
