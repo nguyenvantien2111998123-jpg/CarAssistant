@@ -406,6 +406,7 @@ public final class V10SettingsActivity extends Activity {
                 && !MediaSessionBridge.hasAccess(this)) {
             openNotificationAccessSettings();
         }
+    }
 
     private void refreshOrientationStatus() {
         if (orientationStatus == null) return;
