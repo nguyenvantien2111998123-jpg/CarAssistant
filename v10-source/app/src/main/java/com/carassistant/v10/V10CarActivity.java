@@ -1089,7 +1089,7 @@ private void dispatchMediaSearchOnProjection(
                         .remove("target_package").remove("query")
                         .remove("phase").remove("target_display_id").remove("started_at")
                         .putBoolean("mini_engine_active", false).apply();
-            } else if (miniAccessEngine != null) {
+            } else if (miniAccessEngine != null && resumePositionMs <= 0L) {
                 miniAccessEngine.start();
             }
         }
