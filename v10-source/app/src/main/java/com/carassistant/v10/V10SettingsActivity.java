@@ -14,6 +14,7 @@ import android.graphics.Typeface;
 import android.view.Gravity;
 import android.view.View;
 import android.widget.LinearLayout;
+import android.widget.Switch;
 import android.widget.ScrollView;
 import android.widget.TextView;
 
@@ -170,6 +171,30 @@ public final class V10SettingsActivity extends Activity {
                 rebuildDefaultVoiceAppChoices();
             });
             rebuildDefaultVoiceAppChoices();
+        });
+
+        addSection("TỰ ĐỘNG PHÁT MEDIA", "Khôi phục ứng dụng và vị trí phát khi Android Auto kết nối", body -> {
+            android.content.SharedPreferences mediaPrefs =
+                    getSharedPreferences("media_autoplay", MODE_PRIVATE);
+            Switch autoplaySwitch = new Switch(this);
+            autoplaySwitch.setText("Tự động phát media khi kết nối Android Auto");
+            autoplaySwitch.setTextColor(Color.WHITE);
+            autoplaySwitch.setTextSize(14);
+            autoplaySwitch.setPadding(dp(4), dp(10), dp(4), dp(10));
+            autoplaySwitch.setChecked(mediaPrefs.getBoolean("enabled", true));
+            autoplaySwitch.setOnCheckedChangeListener((button, checked) ->
+                    mediaPrefs.edit().putBoolean("enabled", checked).apply());
+            body.addView(autoplaySwitch, params(-1, -2));
+
+            TextView autoplayHint = text(
+                    "Bật: khôi phục ứng dụng media trên màn hình phụ và tiếp tục phát từ checkpoint gần nhất. "
+                    + "Tắt: vẫn khôi phục ứng dụng/vị trí nhưng giữ tạm dừng. "
+                    + "Checkpoint mới ghi đè checkpoint cũ mỗi 60 giây. Việc khôi phục nội dung phụ thuộc "
+                    + "ứng dụng media còn giữ phiên phát; Android không cung cấp cách ép mọi ứng dụng "
+                    + "mở lại đúng video/bài hát nếu ứng dụng đã xóa phiên.",
+                    13, Color.LTGRAY);
+            autoplayHint.setPadding(dp(4), dp(6), dp(4), dp(8));
+            body.addView(autoplayHint, params(-1, -2));
         });
 
         addSection("QUYỀN & CHẨN ĐOÁN", "Theo dõi quyền hệ thống và trạng thái tích hợp", body -> {
