@@ -2,12 +2,15 @@ package com.carassistant.v10.hook;
 
 import android.app.Application;
 import android.content.ContentResolver;
+import android.content.ComponentName;
 import android.content.Context;
 import android.content.Intent;
+import android.content.ServiceConnection;
 import android.database.Cursor;
 import android.graphics.Color;
 import android.net.Uri;
 import android.os.Handler;
+import android.os.IBinder;
 import android.os.Looper;
 import android.os.SystemClock;
 import android.util.Log;
@@ -78,6 +81,8 @@ public final class GearheadDockPatcher {
     private boolean loggedNoDock;
     private boolean loggedRootFailure;
     private boolean projectionConnected;
+    private boolean standbyBound;
+    private ServiceConnection standbyConnection;
 
     private GearheadDockPatcher() {
     }
@@ -238,16 +243,40 @@ public final class GearheadDockPatcher {
         Context appContext = context;
         if (appContext == null) return;
         try {
-            String action = connected
-                    ? "com.carassistant.v10.PROJECTION_CONNECTED"
-                    : "com.carassistant.v10.PROJECTION_DISCONNECTED";
-            Intent intent = new Intent(action);
-            intent.setPackage("com.carassistant.v10");
-            appContext.sendBroadcast(intent);
-            log(connected ? "Android Auto display detected; preparing phone-side projection"
-                    : "Android Auto display removed; closing standby service");
+            if (connected) {
+                if (standbyBound) return;
+                standbyConnection = new ServiceConnection() {
+                    @Override public void onServiceConnected(ComponentName name, IBinder service) {
+                        log("Phone-side projection standby service connected");
+                    }
+                    @Override public void onServiceDisconnected(ComponentName name) {
+                        log("Phone-side projection standby service disconnected");
+                    }
+                    @Override public void onBindingDied(ComponentName name) {
+                        standbyBound = false;
+                        log("Projection standby binding died");
+                    }
+                    @Override public void onNullBinding(ComponentName name) {
+                        standbyBound = false;
+                        log("Projection standby service rejected the binding");
+                    }
+                };
+                Intent service = new Intent().setComponent(new ComponentName(
+                        "com.carassistant.v10",
+                        "com.carassistant.v10.V10ProjectionStandbyService"));
+                standbyBound = appContext.bindService(service, standbyConnection,
+                        Context.BIND_AUTO_CREATE | Context.BIND_IMPORTANT);
+                log(standbyBound
+                        ? "Android Auto connected; bound phone-side standby projection service"
+                        : "Android Auto connected but standby service binding was rejected");
+            } else if (standbyBound && standbyConnection != null) {
+                appContext.unbindService(standbyConnection);
+                standbyBound = false;
+                standbyConnection = null;
+                log("Android Auto disconnected; released phone-side standby service");
+            }
         } catch (Throwable error) {
-            log("Could not notify phone-side projection service: " + error);
+            log("Projection standby binding failed: " + error);
         }
     }
 
