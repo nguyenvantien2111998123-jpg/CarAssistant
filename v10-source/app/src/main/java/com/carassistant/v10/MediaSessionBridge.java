@@ -11,6 +11,7 @@ import android.media.session.MediaSession;
 import android.media.session.MediaSessionManager;
 import android.media.session.PlaybackState;
 import android.graphics.Bitmap;
+import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
 import android.provider.Settings;
@@ -31,6 +32,8 @@ public final class MediaSessionBridge extends NotificationListenerService {
     private static final String TAG = "CarAssistantMedia";
     private static final String RESUME_PREFS = "carassistant_media_resume";
     private static final String LAST_PACKAGE = "last_media_package";
+    public static final String ACTION_VOICE_ASSISTANT =
+            "com.carassistant.v10.MEDIA_VOICE_ASSISTANT";
     private static final Handler MAIN = new Handler(Looper.getMainLooper());
     private static final CopyOnWriteArrayList<Listener> LISTENERS = new CopyOnWriteArrayList<>();
 
@@ -214,6 +217,13 @@ public final class MediaSessionBridge extends NotificationListenerService {
             @Override public void onRewind() { MediaSessionBridge.seekBy(-15000L); }
             @Override public void onSeekTo(long position) { MediaSessionBridge.seekTo(position); }
             @Override public void onStop() { MediaSessionBridge.pause(); }
+            @Override public void onCustomAction(String action, Bundle extras) {
+                if (ACTION_VOICE_ASSISTANT.equals(action)) {
+                    Intent intent = new Intent("com.carassistant.v10.STEERING_VOICE")
+                            .setPackage(getPackageName());
+                    sendBroadcast(intent);
+                }
+            }
         }, MAIN);
     }
 
@@ -222,13 +232,15 @@ public final class MediaSessionBridge extends NotificationListenerService {
         if (session == null) return;
         boolean hasPlayer = state != null && !TextUtils.isEmpty(state.packageName);
         if (!hasPlayer) {
-            session.setMetadata(null);
-            session.setPlaybackState(new PlaybackState.Builder()
-                    .setActions(PlaybackState.ACTION_PLAY | PlaybackState.ACTION_PAUSE
-                            | PlaybackState.ACTION_PLAY_PAUSE)
-                    .setState(PlaybackState.STATE_NONE, 0L, 0f)
+            // Keep CarAsistant as the one stable media source on Android Auto Home/widget,
+            // including when no phone player currently publishes a media session.
+            session.setMetadata(new MediaMetadata.Builder()
+                    .putString(MediaMetadata.METADATA_KEY_TITLE, "CarAsistant Media")
+                    .putString(MediaMetadata.METADATA_KEY_ARTIST, "Trình điều khiển media")
+                    .putString(MediaMetadata.METADATA_KEY_ALBUM, "CarAsistant")
                     .build());
-            session.setActive(false);
+            session.setPlaybackState(buildMirrorPlaybackState(false, 0L, 0L));
+            session.setActive(true);
             return;
         }
 
@@ -243,17 +255,25 @@ public final class MediaSessionBridge extends NotificationListenerService {
         if (artwork != null) metadata.putBitmap(MediaMetadata.METADATA_KEY_ALBUM_ART, artwork);
         session.setMetadata(metadata.build());
 
+        session.setPlaybackState(buildMirrorPlaybackState(
+                state.playing, Math.max(0L, state.position), Math.max(0L, state.duration)));
+        // Keep CarAsistant active while the source is paused or temporarily disappears.
+        session.setActive(true);
+    }
+
+    private PlaybackState buildMirrorPlaybackState(boolean playing, long position, long duration) {
         long actions = PlaybackState.ACTION_PLAY | PlaybackState.ACTION_PAUSE
                 | PlaybackState.ACTION_PLAY_PAUSE | PlaybackState.ACTION_SKIP_TO_NEXT
-                | PlaybackState.ACTION_SKIP_TO_PREVIOUS | PlaybackState.ACTION_SEEK_TO
-                | PlaybackState.ACTION_FAST_FORWARD | PlaybackState.ACTION_REWIND
-                | PlaybackState.ACTION_STOP;
-        session.setPlaybackState(new PlaybackState.Builder()
+                | PlaybackState.ACTION_SKIP_TO_PREVIOUS;
+        return new PlaybackState.Builder()
                 .setActions(actions)
-                .setState(state.playing ? PlaybackState.STATE_PLAYING : PlaybackState.STATE_PAUSED,
-                        Math.max(0L, state.position), state.playing ? 1f : 0f)
-                .build());
-        session.setActive(true);
+                .setState(playing ? PlaybackState.STATE_PLAYING : PlaybackState.STATE_PAUSED,
+                        duration > 0L ? Math.min(position, duration) : position,
+                        playing ? 1f : 0f)
+                .addCustomAction(new PlaybackState.CustomAction.Builder(
+                        ACTION_VOICE_ASSISTANT, "Trợ lý giọng nói CarAsistant",
+                        android.R.drawable.ic_btn_speak_now).build())
+                .build();
     }
 
     private static Bitmap safeMirrorArtwork(Bitmap source) {
@@ -284,7 +304,8 @@ public final class MediaSessionBridge extends NotificationListenerService {
                     sessionsListener, new ComponentName(this, MediaSessionBridge.class));
             refreshControllers(manager.getActiveSessions(
                     new ComponentName(this, MediaSessionBridge.class)));
-            Log.i(TAG, "Notification access connected");
+            updateMirrorSession(snapshot);
+            Log.i(TAG, "Notification access connected; persistent CarAsistant media session active");
         } catch (SecurityException error) {
             Log.w(TAG, "Notification access is not granted", error);
         } catch (RuntimeException error) {
@@ -344,6 +365,8 @@ public final class MediaSessionBridge extends NotificationListenerService {
 
     private void refreshControllers(List<MediaController> controllers) {
         MediaController chosen = null;
+        MediaController savedCandidate = null;
+        String lastPackage = getLastKnownPackage(this);
         if (controllers != null) {
             for (MediaController candidate : controllers) {
                 if (candidate == null || getPackageName().equals(candidate.getPackageName())) continue;
@@ -352,8 +375,15 @@ public final class MediaSessionBridge extends NotificationListenerService {
                     chosen = candidate;
                     break;
                 }
+                if (savedCandidate == null && lastPackage != null
+                        && lastPackage.equals(candidate.getPackageName())) savedCandidate = candidate;
                 if (chosen == null && candidate.getMetadata() != null) chosen = candidate;
             }
+        }
+        if (savedCandidate != null && (chosen == null
+                || chosen.getPlaybackState() == null
+                || chosen.getPlaybackState().getState() != PlaybackState.STATE_PLAYING)) {
+            chosen = savedCandidate;
         }
 
         MediaController previous = activeController;
