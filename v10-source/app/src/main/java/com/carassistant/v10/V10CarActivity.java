@@ -98,8 +98,6 @@ public final class V10CarActivity
     private TextView date;
 
     private boolean resumed;
-    private static final String MEDIA_AUTOPLAY_PREFS = "media_autoplay";
-    private static final String MEDIA_AUTOPLAY_ENABLED = "enabled";
 
     private ComponentName activeTarget;
 
