@@ -407,6 +407,12 @@ public final class V10CarActivity
                     }));
         }
 
+        SharedPreferences voicePrefs = getSharedPreferences("media_autoplay", MODE_PRIVATE);
+        if (voicePrefs.getBoolean("voice_pending", false)) {
+            voicePrefs.edit().putBoolean("voice_pending", false).apply();
+            handler.postDelayed(this::handleSteeringVoice, 700L);
+        }
+
         loadApps();
         rebuildDock();
 
