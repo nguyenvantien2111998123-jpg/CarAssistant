@@ -1750,6 +1750,9 @@ private void hideTaskSwitcher() {
     public void onStop() {
 
         resumed = false;
+        // A reconnect may reuse this CarActivity instance; allow the durable
+        // checkpoint to be restored again on its next foreground transition.
+        resumeCheckpointAttempted = false;
 
         handler.removeCallbacks(
                 clockTicker);
