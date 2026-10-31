@@ -221,13 +221,11 @@ public final class GearheadDockPatcher {
     }
 
     private static boolean isAndroidAutoDisplay(View view) {
-        if (view == null || view.getDisplay() == null) return false;
-        android.view.Display display = view.getDisplay();
-        if (display.getDisplayId() <= 0) return false;
-        String name = display.getName();
-        return name != null && (name.contains("GhFacetBar")
-                || name.contains("TemplateNavigationService")
-                || name.toLowerCase(java.util.Locale.ROOT).contains("gearhead"));
+        // This hook runs only inside Gearhead. A root attached to any non-default
+        // display is therefore an Android Auto projection lifecycle signal; avoid
+        // relying on obfuscated display names that vary between AA releases.
+        return view != null && view.getDisplay() != null
+                && view.getDisplay().getDisplayId() > 0;
     }
 
     private boolean hasAndroidAutoDisplay() {
