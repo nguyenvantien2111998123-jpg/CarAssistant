@@ -111,6 +111,13 @@ public final class MediaSessionBridge extends NotificationListenerService {
         return duration > 0L ? Math.min(position, duration) : position;
     }
 
+    /** Mark whether the Android Auto CarActivity currently owns the projection session. */
+    public static void setProjectionConnected(Context context, boolean connected) {
+        if (context == null) return;
+        context.getSharedPreferences(RESUME_PREFS, Context.MODE_PRIVATE).edit()
+                .putBoolean("projection_connected", connected).commit();
+    }
+
     /** Flush the last projected media state when the Android Auto activity stops. */
     public static void persistCurrentResumeSnapshot(Context context, boolean durable) {
         MediaController controller = activeController;
@@ -122,6 +129,8 @@ public final class MediaSessionBridge extends NotificationListenerService {
     private static void persistResumeSnapshot(
             Context context, MediaController controller, boolean durable) {
         if (context == null || controller == null) return;
+        if (!context.getSharedPreferences(RESUME_PREFS, Context.MODE_PRIVATE)
+                .getBoolean("projection_connected", false)) return;
         ComponentName projected = V10SessionStore.getTarget(context);
         if (projected == null
                 || !projected.getPackageName().equals(controller.getPackageName())) return;
@@ -348,6 +357,9 @@ public final class MediaSessionBridge extends NotificationListenerService {
     @Override
     public void onListenerConnected() {
         super.onListenerConnected();
+        if (V10SessionStore.getCurrentActivity() == null) {
+            setProjectionConnected(this, false);
+        }
         ensureMirrorSession();
         try {
             manager = (MediaSessionManager) getSystemService(Context.MEDIA_SESSION_SERVICE);
