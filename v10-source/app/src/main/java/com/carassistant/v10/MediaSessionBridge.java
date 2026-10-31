@@ -39,6 +39,13 @@ public final class MediaSessionBridge extends NotificationListenerService {
     private MediaSessionManager manager;
     private MediaSessionManager.OnActiveSessionsChangedListener sessionsListener;
     private MediaController.Callback controllerCallback;
+    private final Runnable snapshotTicker = new Runnable() {
+        @Override public void run() {
+            // Refresh position as well as metadata at a fixed 60-second cadence.
+            refreshFromManager();
+            MAIN.postDelayed(this, 60_000L);
+        }
+    };
 
     public interface Listener {
         void onMediaChanged(Snapshot snapshot);
@@ -191,6 +198,43 @@ public final class MediaSessionBridge extends NotificationListenerService {
         seekTo(Math.max(0L, position + offsetMs));
     }
 
+    /**
+     * Restore only the exact saved source package. A title mismatch is rejected so a
+     * different queue item from the same app is never sought accidentally.
+     */
+    public static boolean restoreSavedPlayback(String expectedPackage, String expectedTitle,
+                                               long savedPositionMs) {
+        MediaController controller = activeController;
+        if (controller == null || TextUtils.isEmpty(expectedPackage)
+                || !expectedPackage.equals(controller.getPackageName())) return false;
+        try {
+            MediaMetadata metadata = controller.getMetadata();
+            String currentTitle = metadata == null ? "" :
+                    metadata.getString(MediaMetadata.METADATA_KEY_TITLE);
+            if (!TextUtils.isEmpty(expectedTitle) && !TextUtils.isEmpty(currentTitle)
+                    && !expectedTitle.equalsIgnoreCase(currentTitle)) {
+                Log.w(TAG, "Refusing resume: current title does not match saved media");
+                return false;
+            }
+            if (savedPositionMs > 0L) {
+                long duration = metadata == null ? 0L :
+                        metadata.getLong(MediaMetadata.METADATA_KEY_DURATION);
+                long target = duration > 0L
+                        ? Math.min(savedPositionMs, duration) : savedPositionMs;
+                controller.getTransportControls().seekTo(Math.max(0L, target));
+            }
+            PlaybackState state = controller.getPlaybackState();
+            if (state == null || state.getState() != PlaybackState.STATE_PLAYING) {
+                controller.getTransportControls().play();
+            }
+            Log.i(TAG, "Restored saved media session for " + expectedPackage);
+            return true;
+        } catch (RuntimeException error) {
+            Log.w(TAG, "Saved media session rejected restore", error);
+            return false;
+        }
+    }
+
     /** Seek to an absolute position, clamped to the active item's duration when known. */
     public static void seekTo(long requestedPositionMs) {
         MediaController controller = activeController;
@@ -218,7 +262,9 @@ public final class MediaSessionBridge extends NotificationListenerService {
                     sessionsListener, new ComponentName(this, MediaSessionBridge.class));
             refreshControllers(manager.getActiveSessions(
                     new ComponentName(this, MediaSessionBridge.class)));
-            Log.i(TAG, "Notification access connected");
+            MAIN.removeCallbacks(snapshotTicker);
+            MAIN.postDelayed(snapshotTicker, 60_000L);
+            Log.i(TAG, "Notification access connected; 60-second media snapshot refresh enabled");
         } catch (SecurityException error) {
             Log.w(TAG, "Notification access is not granted", error);
         } catch (RuntimeException error) {
@@ -228,6 +274,7 @@ public final class MediaSessionBridge extends NotificationListenerService {
 
     @Override
     public void onListenerDisconnected() {
+        MAIN.removeCallbacks(snapshotTicker);
         if (manager != null && sessionsListener != null) {
             try { manager.removeOnActiveSessionsChangedListener(sessionsListener); }
             catch (RuntimeException ignored) { }
@@ -334,6 +381,9 @@ public final class MediaSessionBridge extends NotificationListenerService {
                     controller.getPackageName(), artwork, playing, duration, position);
         }
         Snapshot latest = snapshot;
+        // Keep a durable last-known record so an AA reconnect can recover after the
+        // live MediaController list is temporarily empty.
+        MediaResumeCoordinator.persist(this, latest);
         MAIN.post(() -> {
             for (Listener listener : LISTENERS) {
                 try { listener.onMediaChanged(latest); }
