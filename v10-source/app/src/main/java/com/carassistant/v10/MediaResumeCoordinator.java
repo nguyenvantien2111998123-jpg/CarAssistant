@@ -22,6 +22,7 @@ public final class MediaResumeCoordinator {
     private static final String TAG = "CarAsstMediaResume";
     private static final String PREFS = "carassistant_media_resume_v2";
     private static final String PACKAGE = "package";
+    private static final String PROJECTED_COMPONENT = "projected_component";
     private static final String TITLE = "title";
     private static final String ARTIST = "artist";
     private static final String DURATION = "duration";
@@ -38,6 +39,20 @@ public final class MediaResumeCoordinator {
     private static final AtomicBoolean restoreInProgress = new AtomicBoolean(false);
 
     private MediaResumeCoordinator() { }
+
+    /** Remember which app V10 last projected, independently from the active media player. */
+    public static void persistProjectedTarget(Context context, ComponentName component) {
+        if (context == null || component == null) return;
+        context.getApplicationContext().getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+                .edit().putString(PROJECTED_COMPONENT, component.flattenToString()).apply();
+    }
+
+    public static ComponentName getLastProjectedTarget(Context context) {
+        if (context == null) return null;
+        String value = context.getApplicationContext().getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+                .getString(PROJECTED_COMPONENT, null);
+        return TextUtils.isEmpty(value) ? null : ComponentName.unflattenFromString(value);
+    }
 
     /** Store only the serializable session state; artwork remains in the live session. */
     public static void persist(Context context, MediaSessionBridge.Snapshot snapshot) {
