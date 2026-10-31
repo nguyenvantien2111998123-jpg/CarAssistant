@@ -124,6 +124,9 @@ public final class MediaPlaybackAccessibilityService extends AccessibilityServic
     @Override
     public void onAccessibilityEvent(AccessibilityEvent event) {
         if (event == null || event.getPackageName() == null) return;
+        // Android Auto connection/foreground events are observed independently from
+        // the existing projected-app auto-play workflow.
+        MediaResumeCoordinator.onAccessibilityEvent(this, event, this);
         String eventPackage = event.getPackageName().toString();
         android.content.SharedPreferences prefs =
                 getSharedPreferences(PREFS, MODE_PRIVATE);
@@ -537,6 +540,7 @@ public final class MediaPlaybackAccessibilityService extends AccessibilityServic
     protected void onServiceConnected() {
         super.onServiceConnected();
         activeService = this;
+        MediaResumeCoordinator.onAccessibilityConnected(this);
         automationHandler.removeCallbacks(searchRetry);
         automationHandler.post(searchRetry);
     }
