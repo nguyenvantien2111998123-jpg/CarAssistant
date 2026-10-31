@@ -13,6 +13,7 @@ import android.media.session.PlaybackState;
 import android.graphics.Bitmap;
 import android.os.Handler;
 import android.os.Looper;
+import android.os.SystemClock;
 import android.provider.Settings;
 import android.text.TextUtils;
 import android.service.notification.NotificationListenerService;
@@ -375,6 +376,12 @@ public final class MediaSessionBridge extends NotificationListenerService {
                     : metadata.getLong(MediaMetadata.METADATA_KEY_DURATION);
             long position = state == null ? 0L : Math.max(0L, state.getPosition());
             boolean playing = state != null && state.getState() == PlaybackState.STATE_PLAYING;
+            if (playing && state.getLastPositionUpdateTime() > 0L) {
+                long elapsed = Math.max(0L,
+                        SystemClock.elapsedRealtime() - state.getLastPositionUpdateTime());
+                position += Math.round(elapsed * state.getPlaybackSpeed());
+                if (duration > 0L) position = Math.min(position, duration);
+            }
             snapshot = new Snapshot(
                     TextUtils.isEmpty(title) ? "Đang phát media" : title,
                     TextUtils.isEmpty(artist) ? controller.getPackageName() : artist,
