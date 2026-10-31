@@ -41,6 +41,7 @@ public final class MediaSessionBridge extends NotificationListenerService {
     private static final String CHECKPOINT_POSITION = "checkpoint_position";
     private static final String CHECKPOINT_PLAYING = "checkpoint_playing";
     private static final String CHECKPOINT_UPDATED_AT = "checkpoint_updated_at";
+    private static final String CHECKPOINT_SPEED = "checkpoint_speed";
     public static final String ACTION_VOICE_ASSISTANT =
             "com.carassistant.v10.MEDIA_VOICE_ASSISTANT";
     private static final Handler MAIN = new Handler(Looper.getMainLooper());
@@ -130,6 +131,7 @@ public final class MediaSessionBridge extends NotificationListenerService {
             lastCheckpointDuration = duration;
             boolean playing = state != null
                     && state.getState() == PlaybackState.STATE_PLAYING;
+            float speed = playing && state != null ? state.getPlaybackSpeed() : 0f;
             // commit() makes this minute's checkpoint durable before the next interval.
             getSharedPreferences(RESUME_PREFS, Context.MODE_PRIVATE).edit()
                     .putString(LAST_PACKAGE, packageName)
@@ -139,6 +141,7 @@ public final class MediaSessionBridge extends NotificationListenerService {
                     .putLong(CHECKPOINT_DURATION, duration)
                     .putLong(CHECKPOINT_POSITION, position)
                     .putBoolean(CHECKPOINT_PLAYING, playing)
+                    .putFloat(CHECKPOINT_SPEED, speed)
                     .putLong(CHECKPOINT_UPDATED_AT, System.currentTimeMillis())
                     .commit();
             Log.d(TAG, "Saved rolling checkpoint for " + packageName
@@ -164,6 +167,27 @@ public final class MediaSessionBridge extends NotificationListenerService {
         return TextUtils.isEmpty(value) ? null : value;
     }
 
+    /**
+     * Reconstruct the checkpoint position after abrupt power loss. Since the player
+     * stops when the phone loses power, extrapolation is capped to one checkpoint
+     * interval; time spent with the phone powered off must never advance the track.
+     */
+    private static long getAdjustedCheckpointPosition(Context context) {
+        android.content.SharedPreferences prefs =
+                context.getSharedPreferences(RESUME_PREFS, Context.MODE_PRIVATE);
+        long position = Math.max(0L, prefs.getLong(CHECKPOINT_POSITION, 0L));
+        long duration = Math.max(0L, prefs.getLong(CHECKPOINT_DURATION, 0L));
+        boolean wasPlaying = prefs.getBoolean(CHECKPOINT_PLAYING, false);
+        long savedAt = prefs.getLong(CHECKPOINT_UPDATED_AT, 0L);
+        float speed = prefs.getFloat(CHECKPOINT_SPEED, 1f);
+        if (wasPlaying && savedAt > 0L && speed > 0f) {
+            long elapsed = Math.max(0L, System.currentTimeMillis() - savedAt);
+            elapsed = Math.min(elapsed, CHECKPOINT_INTERVAL_MS);
+            position += (long) (elapsed * speed);
+        }
+        return duration > 0L ? Math.min(position, duration) : position;
+    }
+
     /** Apply the saved position and explicit autoplay preference to the matching player only. */
     public static boolean applyCheckpoint(Context context, String expectedPackage, boolean autoplay) {
         if (context == null || TextUtils.isEmpty(expectedPackage)) return false;
@@ -175,7 +199,7 @@ public final class MediaSessionBridge extends NotificationListenerService {
         try {
             android.content.SharedPreferences prefs =
                     context.getSharedPreferences(RESUME_PREFS, Context.MODE_PRIVATE);
-            long position = Math.max(0L, prefs.getLong(CHECKPOINT_POSITION, 0L));
+            long position = getAdjustedCheckpointPosition(context);
             long duration = Math.max(0L, prefs.getLong(CHECKPOINT_DURATION, 0L));
             controller.getTransportControls().seekTo(
                     duration > 0L ? Math.min(position, duration) : position);
@@ -504,9 +528,11 @@ public final class MediaSessionBridge extends NotificationListenerService {
                 controllerCallback = new MediaController.Callback() {
                     @Override public void onMetadataChanged(MediaMetadata metadata) {
                         publish(selectedController);
+                        if (selectedController == activeController) saveCurrentCheckpoint();
                     }
                     @Override public void onPlaybackStateChanged(PlaybackState state) {
                         publish(selectedController);
+                        if (selectedController == activeController) saveCurrentCheckpoint();
                     }
                     @Override public void onSessionDestroyed() {
                         refreshFromManager();
