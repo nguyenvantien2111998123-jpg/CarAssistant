@@ -157,7 +157,9 @@ public final class MediaPlaybackAccessibilityService extends AccessibilityServic
             AccessibilityNodeInfo root = findRootForPackage(targetPackage, displayId);
             if (root != null) {
                 try {
-                    AccessibilityNodeInfo result = findSearchResult(root, savedTitle);
+                    String resumePhase = prefs.getString("resume_phase", "locate");
+                    AccessibilityNodeInfo result = "wait_session".equals(resumePhase)
+                            ? null : findSearchResult(root, savedTitle);
                     if (result != null) {
                         boolean clicked = clickNodeOrClickableParent(result);
                         if (clicked) {
@@ -168,7 +170,8 @@ public final class MediaPlaybackAccessibilityService extends AccessibilityServic
                         }
                     }
 
-                    if (containsNormalizedText(root, savedTitle)) {
+                    if (!"wait_session".equals(resumePhase)
+                            && containsNormalizedText(root, savedTitle)) {
                         AccessibilityNodeInfo play = findPlayControl(root);
                         if (play != null && clickNodeOrClickableParent(play)) {
                             prefs.edit().putString("resume_phase", "wait_session")
@@ -178,7 +181,8 @@ public final class MediaPlaybackAccessibilityService extends AccessibilityServic
                         }
                     }
 
-                    if (!"search_submitted".equals(prefs.getString("resume_phase", ""))) {
+                    if (!"wait_session".equals(resumePhase)
+                            && !"search_submitted".equals(resumePhase)) {
                         AccessibilityNodeInfo searchField = findSearchInput(root);
                         if (searchField != null) {
                             boolean set = false;
@@ -193,8 +197,9 @@ public final class MediaPlaybackAccessibilityService extends AccessibilityServic
                                     AccessibilityNodeInfo searchButton = findSearchButton(root);
                                     boolean submitted = searchButton != null
                                             && clickNodeOrClickableParent(searchButton);
-                                    if (!submitted) {
-                                        searchField.performAction(AccessibilityNodeInfo.ACTION_CLICK);
+                                    if (!submitted && Build.VERSION.SDK_INT >= 30) {
+                                        submitted = searchField.performAction(
+                                                AccessibilityNodeInfo.AccessibilityAction.ACTION_IME_ENTER.getId());
                                     }
                                     prefs.edit().putString("resume_phase", "search_submitted")
                                             .putInt("resume_attempts", attempts + 1).apply();
@@ -223,8 +228,8 @@ public final class MediaPlaybackAccessibilityService extends AccessibilityServic
         if (state == null || !packageName.equals(state.packageName)) return false;
         String expected = com.carassistant.v10.voice.VoiceCommandParser.normalize(title);
         String actual = com.carassistant.v10.voice.VoiceCommandParser.normalize(state.title);
-        return !expected.isEmpty() && (expected.equals(actual)
-                || expected.contains(actual) || actual.contains(expected));
+        return !expected.isEmpty() && !actual.isEmpty()
+                && (expected.equals(actual) || expected.contains(actual) || actual.contains(expected));
     }
 
     private boolean containsNormalizedText(AccessibilityNodeInfo root, String expected) {
@@ -248,7 +253,7 @@ public final class MediaPlaybackAccessibilityService extends AccessibilityServic
             boolean searchField = searchable.contains("search")
                     || searchable.contains("tìm kiếm") || searchable.contains("tim_kiem")
                     || searchable.contains("query");
-            if ((editText || searchField) && node.isEnabled()) {
+            if (editText && node.isEnabled()) {
                 for (AccessibilityNodeInfo other : nodes) {
                     if (other != node) other.recycle();
                 }
