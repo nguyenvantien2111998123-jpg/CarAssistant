@@ -2,6 +2,7 @@ package com.carassistant.v10;
 
 import android.accessibilityservice.AccessibilityService;
 import android.os.Build;
+import android.os.Bundle;
 import android.view.accessibility.AccessibilityEvent;
 import android.view.accessibility.AccessibilityNodeInfo;
 import android.view.accessibility.AccessibilityWindowInfo;
@@ -20,6 +21,34 @@ import java.util.Locale;
  */
 public final class MediaPlaybackAccessibilityService extends AccessibilityService {
     private static volatile MediaPlaybackAccessibilityService activeService;
+
+    /** Called by V10 only after the restored app is live on Android Auto's projection display. */
+    public static void requestResume(
+            android.content.Context context, String projectedPackage, int displayId) {
+        if (context == null || projectedPackage == null || projectedPackage.isEmpty()
+                || displayId <= 0) return;
+        android.content.SharedPreferences prefs =
+                context.getSharedPreferences("carassistant_media_resume", MODE_PRIVATE);
+        if (!prefs.getBoolean("resume_valid", false)
+                || !prefs.getBoolean("resume_was_playing", false)
+                || !projectedPackage.equals(prefs.getString("resume_projected_package", ""))
+                || !projectedPackage.equals(prefs.getString("resume_media_package", ""))
+                || prefs.getString("resume_title", "").trim().isEmpty()) {
+            return;
+        }
+        prefs.edit()
+                .putBoolean("resume_pending", true)
+                .putInt("resume_display_id", displayId)
+                .putLong("resume_requested_at", System.currentTimeMillis())
+                .putInt("resume_attempts", 0)
+                .putString("resume_phase", "locate")
+                .apply();
+        MediaPlaybackAccessibilityService service = activeService;
+        if (service != null) {
+            service.automationHandler.removeCallbacks(service.resumeRetry);
+            service.automationHandler.post(service.resumeRetry);
+        }
+    }
     private final RootShellSession closeRootShell = new RootShellSession();
 
     /**
@@ -80,6 +109,178 @@ public final class MediaPlaybackAccessibilityService extends AccessibilityServic
     private static final long RETRY_INTERVAL_MS = 400L;
     private final Handler automationHandler = new Handler(Looper.getMainLooper());
 
+    private final Runnable resumeRetry = new Runnable() {
+        @Override public void run() {
+            android.content.SharedPreferences prefs =
+                    getSharedPreferences("carassistant_media_resume", MODE_PRIVATE);
+            if (!prefs.getBoolean("resume_pending", false)) return;
+
+            String targetPackage = prefs.getString("resume_media_package", "");
+            String savedTitle = prefs.getString("resume_title", "");
+            int displayId = prefs.getInt("resume_display_id", -1);
+            long savedPosition = Math.max(0L, prefs.getLong("resume_position", 0L));
+            long requestedAt = prefs.getLong("resume_requested_at", 0L);
+            int attempts = prefs.getInt("resume_attempts", 0);
+            if (targetPackage.isEmpty() || savedTitle.trim().isEmpty() || displayId <= 0) {
+                prefs.edit().putBoolean("resume_pending", false).apply();
+                return;
+            }
+            if (requestedAt <= 0L || System.currentTimeMillis() - requestedAt > 120000L
+                    || attempts >= 160) {
+                prefs.edit().putBoolean("resume_pending", false).apply();
+                Log.w(TAG, "Last-session media restore timed out for " + targetPackage);
+                return;
+            }
+
+            MediaSessionBridge.Snapshot current = MediaSessionBridge.getSnapshot();
+            if (isMatchingResumeSnapshot(current, targetPackage, savedTitle)) {
+                if (!current.playing) {
+                    MediaSessionBridge.play();
+                    prefs.edit().putInt("resume_attempts", attempts + 1).apply();
+                    automationHandler.postDelayed(this, 700L);
+                    return;
+                }
+                long currentPosition = MediaSessionBridge.getCurrentPosition();
+                if (Math.abs(currentPosition - savedPosition) > 2500L) {
+                    MediaSessionBridge.seekTo(savedPosition);
+                }
+                prefs.edit()
+                        .putBoolean("resume_pending", false)
+                        .putLong("resume_completed_at", System.currentTimeMillis())
+                        .putString("resume_phase", "completed")
+                        .apply();
+                Log.i(TAG, "Restored " + savedTitle + " at " + savedPosition
+                        + "ms in " + targetPackage);
+                return;
+            }
+
+            AccessibilityNodeInfo root = findRootForPackage(targetPackage, displayId);
+            if (root != null) {
+                try {
+                    AccessibilityNodeInfo result = findSearchResult(root, savedTitle);
+                    if (result != null) {
+                        boolean clicked = clickNodeOrClickableParent(result);
+                        if (clicked) {
+                            prefs.edit().putString("resume_phase", "wait_session")
+                                    .putInt("resume_attempts", attempts + 1).apply();
+                            automationHandler.postDelayed(this, 800L);
+                            return;
+                        }
+                    }
+
+                    if (containsNormalizedText(root, savedTitle)) {
+                        AccessibilityNodeInfo play = findPlayControl(root);
+                        if (play != null && clickNodeOrClickableParent(play)) {
+                            prefs.edit().putString("resume_phase", "wait_session")
+                                    .putInt("resume_attempts", attempts + 1).apply();
+                            automationHandler.postDelayed(this, 800L);
+                            return;
+                        }
+                    }
+
+                    if (!"search_submitted".equals(prefs.getString("resume_phase", ""))) {
+                        AccessibilityNodeInfo searchField = findSearchInput(root);
+                        if (searchField != null) {
+                            boolean set = false;
+                            try {
+                                Bundle args = new Bundle();
+                                args.putCharSequence(
+                                        AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE,
+                                        savedTitle);
+                                set = searchField.performAction(
+                                        AccessibilityNodeInfo.ACTION_SET_TEXT, args);
+                                if (set) {
+                                    AccessibilityNodeInfo searchButton = findSearchButton(root);
+                                    boolean submitted = searchButton != null
+                                            && clickNodeOrClickableParent(searchButton);
+                                    if (!submitted) {
+                                        searchField.performAction(AccessibilityNodeInfo.ACTION_CLICK);
+                                    }
+                                    prefs.edit().putString("resume_phase", "search_submitted")
+                                            .putInt("resume_attempts", attempts + 1).apply();
+                                    automationHandler.postDelayed(this, 1200L);
+                                    return;
+                                }
+                            } finally {
+                                searchField.recycle();
+                            }
+                        }
+                    }
+                } catch (RuntimeException error) {
+                    Log.w(TAG, "Accessibility resume attempt failed", error);
+                } finally {
+                    root.recycle();
+                }
+            }
+
+            prefs.edit().putInt("resume_attempts", attempts + 1).apply();
+            automationHandler.postDelayed(this, 700L);
+        }
+    };
+
+    private boolean isMatchingResumeSnapshot(
+            MediaSessionBridge.Snapshot state, String packageName, String title) {
+        if (state == null || !packageName.equals(state.packageName)) return false;
+        String expected = com.carassistant.v10.voice.VoiceCommandParser.normalize(title);
+        String actual = com.carassistant.v10.voice.VoiceCommandParser.normalize(state.title);
+        return !expected.isEmpty() && (expected.equals(actual)
+                || expected.contains(actual) || actual.contains(expected));
+    }
+
+    private boolean containsNormalizedText(AccessibilityNodeInfo root, String expected) {
+        String all = com.carassistant.v10.voice.VoiceCommandParser.normalize(
+                collectText(root, 0, new StringBuilder()).toString());
+        String wanted = com.carassistant.v10.voice.VoiceCommandParser.normalize(expected);
+        return !wanted.isEmpty() && all.contains(wanted);
+    }
+
+    private AccessibilityNodeInfo findSearchInput(AccessibilityNodeInfo root) {
+        List<AccessibilityNodeInfo> nodes = new ArrayList<>();
+        collectNodes(root, 0, nodes);
+        for (AccessibilityNodeInfo node : nodes) {
+            CharSequence className = node.getClassName();
+            CharSequence hint = Build.VERSION.SDK_INT >= 26 ? node.getHintText() : null;
+            String id = node.getViewIdResourceName();
+            String searchable = ((hint == null ? "" : hint.toString()) + " "
+                    + (id == null ? "" : id)).toLowerCase(Locale.ROOT);
+            boolean editText = className != null
+                    && className.toString().toLowerCase(Locale.ROOT).contains("edittext");
+            boolean searchField = searchable.contains("search")
+                    || searchable.contains("tìm kiếm") || searchable.contains("tim_kiem")
+                    || searchable.contains("query");
+            if ((editText || searchField) && node.isEnabled()) {
+                for (AccessibilityNodeInfo other : nodes) {
+                    if (other != node) other.recycle();
+                }
+                return node;
+            }
+        }
+        for (AccessibilityNodeInfo node : nodes) node.recycle();
+        return null;
+    }
+
+    private AccessibilityNodeInfo findSearchButton(AccessibilityNodeInfo root) {
+        List<AccessibilityNodeInfo> nodes = new ArrayList<>();
+        collectNodes(root, 0, nodes);
+        for (AccessibilityNodeInfo node : nodes) {
+            String value = "";
+            if (node.getText() != null) value += node.getText().toString();
+            if (node.getContentDescription() != null) value += " " + node.getContentDescription();
+            if (node.getViewIdResourceName() != null) value += " " + node.getViewIdResourceName();
+            String normalized = com.carassistant.v10.voice.VoiceCommandParser.normalize(value);
+            boolean search = normalized.contains("search") || normalized.contains("tìm kiếm")
+                    || normalized.contains("tim kiem") || normalized.contains("submit");
+            if (search && node.isClickable()) {
+                for (AccessibilityNodeInfo other : nodes) {
+                    if (other != node) other.recycle();
+                }
+                return node;
+            }
+        }
+        for (AccessibilityNodeInfo node : nodes) node.recycle();
+        return null;
+    }
+
     private final Runnable playRetry = new Runnable() {
         @Override public void run() {
             android.content.SharedPreferences prefs =
@@ -125,6 +326,13 @@ public final class MediaPlaybackAccessibilityService extends AccessibilityServic
     public void onAccessibilityEvent(AccessibilityEvent event) {
         if (event == null || event.getPackageName() == null) return;
         String eventPackage = event.getPackageName().toString();
+        android.content.SharedPreferences resumePrefs =
+                getSharedPreferences("carassistant_media_resume", MODE_PRIVATE);
+        if (resumePrefs.getBoolean("resume_pending", false)
+                && eventPackage.equals(resumePrefs.getString("resume_media_package", ""))) {
+            automationHandler.removeCallbacks(resumeRetry);
+            automationHandler.post(resumeRetry);
+        }
         android.content.SharedPreferences prefs =
                 getSharedPreferences(PREFS, MODE_PRIVATE);
         String targetPackage = prefs.getString("target_package", "");
@@ -539,11 +747,18 @@ public final class MediaPlaybackAccessibilityService extends AccessibilityServic
         activeService = this;
         automationHandler.removeCallbacks(searchRetry);
         automationHandler.post(searchRetry);
+        android.content.SharedPreferences resumePrefs =
+                getSharedPreferences("carassistant_media_resume", MODE_PRIVATE);
+        if (resumePrefs.getBoolean("resume_pending", false)) {
+            automationHandler.removeCallbacks(resumeRetry);
+            automationHandler.post(resumeRetry);
+        }
     }
 
     @Override public void onInterrupt() {
         automationHandler.removeCallbacks(playRetry);
         automationHandler.removeCallbacks(searchRetry);
+        automationHandler.removeCallbacks(resumeRetry);
     }
 
     @Override public void onDestroy() {
@@ -551,6 +766,7 @@ public final class MediaPlaybackAccessibilityService extends AccessibilityServic
         closeRootShell.destroy();
         automationHandler.removeCallbacks(playRetry);
         automationHandler.removeCallbacks(searchRetry);
+        automationHandler.removeCallbacks(resumeRetry);
         super.onDestroy();
     }
 }
