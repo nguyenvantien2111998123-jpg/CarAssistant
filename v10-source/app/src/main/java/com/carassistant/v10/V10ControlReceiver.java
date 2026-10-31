@@ -34,9 +34,16 @@ public final class V10ControlReceiver
             return;
         }
         if (V10ProjectionStandbyService.ACTION_DISCONNECTED.equals(action)) {
-            context.stopService(new Intent(context, V10ProjectionStandbyService.class));
-            context.getSharedPreferences("carassistant_media_resume", Context.MODE_PRIVATE)
-                    .edit().putBoolean("projection_connected", false).apply();
+            Intent service = new Intent(context, V10ProjectionStandbyService.class)
+                    .setAction(V10ProjectionStandbyService.ACTION_DISCONNECTED);
+            try {
+                context.startService(service);
+            } catch (RuntimeException error) {
+                context.stopService(service);
+                context.getSharedPreferences("carassistant_media_resume", Context.MODE_PRIVATE)
+                        .edit().putBoolean("projection_connected", false).apply();
+                Log.w("CarAssistantStandby", "Disconnect notification failed", error);
+            }
             return;
         }
         if ("com.carassistant.v10.STEERING_VOICE".equals(action)) {
