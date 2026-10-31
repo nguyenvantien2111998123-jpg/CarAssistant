@@ -1005,7 +1005,7 @@ private void launchProjection(ComponentName component) {
 }
 
     private void restoreSavedMediaCheckpoint() {
-        if (!resumed || resumeCheckpointAttempted || session == null || activeTarget != null) return;
+        if (!resumed || resumeCheckpointAttempted || session == null) return;
         SharedPreferences prefs = getSharedPreferences("carassistant_media_resume", MODE_PRIVATE);
         boolean valid = prefs.getBoolean("resume_valid", false);
         boolean wasPlaying = prefs.getBoolean("resume_was_playing", false);
