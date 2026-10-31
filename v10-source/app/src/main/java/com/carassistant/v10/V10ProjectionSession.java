@@ -17,6 +17,7 @@ public final class V10ProjectionSession implements TextureView.SurfaceTextureLis
     private TextureView textureView;
     private ComponentName target;
     private boolean destroyed;
+    private boolean restoreMediaTaskOnAttach;
     private int contentWidth;
     private int contentHeight;
 
@@ -54,7 +55,22 @@ public final class V10ProjectionSession implements TextureView.SurfaceTextureLis
     }
 
     private void launchTargetTask() {
-        displayController.launchNewTask(target);
+        if (restoreMediaTaskOnAttach) {
+            restoreMediaTaskOnAttach = false;
+            displayController.launchMediaTaskOnDisplay(target);
+        } else {
+            displayController.launchNewTask(target);
+        }
+    }
+
+    /** Restore the saved player task to this projection without force-stopping its package. */
+    public void restoreMediaTask(ComponentName component) {
+        if (destroyed || component == null) return;
+        target = component;
+        taskSession.setTarget(component);
+        if (displayController.isLaunched()) displayController.markNotLaunched();
+        restoreMediaTaskOnAttach = true;
+        attachCurrentSurface();
     }
 
     public boolean isActive() {
