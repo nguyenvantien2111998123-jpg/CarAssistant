@@ -171,6 +171,7 @@ public final class MediaPlaybackAccessibilityService extends AccessibilityServic
                     }
 
                     if (!"wait_session".equals(resumePhase)
+                            && !"search_submitted".equals(resumePhase)
                             && containsNormalizedText(root, savedTitle)) {
                         AccessibilityNodeInfo play = findPlayControl(root);
                         if (play != null && clickNodeOrClickableParent(play)) {
