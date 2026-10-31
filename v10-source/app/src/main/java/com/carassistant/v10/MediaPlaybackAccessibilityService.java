@@ -1,6 +1,7 @@
 package com.carassistant.v10;
 
 import android.accessibilityservice.AccessibilityService;
+import android.content.Context;
 import android.os.Build;
 import android.view.accessibility.AccessibilityEvent;
 import android.view.accessibility.AccessibilityNodeInfo;
@@ -80,6 +81,54 @@ public final class MediaPlaybackAccessibilityService extends AccessibilityServic
     private static final long RETRY_INTERVAL_MS = 400L;
     private final Handler automationHandler = new Handler(Looper.getMainLooper());
 
+    public static void prepareResume(Context context, String packageName, String title,
+                                     int displayId, long positionMs) {
+        if (context == null || packageName == null || packageName.isEmpty()
+                || title == null || title.trim().isEmpty() || displayId <= 0) return;
+        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit()
+                .putString("target_package", packageName)
+                .putString("query", title.trim())
+                .putString("phase", "search")
+                .putInt("target_display_id", displayId)
+                .putLong("started_at", System.currentTimeMillis())
+                .putLong("resume_position", Math.max(0L, positionMs))
+                .putBoolean("mini_engine_active", false)
+                .apply();
+    }
+
+    private void scheduleResumeSeek(android.content.SharedPreferences prefs, String packageName) {
+        long position = Math.max(0L, prefs.getLong("resume_position", 0L));
+        prefs.edit().putString("resume_seek_package", packageName)
+                .putLong("resume_seek_position", position)
+                .putLong("resume_seek_until", System.currentTimeMillis() + 15000L).apply();
+        automationHandler.removeCallbacks(resumeSeekRetry);
+        automationHandler.postDelayed(resumeSeekRetry, 1500L);
+    }
+
+    private final Runnable resumeSeekRetry = new Runnable() {
+        @Override public void run() {
+            android.content.SharedPreferences prefs =
+                    getSharedPreferences(PREFS, MODE_PRIVATE);
+            String packageName = prefs.getString("resume_seek_package", "");
+            long position = prefs.getLong("resume_seek_position", 0L);
+            long until = prefs.getLong("resume_seek_until", 0L);
+            if (packageName.isEmpty() || until <= 0L) return;
+            if (MediaSessionBridge.seekToPackage(packageName, position)) {
+                prefs.edit().remove("resume_seek_package").remove("resume_seek_position")
+                        .remove("resume_seek_until").apply();
+                Log.i(TAG, "Restored playback position for " + packageName + ": " + position);
+                return;
+            }
+            if (System.currentTimeMillis() >= until) {
+                prefs.edit().remove("resume_seek_package").remove("resume_seek_position")
+                        .remove("resume_seek_until").apply();
+                Log.w(TAG, "Could not restore playback position before timeout for " + packageName);
+                return;
+            }
+            automationHandler.postDelayed(this, 750L);
+        }
+    };
+
     private final Runnable playRetry = new Runnable() {
         @Override public void run() {
             android.content.SharedPreferences prefs =
@@ -106,6 +155,7 @@ public final class MediaPlaybackAccessibilityService extends AccessibilityServic
                     if (play != null) {
                         boolean clicked = clickNodeOrClickableParent(play);
                         if (clicked) {
+                            scheduleResumeSeek(prefs, targetPackage);
                             clearPending(prefs);
                             Log.i(TAG, "Tapped a visible Play control in " + targetPackage);
                             root.recycle();
@@ -160,6 +210,7 @@ public final class MediaPlaybackAccessibilityService extends AccessibilityServic
                     boolean clicked = clickNodeOrClickableParent(result);
                     if (clicked) {
                         prefs.edit().putString("phase", "play").apply();
+                        scheduleResumeSeek(prefs, eventPackage);
                         automationHandler.removeCallbacks(playRetry);
                         automationHandler.postDelayed(playRetry, 500L);
                         Log.i(TAG, "Selected a matching search result in " + eventPackage);
@@ -507,6 +558,7 @@ public final class MediaPlaybackAccessibilityService extends AccessibilityServic
                         boolean clicked = clickNodeOrClickableParent(result);
                         if (clicked) {
                             prefs.edit().putString("phase", "play").apply();
+                            scheduleResumeSeek(prefs, targetPackage);
                             Log.i(TAG, "Selected matching result package=" + targetPackage
                                     + " displayId=" + targetDisplayId);
                             automationHandler.removeCallbacks(playRetry);
@@ -544,6 +596,7 @@ public final class MediaPlaybackAccessibilityService extends AccessibilityServic
     @Override public void onInterrupt() {
         automationHandler.removeCallbacks(playRetry);
         automationHandler.removeCallbacks(searchRetry);
+        automationHandler.removeCallbacks(resumeSeekRetry);
     }
 
     @Override public void onDestroy() {
@@ -551,6 +604,7 @@ public final class MediaPlaybackAccessibilityService extends AccessibilityServic
         closeRootShell.destroy();
         automationHandler.removeCallbacks(playRetry);
         automationHandler.removeCallbacks(searchRetry);
+        automationHandler.removeCallbacks(resumeSeekRetry);
         super.onDestroy();
     }
 }
