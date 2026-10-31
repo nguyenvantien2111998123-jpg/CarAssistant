@@ -11,7 +11,9 @@ import android.media.session.MediaSession;
 import android.media.session.MediaSessionManager;
 import android.media.session.PlaybackState;
 import android.graphics.Bitmap;
+import android.os.Bundle;
 import android.os.Handler;
+import android.os.SystemClock;
 import android.os.Looper;
 import android.provider.Settings;
 import android.text.TextUtils;
@@ -21,6 +23,8 @@ import android.util.Log;
 
 import java.util.List;
 import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 
 /**
  * Reads the active phone media session so the CarAsistant dashboard can mirror
@@ -31,6 +35,8 @@ public final class MediaSessionBridge extends NotificationListenerService {
     private static final String TAG = "CarAssistantMedia";
     private static final String RESUME_PREFS = "carassistant_media_resume";
     private static final String LAST_PACKAGE = "last_media_package";
+    public static final String ACTION_VOICE_ASSISTANT = "com.carassistant.v10.MEDIA_VOICE_ASSISTANT";
+    private static final long CHECKPOINT_INTERVAL_MS = 1000L;
     private static final Handler MAIN = new Handler(Looper.getMainLooper());
     private static final CopyOnWriteArrayList<Listener> LISTENERS = new CopyOnWriteArrayList<>();
 
@@ -40,6 +46,18 @@ public final class MediaSessionBridge extends NotificationListenerService {
     private MediaSessionManager manager;
     private MediaSessionManager.OnActiveSessionsChangedListener sessionsListener;
     private MediaController.Callback controllerCallback;
+    private final ExecutorService checkpointWriter = Executors.newSingleThreadExecutor(r -> {
+        Thread thread = new Thread(r, "CarAsistantMediaCheckpoint");
+        thread.setDaemon(true);
+        return thread;
+    });
+    private final Runnable checkpointTicker = new Runnable() {
+        @Override public void run() {
+            MediaController controller = activeController;
+            if (controller != null) persistCheckpoint(controller);
+            MAIN.postDelayed(this, CHECKPOINT_INTERVAL_MS);
+        }
+    };
 
     public interface Listener {
         void onMediaChanged(Snapshot snapshot);
@@ -214,6 +232,13 @@ public final class MediaSessionBridge extends NotificationListenerService {
             @Override public void onRewind() { MediaSessionBridge.seekBy(-15000L); }
             @Override public void onSeekTo(long position) { MediaSessionBridge.seekTo(position); }
             @Override public void onStop() { MediaSessionBridge.pause(); }
+            @Override public void onCustomAction(String action, Bundle extras) {
+                if (ACTION_VOICE_ASSISTANT.equals(action)) {
+                    Intent intent = new Intent("com.carassistant.v10.STEERING_VOICE")
+                            .setPackage(getPackageName());
+                    sendBroadcast(intent);
+                }
+            }
         }, MAIN);
     }
 
@@ -222,13 +247,14 @@ public final class MediaSessionBridge extends NotificationListenerService {
         if (session == null) return;
         boolean hasPlayer = state != null && !TextUtils.isEmpty(state.packageName);
         if (!hasPlayer) {
-            session.setMetadata(null);
-            session.setPlaybackState(new PlaybackState.Builder()
-                    .setActions(PlaybackState.ACTION_PLAY | PlaybackState.ACTION_PAUSE
-                            | PlaybackState.ACTION_PLAY_PAUSE)
-                    .setState(PlaybackState.STATE_NONE, 0L, 0f)
+            // Keep one stable CarAsistant source visible on Android Auto home/widget.
+            session.setMetadata(new MediaMetadata.Builder()
+                    .putString(MediaMetadata.METADATA_KEY_TITLE, "CarAsistant Media")
+                    .putString(MediaMetadata.METADATA_KEY_ARTIST, "Trình điều khiển media")
+                    .putString(MediaMetadata.METADATA_KEY_ALBUM, "CarAsistant")
                     .build());
-            session.setActive(false);
+            session.setPlaybackState(buildMirrorPlaybackState(false, 0L, 0L));
+            session.setActive(true);
             return;
         }
 
@@ -243,17 +269,25 @@ public final class MediaSessionBridge extends NotificationListenerService {
         if (artwork != null) metadata.putBitmap(MediaMetadata.METADATA_KEY_ALBUM_ART, artwork);
         session.setMetadata(metadata.build());
 
+        session.setPlaybackState(buildMirrorPlaybackState(
+                state.playing, Math.max(0L, state.position), Math.max(0L, state.duration)));
+        // Keep the mirror active when the source pauses or temporarily disappears.
+        session.setActive(true);
+    }
+
+    private PlaybackState buildMirrorPlaybackState(boolean playing, long position, long duration) {
         long actions = PlaybackState.ACTION_PLAY | PlaybackState.ACTION_PAUSE
                 | PlaybackState.ACTION_PLAY_PAUSE | PlaybackState.ACTION_SKIP_TO_NEXT
-                | PlaybackState.ACTION_SKIP_TO_PREVIOUS | PlaybackState.ACTION_SEEK_TO
-                | PlaybackState.ACTION_FAST_FORWARD | PlaybackState.ACTION_REWIND
-                | PlaybackState.ACTION_STOP;
-        session.setPlaybackState(new PlaybackState.Builder()
+                | PlaybackState.ACTION_SKIP_TO_PREVIOUS;
+        PlaybackState.Builder builder = new PlaybackState.Builder()
                 .setActions(actions)
-                .setState(state.playing ? PlaybackState.STATE_PLAYING : PlaybackState.STATE_PAUSED,
-                        Math.max(0L, state.position), state.playing ? 1f : 0f)
-                .build());
-        session.setActive(true);
+                .setState(playing ? PlaybackState.STATE_PLAYING : PlaybackState.STATE_PAUSED,
+                        duration > 0L ? Math.min(position, duration) : position,
+                        playing ? 1f : 0f)
+                .addCustomAction(new PlaybackState.CustomAction.Builder(
+                        ACTION_VOICE_ASSISTANT, "Trợ lý giọng nói CarAsistant",
+                        android.R.drawable.ic_btn_speak_now).build());
+        return builder.build();
     }
 
     private static Bitmap safeMirrorArtwork(Bitmap source) {
@@ -284,7 +318,10 @@ public final class MediaSessionBridge extends NotificationListenerService {
                     sessionsListener, new ComponentName(this, MediaSessionBridge.class));
             refreshControllers(manager.getActiveSessions(
                     new ComponentName(this, MediaSessionBridge.class)));
-            Log.i(TAG, "Notification access connected");
+            MAIN.removeCallbacks(checkpointTicker);
+            MAIN.postDelayed(checkpointTicker, CHECKPOINT_INTERVAL_MS);
+            updateMirrorSession(snapshot);
+            Log.i(TAG, "Notification access connected; persistent CarAsistant media session active");
         } catch (SecurityException error) {
             Log.w(TAG, "Notification access is not granted", error);
         } catch (RuntimeException error) {
@@ -294,6 +331,9 @@ public final class MediaSessionBridge extends NotificationListenerService {
 
     @Override
     public void onListenerDisconnected() {
+        MediaController current = activeController;
+        if (current != null) persistCheckpoint(current);
+        MAIN.removeCallbacks(checkpointTicker);
         if (manager != null && sessionsListener != null) {
             try { manager.removeOnActiveSessionsChangedListener(sessionsListener); }
             catch (RuntimeException ignored) { }
@@ -305,6 +345,10 @@ public final class MediaSessionBridge extends NotificationListenerService {
 
     @Override
     public void onDestroy() {
+        MediaController current = activeController;
+        if (current != null) persistCheckpoint(current);
+        MAIN.removeCallbacks(checkpointTicker);
+        checkpointWriter.shutdown();
         releaseMirrorSession();
         super.onDestroy();
     }
@@ -344,6 +388,8 @@ public final class MediaSessionBridge extends NotificationListenerService {
 
     private void refreshControllers(List<MediaController> controllers) {
         MediaController chosen = null;
+        MediaController savedCandidate = null;
+        String lastPackage = getLastKnownPackage(this);
         if (controllers != null) {
             for (MediaController candidate : controllers) {
                 if (candidate == null || getPackageName().equals(candidate.getPackageName())) continue;
@@ -352,8 +398,15 @@ public final class MediaSessionBridge extends NotificationListenerService {
                     chosen = candidate;
                     break;
                 }
+                if (savedCandidate == null && lastPackage != null
+                        && lastPackage.equals(candidate.getPackageName())) savedCandidate = candidate;
                 if (chosen == null && candidate.getMetadata() != null) chosen = candidate;
             }
+        }
+        if (savedCandidate != null && (chosen == null
+                || chosen.getPlaybackState() == null
+                || chosen.getPlaybackState().getState() != PlaybackState.STATE_PLAYING)) {
+            chosen = savedCandidate;
         }
 
         MediaController previous = activeController;
@@ -391,8 +444,9 @@ public final class MediaSessionBridge extends NotificationListenerService {
             try {
                 getSharedPreferences(RESUME_PREFS, Context.MODE_PRIVATE).edit()
                         .putString(LAST_PACKAGE, controller.getPackageName()).apply();
+                persistCheckpoint(controller);
             } catch (RuntimeException error) {
-                Log.d(TAG, "Could not persist last media package", error);
+                Log.d(TAG, "Could not persist last media package/checkpoint", error);
             }
             MediaMetadata metadata = controller.getMetadata();
             PlaybackState state = controller.getPlaybackState();
@@ -424,6 +478,57 @@ public final class MediaSessionBridge extends NotificationListenerService {
                 catch (RuntimeException error) { Log.w(TAG, "Media UI callback failed", error); }
             }
         });
+    }
+
+    /**
+     * Persist the current media checkpoint on a dedicated writer thread. A one-second
+     * ticker keeps the durable position close to the last frame before power loss.
+     */
+    private void persistCheckpoint(MediaController controller) {
+        if (controller == null || checkpointWriter.isShutdown()) return;
+        try {
+            MediaMetadata metadata = controller.getMetadata();
+            PlaybackState state = controller.getPlaybackState();
+            if (metadata == null) return;
+            String title = metadata.getString(MediaMetadata.METADATA_KEY_TITLE);
+            if (TextUtils.isEmpty(title)) return;
+            String artist = metadata.getString(MediaMetadata.METADATA_KEY_ARTIST);
+            if (TextUtils.isEmpty(artist)) {
+                artist = metadata.getString(MediaMetadata.METADATA_KEY_ALBUM_ARTIST);
+            }
+            long duration = Math.max(0L, metadata.getLong(MediaMetadata.METADATA_KEY_DURATION));
+            long position = state == null ? 0L : Math.max(0L, state.getPosition());
+            boolean playing = state != null
+                    && state.getState() == PlaybackState.STATE_PLAYING;
+            if (playing && state.getLastPositionUpdateTime() > 0L) {
+                long elapsed = Math.max(0L,
+                        SystemClock.elapsedRealtime() - state.getLastPositionUpdateTime());
+                position += (long) (elapsed * Math.max(0f, state.getPlaybackSpeed()));
+            }
+            if (duration > 0L) position = Math.min(position, duration);
+            final String savedPackage = controller.getPackageName();
+            final String savedTitle = title;
+            final String savedArtist = artist == null ? "" : artist;
+            final long savedDuration = duration;
+            final long savedPosition = position;
+            final boolean savedPlaying = playing;
+            final String mediaId = metadata.getString(MediaMetadata.METADATA_KEY_MEDIA_ID);
+            checkpointWriter.execute(() -> getSharedPreferences(RESUME_PREFS, Context.MODE_PRIVATE)
+                    .edit()
+                    .putString(LAST_PACKAGE, savedPackage)
+                    .putString("resume_media_package", savedPackage)
+                    .putString("resume_title", savedTitle)
+                    .putString("resume_artist", savedArtist)
+                    .putString("resume_media_id", mediaId == null ? "" : mediaId)
+                    .putLong("resume_duration", savedDuration)
+                    .putLong("resume_position", savedPosition)
+                    .putBoolean("resume_was_playing", savedPlaying)
+                    .putLong("resume_saved_at", System.currentTimeMillis())
+                    .putBoolean("resume_valid", true)
+                    .commit());
+        } catch (RuntimeException error) {
+            Log.w(TAG, "Could not queue media checkpoint", error);
+        }
     }
 
     private void clearActiveController() {
