@@ -13,6 +13,7 @@ import android.media.session.PlaybackState;
 import android.graphics.Bitmap;
 import android.os.Handler;
 import android.os.Looper;
+import android.os.SystemClock;
 import android.provider.Settings;
 import android.text.TextUtils;
 import android.service.notification.NotificationListenerService;
@@ -40,6 +41,13 @@ public final class MediaSessionBridge extends NotificationListenerService {
     private MediaSessionManager manager;
     private MediaSessionManager.OnActiveSessionsChangedListener sessionsListener;
     private MediaController.Callback controllerCallback;
+    private final Runnable resumePositionTicker = new Runnable() {
+        @Override public void run() {
+            MediaController controller = activeController;
+            if (controller != null) persistResumeSnapshot(MediaSessionBridge.this, controller, false);
+            if (manager != null) MAIN.postDelayed(this, 1000L);
+        }
+    };
 
     public interface Listener {
         void onMediaChanged(Snapshot snapshot);
@@ -82,6 +90,71 @@ public final class MediaSessionBridge extends NotificationListenerService {
 
     public static Snapshot getSnapshot() {
         return snapshot;
+    }
+
+    /** Current media position extrapolated from the last framework playback-state update. */
+    public static long getCurrentPosition() {
+        MediaController controller = activeController;
+        if (controller == null) return Math.max(0L, snapshot.position);
+        PlaybackState state = controller.getPlaybackState();
+        if (state == null) return Math.max(0L, snapshot.position);
+        long position = Math.max(0L, state.getPosition());
+        if (state.getState() == PlaybackState.STATE_PLAYING
+                && state.getLastPositionUpdateTime() > 0L) {
+            long elapsed = Math.max(0L,
+                    SystemClock.elapsedRealtime() - state.getLastPositionUpdateTime());
+            position += Math.round(elapsed * state.getPlaybackSpeed());
+        }
+        MediaMetadata metadata = controller.getMetadata();
+        long duration = metadata == null ? 0L
+                : metadata.getLong(MediaMetadata.METADATA_KEY_DURATION);
+        return duration > 0L ? Math.min(position, duration) : position;
+    }
+
+    /** Flush the last projected media state when the Android Auto activity stops. */
+    public static void persistCurrentResumeSnapshot(Context context, boolean durable) {
+        MediaController controller = activeController;
+        if (context != null && controller != null) {
+            persistResumeSnapshot(context.getApplicationContext(), controller, durable);
+        }
+    }
+
+    private static void persistResumeSnapshot(
+            Context context, MediaController controller, boolean durable) {
+        if (context == null || controller == null) return;
+        ComponentName projected = V10SessionStore.getTarget(context);
+        if (projected == null
+                || !projected.getPackageName().equals(controller.getPackageName())) return;
+
+        MediaMetadata metadata = controller.getMetadata();
+        PlaybackState state = controller.getPlaybackState();
+        String title = metadata == null ? "" :
+                metadata.getString(MediaMetadata.METADATA_KEY_TITLE);
+        String artist = metadata == null ? "" :
+                metadata.getString(MediaMetadata.METADATA_KEY_ARTIST);
+        if (TextUtils.isEmpty(artist) && metadata != null) {
+            artist = metadata.getString(MediaMetadata.METADATA_KEY_ALBUM_ARTIST);
+        }
+        long duration = metadata == null ? 0L :
+                Math.max(0L, metadata.getLong(MediaMetadata.METADATA_KEY_DURATION));
+        long position = getCurrentPosition();
+        boolean playing = state != null && state.getState() == PlaybackState.STATE_PLAYING;
+
+        android.content.SharedPreferences.Editor editor =
+                context.getSharedPreferences(RESUME_PREFS, Context.MODE_PRIVATE).edit()
+                        .putString(LAST_PACKAGE, controller.getPackageName())
+                        .putString("resume_projected_package", projected.getPackageName())
+                        .putString("resume_projected_class", projected.getClassName())
+                        .putString("resume_media_package", controller.getPackageName())
+                        .putString("resume_title", title == null ? "" : title)
+                        .putString("resume_artist", artist == null ? "" : artist)
+                        .putLong("resume_duration", duration)
+                        .putLong("resume_position", position)
+                        .putBoolean("resume_was_playing", playing)
+                        .putLong("resume_saved_at", System.currentTimeMillis())
+                        .putBoolean("resume_valid", !TextUtils.isEmpty(title));
+        if (durable) editor.commit();
+        else editor.apply();
     }
 
     /** Package of the last media app with a published session, persisted across AA reconnects. */
@@ -284,6 +357,8 @@ public final class MediaSessionBridge extends NotificationListenerService {
                     sessionsListener, new ComponentName(this, MediaSessionBridge.class));
             refreshControllers(manager.getActiveSessions(
                     new ComponentName(this, MediaSessionBridge.class)));
+            MAIN.removeCallbacks(resumePositionTicker);
+            MAIN.postDelayed(resumePositionTicker, 1000L);
             Log.i(TAG, "Notification access connected");
         } catch (SecurityException error) {
             Log.w(TAG, "Notification access is not granted", error);
@@ -294,6 +369,8 @@ public final class MediaSessionBridge extends NotificationListenerService {
 
     @Override
     public void onListenerDisconnected() {
+        MAIN.removeCallbacks(resumePositionTicker);
+        persistCurrentResumeSnapshot(this, true);
         if (manager != null && sessionsListener != null) {
             try { manager.removeOnActiveSessionsChangedListener(sessionsListener); }
             catch (RuntimeException ignored) { }
@@ -305,6 +382,8 @@ public final class MediaSessionBridge extends NotificationListenerService {
 
     @Override
     public void onDestroy() {
+        MAIN.removeCallbacks(resumePositionTicker);
+        persistCurrentResumeSnapshot(this, true);
         releaseMirrorSession();
         super.onDestroy();
     }
@@ -391,6 +470,7 @@ public final class MediaSessionBridge extends NotificationListenerService {
             try {
                 getSharedPreferences(RESUME_PREFS, Context.MODE_PRIVATE).edit()
                         .putString(LAST_PACKAGE, controller.getPackageName()).apply();
+                persistResumeSnapshot(this, controller, false);
             } catch (RuntimeException error) {
                 Log.d(TAG, "Could not persist last media package", error);
             }
