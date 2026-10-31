@@ -97,6 +97,7 @@ public final class V10CarActivity
     private TextView date;
 
     private boolean resumed;
+    private boolean resumeCheckpointAttempted;
 
     private ComponentName activeTarget;
 
@@ -189,6 +190,7 @@ public final class V10CarActivity
 
         MediaSessionBridge.addListener(mediaSessionListener);
         updateMediaCard(MediaSessionBridge.getSnapshot());
+        handler.postDelayed(this::restoreSavedMediaCheckpoint, 900L);
 
         if (voiceAssistantController == null) {
             voiceAssistantController = new VoiceAssistantController(
@@ -1002,11 +1004,50 @@ private void launchProjection(ComponentName component) {
     rememberProjectedTask(component);
 }
 
+    private void restoreSavedMediaCheckpoint() {
+        if (!resumed || resumeCheckpointAttempted || session == null || activeTarget != null) return;
+        SharedPreferences prefs = getSharedPreferences("carassistant_media_resume", MODE_PRIVATE);
+        boolean valid = prefs.getBoolean("resume_valid", false);
+        boolean wasPlaying = prefs.getBoolean("resume_was_playing", false);
+        long savedAt = prefs.getLong("resume_saved_at", 0L);
+        if (!valid || !wasPlaying || savedAt <= 0L
+                || System.currentTimeMillis() - savedAt > 7L * 24L * 60L * 60L * 1000L) return;
+
+        String packageName = prefs.getString("resume_media_package",
+                prefs.getString("last_media_package", ""));
+        String title = prefs.getString("resume_title", "");
+        long position = Math.max(0L, prefs.getLong("resume_position", 0L));
+        if (TextUtils.isEmpty(packageName) || TextUtils.isEmpty(title)) return;
+
+        Intent launch = getPackageManager().getLaunchIntentForPackage(packageName);
+        if (launch == null || launch.getComponent() == null) return;
+        String category = com.carassistant.v10.voice.MediaSearchUriBuilder
+                .isYouTubeVideoPackage(packageName) ? "video" : "music";
+        String uri = com.carassistant.v10.voice.MediaSearchUriBuilder
+                .build(packageName, title, category);
+        if (TextUtils.isEmpty(uri)) {
+            android.util.Log.w("CarAssistantMedia", "No safe restore search URI for " + packageName);
+            return;
+        }
+
+        resumeCheckpointAttempted = true;
+        ComponentName target = launch.getComponent();
+        launchProjection(target);
+        dispatchMediaSearchOnProjection(target, uri, title, position);
+        android.util.Log.i("CarAssistantMedia", "Restoring saved media on projection: "
+                + packageName + " / " + title + " @ " + position + "ms");
+    }
+
 /**
  * Wait until the selected app is attached to display 2 before sending its search URI.
  * Some media apps otherwise reuse an existing phone task during the initial launch race.
  */
 private void dispatchMediaSearchOnProjection(ComponentName target, String uri, String query) {
+    dispatchMediaSearchOnProjection(target, uri, query, 0L);
+}
+
+private void dispatchMediaSearchOnProjection(
+        ComponentName target, String uri, String query, long resumePositionMs) {
     if (target == null || uri == null || query == null || session == null) return;
     final long deadline = SystemClock.uptimeMillis() + 5000L;
     Runnable dispatch = new Runnable() {
@@ -1024,16 +1065,21 @@ private void dispatchMediaSearchOnProjection(ComponentName target, String uri, S
             }
 
             SharedPreferences mediaPrefs = getSharedPreferences("media_autoplay", MODE_PRIVATE);
-            // Keep the existing AccessibilityService as first attempt, but no longer
-            // require it: MiniAccessEngine provides an OCR + display-targeted tap fallback.
-            mediaPrefs.edit()
-                    .putString("target_package", target.getPackageName())
-                    .putString("query", query)
-                    .putString("phase", "search")
-                    .putInt("target_display_id", session.getDisplayId())
-                    .putLong("started_at", System.currentTimeMillis())
-                    .putBoolean("mini_engine_active", false)
-                    .apply();
+            // The same display-scoped automation handles voice search and power-loss resume.
+            if (resumePositionMs > 0L) {
+                MediaPlaybackAccessibilityService.prepareResume(
+                        V10CarActivity.this, target.getPackageName(), query,
+                        session.getDisplayId(), resumePositionMs);
+            } else {
+                mediaPrefs.edit()
+                        .putString("target_package", target.getPackageName())
+                        .putString("query", query)
+                        .putString("phase", "search")
+                        .putInt("target_display_id", session.getDisplayId())
+                        .putLong("started_at", System.currentTimeMillis())
+                        .putBoolean("mini_engine_active", false)
+                        .apply();
+            }
 
             // Delay a little after the launcher intent so the provider's own task is
             // already on the target display; ACTION_VIEW then starts an independent task there.
