@@ -32,6 +32,7 @@ public final class V10SessionStore {
         if (component == null) editor.remove(TARGET);
         else editor.putString(TARGET, component.flattenToString());
         editor.apply();
+        MediaResumeCoordinator.persistProjectedTarget(context, component);
     }
 
     public static ComponentName getTarget(Context context) {
