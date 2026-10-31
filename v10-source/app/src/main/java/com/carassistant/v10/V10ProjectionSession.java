@@ -48,7 +48,13 @@ public final class V10ProjectionSession implements TextureView.SurfaceTextureLis
         target = component;
         if (changed) {
             taskSession.setTarget(component);
-            if (displayController.isLaunched()) displayController.markNotLaunched();
+            // A phone-side standby service may already have launched this exact app
+            // into display 2. Keep that task and only rebind the car TextureView surface.
+            boolean samePreparedTask = displayController.isLaunched()
+                    && component.equals(displayController.getTarget());
+            if (displayController.isLaunched() && !samePreparedTask) {
+                displayController.markNotLaunched();
+            }
         }
         attachCurrentSurface();
     }
