@@ -33,10 +33,12 @@ public final class MediaSessionBridge extends NotificationListenerService {
     private static final String RESUME_PREFS = "carassistant_media_resume";
     private static final String LAST_PACKAGE = "last_media_package";
     // A single rolling checkpoint: each minute replaces these keys; no history is retained.
-    private static final long CHECKPOINT_INTERVAL_MS = 60_000L;
+    private static final long CHECKPOINT_INTERVAL_MS = 5_000L;
     private static final String CHECKPOINT_PACKAGE = "checkpoint_package";
     private static final String CHECKPOINT_TITLE = "checkpoint_title";
     private static final String CHECKPOINT_ARTIST = "checkpoint_artist";
+    private static final String CHECKPOINT_MEDIA_ID = "checkpoint_media_id";
+    private static final String CHECKPOINT_MEDIA_URI = "checkpoint_media_uri";
     private static final String CHECKPOINT_DURATION = "checkpoint_duration";
     private static final String CHECKPOINT_POSITION = "checkpoint_position";
     private static final String CHECKPOINT_PLAYING = "checkpoint_playing";
@@ -139,6 +141,8 @@ public final class MediaSessionBridge extends NotificationListenerService {
                     .putString(CHECKPOINT_PACKAGE, packageName)
                     .putString(CHECKPOINT_TITLE, title == null ? "" : title)
                     .putString(CHECKPOINT_ARTIST, artist == null ? "" : artist)
+                    .putString(CHECKPOINT_MEDIA_ID, metadata == null ? "" : safeMetadataString(metadata, MediaMetadata.METADATA_KEY_MEDIA_ID))
+                    .putString(CHECKPOINT_MEDIA_URI, metadata == null ? "" : safeMetadataString(metadata, MediaMetadata.METADATA_KEY_MEDIA_URI))
                     .putLong(CHECKPOINT_DURATION, duration)
                     .putLong(CHECKPOINT_POSITION, position)
                     .putBoolean(CHECKPOINT_PLAYING, playing)
@@ -159,6 +163,45 @@ public final class MediaSessionBridge extends NotificationListenerService {
         String value = context.getSharedPreferences(RESUME_PREFS, Context.MODE_PRIVATE)
                 .getString(LAST_PACKAGE, null);
         return TextUtils.isEmpty(value) ? null : value;
+    }
+
+    /** Stable content identifier supplied by the source MediaSession, when available. */
+    public static String getCheckpointMediaId(Context context) {
+        if (context == null) return null;
+        String value = context.getSharedPreferences(RESUME_PREFS, Context.MODE_PRIVATE)
+                .getString(CHECKPOINT_MEDIA_ID, null);
+        return TextUtils.isEmpty(value) ? null : value;
+    }
+
+    /** Deep link supplied by the source MediaSession, when available. */
+    public static String getCheckpointMediaUri(Context context) {
+        if (context == null) return null;
+        String value = context.getSharedPreferences(RESUME_PREFS, Context.MODE_PRIVATE)
+                .getString(CHECKPOINT_MEDIA_URI, null);
+        return TextUtils.isEmpty(value) ? null : value;
+    }
+
+    public static String getCheckpointTitle(Context context) {
+        if (context == null) return null;
+        String value = context.getSharedPreferences(RESUME_PREFS, Context.MODE_PRIVATE)
+                .getString(CHECKPOINT_TITLE, null);
+        return TextUtils.isEmpty(value) ? null : value;
+    }
+
+    public static String getCheckpointArtist(Context context) {
+        if (context == null) return null;
+        String value = context.getSharedPreferences(RESUME_PREFS, Context.MODE_PRIVATE)
+                .getString(CHECKPOINT_ARTIST, null);
+        return TextUtils.isEmpty(value) ? null : value;
+    }
+
+    private static String safeMetadataString(MediaMetadata metadata, String key) {
+        try {
+            String value = metadata.getString(key);
+            return value == null ? "" : value;
+        } catch (RuntimeException ignored) {
+            return "";
+        }
     }
 
     /** Package associated with the newest complete checkpoint. */
@@ -430,7 +473,7 @@ public final class MediaSessionBridge extends NotificationListenerService {
             MAIN.removeCallbacks(checkpointTask);
             saveCurrentCheckpoint();
             MAIN.postDelayed(checkpointTask, CHECKPOINT_INTERVAL_MS);
-            Log.i(TAG, "Notification access connected; media checkpoint scheduled every 60 seconds");
+            Log.i(TAG, "Notification access connected; durable media checkpoint scheduled every 5 seconds");
         } catch (SecurityException error) {
             Log.w(TAG, "Notification access is not granted", error);
         } catch (RuntimeException error) {
