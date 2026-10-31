@@ -1705,6 +1705,10 @@ private void hideTaskSwitcher() {
         handler.removeCallbacks(
                 targetPoller);
 
+        // Return the shared display surface to the phone-side standby sink. The
+        // projected app task remains alive and is ready for the next CarActivity.
+        V10ProjectionStandbyService.onCarActivityStopped();
+
         /* Display Core V1: Activity stop is not task close. */
         super.onStop();
     }
