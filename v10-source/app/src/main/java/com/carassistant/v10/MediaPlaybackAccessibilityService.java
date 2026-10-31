@@ -2,6 +2,7 @@ package com.carassistant.v10;
 
 import android.accessibilityservice.AccessibilityService;
 import android.os.Build;
+import android.os.Bundle;
 import android.view.accessibility.AccessibilityEvent;
 import android.view.accessibility.AccessibilityNodeInfo;
 import android.view.accessibility.AccessibilityWindowInfo;
@@ -444,6 +445,39 @@ public final class MediaPlaybackAccessibilityService extends AccessibilityServic
         return null;
     }
 
+    /**
+     * On apps that open to their home screen instead of handling ACTION_SEARCH,
+     * fill an exposed search EditText and submit it. The result matcher above still
+     * verifies the title before tapping anything.
+     */
+    private boolean enterSearchQuery(AccessibilityNodeInfo node, String query, int depth) {
+        if (node == null || depth > MAX_DEPTH) return false;
+        CharSequence className = node.getClassName();
+        String viewId = node.getViewIdResourceName();
+        boolean editText = className != null
+                && className.toString().toLowerCase(Locale.ROOT).contains("edittext");
+        boolean searchField = editText || (viewId != null
+                && viewId.toLowerCase(Locale.ROOT).contains("search")
+                && node.isEditable());
+        if (searchField && node.isEnabled()) {
+            Bundle args = new Bundle();
+            args.putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, query);
+            if (node.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, args)) {
+                node.performAction(AccessibilityNodeInfo.ACTION_IME_ENTER);
+                return true;
+            }
+        }
+        for (int i = 0; i < node.getChildCount(); i++) {
+            AccessibilityNodeInfo child = node.getChild(i);
+            if (child != null) {
+                boolean submitted = enterSearchQuery(child, query, depth + 1);
+                child.recycle();
+                if (submitted) return true;
+            }
+        }
+        return false;
+    }
+
     private static final class Candidate {
         AccessibilityNodeInfo node;
         int score;
@@ -517,8 +551,17 @@ public final class MediaPlaybackAccessibilityService extends AccessibilityServic
                         Log.w(TAG, "Result click rejected package=" + targetPackage
                                 + " displayId=" + targetDisplayId);
                     } else {
-                        Log.d(TAG, "No matching result yet package=" + targetPackage
-                                + " displayId=" + targetDisplayId);
+                        long lastSubmit = prefs.getLong("search_submitted_at", 0L);
+                        if (System.currentTimeMillis() - lastSubmit > 7000L
+                                && enterSearchQuery(root, query, 0)) {
+                            prefs.edit().putLong("search_submitted_at",
+                                    System.currentTimeMillis()).apply();
+                            Log.i(TAG, "Entered saved media title into source search field: "
+                                    + targetPackage);
+                        } else {
+                            Log.d(TAG, "No matching result or exposed search field yet package="
+                                    + targetPackage + " displayId=" + targetDisplayId);
+                        }
                     }
                 } catch (RuntimeException error) {
                     Log.w(TAG, "Search selection retry failed", error);
