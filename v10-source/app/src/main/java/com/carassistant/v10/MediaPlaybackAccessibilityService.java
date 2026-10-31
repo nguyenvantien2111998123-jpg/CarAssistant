@@ -209,6 +209,15 @@ public final class MediaPlaybackAccessibilityService extends AccessibilityServic
                             } finally {
                                 searchField.recycle();
                             }
+                        } else if (!"search_opened".equals(resumePhase)) {
+                            AccessibilityNodeInfo searchLauncher = findSearchButton(root);
+                            if (searchLauncher != null
+                                    && clickNodeOrClickableParent(searchLauncher)) {
+                                prefs.edit().putString("resume_phase", "search_opened")
+                                        .putInt("resume_attempts", attempts + 1).apply();
+                                automationHandler.postDelayed(this, 800L);
+                                return;
+                            }
                         }
                     }
                 } catch (RuntimeException error) {
@@ -253,7 +262,7 @@ public final class MediaPlaybackAccessibilityService extends AccessibilityServic
             boolean searchField = searchable.contains("search")
                     || searchable.contains("tìm kiếm") || searchable.contains("tim_kiem")
                     || searchable.contains("query");
-            if (editText && node.isEnabled()) {
+            if (editText && searchField && node.isEnabled()) {
                 for (AccessibilityNodeInfo other : nodes) {
                     if (other != node) other.recycle();
                 }
