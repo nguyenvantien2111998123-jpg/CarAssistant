@@ -216,6 +216,13 @@ public final class V10ProjectionStandbyService extends Service {
         }
     }
 
+    public static void onCarActivityDestroyed() {
+        V10ProjectionStandbyService service = instance;
+        if (service != null && service.connected) {
+            service.main.post(() -> service.ensureStandbyDisplay(true));
+        }
+    }
+
     private void closeImageReader() {
         if (imageReader == null) return;
         try {
