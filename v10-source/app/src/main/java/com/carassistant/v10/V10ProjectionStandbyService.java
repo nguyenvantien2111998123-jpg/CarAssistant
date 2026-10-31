@@ -37,6 +37,18 @@ public final class V10ProjectionStandbyService extends Service {
     private Handler imageHandler;
     private final Handler main = new Handler();
     private boolean connected;
+    private long disconnectDeadline;
+    private final Runnable disconnectStopper = new Runnable() {
+        @Override public void run() {
+            if (connected) return;
+            if (V10SessionStore.getCurrentActivity() == null
+                    || System.currentTimeMillis() >= disconnectDeadline) {
+                stopSelf();
+            } else {
+                main.postDelayed(this, 2000L);
+            }
+        }
+    };
 
     @Override
     public void onCreate() {
@@ -55,14 +67,17 @@ public final class V10ProjectionStandbyService extends Service {
         String action = intent == null ? ACTION_CONNECTED : intent.getAction();
         if (ACTION_DISCONNECTED.equals(action)) {
             connected = false;
+            disconnectDeadline = System.currentTimeMillis() + 30000L;
             getSharedPreferences(RESUME_PREFS, MODE_PRIVATE).edit()
                     .putBoolean("projection_connected", false).commit();
+            main.removeCallbacks(disconnectStopper);
+            main.postDelayed(disconnectStopper, 2000L);
             Log.i(TAG, "Android Auto disconnected; preserving the last playback checkpoint");
-            stopSelf(startId);
             return START_NOT_STICKY;
         }
 
         connected = true;
+        main.removeCallbacks(disconnectStopper);
         getSharedPreferences(RESUME_PREFS, MODE_PRIVATE).edit()
                 .putBoolean("projection_connected", true).apply();
         prepareStandby();
@@ -70,7 +85,13 @@ public final class V10ProjectionStandbyService extends Service {
     }
 
     private void prepareStandby() {
-        if (!ensureStandbyDisplay()) {
+        // If the car activity is already visible, its TextureView owns the display.
+        // Do not replace that live surface with the hidden ImageReader sink.
+        if (V10SessionStore.getCurrentActivity() != null) {
+            Log.i(TAG, "CarActivity already owns the projection; leaving its surface untouched");
+            return;
+        }
+        if (!ensureStandbyDisplay(false)) {
             Log.w(TAG, "Could not create the standby virtual display");
             return;
         }
@@ -94,8 +115,10 @@ public final class V10ProjectionStandbyService extends Service {
         restoreSavedMedia(target);
     }
 
-    private boolean ensureStandbyDisplay() {
+    private boolean ensureStandbyDisplay(boolean forceRebind) {
         if (displayController == null) return false;
+        if (!forceRebind && displayController.isReady()
+                && V10SessionStore.getCurrentActivity() != null) return true;
         if (imageReader == null) {
             try {
                 imageReader = ImageReader.newInstance(WIDTH, HEIGHT, PixelFormat.RGBA_8888, 2);
@@ -230,7 +253,7 @@ public final class V10ProjectionStandbyService extends Service {
     public static void onCarActivityStopped() {
         V10ProjectionStandbyService service = instance;
         if (service != null && service.connected) {
-            service.main.post(service::ensureStandbyDisplay);
+            service.main.post(() -> service.ensureStandbyDisplay(true));
         }
     }
 
@@ -244,10 +267,9 @@ public final class V10ProjectionStandbyService extends Service {
         // If the car activity has not attached its TextureView, this service still owns
         // the sink and must release the virtual display. Otherwise the live car surface
         // remains attached and the controller must survive the service teardown.
-        if (V10SessionStore.getCurrentActivity() == null && displayController != null) {
-            displayController.destroy();
-        }
+        if (displayController != null) displayController.destroy();
         closeImageReader();
+        main.removeCallbacks(disconnectStopper);
         if (imageThread != null) imageThread.quitSafely();
         super.onDestroy();
     }
