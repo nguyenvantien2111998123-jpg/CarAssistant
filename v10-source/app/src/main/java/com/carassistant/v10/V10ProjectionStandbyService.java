@@ -1,8 +1,5 @@
 package com.carassistant.v10;
 
-import android.app.Notification;
-import android.app.NotificationChannel;
-import android.app.NotificationManager;
 import android.app.Service;
 import android.content.ComponentName;
 import android.content.Context;
@@ -11,7 +8,7 @@ import android.content.pm.PackageManager;
 import android.graphics.PixelFormat;
 import android.media.Image;
 import android.media.ImageReader;
-import android.os.Build;
+import android.os.Binder;
 import android.os.Handler;
 import android.os.HandlerThread;
 import android.os.IBinder;
@@ -19,43 +16,26 @@ import android.text.TextUtils;
 import android.util.Log;
 
 public final class V10ProjectionStandbyService extends Service {
-    public static final String ACTION_CONNECTED = "com.carassistant.v10.PROJECTION_CONNECTED";
-    public static final String ACTION_DISCONNECTED = "com.carassistant.v10.PROJECTION_DISCONNECTED";
-
     private static final String TAG = "CarAssistantStandby";
     private static final String RESUME_PREFS = "carassistant_media_resume";
+    private static final String GEARHEAD = "com.google.android.projection.gearhead";
     private static final int DISPLAY_INDEX = 1;
     private static final int WIDTH = 1280;
     private static final int HEIGHT = 720;
-    private static final int NOTIFICATION_ID = 3491;
-    private static final String CHANNEL_ID = "projection_standby";
-    private static volatile V10ProjectionStandbyService instance;
 
+    private static volatile V10ProjectionStandbyService instance;
+    private final IBinder binder = new Binder();
     private V10DisplayController displayController;
     private ImageReader imageReader;
     private HandlerThread imageThread;
     private Handler imageHandler;
     private final Handler main = new Handler();
     private boolean connected;
-    private long disconnectDeadline;
-    private final Runnable disconnectStopper = new Runnable() {
-        @Override public void run() {
-            if (connected) return;
-            if (V10SessionStore.getCurrentActivity() == null
-                    || System.currentTimeMillis() >= disconnectDeadline) {
-                stopSelf();
-            } else {
-                main.postDelayed(this, 2000L);
-            }
-        }
-    };
 
     @Override
     public void onCreate() {
         super.onCreate();
         instance = this;
-        createNotificationChannel();
-        startForeground(NOTIFICATION_ID, buildNotification());
         displayController = V10DisplayController.get(getApplicationContext(), DISPLAY_INDEX);
         imageThread = new HandlerThread("CarAssistantProjectionStandby");
         imageThread.start();
@@ -63,32 +43,42 @@ public final class V10ProjectionStandbyService extends Service {
     }
 
     @Override
-    public int onStartCommand(Intent intent, int flags, int startId) {
-        String action = intent == null ? ACTION_CONNECTED : intent.getAction();
-        if (ACTION_DISCONNECTED.equals(action)) {
-            connected = false;
-            disconnectDeadline = System.currentTimeMillis() + 30000L;
-            getSharedPreferences(RESUME_PREFS, MODE_PRIVATE).edit()
-                    .putBoolean("projection_connected", false).commit();
-            main.removeCallbacks(disconnectStopper);
-            main.postDelayed(disconnectStopper, 2000L);
-            Log.i(TAG, "Android Auto disconnected; preserving the last playback checkpoint");
-            return START_NOT_STICKY;
+    public IBinder onBind(Intent intent) {
+        if (!isGearheadCaller()) {
+            Log.w(TAG, "Rejected bind request from a non-Android-Auto package");
+            return null;
         }
-
         connected = true;
-        main.removeCallbacks(disconnectStopper);
         getSharedPreferences(RESUME_PREFS, MODE_PRIVATE).edit()
                 .putBoolean("projection_connected", true).apply();
-        prepareStandby();
-        return START_STICKY;
+        main.post(this::prepareStandby);
+        Log.i(TAG, "Android Auto bound the phone-side projection standby service");
+        return binder;
+    }
+
+    private boolean isGearheadCaller() {
+        String[] packages = getPackageManager().getPackagesForUid(Binder.getCallingUid());
+        if (packages == null) return false;
+        for (String packageName : packages) {
+            if (GEARHEAD.equals(packageName)) return true;
+        }
+        return false;
+    }
+
+    @Override
+    public boolean onUnbind(Intent intent) {
+        connected = false;
+        getSharedPreferences(RESUME_PREFS, MODE_PRIVATE).edit()
+                .putBoolean("projection_connected", false).commit();
+        Log.i(TAG, "Android Auto released the standby service; checkpoint preserved");
+        return false;
     }
 
     private void prepareStandby() {
-        // If the car activity is already visible, its TextureView owns the display.
-        // Do not replace that live surface with the hidden ImageReader sink.
+        if (!connected) return;
+        // The live car activity owns this display if it is already visible.
         if (V10SessionStore.getCurrentActivity() != null) {
-            Log.i(TAG, "CarActivity already owns the projection; leaving its surface untouched");
+            Log.i(TAG, "CarActivity already owns the projection surface");
             return;
         }
         if (!ensureStandbyDisplay(false)) {
@@ -98,7 +88,7 @@ public final class V10ProjectionStandbyService extends Service {
 
         ComponentName target = resolveResumeTarget();
         if (target == null) {
-            Log.i(TAG, "No saved projection/media app; standby display is ready without launching an app");
+            Log.i(TAG, "No saved media/app target; standby display is ready");
             return;
         }
 
@@ -109,9 +99,8 @@ public final class V10ProjectionStandbyService extends Service {
             V10SessionStore.setTarget(this, target);
             Log.i(TAG, "Prepared saved app on standby display: " + target.flattenToString());
         } else {
-            Log.i(TAG, "Reusing the existing standby task: " + target.flattenToString());
+            Log.i(TAG, "Reusing prepared app task: " + target.flattenToString());
         }
-
         restoreSavedMedia(target);
     }
 
@@ -153,6 +142,7 @@ public final class V10ProjectionStandbyService extends Service {
         String mediaPackage = prefs.getString("last_media_package", "");
         String title = prefs.getString("resume_title", "");
         boolean checkpointValid = prefs.getBoolean("resume_valid", false)
+                && prefs.getBoolean("resume_was_playing", false)
                 && System.currentTimeMillis() - prefs.getLong("resume_saved_at", 0L)
                 < 7L * 24L * 60L * 60L * 1000L;
         if (checkpointValid && !TextUtils.isEmpty(mediaPackage) && !TextUtils.isEmpty(title)) {
@@ -162,7 +152,6 @@ public final class V10ProjectionStandbyService extends Service {
 
         ComponentName saved = V10SessionStore.getTarget(this);
         if (saved != null && isInstalled(saved.getPackageName())) return saved;
-
         if (!TextUtils.isEmpty(mediaPackage)) return launchComponentForPackage(mediaPackage);
         return null;
     }
@@ -171,7 +160,11 @@ public final class V10ProjectionStandbyService extends Service {
         if (TextUtils.isEmpty(packageName) || !isInstalled(packageName)) return null;
         Intent launch = getPackageManager().getLaunchIntentForPackage(packageName);
         if (launch == null) return null;
-        return launch.getComponent();
+        ComponentName component = launch.getComponent();
+        if (component != null) return component;
+        android.content.pm.ResolveInfo resolved = getPackageManager().resolveActivity(launch, 0);
+        if (resolved == null || resolved.activityInfo == null) return null;
+        return new ComponentName(resolved.activityInfo.packageName, resolved.activityInfo.name);
     }
 
     private boolean isInstalled(String packageName) {
@@ -191,14 +184,12 @@ public final class V10ProjectionStandbyService extends Service {
         long position = Math.max(0L, prefs.getLong("resume_position", 0L));
         boolean wasPlaying = prefs.getBoolean("resume_was_playing", false);
         if (!prefs.getBoolean("resume_valid", false) || !wasPlaying || TextUtils.isEmpty(title)
-                || !target.getPackageName().equals(mediaPackage)) {
-            return;
-        }
+                || !target.getPackageName().equals(mediaPackage)) return;
 
         String category = mediaCategory(mediaPackage);
         String uri = VoiceBackgroundTaskManager.buildSearchUri(target, title, category);
         if (TextUtils.isEmpty(uri)) {
-            Log.w(TAG, "No safe search URI for saved media package " + mediaPackage);
+            Log.w(TAG, "No supported search URI for saved media package " + mediaPackage);
             return;
         }
 
@@ -208,34 +199,20 @@ public final class V10ProjectionStandbyService extends Service {
         main.postDelayed(() -> {
             if (!connected || displayController == null || !displayController.isReady()) return;
             boolean accepted = displayController.launchMediaViewIntentOnDisplay(mediaPackage, uri);
-            Log.i(TAG, "Saved media search dispatched on display " + displayId
-                    + "; accepted=" + accepted + "; title=" + title);
+            Log.i(TAG, "Restoration search dispatched on display " + displayId
+                    + "; accepted=" + accepted);
         }, 1100L);
     }
 
     private static String mediaCategory(String packageName) {
         String value = packageName.toLowerCase(java.util.Locale.ROOT);
-        return value.contains("youtube") && !value.contains("music")
-                ? "video" : "music";
+        return value.contains("youtube") && !value.contains("music") ? "video" : "music";
     }
 
-    private Notification buildNotification() {
-        return new Notification.Builder(this, CHANNEL_ID)
-                .setSmallIcon(R.drawable.ic_aacast)
-                .setContentTitle("CarAsistant")
-                .setContentText("Đang chuẩn bị luồng chiếu Android Auto")
-                .setOngoing(true)
-                .setCategory(Notification.CATEGORY_SERVICE)
-                .build();
-    }
-
-    private void createNotificationChannel() {
-        if (Build.VERSION.SDK_INT < 26) return;
-        NotificationManager manager = getSystemService(NotificationManager.class);
-        if (manager != null && manager.getNotificationChannel(CHANNEL_ID) == null) {
-            manager.createNotificationChannel(new NotificationChannel(
-                    CHANNEL_ID, "CarAsistant projection standby",
-                    NotificationManager.IMPORTANCE_LOW));
+    public static void onCarActivityStopped() {
+        V10ProjectionStandbyService service = instance;
+        if (service != null && service.connected) {
+            service.main.post(() -> service.ensureStandbyDisplay(true));
         }
     }
 
@@ -249,33 +226,16 @@ public final class V10ProjectionStandbyService extends Service {
         imageReader = null;
     }
 
-    /** Rebinds the display to its hidden sink when the car-side activity is dismissed. */
-    public static void onCarActivityStopped() {
-        V10ProjectionStandbyService service = instance;
-        if (service != null && service.connected) {
-            service.main.post(() -> service.ensureStandbyDisplay(true));
-        }
-    }
-
     @Override
     public void onDestroy() {
-        if (instance == this) instance = null;
         connected = false;
+        if (instance == this) instance = null;
         getSharedPreferences(RESUME_PREFS, MODE_PRIVATE).edit()
                 .putBoolean("projection_connected", false).apply();
         main.removeCallbacksAndMessages(null);
-        // If the car activity has not attached its TextureView, this service still owns
-        // the sink and must release the virtual display. Otherwise the live car surface
-        // remains attached and the controller must survive the service teardown.
         if (displayController != null) displayController.destroy();
         closeImageReader();
-        main.removeCallbacks(disconnectStopper);
         if (imageThread != null) imageThread.quitSafely();
         super.onDestroy();
-    }
-
-    @Override
-    public IBinder onBind(Intent intent) {
-        return null;
     }
 }
