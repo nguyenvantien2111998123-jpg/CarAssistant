@@ -967,7 +967,7 @@ public final class V10CarActivity
  * only on projection display 1; never launch this media app on the phone display.
  */
 private void restoreLastMediaOnCarDisplay() {
-    if (isFinishing() || session == null || !session.isActive()) return;
+    if (isFinishing() || session == null) return;
     if (!MediaSessionBridge.hasAccess(this)) return;
 
     String packageName = MediaSessionBridge.getCheckpointPackage(this);
@@ -994,7 +994,7 @@ private void restoreLastMediaOnCarDisplay() {
     Runnable applyCheckpoint = new Runnable() {
         @Override public void run() {
             if (isFinishing() || isDestroyed()) return;
-            if (MediaSessionBridge.applyCheckpoint(expectedPackage, autoplay)) return;
+            if (MediaSessionBridge.applyCheckpoint(V10CarActivity.this, expectedPackage, autoplay)) return;
             if (android.os.SystemClock.uptimeMillis() - startedAt < 20_000L) {
                 handler.postDelayed(this, 1000L);
             } else {
