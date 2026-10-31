@@ -98,6 +98,7 @@ public final class V10CarActivity
 
     private boolean resumed;
     private boolean resumeCheckpointAttempted;
+    private int resumeCheckpointRetries;
 
     private ComponentName activeTarget;
 
@@ -1011,7 +1012,8 @@ private void launchProjection(ComponentName component) {
 }
 
     private void restoreSavedMediaCheckpoint() {
-        if (!resumed || resumeCheckpointAttempted || session == null) return;
+        if (!resumed || resumeCheckpointAttempted || session == null
+                || resumeCheckpointRetries >= 3) return;
         SharedPreferences prefs = getSharedPreferences("carassistant_media_resume", MODE_PRIVATE);
         boolean valid = prefs.getBoolean("resume_valid", false);
         boolean wasPlaying = prefs.getBoolean("resume_was_playing", false);
@@ -1043,9 +1045,13 @@ private void launchProjection(ComponentName component) {
         }
 
         resumeCheckpointAttempted = true;
+        resumeCheckpointRetries++;
         ComponentName target = launch.getComponent();
         launchProjection(target);
-        dispatchMediaSearchOnProjection(target, uri, query, position);
+        // This is a restore request even when the saved position is exactly 0 ms.
+        // Keep it on the existing display-scoped Accessibility path and do not start
+        // MiniAccessEngine in parallel with the restore controller.
+        dispatchMediaSearchOnProjection(target, uri, query, position, true);
         android.util.Log.i("CarAssistantMedia", "Restoring saved media on projection: "
                 + packageName + " / " + query + " @ " + position + "ms");
     }
@@ -1055,11 +1061,24 @@ private void launchProjection(ComponentName component) {
  * Some media apps otherwise reuse an existing phone task during the initial launch race.
  */
 private void dispatchMediaSearchOnProjection(ComponentName target, String uri, String query) {
-    dispatchMediaSearchOnProjection(target, uri, query, 0L);
+    dispatchMediaSearchOnProjection(target, uri, query, 0L, false);
 }
 
 private void dispatchMediaSearchOnProjection(
         ComponentName target, String uri, String query, long resumePositionMs) {
+    dispatchMediaSearchOnProjection(target, uri, query, resumePositionMs,
+            resumePositionMs > 0L);
+}
+
+private void scheduleMediaResumeRetry() {
+    if (!resumed || resumeCheckpointRetries >= 3) return;
+    resumeCheckpointAttempted = false;
+    handler.postDelayed(this::restoreSavedMediaCheckpoint, 1200L);
+}
+
+private void dispatchMediaSearchOnProjection(
+        ComponentName target, String uri, String query, long resumePositionMs,
+        boolean restoringCheckpoint) {
     if (target == null || uri == null || query == null || session == null) return;
     final long deadline = SystemClock.uptimeMillis() + 5000L;
     Runnable dispatch = new Runnable() {
@@ -1068,6 +1087,10 @@ private void dispatchMediaSearchOnProjection(
             if (!session.isActive() || session.getDisplayId() <= 0) {
                 if (SystemClock.uptimeMillis() < deadline) {
                     handler.postDelayed(this, 250L);
+                } else if (restoringCheckpoint) {
+                    android.util.Log.w("CarAssistantMedia",
+                            "Projection display was not ready for media restore; retrying");
+                    scheduleMediaResumeRetry();
                 } else {
                     Toast.makeText(V10CarActivity.this,
                             "Không thể mở kết quả tìm kiếm trên màn hình chiếu.",
@@ -1078,7 +1101,7 @@ private void dispatchMediaSearchOnProjection(
 
             SharedPreferences mediaPrefs = getSharedPreferences("media_autoplay", MODE_PRIVATE);
             // The same display-scoped automation handles voice search and power-loss resume.
-            if (resumePositionMs > 0L) {
+            if (restoringCheckpoint) {
                 MediaPlaybackAccessibilityService.prepareResume(
                         V10CarActivity.this, target.getPackageName(), query,
                         session.getDisplayId(), resumePositionMs);
@@ -1101,7 +1124,8 @@ private void dispatchMediaSearchOnProjection(
                         .remove("target_package").remove("query")
                         .remove("phase").remove("target_display_id").remove("started_at")
                         .putBoolean("mini_engine_active", false).apply();
-            } else if (miniAccessEngine != null && resumePositionMs <= 0L) {
+                if (restoringCheckpoint) scheduleMediaResumeRetry();
+            } else if (miniAccessEngine != null && !restoringCheckpoint) {
                 miniAccessEngine.start();
             }
         }
@@ -1759,6 +1783,7 @@ private void hideTaskSwitcher() {
         // A reconnect may reuse this CarActivity instance; allow the durable
         // checkpoint to be restored again on its next foreground transition.
         resumeCheckpointAttempted = false;
+        resumeCheckpointRetries = 0;
 
         handler.removeCallbacks(
                 clockTicker);

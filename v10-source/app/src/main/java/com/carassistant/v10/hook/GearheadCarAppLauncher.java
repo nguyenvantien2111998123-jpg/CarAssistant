@@ -38,7 +38,9 @@ public final class GearheadCarAppLauncher {
 
     public static void open() {
         long now = SystemClock.elapsedRealtime();
-        if (now - lastOpenElapsed < COOLDOWN_MS
+        // elapsedRealtime() starts near zero after a reboot; zero means no prior
+        // launch, not a launch inside the cooldown window.
+        if ((lastOpenElapsed > 0L && now - lastOpenElapsed < COOLDOWN_MS)
                 || !PENDING.compareAndSet(false, true)) return;
         MAIN.post(() -> attemptOpen(1));
     }

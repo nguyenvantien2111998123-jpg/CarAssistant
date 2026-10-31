@@ -136,11 +136,23 @@ public final class MediaSessionBridge extends NotificationListenerService {
         MediaController controller = activeController;
         if (controller == null || !expectedPackage.equals(controller.getPackageName())) return false;
         try {
-            long target = Math.max(0L, positionMs);
             MediaMetadata metadata = controller.getMetadata();
-            long duration = metadata == null ? 0L
-                    : metadata.getLong(MediaMetadata.METADATA_KEY_DURATION);
-            if (duration > 0L) target = Math.min(target, duration);
+            PlaybackState state = controller.getPlaybackState();
+            // A matching package alone is not enough: immediately after a search-result
+            // tap the app may still expose its previous/empty session. Do not report a
+            // seek as restored until the selected content has a duration and a usable
+            // playback state; the Accessibility retry will keep waiting meanwhile.
+            if (metadata == null || state == null) return false;
+            long duration = metadata.getLong(MediaMetadata.METADATA_KEY_DURATION);
+            int playback = state.getState();
+            boolean ready = duration > 0L && (playback == PlaybackState.STATE_PLAYING
+                    || playback == PlaybackState.STATE_PAUSED
+                    || playback == PlaybackState.STATE_BUFFERING
+                    || playback == PlaybackState.STATE_FAST_FORWARDING
+                    || playback == PlaybackState.STATE_REWINDING);
+            if (!ready) return false;
+            long target = Math.max(0L, positionMs);
+            target = Math.min(target, duration);
             controller.getTransportControls().seekTo(target);
             Log.i(TAG, "Restored " + expectedPackage + " to " + target + "ms");
             return true;

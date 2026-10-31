@@ -9,6 +9,7 @@ import android.os.Build;
 import android.database.Cursor;
 import android.net.Uri;
 import android.view.LayoutInflater;
+import android.view.View;
 import android.view.ViewGroup;
 
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -34,7 +35,9 @@ public final class GearheadAutoResumeHook {
             "gh_coolwalk_facet_bar_rhd"
     };
 
-    private static final AtomicBoolean CHECK_IN_FLIGHT = new AtomicBoolean(false);
+    // One auto-resume attempt per attached AA facet-bar instance. Re-inflations while
+    // connected must not repeatedly relaunch CarAsistant; detach marks a new session.
+    private static final AtomicBoolean FACET_ATTACHED = new AtomicBoolean(false);
     private static volatile Context appContext;
     private static final AtomicBoolean RECEIVER_REGISTERED = new AtomicBoolean(false);
 
@@ -61,15 +64,25 @@ public final class GearheadAutoResumeHook {
                             if (context == null || !(param.args[0] instanceof Integer)) return;
                             int resourceId = (Integer) param.args[0];
                             if (!isFacetBarLayout(context, resourceId)) return;
-                            if (!CHECK_IN_FLIGHT.compareAndSet(false, true)) return;
-                            new android.os.Handler(android.os.Looper.getMainLooper())
-                                    .postDelayed(() -> {
-                                        boolean shouldResume = hasDurablePlayingCheckpoint(context);
-                                        CHECK_IN_FLIGHT.set(false);
-                                        if (shouldResume) {
-                                            GearheadCarAppLauncher.open();
-                                        }
-                                    }, 1000L);
+                            View facetRoot = (View) param.getResult();
+                            if (facetRoot == null) return;
+                            facetRoot.addOnAttachStateChangeListener(
+                                    new View.OnAttachStateChangeListener() {
+                                @Override public void onViewAttachedToWindow(View view) {
+                                    if (!FACET_ATTACHED.compareAndSet(false, true)) return;
+                                    new android.os.Handler(android.os.Looper.getMainLooper())
+                                            .postDelayed(() -> {
+                                                if (view.isAttachedToWindow()
+                                                        && hasDurablePlayingCheckpoint(context)) {
+                                                    GearheadCarAppLauncher.open();
+                                                }
+                                            }, 1000L);
+                                }
+
+                                @Override public void onViewDetachedFromWindow(View view) {
+                                    FACET_ATTACHED.set(false);
+                                }
+                            });
                         }
                     });
             XposedBridge.log(TAG + " installed in Gearhead projection process");

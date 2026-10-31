@@ -221,7 +221,6 @@ public final class MediaPlaybackAccessibilityService extends AccessibilityServic
                     boolean clicked = clickNodeOrClickableParent(result);
                     if (clicked) {
                         prefs.edit().putString("phase", "play").apply();
-                        scheduleResumeSeek(prefs, eventPackage);
                         automationHandler.removeCallbacks(playRetry);
                         automationHandler.postDelayed(playRetry, 500L);
                         Log.i(TAG, "Selected a matching search result in " + eventPackage);
@@ -570,7 +569,6 @@ public final class MediaPlaybackAccessibilityService extends AccessibilityServic
                         boolean clicked = clickNodeOrClickableParent(result);
                         if (clicked) {
                             prefs.edit().putString("phase", "play").apply();
-                            scheduleResumeSeek(prefs, targetPackage);
                             Log.i(TAG, "Selected matching result package=" + targetPackage
                                     + " displayId=" + targetDisplayId);
                             automationHandler.removeCallbacks(playRetry);
