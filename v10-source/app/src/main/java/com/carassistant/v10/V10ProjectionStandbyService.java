@@ -57,10 +57,13 @@ public final class V10ProjectionStandbyService extends Service {
     }
 
     private boolean isGearheadCaller() {
+        String callingPackage = getCallingPackage();
+        if (GEARHEAD.equals(callingPackage)) return true;
         String[] packages = getPackageManager().getPackagesForUid(Binder.getCallingUid());
-        if (packages == null) return false;
-        for (String packageName : packages) {
-            if (GEARHEAD.equals(packageName)) return true;
+        if (packages != null) {
+            for (String packageName : packages) {
+                if (GEARHEAD.equals(packageName)) return true;
+            }
         }
         return false;
     }
