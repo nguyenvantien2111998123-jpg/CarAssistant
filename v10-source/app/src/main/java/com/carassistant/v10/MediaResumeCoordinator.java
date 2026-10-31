@@ -149,8 +149,7 @@ public final class MediaResumeCoordinator {
                 String output = shell.run(12, command);
                 Log.i(TAG, "Background launch requested for " + expectedPackage
                         + "; phone task returned Home. " + output);
-                retryRestore(context, expectedPackage, expectedTitle, expectedPosition,
-                        service, 0);
+                retryRestore(context, expectedPackage, expectedTitle, expectedPosition, 0);
             } catch (Throwable error) {
                 Log.w(TAG, "Could not start saved media app in background", error);
                 restoreInProgress.set(false);
@@ -161,7 +160,7 @@ public final class MediaResumeCoordinator {
     }
 
     private static void retryRestore(Context context, String packageName, String title,
-                                     long position, AccessibilityService service, int attempt) {
+                                     long position, int attempt) {
         if (MediaSessionBridge.restoreSavedPlayback(packageName, title, position)) {
             restoreInProgress.set(false);
             return;
@@ -172,11 +171,7 @@ public final class MediaResumeCoordinator {
             return;
         }
         new android.os.Handler(android.os.Looper.getMainLooper()).postDelayed(() -> {
-            if (service == null || !service.isServiceConnectedForMediaRestore()) {
-                restoreInProgress.set(false);
-                return;
-            }
-            retryRestore(context, packageName, title, position, service, attempt + 1);
+            retryRestore(context, packageName, title, position, attempt + 1);
         }, RETRY_INTERVAL_MS);
     }
 }
