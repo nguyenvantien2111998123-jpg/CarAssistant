@@ -32,7 +32,7 @@ public final class MediaSessionBridge extends NotificationListenerService {
     private static final String TAG = "CarAssistantMedia";
     private static final String RESUME_PREFS = "carassistant_media_resume";
     private static final String LAST_PACKAGE = "last_media_package";
-    // A single rolling checkpoint: each minute replaces these keys; no history is retained.
+    // A single rolling checkpoint: frequent durable writes keep abrupt-power-loss recovery close to real time.
     private static final long CHECKPOINT_INTERVAL_MS = 5_000L;
     private static final String CHECKPOINT_PACKAGE = "checkpoint_package";
     private static final String CHECKPOINT_TITLE = "checkpoint_title";
@@ -110,7 +110,7 @@ public final class MediaSessionBridge extends NotificationListenerService {
     }
 
     /**
-     * Persist one rolling media checkpoint every 60 seconds. The same preference keys
+     * Persist one rolling media checkpoint every five seconds. The same preference keys
      * are overwritten on each run, so only the newest checkpoint is retained.
      */
     private void saveCurrentCheckpoint() {
@@ -397,14 +397,34 @@ public final class MediaSessionBridge extends NotificationListenerService {
         if (session == null) return;
         boolean hasPlayer = state != null && !TextUtils.isEmpty(state.packageName);
         if (!hasPlayer) {
-            // Keep CarAsistant as the one stable media source on Android Auto Home/widget,
-            // including when no phone player currently publishes a media session.
-            session.setMetadata(new MediaMetadata.Builder()
-                    .putString(MediaMetadata.METADATA_KEY_TITLE, "CarAsistant Media")
-                    .putString(MediaMetadata.METADATA_KEY_ARTIST, "Trình điều khiển media")
-                    .putString(MediaMetadata.METADATA_KEY_ALBUM, "CarAsistant")
-                    .build());
-            session.setPlaybackState(buildMirrorPlaybackState(false, 0L, 0L));
+            // After a phone reboot the source app has no MediaSession yet. Publish the
+            // durable checkpoint so Android Auto still sees CarAsistant and the last item.
+            String savedTitle = getCheckpointTitle(this);
+            String savedArtist = getCheckpointArtist(this);
+            String savedPackage = getCheckpointPackage(this);
+            android.content.SharedPreferences prefs =
+                    getSharedPreferences(RESUME_PREFS, Context.MODE_PRIVATE);
+            long savedDuration = Math.max(0L, prefs.getLong(CHECKPOINT_DURATION, 0L));
+            long savedPosition = getAdjustedCheckpointPosition(this);
+            if (!TextUtils.isEmpty(savedTitle)) {
+                session.setMetadata(new MediaMetadata.Builder()
+                        .putString(MediaMetadata.METADATA_KEY_TITLE, savedTitle)
+                        .putString(MediaMetadata.METADATA_KEY_ARTIST,
+                                TextUtils.isEmpty(savedArtist) ? savedPackage : savedArtist)
+                        .putString(MediaMetadata.METADATA_KEY_ALBUM,
+                                TextUtils.isEmpty(savedPackage) ? "CarAsistant" : savedPackage)
+                        .putLong(MediaMetadata.METADATA_KEY_DURATION, savedDuration)
+                        .build());
+                // Show the saved item as paused until its source session is verified.
+                session.setPlaybackState(buildMirrorPlaybackState(false, savedPosition, savedDuration));
+            } else {
+                session.setMetadata(new MediaMetadata.Builder()
+                        .putString(MediaMetadata.METADATA_KEY_TITLE, "CarAsistant Media")
+                        .putString(MediaMetadata.METADATA_KEY_ARTIST, "Trình điều khiển media")
+                        .putString(MediaMetadata.METADATA_KEY_ALBUM, "CarAsistant")
+                        .build());
+                session.setPlaybackState(buildMirrorPlaybackState(false, 0L, 0L));
+            }
             session.setActive(true);
             return;
         }
@@ -429,7 +449,9 @@ public final class MediaSessionBridge extends NotificationListenerService {
     private PlaybackState buildMirrorPlaybackState(boolean playing, long position, long duration) {
         long actions = PlaybackState.ACTION_PLAY | PlaybackState.ACTION_PAUSE
                 | PlaybackState.ACTION_PLAY_PAUSE | PlaybackState.ACTION_SKIP_TO_NEXT
-                | PlaybackState.ACTION_SKIP_TO_PREVIOUS;
+                | PlaybackState.ACTION_SKIP_TO_PREVIOUS
+                | PlaybackState.ACTION_SEEK_TO | PlaybackState.ACTION_FAST_FORWARD
+                | PlaybackState.ACTION_REWIND;
         return new PlaybackState.Builder()
                 .setActions(actions)
                 .setState(playing ? PlaybackState.STATE_PLAYING : PlaybackState.STATE_PAUSED,
