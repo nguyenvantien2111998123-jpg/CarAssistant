@@ -44,10 +44,6 @@ public final class MediaAutoRestoreService extends Service {
             if (MediaSessionBridge.applyCheckpoint(
                     MediaAutoRestoreService.this, expectedPackage, autoplay)) {
                 clearRecoveryAssist();
-                getSharedPreferences(MediaBootReceiver.PREFS, MODE_PRIVATE).edit()
-                        .putBoolean(MediaBootReceiver.KEY_BOOT_PENDING, false)
-                        .putBoolean(MediaBootReceiver.KEY_BOOT_PREPARE_READY, false)
-                        .commit();
                 Log.i(TAG, "Restored source=" + expectedPackage + ", autoplay=" + autoplay);
                 stopSelf();
                 return;
@@ -105,15 +101,8 @@ public final class MediaAutoRestoreService extends Service {
             return START_NOT_STICKY;
         }
         startedAt = SystemClock.uptimeMillis();
-        android.content.SharedPreferences bootPrefs = getSharedPreferences(
-                MediaBootReceiver.PREFS, MODE_PRIVATE);
-        boolean bootPending = bootPrefs.getBoolean(
-                MediaBootReceiver.KEY_BOOT_PENDING, false);
-        boolean bootPrepared = bootPrefs.getBoolean(
-                MediaBootReceiver.KEY_BOOT_PREPARE_READY, false);
-        Log.i(TAG, "Android Auto connected; restoring phone app=" + expectedPackage
-                + ", bootRecoveryPending=" + bootPending
-                + ", bootProcessPrepared=" + bootPrepared);
+        Log.i(TAG, "Android Auto connection notification received; restoring phone app="
+                + expectedPackage);
         handler.post(restoreCheckpoint);
         return START_NOT_STICKY;
     }
