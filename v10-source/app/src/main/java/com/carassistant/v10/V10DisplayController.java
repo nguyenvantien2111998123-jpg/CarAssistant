@@ -264,9 +264,12 @@ public final class V10DisplayController {
     }
 
     /**
-     * Prefer moving the existing task for the active media package onto the
-     * projection display. If Android does not support the task move command,
-     * fall back to launching the selected component on the projection display.
+     * Moves the existing media root task from the phone display to this
+     * projection display. Android 12 exposes this operation as
+     * "am display move-stack <ROOT_TASK_ID> <DISPLAY_ID>".
+     *
+     * Do not launch a replacement task when lookup or move fails: doing so
+     * leaves the original phone-side UI visible and creates a second task.
      */
     public synchronized void launchMediaTaskOnDisplay(ComponentName component) {
         if (!isReady() || component == null) return;
@@ -274,24 +277,18 @@ public final class V10DisplayController {
         target = component;
         launched = true;
         final int displayId = display.getDisplayId();
-        final int userId = Process.myUid() / 100000;
-        final String flat = shellQuote(component.flattenToString());
-        final String packageSelector = shellQuote("A=" + component.getPackageName());
-        final String command = "TASK_ID=$(/system/bin/dumpsys activity recents 2>/dev/null"
-                + " | /system/bin/grep -F " + packageSelector
-                + " | /system/bin/sed -n 's/.*#[[:space:]]*\\([0-9][0-9]*\\).*/\\1/p'"
+        final String packageName = shellQuote(component.getPackageName());
+        final String command = "ROOT_TASK_ID=$(/system/bin/dumpsys activity activities 2>/dev/null"
+                + " | /system/bin/grep 'Task{'"
+                + " | /system/bin/grep -F " + shellQuote("A=" + component.getPackageName())
+                + " | /system/bin/sed -n 's/.*rootTaskId=\\([0-9][0-9]*\\).*/\\1/p'"
                 + " | /system/bin/head -n 1); "
-                + "if [ -n \"$TASK_ID\" ] && /system/bin/am task move-to-display"
-                + " \"$TASK_ID\" " + displayId + " >/dev/null 2>&1; then "
-                + "echo 'CarAsistant: restored existing media task on projection display'; "
-                + "else /system/bin/am start --user " + userId
-                + " --display " + displayId
-                + " --windowingMode 1"
-                + " -a android.intent.action.MAIN"
-                + " -c android.intent.category.LAUNCHER"
-                + " -f 0x10000000"
-                + " -n " + flat + "; fi";
-        execute(command, "Media task restore failed; attempted projection launch");
+                + "if [ -z \"$ROOT_TASK_ID\" ]; then "
+                + "echo 'CarAsistant: active media root task not found for " + component.getPackageName() + "'; "
+                + "exit 1; fi; "
+                + "/system/bin/am display move-stack \"$ROOT_TASK_ID\" " + displayId
+                + " && echo 'CarAsistant: moved existing media root task to projection display'";
+        execute(command, "Existing media task move failed; no duplicate task was launched");
     }
 
     /**
