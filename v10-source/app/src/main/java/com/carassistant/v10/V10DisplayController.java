@@ -277,11 +277,12 @@ public final class V10DisplayController {
         target = component;
         launched = true;
         final int displayId = display.getDisplayId();
-        final String packageName = shellQuote(component.getPackageName());
         final String command = "ROOT_TASK_ID=$(/system/bin/dumpsys activity activities 2>/dev/null"
                 + " | /system/bin/grep 'Task{'"
                 + " | /system/bin/grep -F " + shellQuote("A=" + component.getPackageName())
-                + " | /system/bin/sed -n 's/.*rootTaskId=\\([0-9][0-9]*\\).*/\\1/p'"
+                // Child tasks expose rootTaskId; a root task uses its own #taskId.
+                + " | /system/bin/sed -n -e 's/.*rootTaskId=\\([0-9][0-9]*\\).*/\\1/p'"
+                + " -e 's/.*Task{[^#]*#\\([0-9][0-9]*\\).*/\\1/p'"
                 + " | /system/bin/head -n 1); "
                 + "if [ -z \"$ROOT_TASK_ID\" ]; then "
                 + "echo 'CarAsistant: active media root task not found for " + component.getPackageName() + "'; "
