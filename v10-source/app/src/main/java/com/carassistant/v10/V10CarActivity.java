@@ -624,7 +624,10 @@ public final class V10CarActivity
                         Toast.LENGTH_SHORT).show();
                 return;
             }
-            launchProjection(launch.getComponent());
+            // The media app may already own a live task on the phone display.
+            // Reuse/move that task onto V10's secondary display instead of launching
+            // a second launcher task and leaving the phone-side UI visible.
+            launchActiveMediaProjection(launch.getComponent());
         } catch (RuntimeException error) {
             Toast.makeText(this, "Không thể mở ứng dụng media trên màn hình phụ.",
                     Toast.LENGTH_SHORT).show();
@@ -954,6 +957,32 @@ public final class V10CarActivity
         keyboardController.start();
     }
 
+
+private void launchActiveMediaProjection(ComponentName component) {
+    if (keyboardController != null) keyboardController.hide();
+    if (component == null || session == null) return;
+
+    if (activeTarget != null && !activeTarget.equals(component)) {
+        session.release();
+    }
+
+    activeTarget = component;
+    V10SessionStore.setTarget(this, component);
+
+    if (floatingVoiceButton != null) {
+        floatingVoiceButton.setVisibility(View.VISIBLE);
+        floatingVoiceButton.bringToFront();
+    }
+
+    projectionLayer.setVisibility(View.GONE);
+    appProjectionLayer.setVisibility(View.VISIBLE);
+    launcherLayer.setVisibility(View.GONE);
+
+    // This path specifically reuses the currently playing media task and moves
+    // it to the projection display; normal app selection keeps launchProjection().
+    session.restoreMediaTask(component);
+    rememberProjectedTask(component);
+}
 
 private void launchProjection(ComponentName component) {
 
