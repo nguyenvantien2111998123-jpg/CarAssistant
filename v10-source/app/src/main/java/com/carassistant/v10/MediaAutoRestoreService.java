@@ -25,13 +25,16 @@ public final class MediaAutoRestoreService extends Service {
     private static final String CHANNEL = "carassistant_media_restore";
     private static final int NOTIFICATION_ID = 4038;
     private static final long RETRY_MS = 1000L;
-    private static final long RETRY_WINDOW_MS = 60000L;
+    private static final long RETRY_WINDOW_MS = 120000L;
+    private static final long LAUNCH_RETRY_INTERVAL_MS = 15000L;
+    private static final int MAX_LAUNCH_ATTEMPTS = 3;
 
     private final Handler handler = new Handler(Looper.getMainLooper());
     private final RootShellSession rootShell = new RootShellSession();
     private long startedAt;
     private String expectedPackage;
-    private boolean launchRequested;
+    private int launchAttempts;
+    private long lastLaunchElapsed;
 
     private final Runnable restoreCheckpoint = new Runnable() {
         @Override public void run() {
@@ -41,12 +44,24 @@ public final class MediaAutoRestoreService extends Service {
             if (MediaSessionBridge.applyCheckpoint(
                     MediaAutoRestoreService.this, expectedPackage, autoplay)) {
                 clearRecoveryAssist();
+                getSharedPreferences(MediaBootReceiver.PREFS, MODE_PRIVATE).edit()
+                        .putBoolean(MediaBootReceiver.KEY_BOOT_PENDING, false).commit();
                 Log.i(TAG, "Restored source=" + expectedPackage + ", autoplay=" + autoplay);
                 stopSelf();
                 return;
             }
-            if (!launchRequested) { launchRequested = true; requestSourceLaunch(); }
-            if (SystemClock.uptimeMillis() - startedAt < RETRY_WINDOW_MS) {
+            long now = SystemClock.uptimeMillis();
+            if (launchAttempts < MAX_LAUNCH_ATTEMPTS
+                    && (launchAttempts == 0
+                    || now - lastLaunchElapsed >= LAUNCH_RETRY_INTERVAL_MS)) {
+                launchAttempts++;
+                lastLaunchElapsed = now;
+                Log.i(TAG, "Source MediaSession not ready; launch attempt "
+                        + launchAttempts + "/" + MAX_LAUNCH_ATTEMPTS
+                        + " for " + expectedPackage);
+                requestSourceLaunch();
+            }
+            if (now - startedAt < RETRY_WINDOW_MS) {
                 handler.postDelayed(this, RETRY_MS);
             } else {
                 Log.w(TAG, "Timed out waiting for source MediaSession: " + expectedPackage);
@@ -77,7 +92,8 @@ public final class MediaAutoRestoreService extends Service {
 
     @Override public int onStartCommand(Intent intent, int flags, int startId) {
         handler.removeCallbacks(restoreCheckpoint);
-        launchRequested = false;
+        launchAttempts = 0;
+        lastLaunchElapsed = 0L;
         expectedPackage = MediaSessionBridge.getCheckpointPackage(this);
         if (expectedPackage == null) expectedPackage = MediaSessionBridge.getLastKnownPackage(this);
         if (TextUtils.isEmpty(expectedPackage) || getPackageName().equals(expectedPackage)
@@ -87,7 +103,11 @@ public final class MediaAutoRestoreService extends Service {
             return START_NOT_STICKY;
         }
         startedAt = SystemClock.uptimeMillis();
-        Log.i(TAG, "Android Auto connected; restoring phone app=" + expectedPackage);
+        boolean bootPending = getSharedPreferences(
+                MediaBootReceiver.PREFS, MODE_PRIVATE)
+                .getBoolean(MediaBootReceiver.KEY_BOOT_PENDING, false);
+        Log.i(TAG, "Android Auto connected; restoring phone app=" + expectedPackage
+                + ", bootRecoveryPending=" + bootPending);
         handler.post(restoreCheckpoint);
         return START_NOT_STICKY;
     }
