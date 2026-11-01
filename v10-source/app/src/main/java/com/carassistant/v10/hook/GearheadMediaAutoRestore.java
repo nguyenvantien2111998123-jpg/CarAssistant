@@ -44,13 +44,20 @@ public final class GearheadMediaAutoRestore {
                         if (!matched) return;
                         long now = SystemClock.elapsedRealtime();
                         if (now - lastRequestElapsed < 30000L) return;
-                        lastRequestElapsed = now;
-                        Intent restore = new Intent(ACTION).setComponent(new ComponentName(PACKAGE, SERVICE));
+                        Intent restore = new Intent(ACTION)
+                                .setComponent(new ComponentName(PACKAGE, SERVICE));
                         try {
                             if (Build.VERSION.SDK_INT >= 26) context.startForegroundService(restore);
                             else context.startService(restore);
+                            // Start the cooldown only after Android accepted the service request.
+                            // If Android 12 rejects a background FGS start, allow the next AA
+                            // layout inflation to retry instead of suppressing it for 30 seconds.
+                            lastRequestElapsed = now;
                             log("Detected Android Auto connection; requested saved-session resume in CarAsistant Media");
-                        } catch (Throwable error) { log("Could not start restore service: " + error); }
+                        } catch (Throwable error) {
+                            lastRequestElapsed = Math.max(0L, now - 25000L);
+                            log("Could not start restore service; a later AA UI event will retry: " + error);
+                        }
                     } catch (Throwable error) { log("Connection detection failed safely: " + error); }
                 }
             });
