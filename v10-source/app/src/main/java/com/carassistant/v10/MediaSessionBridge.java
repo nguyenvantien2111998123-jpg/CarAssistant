@@ -615,6 +615,12 @@ public final class MediaSessionBridge extends NotificationListenerService {
 
     @Override
     public void onNotificationRemoved(StatusBarNotification sbn) {
+        if (sbn != null && GEARHEAD_PACKAGE.equals(sbn.getPackageName())) {
+            // Android Auto removes its connection notification on disconnect.
+            getSharedPreferences(RESUME_PREFS, Context.MODE_PRIVATE).edit()
+                    .remove(AA_TRIGGER_PREF).apply();
+            Log.i(TAG, "Android Auto connection notification removed; reconnect trigger re-armed");
+        }
         refreshFromManager();
     }
 
