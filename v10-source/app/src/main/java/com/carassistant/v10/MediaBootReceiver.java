@@ -11,9 +11,8 @@ import android.text.TextUtils;
 import android.util.Log;
 
 /**
- * Records the last media checkpoint after a full reboot and schedules a short,
- * persisted JobScheduler pass to initialize the app process without opening UI.
- * Actual media restoration remains gated on Android Auto reconnect.
+ * On BOOT_COMPLETED, queues the boot-driven media restore job.
+ * The job itself launches the saved player and restores playback; Android Auto is not involved.
  */
 public final class MediaBootReceiver extends BroadcastReceiver {
     private static final String TAG = "CarAssistantMediaResume";
@@ -35,7 +34,7 @@ public final class MediaBootReceiver extends BroadcastReceiver {
         if (TextUtils.isEmpty(savedPackage)
                 || context.getPackageName().equals(savedPackage)
                 || !savedPackage.matches("[A-Za-z0-9_]+(\\.[A-Za-z0-9_]+)+")) {
-            Log.i(TAG, "Boot completed; no valid external media checkpoint to prepare");
+            Log.i(TAG, "Boot completed; no valid external media checkpoint to restore");
             return;
         }
 
@@ -46,8 +45,7 @@ public final class MediaBootReceiver extends BroadcastReceiver {
                 .putLong(KEY_BOOT_RECEIVED_AT, System.currentTimeMillis())
                 .commit();
 
-        // A persisted job gives Android a second, scheduler-managed opportunity to
-        // start the CarAsistant process after boot. It performs no UI or media launch.
+        // JobScheduler starts the root-assisted restore after boot without opening CarAsistant UI.
         JobScheduler scheduler = context.getSystemService(JobScheduler.class);
         if (scheduler != null) {
             ComponentName component = new ComponentName(context, MediaBootPrepareJobService.class);
@@ -57,10 +55,10 @@ public final class MediaBootReceiver extends BroadcastReceiver {
                     .setOverrideDeadline(15000L)
                     .build();
             int result = scheduler.schedule(job);
-            Log.i(TAG, "Boot recovery queued for " + savedPackage
-                    + "; prepareJobScheduleResult=" + result);
+            Log.i(TAG, "Boot media restore queued for " + savedPackage
+                    + "; scheduleResult=" + result);
         } else {
-            Log.w(TAG, "JobScheduler unavailable; boot recovery remains pending");
+            Log.w(TAG, "JobScheduler unavailable; boot media restore remains pending");
         }
     }
 }
