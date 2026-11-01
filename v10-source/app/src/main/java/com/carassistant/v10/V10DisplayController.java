@@ -275,7 +275,7 @@ public final class V10DisplayController {
         if (!isReady() || component == null) return;
         managedPackages.add(component.getPackageName());
         target = component;
-        launched = true;
+        launched = false;
         final int displayId = display.getDisplayId();
         final String command = "ROOT_TASK_ID=$(/system/bin/dumpsys activity activities 2>/dev/null"
                 + " | /system/bin/grep 'Task{'"
@@ -289,7 +289,19 @@ public final class V10DisplayController {
                 + "exit 1; fi; "
                 + "/system/bin/am display move-stack \"$ROOT_TASK_ID\" " + displayId
                 + " && echo 'CarAsistant: moved existing media root task to projection display'";
-        execute(command, "Existing media task move failed; no duplicate task was launched");
+        RootShellSession.EXEC.execute(() -> {
+            try {
+                rootShell.run(10, command);
+                synchronized (V10DisplayController.this) {
+                    if (!destroyed && component.equals(target)) launched = true;
+                }
+            } catch (Throwable error) {
+                synchronized (V10DisplayController.this) {
+                    if (component.equals(target)) launched = false;
+                }
+                Log.w(TAG, "Existing media task move failed; no duplicate task was launched", error);
+            }
+        });
     }
 
     /**
