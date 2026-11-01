@@ -45,6 +45,9 @@ public final class MediaSessionBridge extends NotificationListenerService {
     private static final String CHECKPOINT_UPDATED_AT = "checkpoint_updated_at";
     private static final String CHECKPOINT_SPEED = "checkpoint_speed";
     private static final String CHECKPOINT_ELAPSED_REALTIME = "checkpoint_elapsed_realtime";
+    private static final String GEARHEAD_PACKAGE = "com.google.android.projection.gearhead";
+    private static final String AA_TRIGGER_PREF = "last_aa_notification_restore";
+    private static final long AA_TRIGGER_COOLDOWN_MS = 90000L;
     public static final String ACTION_VOICE_ASSISTANT =
             "com.carassistant.v10.MEDIA_VOICE_ASSISTANT";
     private static final Handler MAIN = new Handler(Looper.getMainLooper());
@@ -498,6 +501,18 @@ public final class MediaSessionBridge extends NotificationListenerService {
             refreshControllers(manager.getActiveSessions(
                     new ComponentName(this, MediaSessionBridge.class)));
             updateMirrorSession(snapshot);
+            // NotificationListenerService is rebound by Android after reboot.
+            // If AA's connected notification is already present, process it once.
+            try {
+                StatusBarNotification[] active = getActiveNotifications();
+                if (active != null) {
+                    for (StatusBarNotification notification : active) {
+                        handleAndroidAutoConnectionNotification(notification);
+                    }
+                }
+            } catch (RuntimeException error) {
+                Log.w(TAG, "Could not inspect active Android Auto notifications", error);
+            }
             MAIN.removeCallbacks(checkpointTask);
             saveCurrentCheckpoint();
             MAIN.postDelayed(checkpointTask, CHECKPOINT_INTERVAL_MS);
@@ -543,7 +558,59 @@ public final class MediaSessionBridge extends NotificationListenerService {
 
     @Override
     public void onNotificationPosted(StatusBarNotification sbn) {
+        handleAndroidAutoConnectionNotification(sbn);
         refreshFromManager();
+    }
+
+    /**
+     * Android Auto's phone-side notification is the single reconnect signal.
+     * USB power/data state and Gearhead Activity lifecycle are deliberately not used.
+     */
+    private void handleAndroidAutoConnectionNotification(StatusBarNotification sbn) {
+        if (sbn == null || !GEARHEAD_PACKAGE.equals(sbn.getPackageName())) return;
+        Notification notification = sbn.getNotification();
+        if (notification == null || notification.extras == null) return;
+
+        Bundle extras = notification.extras;
+        StringBuilder content = new StringBuilder();
+        appendNotificationText(content, extras.getCharSequence(Notification.EXTRA_TITLE));
+        appendNotificationText(content, extras.getCharSequence(Notification.EXTRA_TEXT));
+        appendNotificationText(content, extras.getCharSequence(Notification.EXTRA_BIG_TEXT));
+        appendNotificationText(content, extras.getCharSequence(Notification.EXTRA_SUB_TEXT));
+        appendNotificationText(content, extras.getCharSequence(Notification.EXTRA_SUMMARY_TEXT));
+        String message = content.toString().toLowerCase(java.util.Locale.ROOT);
+
+        // Require an explicit connected-state phrase, not just any Gearhead notification.
+        boolean connected = message.contains("connected")
+                || message.contains("đã kết nối")
+                || message.contains("đang kết nối")
+                || message.contains("connecté")
+                || message.contains("verbunden");
+        if (!connected) return;
+
+        android.content.SharedPreferences prefs = getSharedPreferences(
+                RESUME_PREFS, Context.MODE_PRIVATE);
+        long now = System.currentTimeMillis();
+        long previous = prefs.getLong(AA_TRIGGER_PREF, 0L);
+        if (previous > 0L && now - previous < AA_TRIGGER_COOLDOWN_MS) return;
+
+        Intent restore = new Intent(this, MediaAutoRestoreService.class)
+                .setAction(MediaAutoRestoreService.ACTION_RESTORE);
+        try {
+            if (android.os.Build.VERSION.SDK_INT >= 26) startForegroundService(restore);
+            else startService(restore);
+            prefs.edit().putLong(AA_TRIGGER_PREF, now).apply();
+            Log.i(TAG, "Android Auto connected notification detected; media restore requested: "
+                    + message);
+        } catch (RuntimeException error) {
+            Log.w(TAG, "Could not start media restore after Android Auto notification", error);
+        }
+    }
+
+    private static void appendNotificationText(StringBuilder target, CharSequence value) {
+        if (value == null || value.length() == 0) return;
+        if (target.length() > 0) target.append(' ');
+        target.append(value);
     }
 
     @Override
