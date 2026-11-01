@@ -61,9 +61,7 @@ public final class MediaBootPrepareJobService extends JobService {
             return false;
         }
 
-        android.content.SharedPreferences prefs = getSharedPreferences(
-                MediaBootReceiver.PREFS, MODE_PRIVATE);
-        prefs.edit()
+        getSharedPreferences(MediaBootReceiver.PREFS, MODE_PRIVATE).edit()
                 .putBoolean(MediaBootReceiver.KEY_BOOT_PENDING, true)
                 .putBoolean(MediaBootReceiver.KEY_BOOT_PREPARE_READY, true)
                 .putLong(MediaBootReceiver.KEY_BOOT_PREPARE_AT, System.currentTimeMillis())
@@ -81,9 +79,7 @@ public final class MediaBootPrepareJobService extends JobService {
                 + ", hasDeepLink=" + !TextUtils.isEmpty(mediaUri)
                 + ", autoplay=" + autoplay);
 
-        // Arm the search fallback before launching an app that has no usable deep link.
         if (TextUtils.isEmpty(mediaUri)) prepareAccessibilityRecovery(packageName, title, artist);
-
         RootShellSession.EXEC.execute(() -> launchSourceApp(packageName, mediaUri, title, artist));
         handler.removeCallbacks(checkpointPoll);
         handler.post(checkpointPoll);
@@ -94,30 +90,30 @@ public final class MediaBootPrepareJobService extends JobService {
         if (!launchStarted.compareAndSet(false, true)) return;
         RootShellSession shell = new RootShellSession();
         String pkg = shellQuote(packageName);
-        if (!TextUtils.isEmpty(mediaUri)) {
-            try {
-                shell.run(15, "am start --display 0 -a android.intent.action.VIEW -d "
-                        + shellQuote(mediaUri) + " -p " + pkg);
-                Log.i(TAG, "Opened saved media deep link after boot: " + packageName);
-                return;
-            } catch (RuntimeException error) {
-                Log.w(TAG, "Saved media deep link rejected; falling back to app search", error);
-            }
-        }
-
-        prepareAccessibilityRecovery(packageName, title, artist);
-        String query = joinTitleArtist(title, artist);
-        if (!TextUtils.isEmpty(query)) {
-            try {
-                shell.run(15, "am start --display 0 -a android.intent.action.SEARCH"
-                        + " --es query " + shellQuote(query) + " -p " + pkg);
-                Log.i(TAG, "Opened source search after boot: " + packageName);
-                return;
-            } catch (RuntimeException error) {
-                Log.i(TAG, "Source app has no compatible SEARCH activity; opening launcher", error);
-            }
-        }
         try {
+            if (!TextUtils.isEmpty(mediaUri)) {
+                try {
+                    shell.run(15, "am start --display 0 -a android.intent.action.VIEW -d "
+                            + shellQuote(mediaUri) + " -p " + pkg);
+                    Log.i(TAG, "Opened saved media deep link after boot: " + packageName);
+                    return;
+                } catch (RuntimeException error) {
+                    Log.w(TAG, "Saved media deep link rejected; falling back to app search", error);
+                }
+            }
+
+            prepareAccessibilityRecovery(packageName, title, artist);
+            String query = joinTitleArtist(title, artist);
+            if (!TextUtils.isEmpty(query)) {
+                try {
+                    shell.run(15, "am start --display 0 -a android.intent.action.SEARCH"
+                            + " --es query " + shellQuote(query) + " -p " + pkg);
+                    Log.i(TAG, "Opened source search after boot: " + packageName);
+                    return;
+                } catch (RuntimeException error) {
+                    Log.i(TAG, "Source app has no compatible SEARCH activity; opening launcher", error);
+                }
+            }
             shell.run(15, "am start --display 0 -a android.intent.action.MAIN"
                     + " -c android.intent.category.LAUNCHER -p " + pkg);
             Log.i(TAG, "Launched saved media app after boot: " + packageName);
