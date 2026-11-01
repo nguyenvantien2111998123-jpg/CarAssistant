@@ -5,7 +5,6 @@ import android.os.Build;
 import com.carassistant.v10.AACastDisplay;
 import com.carassistant.v10.hook.DisplayHooks;
 import com.carassistant.v10.hook.GearheadAllow;
-import com.carassistant.v10.hook.GearheadMediaAutoRestore;
 import com.carassistant.v10.hook.GearheadDockPatcher;
 import com.carassistant.v10.hook.GearheadMediaSessionFilter;
 import com.carassistant.v10.hook.InputHooks;
@@ -54,12 +53,6 @@ public final class AACastBridge implements IXposedHookLoadPackage {
                 GearheadAllow.install(param.classLoader);
                 GearheadMediaSessionFilter.install();
                 GearheadDockPatcher.install();
-                // Gearhead process names vary across Android Auto releases and device builds.
-                // Install the lightweight inflater watcher in every Gearhead process; it only
-                // fires when the actual Coolwalk facet-bar layout is inflated.
-                GearheadMediaAutoRestore.install(param.classLoader);
-
-                // Restore media on AA connection without opening the V10 Car App UI.
             }
 
             if (Build.VERSION.SDK_INT >= 30) {
