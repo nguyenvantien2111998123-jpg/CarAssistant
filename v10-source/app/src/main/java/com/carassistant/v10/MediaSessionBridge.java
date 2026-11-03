@@ -795,6 +795,7 @@ public final class MediaSessionBridge extends NotificationListenerService {
             catch (RuntimeException ignored) { }
         }
         activeController = null;
+        checkpointController = null;
         controllerCallback = null;
         publish(null);
     }
