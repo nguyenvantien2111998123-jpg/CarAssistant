@@ -153,21 +153,21 @@ final class SteeringWheelMediaKeyHandler {
         synchronized (lock) {
             if (pressedKey != key || longPressStarted) return;
             longPressStarted = true;
-            if (key == KeyEvent.KEYCODE_MEDIA_NEXT) actions.onSeekForward();
-            else actions.onSeekBackward();
-
             seekRepeatRunnable = new Runnable() {
                 @Override public void run() {
                     synchronized (lock) {
                         if (pressedKey != key || !longPressStarted) return;
-                        if (key == KeyEvent.KEYCODE_MEDIA_NEXT) actions.onSeekForward();
-                        else actions.onSeekBackward();
                         handler.postDelayed(this, SEEK_INTERVAL_MS);
                     }
+                    if (key == KeyEvent.KEYCODE_MEDIA_NEXT) actions.onSeekForward();
+                    else actions.onSeekBackward();
                 }
             };
             handler.postDelayed(seekRepeatRunnable, SEEK_INTERVAL_MS);
         }
+        // Never invoke MediaController/app callbacks while holding the gesture lock.
+        if (key == KeyEvent.KEYCODE_MEDIA_NEXT) actions.onSeekForward();
+        else actions.onSeekBackward();
     }
 
     private void cancelLongPressLocked() {
