@@ -26,6 +26,9 @@ public final class GearheadMediaSessionFilter {
     private static final String V10_PACKAGE = "com.carassistant.v10";
     private static final String GEARHEAD = "com.google.android.projection.gearhead";
     private static volatile boolean installed;
+    // Retain the last valid mirror controller across transient session-list gaps. The
+    // mirror is owned by MediaSessionBridge and remains active during listener rebinds.
+    private static volatile MediaController lastV10Controller;
 
     private GearheadMediaSessionFilter() {
     }
@@ -99,23 +102,38 @@ public final class GearheadMediaSessionFilter {
         if (!(value instanceof List)) return value;
 
         List<?> sessions = (List<?>) value;
-        boolean hasV10Session = false;
-        for (Object item : sessions) {
-            if (item instanceof MediaController
-                    && V10_PACKAGE.equals(((MediaController) item).getPackageName())) {
-                hasV10Session = true;
-                break;
-            }
-        }
-        if (!hasV10Session) return value;
-
         ArrayList<MediaController> filtered = new ArrayList<>();
         for (Object item : sessions) {
             if (item instanceof MediaController
                     && V10_PACKAGE.equals(((MediaController) item).getPackageName())) {
-                filtered.add((MediaController) item);
+                MediaController controller = (MediaController) item;
+                lastV10Controller = controller;
+                filtered.add(controller);
             }
         }
+
+        if (filtered.isEmpty()) {
+            // Gearhead can emit a transient empty/non-V10 list while the framework is
+            // rebinding active-session listeners. Reuse only a controller previously
+            // observed from our own package; never manufacture or deactivate a source session.
+            MediaController cached = lastV10Controller;
+            if (cached != null) {
+                try {
+                    if (V10_PACKAGE.equals(cached.getPackageName())) {
+                        cached.getPlaybackState(); // Validate that the remote session is reachable.
+                        filtered.add(cached);
+                        XposedBridge.log(TAG + " retained cached V10 mirror during session-list gap; "
+                                + "suppressed " + sessions.size() + " competing sessions");
+                        return filtered;
+                    }
+                } catch (Throwable error) {
+                    lastV10Controller = null;
+                    XposedBridge.log(TAG + " cached V10 mirror is no longer reachable: " + error);
+                }
+            }
+            return value;
+        }
+
         XposedBridge.log(TAG + " V10 mirror active; filtered Gearhead session list "
                 + sessions.size() + " -> " + filtered.size());
         return filtered;
