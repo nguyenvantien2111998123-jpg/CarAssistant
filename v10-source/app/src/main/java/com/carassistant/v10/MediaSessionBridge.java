@@ -48,6 +48,7 @@ public final class MediaSessionBridge extends NotificationListenerService {
     private static final String CHECKPOINT_ELAPSED_REALTIME = "checkpoint_elapsed_realtime";
     private static final String GEARHEAD_PACKAGE = "com.google.android.projection.gearhead";
     private static final String AA_TRIGGER_PREF = "last_aa_notification_restore";
+    private static final String AA_TRIGGER_ELAPSED_PREF = "last_aa_notification_restore_elapsed";
     private static final String AA_CONNECTED_PREF = "aa_connected";
     private static final String AA_NOTIFICATION_ID_PREF = "aa_notification_id";
     private static final String AA_NOTIFICATION_TAG_PREF = "aa_notification_tag";
@@ -683,15 +684,21 @@ public final class MediaSessionBridge extends NotificationListenerService {
                 .putString(AA_NOTIFICATION_TAG_PREF, sbn.getTag() == null ? "" : sbn.getTag())
                 .apply();
         long now = System.currentTimeMillis();
+        long nowElapsed = android.os.SystemClock.elapsedRealtime();
         long previous = prefs.getLong(AA_TRIGGER_PREF, 0L);
-        if (previous > 0L && now - previous < AA_TRIGGER_COOLDOWN_MS) return;
+        long previousElapsed = prefs.getLong(AA_TRIGGER_ELAPSED_PREF, 0L);
+        // elapsedRealtime resets on reboot. Do not let the previous boot's
+        // 90-second notification debounce suppress the first AA reconnect.
+        boolean sameBoot = previousElapsed > 0L && nowElapsed >= previousElapsed;
+        if (sameBoot && previous > 0L && now - previous < AA_TRIGGER_COOLDOWN_MS) return;
 
         Intent restore = new Intent(this, MediaAutoRestoreService.class)
                 .setAction(MediaAutoRestoreService.ACTION_RESTORE);
         try {
             if (android.os.Build.VERSION.SDK_INT >= 26) startForegroundService(restore);
             else startService(restore);
-            prefs.edit().putLong(AA_TRIGGER_PREF, now).apply();
+            prefs.edit().putLong(AA_TRIGGER_PREF, now)
+                    .putLong(AA_TRIGGER_ELAPSED_PREF, nowElapsed).apply();
             Log.i(TAG, "Android Auto connected notification detected; media restore requested: "
                     + message);
         } catch (RuntimeException error) {
@@ -719,6 +726,7 @@ public final class MediaSessionBridge extends NotificationListenerService {
             if (sbn.getId() == expectedId && removedTag.equals(expectedTag)) {
                 prefs.edit().putBoolean(AA_CONNECTED_PREF, false)
                         .remove(AA_TRIGGER_PREF)
+                        .remove(AA_TRIGGER_ELAPSED_PREF)
                         .remove(AA_NOTIFICATION_ID_PREF)
                         .remove(AA_NOTIFICATION_TAG_PREF)
                         .apply();
