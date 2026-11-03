@@ -509,7 +509,7 @@ public final class MediaSessionBridge extends NotificationListenerService {
                     sessionsListener, new ComponentName(this, MediaSessionBridge.class));
             refreshControllers(manager.getActiveSessions(
                     new ComponentName(this, MediaSessionBridge.class)));
-            updateMirrorSession(snapshot);
+            MediaAutoRestoreService.updateMediaSession(this, snapshot);
             // NotificationListenerService is rebound by Android after reboot.
             // If AA's connected notification is already present, process it once.
             try {
@@ -557,23 +557,6 @@ public final class MediaSessionBridge extends NotificationListenerService {
         MAIN.removeCallbacks(checkpointTask);
         MAIN.removeCallbacks(controllerRefreshTask);
         super.onDestroy();
-    }
-
-    private void releaseMirrorSession() {
-        if (steeringKeyHandler != null) {
-            steeringKeyHandler.dispose();
-            steeringKeyHandler = null;
-        }
-        MediaSession session = mirrorSession;
-        mirrorSession = null;
-        if (session != null) {
-            try {
-                session.setActive(false);
-                session.release();
-            } catch (RuntimeException error) {
-                Log.w(TAG, "Could not release mirrored media session", error);
-            }
-        }
     }
 
     @Override
