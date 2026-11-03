@@ -195,6 +195,9 @@ public final class GearheadDockPatcher {
             intent.setComponent(new ComponentName(
                     "com.carassistant.v10", "com.carassistant.v10.AACastCarService"));
             intent.putExtra("android.intent.extra.PACKAGE_NAME", "com.carassistant.v10");
+            // Tell V10CarActivity that this launch originated from the media card so
+            // it restores the active/checkpointed player task, not an unrelated old target.
+            intent.putExtra("com.carassistant.v10.OPEN_ACTIVE_MEDIA", true);
             launcher.invoke(null, intent);
             log("Opened CarAsistant V10 from Android Auto media metadata click");
         } catch (Throwable error) {
