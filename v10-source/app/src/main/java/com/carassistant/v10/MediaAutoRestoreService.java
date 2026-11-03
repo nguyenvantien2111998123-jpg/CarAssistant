@@ -74,7 +74,12 @@ public final class MediaAutoRestoreService extends Service {
                 if (MediaSessionBridge.applyCheckpoint(
                         MediaAutoRestoreService.this, expectedPackage, autoplay)) {
                     checkpointApplied = true;
-                    clearRecoveryAssist();
+                    // Keep the handoff marker until V10 opens. Its CarActivity must
+                    // still know that Display 2 already owns this task and adopt it.
+                    getSharedPreferences("media_autoplay", MODE_PRIVATE).edit()
+                            .putString("phase", "headless_media_applied")
+                            .putInt("target_display_id", controller.getDisplayId())
+                            .apply();
                     updateForegroundStatus("Đã khôi phục phiên media trên màn hình phụ");
                     Log.i(TAG, "Restored source=" + expectedPackage + ", autoplay=" + autoplay
                             + ", displayId=" + controller.getDisplayId());
@@ -148,7 +153,7 @@ public final class MediaAutoRestoreService extends Service {
         expectedPackage = MediaSessionBridge.getCheckpointPackage(this);
         if (expectedPackage == null) expectedPackage = MediaSessionBridge.getLastKnownPackage(this);
         expectedComponent = MediaSessionBridge.getCheckpointTaskComponent(this);
-        if (expectedComponent == null
+        if (TextUtils.isEmpty(expectedPackage) || expectedComponent == null
                 || !expectedPackage.equals(expectedComponent.getPackageName())) {
             try {
                 Intent launch = getPackageManager().getLaunchIntentForPackage(expectedPackage);
