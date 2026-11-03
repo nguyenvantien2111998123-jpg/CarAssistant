@@ -48,6 +48,7 @@ public final class MediaSessionBridge extends NotificationListenerService {
     private static final String CHECKPOINT_ELAPSED_REALTIME = "checkpoint_elapsed_realtime";
     private static final String GEARHEAD_PACKAGE = "com.google.android.projection.gearhead";
     private static final String AA_TRIGGER_PREF = "last_aa_notification_restore";
+    private static final String AA_CONNECTED_PREF = "aa_connected";
     private static final long AA_TRIGGER_COOLDOWN_MS = 90000L;
     public static final String ACTION_VOICE_ASSISTANT =
             "com.carassistant.v10.MEDIA_VOICE_ASSISTANT";
@@ -657,6 +658,7 @@ public final class MediaSessionBridge extends NotificationListenerService {
 
         android.content.SharedPreferences prefs = getSharedPreferences(
                 RESUME_PREFS, Context.MODE_PRIVATE);
+        prefs.edit().putBoolean(AA_CONNECTED_PREF, true).apply();
         long now = System.currentTimeMillis();
         long previous = prefs.getLong(AA_TRIGGER_PREF, 0L);
         if (previous > 0L && now - previous < AA_TRIGGER_COOLDOWN_MS) return;
@@ -683,10 +685,13 @@ public final class MediaSessionBridge extends NotificationListenerService {
     @Override
     public void onNotificationRemoved(StatusBarNotification sbn) {
         if (sbn != null && GEARHEAD_PACKAGE.equals(sbn.getPackageName())) {
-            // Android Auto removes its connection notification on disconnect.
+            // Android Auto removes its connection notification on disconnect. The
+            // foreground restore service observes this durable state and releases only
+            // a still-headless Display 2; it never tears down a Surface V10 has adopted.
             getSharedPreferences(RESUME_PREFS, Context.MODE_PRIVATE).edit()
+                    .putBoolean(AA_CONNECTED_PREF, false)
                     .remove(AA_TRIGGER_PREF).apply();
-            Log.i(TAG, "Android Auto connection notification removed; reconnect trigger re-armed");
+            Log.i(TAG, "Android Auto connection notification removed; headless restore stop requested");
         }
         refreshFromManager();
     }
