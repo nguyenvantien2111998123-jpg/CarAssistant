@@ -37,6 +37,7 @@ final class SteeringWheelMediaKeyHandler {
     private boolean longPressStarted;
     private long lastNextClickUp;
     private boolean nextClickPending;
+    private boolean secondNextTapCandidate;
 
     private final Runnable pendingNextSingle = new Runnable() {
         @Override public void run() {
@@ -85,6 +86,13 @@ final class SteeringWheelMediaKeyHandler {
             if (event.getRepeatCount() != 0) return;
             synchronized (lock) {
                 if (pressedKey != KeyEvent.KEYCODE_UNKNOWN) return;
+                long now = SystemClock.uptimeMillis();
+                secondNextTapCandidate = nextClickPending
+                        && now - lastNextClickUp <= DOUBLE_CLICK_MS;
+                if (secondNextTapCandidate) {
+                    handler.removeCallbacks(pendingNextSingle);
+                    nextClickPending = false;
+                }
                 pressedKey = KeyEvent.KEYCODE_MEDIA_NEXT;
                 longPressStarted = false;
                 longPressRunnable = () -> startLongPress(KeyEvent.KEYCODE_MEDIA_NEXT);
@@ -103,22 +111,15 @@ final class SteeringWheelMediaKeyHandler {
             pressedKey = KeyEvent.KEYCODE_UNKNOWN;
             longPressStarted = false;
 
-            if (!wasLongPress) {
-                long now = SystemClock.uptimeMillis();
-                if (nextClickPending && now - lastNextClickUp <= DOUBLE_CLICK_MS) {
-                    handler.removeCallbacks(pendingNextSingle);
-                    nextClickPending = false;
-                    isDoubleClick = true;
-                } else {
-                    if (nextClickPending) {
-                        handler.removeCallbacks(pendingNextSingle);
-                        nextClickPending = false;
-                    }
-                    nextClickPending = true;
-                    lastNextClickUp = now;
-                    handler.postDelayed(pendingNextSingle, DOUBLE_CLICK_MS);
-                }
+            if (!wasLongPress && secondNextTapCandidate) {
+                secondNextTapCandidate = false;
+                isDoubleClick = true;
+            } else if (!wasLongPress) {
+                nextClickPending = true;
+                lastNextClickUp = SystemClock.uptimeMillis();
+                handler.postDelayed(pendingNextSingle, DOUBLE_CLICK_MS);
             }
+            if (wasLongPress) secondNextTapCandidate = false;
         }
         if (isDoubleClick) actions.onVoiceAssistant();
     }
@@ -181,6 +182,7 @@ final class SteeringWheelMediaKeyHandler {
             cancelLongPressLocked();
             handler.removeCallbacks(pendingNextSingle);
             nextClickPending = false;
+            secondNextTapCandidate = false;
             pressedKey = KeyEvent.KEYCODE_UNKNOWN;
             longPressStarted = false;
         }
