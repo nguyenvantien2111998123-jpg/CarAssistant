@@ -424,10 +424,19 @@ public final class V10CarActivity
                 getSharedPreferences("media_autoplay", MODE_PRIVATE);
         boolean pendingMediaRestore =
                 restorePrefs.getBoolean("pending_projection_restore", false);
+        boolean mediaCardLaunch = getIntent() != null
+                && getIntent().getBooleanExtra("com.carassistant.v10.OPEN_ACTIVE_MEDIA", false);
+        if (mediaCardLaunch && getIntent() != null) {
+            getIntent().removeExtra("com.carassistant.v10.OPEN_ACTIVE_MEDIA");
+        }
         ComponentName target = V10SessionStore.getTarget(this);
         ComponentName checkpointTask = MediaSessionBridge.getCheckpointTaskComponent(this);
         String checkpointPackage = MediaSessionBridge.getCheckpointPackage(this);
-        if (pendingMediaRestore && checkpointTask != null
+        if (mediaCardLaunch) {
+            // A media-card click must resolve the active/checkpointed source package,
+            // rather than blindly reopening a stale app-picker target.
+            openActiveMediaOnProjection();
+        } else if (pendingMediaRestore && checkpointTask != null
                 && checkpointPackage != null
                 && checkpointPackage.equals(checkpointTask.getPackageName())) {
             // Recreate the saved task only on V10's secondary virtual display.
