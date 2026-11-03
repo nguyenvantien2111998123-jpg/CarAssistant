@@ -662,9 +662,13 @@ public final class V10CarActivity
                         Toast.LENGTH_SHORT).show();
                 return;
             }
+            boolean pendingRestore = getSharedPreferences("media_autoplay", MODE_PRIVATE)
+                    .getBoolean("pending_projection_restore", false);
             launchActiveMediaProjection(component);
-            startMediaRestoreWaiter();
-            restoreCheckpointContentOnProjection(component);
+            if (pendingRestore) {
+                startMediaRestoreWaiter();
+                restoreCheckpointContentOnProjection(component);
+            }
         } catch (RuntimeException error) {
             Log.w("CarAssistantMediaResume", "Cannot restore saved media task on projection", error);
             Toast.makeText(this, "Không thể mở ứng dụng media trên màn hình phụ.",
