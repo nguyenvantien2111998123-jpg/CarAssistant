@@ -40,6 +40,9 @@ public final class MediaAutoRestoreService extends Service {
     private int launchAttempts;
     private long lastLaunchElapsed;
     private boolean checkpointApplied;
+    private boolean contentRestoreRequested;
+    private long taskLaunchedAt;
+    private long contentRestoreAt;
 
     private final Runnable disconnectMonitor = new Runnable() {
         @Override public void run() {
@@ -77,11 +80,38 @@ public final class MediaAutoRestoreService extends Service {
 
             V10DisplayController controller = V10DisplayController.get(
                     MediaAutoRestoreService.this, HeadlessProjectionHost.DISPLAY_INDEX);
+            long now = SystemClock.uptimeMillis();
             if (!controller.isLaunched()
                     && launchAttempts < MAX_LAUNCH_ATTEMPTS
                     && (launchAttempts == 0
-                    || SystemClock.uptimeMillis() - lastLaunchElapsed >= LAUNCH_RETRY_INTERVAL_MS)) {
+                    || now - lastLaunchElapsed >= LAUNCH_RETRY_INTERVAL_MS)) {
                 requestSourceLaunch(controller);
+            }
+            if (controller.isLaunched()) {
+                if (taskLaunchedAt == 0L) taskLaunchedAt = now;
+                boolean exactItemReady = MediaSessionBridge.isCheckpointMediaReady(
+                        MediaAutoRestoreService.this, expectedPackage);
+                if (!exactItemReady && !contentRestoreRequested
+                        && now - taskLaunchedAt >= 4000L) {
+                    requestCheckpointContent(controller);
+                } else if (!exactItemReady && contentRestoreRequested
+                        && "checkpoint_uri".equals(getSharedPreferences(
+                                "media_autoplay", MODE_PRIVATE).getString("phase", ""))
+                        && now - contentRestoreAt >= 12000L) {
+                    String fallbackQuery = joinTitleArtist(
+                            MediaSessionBridge.getCheckpointTitle(MediaAutoRestoreService.this),
+                            MediaSessionBridge.getCheckpointArtist(MediaAutoRestoreService.this));
+                    if (!TextUtils.isEmpty(fallbackQuery)) {
+                        getSharedPreferences("media_autoplay", MODE_PRIVATE).edit()
+                                .putString("phase", "search")
+                                .putLong("started_at", System.currentTimeMillis())
+                                .putInt("target_display_id", controller.getDisplayId())
+                                .apply();
+                        controller.launchSearchIntentOnDisplay(expectedPackage, fallbackQuery);
+                        contentRestoreAt = now;
+                        Log.i(TAG, "Checkpoint URI did not publish the saved item; starting title search");
+                    }
+                }
             }
 
             if (!checkpointApplied) {
@@ -174,6 +204,9 @@ public final class MediaAutoRestoreService extends Service {
         launchAttempts = 0;
         lastLaunchElapsed = 0L;
         checkpointApplied = false;
+        contentRestoreRequested = false;
+        taskLaunchedAt = 0L;
+        contentRestoreAt = 0L;
         expectedPackage = MediaSessionBridge.getCheckpointPackage(this);
         if (expectedPackage == null) expectedPackage = MediaSessionBridge.getLastKnownPackage(this);
         expectedComponent = MediaSessionBridge.getCheckpointTaskComponent(this);
@@ -206,6 +239,7 @@ public final class MediaAutoRestoreService extends Service {
                 .putInt("target_display_id", -1)
                 .putLong("started_at", System.currentTimeMillis())
                 .putBoolean("mini_engine_active", false)
+                .putBoolean("content_restore_requested", false)
                 .apply();
 
         updateForegroundStatus("Đang khởi chạy " + expectedPackage + " trên Display 2");
@@ -229,12 +263,41 @@ public final class MediaAutoRestoreService extends Service {
         controller.launchMediaTaskOnDisplay(expectedComponent);
     }
 
+    private void requestCheckpointContent(V10DisplayController controller) {
+        if (contentRestoreRequested || controller == null || !controller.isReady()) return;
+        contentRestoreRequested = true;
+        contentRestoreAt = SystemClock.uptimeMillis();
+        String uri = MediaSessionBridge.getCheckpointMediaUri(this);
+        String query = joinTitleArtist(MediaSessionBridge.getCheckpointTitle(this),
+                MediaSessionBridge.getCheckpointArtist(this));
+        android.content.SharedPreferences.Editor editor =
+                getSharedPreferences("media_autoplay", MODE_PRIVATE).edit()
+                        .putBoolean("content_restore_requested", true)
+                        .putString("target_package", expectedPackage)
+                        .putString("query", query)
+                        .putInt("target_display_id", controller.getDisplayId())
+                        .putLong("started_at", System.currentTimeMillis())
+                        .putBoolean("mini_engine_active", false);
+        if (!TextUtils.isEmpty(uri)) {
+            editor.putString("phase", "checkpoint_uri").apply();
+            controller.launchCheckpointUriOnDisplay(expectedPackage, uri);
+            Log.i(TAG, "Opening saved media URI on Display 2 for " + expectedPackage);
+        } else if (!TextUtils.isEmpty(query)) {
+            editor.putString("phase", "search").apply();
+            controller.launchSearchIntentOnDisplay(expectedPackage, query);
+            Log.i(TAG, "Searching saved media title on Display 2 for " + expectedPackage);
+        } else {
+            editor.putString("phase", "await_media_session").apply();
+            Log.w(TAG, "No saved media URI or title; waiting for source app's own resume");
+        }
+    }
+
     private void clearRecoveryAssist() {
         getSharedPreferences("media_autoplay", MODE_PRIVATE).edit()
                 .remove("pending_projection_restore")
                 .remove("target_package").remove("query").remove("phase")
                 .remove("target_display_id").remove("started_at")
-                .remove("search_submitted_at").apply();
+                .remove("search_submitted_at").remove("content_restore_requested").apply();
     }
 
     private static String joinTitleArtist(String title, String artist) {
