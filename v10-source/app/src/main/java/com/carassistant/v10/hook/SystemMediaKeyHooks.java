@@ -107,7 +107,7 @@ public final class SystemMediaKeyHooks {
         }
     }
 
-    private static void logRawEvent(MethodHookParam param, KeyEvent event) {
+    private static void logRawEvent(XC_MethodHook.MethodHookParam param, KeyEvent event) {
         String callerPackage = "unknown";
         boolean asSystemService = false;
         for (Object arg : param.args) {
@@ -130,7 +130,7 @@ public final class SystemMediaKeyHooks {
                 + " binderUid=" + uid
                 + " binderPid=" + pid
                 + " key=" + KeyEvent.keyCodeToString(event.getKeyCode())
-                + " action=" + KeyEvent.actionToString(event.getAction())
+                + " action=" + (event.getAction() == KeyEvent.ACTION_DOWN ? "DOWN" : "UP")
                 + " repeat=" + event.getRepeatCount()
                 + " deviceId=" + event.getDeviceId()
                 + " source=0x" + Integer.toHexString(event.getSource())
