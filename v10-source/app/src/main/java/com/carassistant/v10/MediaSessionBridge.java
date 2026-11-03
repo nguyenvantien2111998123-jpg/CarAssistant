@@ -72,12 +72,12 @@ public final class MediaSessionBridge extends NotificationListenerService {
             if (manager != null) MAIN.postDelayed(this, CHECKPOINT_INTERVAL_MS);
         }
     };
-    // Retry only while the source session is missing; callbacks remain the normal update path.
+    // Retry only while no source controller is available. A valid controller is
+    // observed through MediaController.Callback and does not need periodic polling.
     private final Runnable controllerRefreshTask = new Runnable() {
         @Override public void run() {
-            if (manager == null) return;
-            if (activeController == null) refreshFromManager();
-            if (manager != null) MAIN.postDelayed(this, 2000L);
+            if (manager == null || activeController != null) return;
+            refreshFromManager();
         }
     };
 
@@ -526,7 +526,7 @@ public final class MediaSessionBridge extends NotificationListenerService {
             MAIN.removeCallbacks(controllerRefreshTask);
             saveCurrentCheckpoint();
             MAIN.postDelayed(checkpointTask, CHECKPOINT_INTERVAL_MS);
-            MAIN.postDelayed(controllerRefreshTask, 2000L);
+            // refreshControllers() starts the 2-second retry only if no source exists.
             Log.i(TAG, "Notification access connected; durable media checkpoint scheduled every 5 seconds");
         } catch (SecurityException error) {
             Log.w(TAG, "Notification access is not granted", error);
@@ -727,6 +727,13 @@ public final class MediaSessionBridge extends NotificationListenerService {
         }
         checkpointController = checkpointCandidate;
         publish(chosen);
+
+        // Poll only while the source is absent. Once acquired, rely on its callback;
+        // if a later session-list update removes it, this schedules retries again.
+        MAIN.removeCallbacks(controllerRefreshTask);
+        if (chosen == null && manager != null) {
+            MAIN.postDelayed(controllerRefreshTask, 2000L);
+        }
     }
 
     private void publish(MediaController controller) {
