@@ -64,6 +64,7 @@ public final class MediaSessionBridge extends NotificationListenerService {
     private static volatile long lastCheckpointPosition;
     private static volatile long lastCheckpointDuration;
     private MediaSession mirrorSession;
+    private SteeringWheelMediaKeyHandler steeringKeyHandler;
     private MediaSessionManager manager;
     private MediaSessionManager.OnActiveSessionsChangedListener sessionsListener;
     private MediaController.Callback controllerCallback;
@@ -496,7 +497,24 @@ public final class MediaSessionBridge extends NotificationListenerService {
         mirrorSession = new MediaSession(this, "CarAsistant Media Controller");
         mirrorSession.setFlags(MediaSession.FLAG_HANDLES_MEDIA_BUTTONS
                 | MediaSession.FLAG_HANDLES_TRANSPORT_CONTROLS);
+        steeringKeyHandler = new SteeringWheelMediaKeyHandler(
+                new SteeringWheelMediaKeyHandler.Actions() {
+                    @Override public void onNext() { MediaSessionBridge.skipNext(); }
+                    @Override public void onPrevious() { MediaSessionBridge.skipPrevious(); }
+                    @Override public void onSeekForward() { MediaSessionBridge.seekBy(15000L); }
+                    @Override public void onSeekBackward() { MediaSessionBridge.seekBy(-15000L); }
+                    @Override public void onVoiceAssistant() {
+                        Intent intent = new Intent("com.carassistant.v10.STEERING_VOICE")
+                                .setPackage(getPackageName());
+                        sendBroadcast(intent);
+                    }
+                });
         mirrorSession.setCallback(new MediaSession.Callback() {
+            @Override public boolean onMediaButtonEvent(Intent mediaButtonIntent) {
+                if (steeringKeyHandler != null
+                        && steeringKeyHandler.handle(mediaButtonIntent)) return true;
+                return super.onMediaButtonEvent(mediaButtonIntent);
+            }
             @Override public void onPlay() { MediaSessionBridge.play(); }
             @Override public void onPause() { MediaSessionBridge.pause(); }
             @Override public void onSkipToNext() {
