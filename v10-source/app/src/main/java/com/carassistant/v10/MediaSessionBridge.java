@@ -670,11 +670,14 @@ public final class MediaSessionBridge extends NotificationListenerService {
         String message = content.toString().toLowerCase(java.util.Locale.ROOT);
 
         // Require an explicit connected-state phrase, not just any Gearhead notification.
-        boolean connected = message.contains("connected")
+        boolean disconnected = message.contains("disconnected")
+                || message.contains("not connected")
+                || message.contains("đã ngắt kết nối")
+                || message.contains("mất kết nối");
+        boolean connected = !disconnected && (message.contains("connected")
                 || message.contains("đã kết nối")
-                || message.contains("đang kết nối")
                 || message.contains("connecté")
-                || message.contains("verbunden");
+                || message.contains("verbunden"));
         if (!connected) return;
 
         android.content.SharedPreferences prefs = getSharedPreferences(
