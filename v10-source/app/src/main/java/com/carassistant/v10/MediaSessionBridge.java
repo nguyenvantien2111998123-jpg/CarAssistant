@@ -425,12 +425,45 @@ public final class MediaSessionBridge extends NotificationListenerService {
 
     public static void skipNext() {
         MediaController controller = activeController;
-        if (controller != null) controller.getTransportControls().skipToNext();
+        logSteeringTarget("NEXT", controller);
+        if (controller != null) {
+            try {
+                controller.getTransportControls().skipToNext();
+            } catch (RuntimeException error) {
+                Log.w(TAG, "Steering NEXT rejected by " + controller.getPackageName(), error);
+            }
+        }
     }
 
     public static void skipPrevious() {
         MediaController controller = activeController;
-        if (controller != null) controller.getTransportControls().skipToPrevious();
+        logSteeringTarget("PREVIOUS", controller);
+        if (controller != null) {
+            try {
+                controller.getTransportControls().skipToPrevious();
+            } catch (RuntimeException error) {
+                Log.w(TAG, "Steering PREVIOUS rejected by " + controller.getPackageName(), error);
+            }
+        }
+    }
+
+    private static void logSteeringTarget(String action, MediaController controller) {
+        if (controller == null) {
+            Log.w(TAG, "STEERING " + action + " received by CarAsistant Media but no source session is active");
+            return;
+        }
+        try {
+            MediaMetadata metadata = controller.getMetadata();
+            PlaybackState state = controller.getPlaybackState();
+            String title = metadata == null ? "" :
+                    metadata.getString(MediaMetadata.METADATA_KEY_TITLE);
+            Log.i(TAG, "STEERING " + action + " routed by CarAsistant Media"
+                    + " source=" + controller.getPackageName()
+                    + " title=" + (title == null ? "" : title)
+                    + " playbackState=" + (state == null ? "null" : state.getState()));
+        } catch (RuntimeException error) {
+            Log.w(TAG, "Could not inspect steering target for " + action, error);
+        }
     }
 
     /** Seek the active media session to an absolute position in milliseconds. */
@@ -466,10 +499,22 @@ public final class MediaSessionBridge extends NotificationListenerService {
         mirrorSession.setCallback(new MediaSession.Callback() {
             @Override public void onPlay() { MediaSessionBridge.play(); }
             @Override public void onPause() { MediaSessionBridge.pause(); }
-            @Override public void onSkipToNext() { MediaSessionBridge.skipNext(); }
-            @Override public void onSkipToPrevious() { MediaSessionBridge.skipPrevious(); }
-            @Override public void onFastForward() { MediaSessionBridge.seekBy(15000L); }
-            @Override public void onRewind() { MediaSessionBridge.seekBy(-15000L); }
+            @Override public void onSkipToNext() {
+                Log.i(TAG, "CarAsistant MediaSession callback: onSkipToNext");
+                MediaSessionBridge.skipNext();
+            }
+            @Override public void onSkipToPrevious() {
+                Log.i(TAG, "CarAsistant MediaSession callback: onSkipToPrevious");
+                MediaSessionBridge.skipPrevious();
+            }
+            @Override public void onFastForward() {
+                Log.i(TAG, "CarAsistant MediaSession callback: onFastForward");
+                MediaSessionBridge.seekBy(15000L);
+            }
+            @Override public void onRewind() {
+                Log.i(TAG, "CarAsistant MediaSession callback: onRewind");
+                MediaSessionBridge.seekBy(-15000L);
+            }
             @Override public void onSeekTo(long position) { MediaSessionBridge.seekTo(position); }
             @Override public void onStop() { MediaSessionBridge.pause(); }
             @Override public void onCustomAction(String action, Bundle extras) {
@@ -783,6 +828,9 @@ public final class MediaSessionBridge extends NotificationListenerService {
 
         MediaController previous = activeController;
         if (previous != chosen) {
+            Log.i(TAG, "Active media controller changed: "
+                    + (previous == null ? "none" : previous.getPackageName())
+                    + " -> " + (chosen == null ? "none" : chosen.getPackageName()));
             if (previous != null && controllerCallback != null) {
                 try { previous.unregisterCallback(controllerCallback); }
                 catch (RuntimeException ignored) { }
