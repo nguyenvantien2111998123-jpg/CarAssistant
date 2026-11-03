@@ -24,21 +24,25 @@ public final class V10ControlReceiver
 
         String action = intent.getAction();
         if ("com.carassistant.v10.STEERING_VOICE".equals(action)) {
+            Log.i("CarAssistantSteering", "Receiver got STEERING_VOICE");
             V10CarActivity activity = V10SessionStore.getCurrentActivity();
             if (activity != null) activity.handleSteeringVoice();
             else Log.w("CarAssistantSteering", "V10 activity is not active; voice request ignored");
             return;
         }
         if ("com.carassistant.v10.STEERING_MEDIA_NEXT".equals(action)) {
+            Log.i("CarAssistantSteering", "Receiver got STEERING_MEDIA_NEXT");
             MediaSessionBridge.skipNext();
             return;
         }
         if ("com.carassistant.v10.STEERING_MEDIA_PREVIOUS".equals(action)) {
+            Log.i("CarAssistantSteering", "Receiver got STEERING_MEDIA_PREVIOUS");
             MediaSessionBridge.skipPrevious();
             return;
         }
         if ("com.carassistant.v10.STEERING_MEDIA_SEEK".equals(action)) {
             int direction = intent.getIntExtra("direction", 0);
+            Log.i("CarAssistantSteering", "Receiver got STEERING_MEDIA_SEEK direction=" + direction);
             if (direction != 0) MediaSessionBridge.seekBy(direction > 0 ? 15000L : -15000L);
             return;
         }
