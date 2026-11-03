@@ -277,6 +277,7 @@ public final class V10DisplayController {
         target = component;
         launched = false;
         final int displayId = display.getDisplayId();
+        final int userId = Process.myUid() / 100000;
         final String flat = component.flattenToString().replace("'", "'\\\"'\\\"'");
         final String command = "ROOT_TASK_ID=$(/system/bin/dumpsys activity activities 2>/dev/null"
                 + " | /system/bin/grep 'Task{'"
