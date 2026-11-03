@@ -3,6 +3,7 @@ package com.carassistant.v10.hook;
 import android.content.ComponentName;
 import android.content.Context;
 import android.content.Intent;
+import android.os.Binder;
 import android.os.Handler;
 import android.os.Looper;
 import android.os.SystemClock;
@@ -12,6 +13,7 @@ import android.view.KeyEvent;
 
 import java.lang.reflect.Method;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicLong;
 
 import de.robv.android.xposed.XC_MethodHook;
 import de.robv.android.xposed.XposedBridge;
@@ -28,11 +30,15 @@ public final class SystemMediaKeyHooks {
     private static final long DOUBLE_MS = 300L;
     private static final long HOLD_MS = 1000L;
     private static final long SEEK_REPEAT_MS = 1000L;
+    // First real-car pass is diagnostic-only. Do not consume keys until the raw
+    // event source has been confirmed from the POCO/BR-V logs.
+    private static final boolean ROUTE_CAPTURED_KEYS = false;
     private static final int NEXT = KeyEvent.KEYCODE_MEDIA_NEXT;
     private static final int PREVIOUS = KeyEvent.KEYCODE_MEDIA_PREVIOUS;
     private static final Handler MAIN = new Handler(Looper.getMainLooper());
     private static final Object LOCK = new Object();
     private static final AtomicBoolean INSTALLED = new AtomicBoolean();
+    private static final AtomicLong RAW_EVENT_COUNT = new AtomicLong();
 
     private static Context systemContext;
     private static int pressedKey = KeyEvent.KEYCODE_UNKNOWN;
@@ -71,6 +77,13 @@ public final class SystemMediaKeyHooks {
                         if (event == null) return;
                         int key = event.getKeyCode();
                         if (key != NEXT && key != PREVIOUS) return;
+
+                        // Observe the exact system-server dispatch boundary first.
+                        // The event is deliberately allowed to continue to Android Auto /
+                        // the active MediaSession in this diagnostic build.
+                        logRawEvent(param, event);
+                        if (!ROUTE_CAPTURED_KEYS) return;
+
                         try {
                             Object value = XposedHelpers.getObjectField(param.thisObject, "mContext");
                             if (value instanceof Context) systemContext = (Context) value;
@@ -92,6 +105,40 @@ public final class SystemMediaKeyHooks {
             INSTALLED.set(false);
             XposedBridge.log(TAG + " install failed: " + error);
         }
+    }
+
+    private static void logRawEvent(MethodHookParam param, KeyEvent event) {
+        String callerPackage = "unknown";
+        boolean asSystemService = false;
+        for (Object arg : param.args) {
+            if (arg instanceof String && "unknown".equals(callerPackage)) {
+                callerPackage = (String) arg;
+            } else if (arg instanceof Boolean) {
+                asSystemService = (Boolean) arg;
+            }
+        }
+
+        long sequence = RAW_EVENT_COUNT.incrementAndGet();
+        int uid;
+        int pid;
+        try { uid = Binder.getCallingUid(); } catch (Throwable ignored) { uid = -1; }
+        try { pid = Binder.getCallingPid(); } catch (Throwable ignored) { pid = -1; }
+
+        String line = TAG + " RAW#" + sequence
+                + " callerPkg=" + callerPackage
+                + " asSystemService=" + asSystemService
+                + " binderUid=" + uid
+                + " binderPid=" + pid
+                + " key=" + KeyEvent.keyCodeToString(event.getKeyCode())
+                + " action=" + KeyEvent.actionToString(event.getAction())
+                + " repeat=" + event.getRepeatCount()
+                + " deviceId=" + event.getDeviceId()
+                + " source=0x" + Integer.toHexString(event.getSource())
+                + " scanCode=" + event.getScanCode()
+                + " flags=0x" + Integer.toHexString(event.getFlags())
+                + " downTime=" + event.getDownTime()
+                + " eventTime=" + event.getEventTime();
+        XposedBridge.log(line);
     }
 
     private static boolean hasMediaAccess() {
