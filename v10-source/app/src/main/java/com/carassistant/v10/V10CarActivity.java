@@ -674,6 +674,22 @@ public final class V10CarActivity
 
     /** Keep the checkpoint applier alive until the source publishes its restored MediaSession. */
     private void startMediaRestoreWaiter() {
+        String savedPackage = MediaSessionBridge.getCheckpointPackage(this);
+        String savedTitle = MediaSessionBridge.getCheckpointTitle(this);
+        String savedArtist = MediaSessionBridge.getCheckpointArtist(this);
+        String savedQuery = TextUtils.isEmpty(savedTitle) ? ""
+                : (TextUtils.isEmpty(savedArtist)
+                || savedTitle.toLowerCase(Locale.ROOT).contains(savedArtist.toLowerCase(Locale.ROOT))
+                ? savedTitle : savedTitle + " " + savedArtist);
+        getSharedPreferences("media_autoplay", MODE_PRIVATE).edit()
+                .putBoolean("pending_projection_restore", true)
+                .putString("target_package", savedPackage)
+                .putString("query", savedQuery)
+                .putString("phase", "await_projection")
+                .putInt("target_display_id", -1)
+                .putLong("started_at", System.currentTimeMillis())
+                .putBoolean("mini_engine_active", false)
+                .apply();
         Intent restore = new Intent(this, MediaAutoRestoreService.class)
                 .setAction(MediaAutoRestoreService.ACTION_RESTORE);
         try {
