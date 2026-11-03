@@ -86,6 +86,11 @@ public final class V10ProjectionSession implements TextureView.SurfaceTextureLis
         return !destroyed && target != null && displayController.isReady();
     }
 
+    /** True after the root task has been moved or created on this projection display. */
+    public boolean isTaskLaunched() {
+        return !destroyed && target != null && displayController.isLaunched();
+    }
+
     public int getDisplayId() { return displayController.getDisplayId(); }
 
     /** Sends a VIEW URI to the currently projected app on this display. */
