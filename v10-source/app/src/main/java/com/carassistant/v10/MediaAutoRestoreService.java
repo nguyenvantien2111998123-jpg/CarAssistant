@@ -30,7 +30,6 @@ public final class MediaAutoRestoreService extends Service {
     private static final int MAX_LAUNCH_ATTEMPTS = 3;
 
     private final Handler handler = new Handler(Looper.getMainLooper());
-    private final RootShellSession rootShell = new RootShellSession();
     private long startedAt;
     private String expectedPackage;
     private int launchAttempts;
@@ -140,25 +139,6 @@ public final class MediaAutoRestoreService extends Service {
                 + "phone display remains untouched: " + expectedPackage);
     }
 
-    private void prepareAccessibilityRecovery() {
-        String query = joinTitleArtist(MediaSessionBridge.getCheckpointTitle(this),
-                MediaSessionBridge.getCheckpointArtist(this));
-        if (TextUtils.isEmpty(query)) return;
-        getSharedPreferences("media_autoplay", MODE_PRIVATE).edit()
-                .putString("target_package", expectedPackage)
-                .putString("query", query)
-                .putString("phase", "search")
-                .putInt("target_display_id", 0)
-                .putLong("started_at", System.currentTimeMillis())
-                .putBoolean("mini_engine_active", false).apply();
-    }
-
-    private void clearRecoveryAssist() {
-        getSharedPreferences("media_autoplay", MODE_PRIVATE).edit()
-                .remove("pending_projection_restore")
-                .remove("target_package").remove("query").remove("phase")
-                .remove("target_display_id").remove("started_at").remove("search_submitted_at").apply();
-    }
 
     private static String joinTitleArtist(String title, String artist) {
         if (TextUtils.isEmpty(title)) return "";
@@ -167,13 +147,9 @@ public final class MediaAutoRestoreService extends Service {
         return title + " " + artist;
     }
 
-    private static String shellQuote(String value) {
-        return "'" + value.replace("'", "'\\''") + "'";
-    }
 
     @Override public void onDestroy() {
         handler.removeCallbacks(restoreCheckpoint);
-        rootShell.destroy();
         super.onDestroy();
     }
 
