@@ -426,6 +426,8 @@ public final class V10CarActivity
                 restorePrefs.getBoolean("pending_projection_restore", false);
         boolean headlessMediaAlreadyApplied =
                 "headless_media_applied".equals(restorePrefs.getString("phase", ""));
+        boolean headlessContentRestoreRequested =
+                restorePrefs.getBoolean("content_restore_requested", false);
         boolean mediaCardLaunch = getIntent() != null
                 && getIntent().getBooleanExtra("com.carassistant.v10.OPEN_ACTIVE_MEDIA", false);
         if (mediaCardLaunch && getIntent() != null) {
@@ -446,7 +448,7 @@ public final class V10CarActivity
             launchActiveMediaProjection(checkpointTask);
             if (headlessMediaAlreadyApplied) {
                 clearPendingMediaRestore();
-            } else {
+            } else if (!headlessContentRestoreRequested) {
                 startMediaRestoreWaiter();
                 restoreCheckpointContentOnProjection(checkpointTask);
             }
@@ -458,7 +460,7 @@ public final class V10CarActivity
                 launchActiveMediaProjection(launch.getComponent());
                 if (headlessMediaAlreadyApplied) {
                     clearPendingMediaRestore();
-                } else {
+                } else if (!headlessContentRestoreRequested) {
                     startMediaRestoreWaiter();
                     restoreCheckpointContentOnProjection(launch.getComponent());
                 }
@@ -656,7 +658,7 @@ public final class V10CarActivity
                 .putBoolean("pending_projection_restore", false)
                 .remove("target_package").remove("query").remove("phase")
                 .remove("target_display_id").remove("started_at")
-                .remove("search_submitted_at").apply();
+                .remove("search_submitted_at").remove("content_restore_requested").apply();
     }
 
     private void openActiveMediaOnProjection() {
@@ -685,10 +687,12 @@ public final class V10CarActivity
             boolean pendingRestore = restorePrefs.getBoolean("pending_projection_restore", false);
             boolean alreadyApplied = "headless_media_applied".equals(
                     restorePrefs.getString("phase", ""));
+            boolean contentAlreadyRequested =
+                    restorePrefs.getBoolean("content_restore_requested", false);
             launchActiveMediaProjection(component);
             if (pendingRestore && alreadyApplied) {
                 clearPendingMediaRestore();
-            } else if (pendingRestore) {
+            } else if (pendingRestore && !contentAlreadyRequested) {
                 startMediaRestoreWaiter();
                 restoreCheckpointContentOnProjection(component);
             }
