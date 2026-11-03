@@ -689,10 +689,11 @@ public final class V10CarActivity
         Runnable restore = new Runnable() {
             @Override public void run() {
                 if (session == null || !target.equals(activeTarget)) return;
-                if (!session.isActive() || session.getDisplayId() <= 0) {
+                if (!session.isActive() || !session.isTaskLaunched()
+                        || session.getDisplayId() <= 0) {
                     if (SystemClock.uptimeMillis() < deadline) handler.postDelayed(this, 250L);
                     else Log.w("CarAssistantMediaResume",
-                            "Projection surface not ready; saved media content remains pending");
+                            "Projection task not ready; saved media content remains pending");
                     return;
                 }
                 String uri = MediaSessionBridge.getCheckpointMediaUri(V10CarActivity.this);
