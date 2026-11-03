@@ -286,17 +286,17 @@ public final class V10DisplayController {
                 + " | /system/bin/sed -n -e 's/.*rootTaskId=\\([0-9][0-9]*\\).*/\\1/p'"
                 + " -e 's/.*Task{[^#]*#\\([0-9][0-9]*\\).*/\\1/p'"
                 + " | /system/bin/head -n 1); "
-                + "if [ -n \"$ROOT_TASK_ID\" ]; then "
-                + "/system/bin/am display move-stack \"$ROOT_TASK_ID\" " + displayId
-                + "; else "
-                // After a reboot there is no old task to move. Create it directly on
-                // the V10 virtual display; never fall back to phone display 0.
+                + "if [ -n \"$ROOT_TASK_ID\" ] && /system/bin/am display move-stack \"$ROOT_TASK_ID\" " + displayId + "; then "
+                + "echo 'CarAsistant: moved existing media task to projection display'; "
+                + "else "
+                // After a reboot, or if moving the old task fails, create a distinct
+                // task directly on V10's virtual display; never use phone display 0.
                 + "/system/bin/am start --user " + userId
                 + " --display " + displayId
                 + " --windowingMode 1"
                 + " -a android.intent.action.MAIN"
                 + " -c android.intent.category.LAUNCHER"
-                + " -f 0x10000000"
+                + " -f 0x18000000"
                 + " -n '" + flat + "'"
                 + "; fi"
                 + " && echo 'CarAsistant: restored media task on projection display'";
