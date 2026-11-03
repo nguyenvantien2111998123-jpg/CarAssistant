@@ -266,6 +266,37 @@ public final class MediaSessionBridge extends NotificationListenerService {
         return duration > 0L ? Math.min(position, duration) : position;
     }
 
+    /**
+     * A package match alone is insufficient: many players publish a session before
+     * restoring the selected track. Wait until the saved item identity is visible so
+     * the old seek position cannot be applied to a different song/video.
+     */
+    private static boolean matchesSavedMediaIdentity(
+            android.content.SharedPreferences prefs, MediaMetadata current) {
+        if (current == null) return false;
+        String expectedId = prefs.getString(CHECKPOINT_MEDIA_ID, "");
+        String expectedUri = prefs.getString(CHECKPOINT_MEDIA_URI, "");
+        String expectedTitle = prefs.getString(CHECKPOINT_TITLE, "");
+        String expectedArtist = prefs.getString(CHECKPOINT_ARTIST, "");
+        String actualId = safeMetadataString(current, MediaMetadata.METADATA_KEY_MEDIA_ID);
+        String actualUri = safeMetadataString(current, MediaMetadata.METADATA_KEY_MEDIA_URI);
+        String actualTitle = safeMetadataString(current, MediaMetadata.METADATA_KEY_TITLE);
+        String actualArtist = safeMetadataString(current, MediaMetadata.METADATA_KEY_ARTIST);
+        if (!TextUtils.isEmpty(expectedId) && !TextUtils.isEmpty(actualId)) {
+            return expectedId.equals(actualId);
+        }
+        if (!TextUtils.isEmpty(expectedUri) && !TextUtils.isEmpty(actualUri)) {
+            return expectedUri.equals(actualUri);
+        }
+        if (!TextUtils.isEmpty(expectedTitle)) {
+            if (TextUtils.isEmpty(actualTitle)
+                    || !expectedTitle.trim().equalsIgnoreCase(actualTitle.trim())) return false;
+            return TextUtils.isEmpty(expectedArtist) || TextUtils.isEmpty(actualArtist)
+                    || expectedArtist.trim().equalsIgnoreCase(actualArtist.trim());
+        }
+        return TextUtils.isEmpty(expectedId) && TextUtils.isEmpty(expectedUri);
+    }
+
     /** Apply the saved position and explicit autoplay preference to the matching player only. */
     public static boolean applyCheckpoint(Context context, String expectedPackage, boolean autoplay) {
         if (context == null || TextUtils.isEmpty(expectedPackage)) return false;
@@ -277,6 +308,12 @@ public final class MediaSessionBridge extends NotificationListenerService {
         try {
             android.content.SharedPreferences prefs =
                     context.getSharedPreferences(RESUME_PREFS, Context.MODE_PRIVATE);
+            MediaMetadata currentMetadata = controller.getMetadata();
+            if (!matchesSavedMediaIdentity(prefs, currentMetadata)) {
+                Log.i(TAG, "Waiting for the exact checkpointed media item before seeking; source="
+                        + expectedPackage);
+                return false;
+            }
             long position = getAdjustedCheckpointPosition(context);
             long duration = Math.max(0L, prefs.getLong(CHECKPOINT_DURATION, 0L));
             controller.getTransportControls().seekTo(
