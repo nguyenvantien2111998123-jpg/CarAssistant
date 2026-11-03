@@ -101,7 +101,18 @@ public final class MediaAutoRestoreService extends Service {
             return START_NOT_STICKY;
         }
         startedAt = SystemClock.uptimeMillis();
-        Log.i(TAG, "Android Auto connection notification received; restoring phone app="
+        String savedQuery = joinTitleArtist(MediaSessionBridge.getCheckpointTitle(this),
+                MediaSessionBridge.getCheckpointArtist(this));
+        getSharedPreferences("media_autoplay", MODE_PRIVATE).edit()
+                .putBoolean("pending_projection_restore", true)
+                .putString("target_package", expectedPackage)
+                .putString("query", savedQuery)
+                .putString("phase", "await_projection")
+                .putInt("target_display_id", -1)
+                .putLong("started_at", System.currentTimeMillis())
+                .putBoolean("mini_engine_active", false)
+                .apply();
+        Log.i(TAG, "Android Auto connected; waiting to restore saved task on V10 projection display: "
                 + expectedPackage);
         handler.post(restoreCheckpoint);
         return START_NOT_STICKY;
