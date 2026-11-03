@@ -745,6 +745,13 @@ public final class V10CarActivity
         Runnable restore = new Runnable() {
             @Override public void run() {
                 if (session == null || !target.equals(activeTarget)) return;
+                if (prefs.getBoolean("content_restore_requested", false)
+                        || "headless_media_applied".equals(prefs.getString("phase", ""))) {
+                    if ("headless_media_applied".equals(prefs.getString("phase", ""))) {
+                        clearPendingMediaRestore();
+                    }
+                    return;
+                }
                 if (!session.isActive() || !session.isTaskLaunched()
                         || session.getDisplayId() <= 0) {
                     if (SystemClock.uptimeMillis() < deadline) handler.postDelayed(this, 250L);
@@ -760,12 +767,22 @@ public final class V10CarActivity
                         || savedTitle.toLowerCase(Locale.ROOT).contains(savedArtist.toLowerCase(Locale.ROOT))
                         ? savedTitle : savedTitle + " " + savedArtist);
                 if (!TextUtils.isEmpty(uri)) {
-                    boolean accepted = session.launchViewIntentOnDisplay(
+                    prefs.edit()
+                            .putBoolean("content_restore_requested", true)
+                            .putString("target_package", target.getPackageName())
+                            .putString("query", query)
+                            .putString("phase", "checkpoint_uri")
+                            .putInt("target_display_id", session.getDisplayId())
+                            .putLong("started_at", System.currentTimeMillis())
+                            .putBoolean("mini_engine_active", false)
+                            .apply();
+                    boolean accepted = session.launchCheckpointUriOnDisplay(
                             target.getPackageName(), uri);
                     Log.i("CarAssistantMediaResume", "Restored saved media URI on display "
                             + session.getDisplayId() + "; accepted=" + accepted);
                 } else if (!TextUtils.isEmpty(query)) {
                     prefs.edit()
+                            .putBoolean("content_restore_requested", true)
                             .putString("target_package", target.getPackageName())
                             .putString("query", query)
                             .putString("phase", "search")
