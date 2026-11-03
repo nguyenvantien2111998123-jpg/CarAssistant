@@ -4,7 +4,9 @@ import android.app.Notification;
 import android.app.NotificationChannel;
 import android.app.NotificationManager;
 import android.app.Service;
+import android.content.ComponentName;
 import android.content.Intent;
+import android.content.pm.PackageManager;
 import android.os.Build;
 import android.os.Handler;
 import android.os.IBinder;
@@ -14,13 +16,15 @@ import android.text.TextUtils;
 import android.util.Log;
 
 /**
- * Restores a media app after an abrupt phone reboot, but only when Android Auto
- * reconnects. The source app is launched on the phone default display; this service
- * never creates a VirtualDisplay and never opens the V10 car UI.
+ * Restores the checkpointed media task on V10 Display 2 as soon as Android Auto
+ * reconnects. The headless ImageReader Surface exists before V10's CarActivity;
+ * opening V10 later only replaces that Surface and adopts the already-running task.
  */
 public final class MediaAutoRestoreService extends Service {
     public static final String ACTION_RESTORE =
             "com.carassistant.v10.action.RESTORE_MEDIA_ON_AA_CONNECT";
+    public static final String ACTION_AA_DISCONNECTED =
+            "com.carassistant.v10.action.AA_DISCONNECTED";
     private static final String TAG = "CarAssistantMediaResume";
     private static final String CHANNEL = "carassistant_media_restore";
     private static final int NOTIFICATION_ID = 4038;
@@ -32,73 +36,136 @@ public final class MediaAutoRestoreService extends Service {
     private final Handler handler = new Handler(Looper.getMainLooper());
     private long startedAt;
     private String expectedPackage;
+    private ComponentName expectedComponent;
     private int launchAttempts;
     private long lastLaunchElapsed;
+    private boolean checkpointApplied;
 
     private final Runnable restoreCheckpoint = new Runnable() {
         @Override public void run() {
-            if (TextUtils.isEmpty(expectedPackage)) { stopSelf(); return; }
-            boolean autoplay = getSharedPreferences("media_autoplay", MODE_PRIVATE)
-                    .getBoolean("enabled", true);
-            if (MediaSessionBridge.applyCheckpoint(
-                    MediaAutoRestoreService.this, expectedPackage, autoplay)) {
-                clearRecoveryAssist();
-                Log.i(TAG, "Restored source=" + expectedPackage + ", autoplay=" + autoplay);
-                stopSelf();
+            if (TextUtils.isEmpty(expectedPackage) || expectedComponent == null) {
+                Log.w(TAG, "No valid saved media component; headless restore cannot continue");
                 return;
             }
-            long now = SystemClock.uptimeMillis();
-            if (launchAttempts < MAX_LAUNCH_ATTEMPTS
-                    && (launchAttempts == 0
-                    || now - lastLaunchElapsed >= LAUNCH_RETRY_INTERVAL_MS)) {
-                launchAttempts++;
-                lastLaunchElapsed = now;
-                Log.i(TAG, "Source MediaSession not ready; launch attempt "
-                        + launchAttempts + "/" + MAX_LAUNCH_ATTEMPTS
-                        + " for " + expectedPackage);
-                requestSourceLaunch();
+
+            // Display 2 is V10 displayIndex=1. It is created by this foreground
+            // service, not by V10CarActivity, so no user tap is needed after AA connects.
+            if (!HeadlessProjectionHost.start(MediaAutoRestoreService.this)) {
+                if (SystemClock.uptimeMillis() - startedAt < RETRY_WINDOW_MS) {
+                    handler.postDelayed(this, RETRY_MS);
+                } else {
+                    Log.e(TAG, "Timed out creating headless V10 Display 2");
+                }
+                return;
             }
-            if (now - startedAt < RETRY_WINDOW_MS) {
+
+            V10DisplayController controller = V10DisplayController.get(
+                    MediaAutoRestoreService.this, HeadlessProjectionHost.DISPLAY_INDEX);
+            if (!controller.isLaunched()
+                    && launchAttempts < MAX_LAUNCH_ATTEMPTS
+                    && (launchAttempts == 0
+                    || SystemClock.uptimeMillis() - lastLaunchElapsed >= LAUNCH_RETRY_INTERVAL_MS)) {
+                requestSourceLaunch(controller);
+            }
+
+            if (!checkpointApplied) {
+                boolean autoplay = getSharedPreferences("media_autoplay", MODE_PRIVATE)
+                        .getBoolean("enabled", true);
+                if (MediaSessionBridge.applyCheckpoint(
+                        MediaAutoRestoreService.this, expectedPackage, autoplay)) {
+                    checkpointApplied = true;
+                    clearRecoveryAssist();
+                    updateForegroundStatus("Đã khôi phục phiên media trên màn hình phụ");
+                    Log.i(TAG, "Restored source=" + expectedPackage + ", autoplay=" + autoplay
+                            + ", displayId=" + controller.getDisplayId());
+                    return;
+                }
+            }
+
+            if (SystemClock.uptimeMillis() - startedAt < RETRY_WINDOW_MS) {
                 handler.postDelayed(this, RETRY_MS);
             } else {
-                Log.w(TAG, "Timed out waiting for source MediaSession: " + expectedPackage);
-                stopSelf();
+                // Keep this foreground service alive while AA is connected: it owns
+                // the ImageReader producer and therefore the headless VirtualDisplay.
+                Log.w(TAG, "MediaSession did not match checkpoint within retry window: "
+                        + expectedPackage + "; keeping Display 2 alive until AA disconnect");
             }
         }
     };
 
     @Override public void onCreate() {
         super.onCreate();
+        createNotificationChannel();
+        startForeground(NOTIFICATION_ID, buildNotification(
+                "Đang chuẩn bị khôi phục media trên màn hình phụ"));
+    }
+
+    private void createNotificationChannel() {
         if (Build.VERSION.SDK_INT >= 26) {
             NotificationManager manager = getSystemService(NotificationManager.class);
             if (manager != null) manager.createNotificationChannel(new NotificationChannel(
                     CHANNEL, "CarAsistant media controller", NotificationManager.IMPORTANCE_LOW));
-            startForeground(NOTIFICATION_ID, new Notification.Builder(this, CHANNEL)
-                    .setSmallIcon(R.drawable.ic_aacast)
-                    .setContentTitle("CarAsistant Media")
-                    .setContentText("Đang mở lại ứng dụng media trên điện thoại")
-                    .setOngoing(true).build());
-        } else {
-            startForeground(NOTIFICATION_ID, new Notification.Builder(this)
-                    .setSmallIcon(R.drawable.ic_aacast)
-                    .setContentTitle("CarAsistant Media")
-                    .setContentText("Đang mở lại ứng dụng media trên điện thoại")
-                    .setOngoing(true).build());
         }
     }
 
+    private Notification buildNotification(String message) {
+        if (Build.VERSION.SDK_INT >= 26) {
+            return new Notification.Builder(this, CHANNEL)
+                    .setSmallIcon(R.drawable.ic_aacast)
+                    .setContentTitle("CarAsistant Media")
+                    .setContentText(message)
+                    .setOngoing(true)
+                    .build();
+        }
+        return new Notification.Builder(this)
+                .setSmallIcon(R.drawable.ic_aacast)
+                .setContentTitle("CarAsistant Media")
+                .setContentText(message)
+                .setOngoing(true)
+                .build();
+    }
+
+    private void updateForegroundStatus(String message) {
+        NotificationManager manager = (NotificationManager) getSystemService(NOTIFICATION_SERVICE);
+        if (manager != null) manager.notify(NOTIFICATION_ID, buildNotification(message));
+    }
+
     @Override public int onStartCommand(Intent intent, int flags, int startId) {
+        String action = intent == null ? ACTION_RESTORE : intent.getAction();
+        if (ACTION_AA_DISCONNECTED.equals(action)) {
+            handler.removeCallbacks(restoreCheckpoint);
+            HeadlessProjectionHost.releaseIfHeadless(this);
+            stopForeground(true);
+            stopSelf(startId);
+            Log.i(TAG, "Android Auto disconnected; released headless projection resources");
+            return START_NOT_STICKY;
+        }
+
         handler.removeCallbacks(restoreCheckpoint);
         launchAttempts = 0;
         lastLaunchElapsed = 0L;
+        checkpointApplied = false;
         expectedPackage = MediaSessionBridge.getCheckpointPackage(this);
         if (expectedPackage == null) expectedPackage = MediaSessionBridge.getLastKnownPackage(this);
+        expectedComponent = MediaSessionBridge.getCheckpointTaskComponent(this);
+        if (expectedComponent == null
+                || !expectedPackage.equals(expectedComponent.getPackageName())) {
+            try {
+                Intent launch = getPackageManager().getLaunchIntentForPackage(expectedPackage);
+                expectedComponent = launch == null ? null : launch.getComponent();
+            } catch (RuntimeException ignored) {
+                expectedComponent = null;
+            }
+        }
+
         if (TextUtils.isEmpty(expectedPackage) || getPackageName().equals(expectedPackage)
-                || !expectedPackage.matches("[A-Za-z0-9_]+(\\.[A-Za-z0-9_]+)+")) {
+                || !expectedPackage.matches("[A-Za-z0-9_]+(\\.[A-Za-z0-9_]+)+")
+                || expectedComponent == null) {
             Log.i(TAG, "No valid external media checkpoint to resume");
             stopSelf(startId);
             return START_NOT_STICKY;
         }
+
         startedAt = SystemClock.uptimeMillis();
         String savedQuery = joinTitleArtist(MediaSessionBridge.getCheckpointTitle(this),
                 MediaSessionBridge.getCheckpointArtist(this));
@@ -106,45 +173,39 @@ public final class MediaAutoRestoreService extends Service {
                 .putBoolean("pending_projection_restore", true)
                 .putString("target_package", expectedPackage)
                 .putString("query", savedQuery)
-                .putString("phase", "await_projection")
+                .putString("phase", "headless_display2")
                 .putInt("target_display_id", -1)
                 .putLong("started_at", System.currentTimeMillis())
                 .putBoolean("mini_engine_active", false)
                 .apply();
-        Log.i(TAG, "Android Auto connected; waiting to restore saved task on V10 projection display: "
-                + expectedPackage);
+
+        updateForegroundStatus("Đang khởi chạy " + expectedPackage + " trên Display 2");
+        Log.i(TAG, "AA reconnect accepted; creating headless Display 2 for "
+                + expectedComponent.flattenToString());
         handler.post(restoreCheckpoint);
-        return START_NOT_STICKY;
+        return START_STICKY;
     }
 
-    /**
-     * Do not launch the source app on display 0. After a power-loss reboot there is
-     * no surviving Android task to move; V10 must recreate it only after its AA
-     * projection surface is attached. This service records the pending restore and
-     * waits for the matching MediaSession to appear from that projection task.
-     */
-    private void requestSourceLaunch() {
-        String query = joinTitleArtist(MediaSessionBridge.getCheckpointTitle(this),
-                MediaSessionBridge.getCheckpointArtist(this));
+    private void requestSourceLaunch(V10DisplayController controller) {
+        if (controller == null || !controller.isReady() || expectedComponent == null) return;
+        launchAttempts++;
+        lastLaunchElapsed = SystemClock.uptimeMillis();
         getSharedPreferences("media_autoplay", MODE_PRIVATE).edit()
-                .putBoolean("pending_projection_restore", true)
-                .putString("target_package", expectedPackage)
-                .putString("query", query)
-                .putString("phase", "await_projection")
-                .putInt("target_display_id", -1)
-                .putLong("started_at", System.currentTimeMillis())
-                .putBoolean("mini_engine_active", false)
+                .putString("phase", "launching_on_display2")
+                .putInt("target_display_id", controller.getDisplayId())
                 .apply();
-        Log.i(TAG, "Deferred source task launch until V10 projection display is ready; "
-                + "phone display remains untouched: " + expectedPackage);
+        Log.i(TAG, "Launching saved component on V10 Display 2, attempt "
+                + launchAttempts + "/" + MAX_LAUNCH_ATTEMPTS + ": "
+                + expectedComponent.flattenToString());
+        controller.launchMediaTaskOnDisplay(expectedComponent);
     }
-
 
     private void clearRecoveryAssist() {
         getSharedPreferences("media_autoplay", MODE_PRIVATE).edit()
                 .remove("pending_projection_restore")
                 .remove("target_package").remove("query").remove("phase")
-                .remove("target_display_id").remove("started_at").remove("search_submitted_at").apply();
+                .remove("target_display_id").remove("started_at")
+                .remove("search_submitted_at").apply();
     }
 
     private static String joinTitleArtist(String title, String artist) {
@@ -154,9 +215,11 @@ public final class MediaAutoRestoreService extends Service {
         return title + " " + artist;
     }
 
-
     @Override public void onDestroy() {
         handler.removeCallbacks(restoreCheckpoint);
+        // If the service is stopped unexpectedly while the reader still owns the
+        // Surface, release it. Once V10 takes over, releaseIfHeadless is a no-op.
+        HeadlessProjectionHost.releaseIfHeadless(this);
         super.onDestroy();
     }
 
