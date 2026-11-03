@@ -37,6 +37,7 @@ public final class AACastBridge implements IXposedHookLoadPackage {
         if ("android".equals(packageName)) {
             DisplayHooks.installDisplayFlags(param.classLoader);
             DisplayHooks.installInputPolicy(param.classLoader);
+            DisplayHooks.installV10RootLaunchPolicy(param.classLoader);
             OrientationHooks.install(param.classLoader);
             InputHooks.install(param.classLoader);
             // Capture AVRCP steering-wheel media keys at the system media-session
