@@ -109,6 +109,13 @@ public final class V10ProjectionSession implements TextureView.SurfaceTextureLis
         return true;
     }
 
+    /** Opens a saved checkpoint URI while reusing the current projected task. */
+    public boolean launchCheckpointUriOnDisplay(String packageName, String uri) {
+        if (!isActive() || packageName == null || uri == null) return false;
+        displayController.launchCheckpointUriOnDisplay(packageName, uri);
+        return true;
+    }
+
     /** Starts a media VIEW deep link on this session's exact display, isolating it from phone tasks. */
     public boolean launchMediaViewIntentOnDisplay(String packageName, String uri) {
         if (!isActive() || packageName == null || uri == null) return false;
