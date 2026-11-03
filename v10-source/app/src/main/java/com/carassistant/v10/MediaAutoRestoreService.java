@@ -41,6 +41,22 @@ public final class MediaAutoRestoreService extends Service {
     private long lastLaunchElapsed;
     private boolean checkpointApplied;
 
+    private final Runnable disconnectMonitor = new Runnable() {
+        @Override public void run() {
+            boolean connected = getSharedPreferences("carassistant_media_resume", MODE_PRIVATE)
+                    .getBoolean("aa_connected", false);
+            if (!connected) {
+                handler.removeCallbacks(restoreCheckpoint);
+                HeadlessProjectionHost.releaseIfHeadless(MediaAutoRestoreService.this);
+                stopForeground(true);
+                stopSelf();
+                Log.i(TAG, "AA notification disappeared; stopped headless restore service");
+                return;
+            }
+            handler.postDelayed(this, 5000L);
+        }
+    };
+
     private final Runnable restoreCheckpoint = new Runnable() {
         @Override public void run() {
             if (TextUtils.isEmpty(expectedPackage) || expectedComponent == null) {
@@ -153,6 +169,8 @@ public final class MediaAutoRestoreService extends Service {
         }
 
         handler.removeCallbacks(restoreCheckpoint);
+        handler.removeCallbacks(disconnectMonitor);
+        handler.postDelayed(disconnectMonitor, 5000L);
         launchAttempts = 0;
         lastLaunchElapsed = 0L;
         checkpointApplied = false;
@@ -228,6 +246,7 @@ public final class MediaAutoRestoreService extends Service {
 
     @Override public void onDestroy() {
         handler.removeCallbacks(restoreCheckpoint);
+        handler.removeCallbacks(disconnectMonitor);
         // If the service is stopped unexpectedly while the reader still owns the
         // Surface, release it. Once V10 takes over, releaseIfHeadless is a no-op.
         HeadlessProjectionHost.releaseIfHeadless(this);
