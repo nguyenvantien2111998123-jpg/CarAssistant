@@ -424,6 +424,8 @@ public final class V10CarActivity
                 getSharedPreferences("media_autoplay", MODE_PRIVATE);
         boolean pendingMediaRestore =
                 restorePrefs.getBoolean("pending_projection_restore", false);
+        boolean headlessMediaAlreadyApplied =
+                "headless_media_applied".equals(restorePrefs.getString("phase", ""));
         boolean mediaCardLaunch = getIntent() != null
                 && getIntent().getBooleanExtra("com.carassistant.v10.OPEN_ACTIVE_MEDIA", false);
         if (mediaCardLaunch && getIntent() != null) {
@@ -442,16 +444,24 @@ public final class V10CarActivity
             // Recreate the saved task only on V10's secondary virtual display.
             // Never open the source app on the phone's default display after reboot.
             launchActiveMediaProjection(checkpointTask);
-            startMediaRestoreWaiter();
-            restoreCheckpointContentOnProjection(checkpointTask);
+            if (headlessMediaAlreadyApplied) {
+                clearPendingMediaRestore();
+            } else {
+                startMediaRestoreWaiter();
+                restoreCheckpointContentOnProjection(checkpointTask);
+            }
         } else if (target != null) {
             launchProjection(target);
         } else if (pendingMediaRestore && checkpointPackage != null) {
             Intent launch = getPackageManager().getLaunchIntentForPackage(checkpointPackage);
             if (launch != null && launch.getComponent() != null) {
                 launchActiveMediaProjection(launch.getComponent());
-                startMediaRestoreWaiter();
-                restoreCheckpointContentOnProjection(launch.getComponent());
+                if (headlessMediaAlreadyApplied) {
+                    clearPendingMediaRestore();
+                } else {
+                    startMediaRestoreWaiter();
+                    restoreCheckpointContentOnProjection(launch.getComponent());
+                }
             }
         }
 
@@ -641,6 +651,14 @@ public final class V10CarActivity
         handler.post(this::openActiveMediaOnProjection);
     }
 
+    private void clearPendingMediaRestore() {
+        getSharedPreferences("media_autoplay", MODE_PRIVATE).edit()
+                .putBoolean("pending_projection_restore", false)
+                .remove("target_package").remove("query").remove("phase")
+                .remove("target_display_id").remove("started_at")
+                .remove("search_submitted_at").apply();
+    }
+
     private void openActiveMediaOnProjection() {
         if (!ensureMediaAccess()) return;
         MediaSessionBridge.Snapshot state = MediaSessionBridge.getSnapshot();
@@ -662,10 +680,15 @@ public final class V10CarActivity
                         Toast.LENGTH_SHORT).show();
                 return;
             }
-            boolean pendingRestore = getSharedPreferences("media_autoplay", MODE_PRIVATE)
-                    .getBoolean("pending_projection_restore", false);
+            android.content.SharedPreferences restorePrefs =
+                    getSharedPreferences("media_autoplay", MODE_PRIVATE);
+            boolean pendingRestore = restorePrefs.getBoolean("pending_projection_restore", false);
+            boolean alreadyApplied = "headless_media_applied".equals(
+                    restorePrefs.getString("phase", ""));
             launchActiveMediaProjection(component);
-            if (pendingRestore) {
+            if (pendingRestore && alreadyApplied) {
+                clearPendingMediaRestore();
+            } else if (pendingRestore) {
                 startMediaRestoreWaiter();
                 restoreCheckpointContentOnProjection(component);
             }
