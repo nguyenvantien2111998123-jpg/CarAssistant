@@ -75,10 +75,19 @@ public final class V10ProjectionSession implements TextureView.SurfaceTextureLis
     /** Restore the saved player task to this projection without force-stopping its package. */
     public void restoreMediaTask(ComponentName component) {
         if (destroyed || component == null) return;
+        boolean sameHeadlessTask = displayController.isReady()
+                && displayController.isLaunched()
+                && component.equals(displayController.getTarget());
         target = component;
         taskSession.setTarget(component);
-        if (displayController.isLaunched()) displayController.markNotLaunched();
-        restoreMediaTaskOnAttach = true;
+        if (sameHeadlessTask) {
+            // Android Auto opened V10 after the background restore. Keep the exact
+            // running root task; only replace the ImageReader Surface with TextureView.
+            restoreMediaTaskOnAttach = false;
+        } else {
+            if (displayController.isLaunched()) displayController.markNotLaunched();
+            restoreMediaTaskOnAttach = true;
+        }
         attachCurrentSurface();
     }
 
