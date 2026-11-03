@@ -66,9 +66,7 @@ public final class V10DisplayController {
             return false;
         }
         if (virtualDisplay != null && display != null) {
-            replaceSurface(newSurface);
-            virtualDisplay.setSurface(newSurface);
-            return true;
+            return bindSurface(newSurface);
         }
         try {
             DisplayManager manager = (DisplayManager) context.getSystemService(Context.DISPLAY_SERVICE);
@@ -90,7 +88,7 @@ public final class V10DisplayController {
             }
             virtualDisplay = created;
             display = createdDisplay;
-            replaceSurface(newSurface);
+            surface = newSurface; // createVirtualDisplay already attached this Surface.
             return true;
         } catch (RuntimeException e) {
             Log.w(TAG, "Display creation failed", e);
@@ -98,12 +96,12 @@ public final class V10DisplayController {
         }
     }
 
-    public synchronized void attachSurface(SurfaceTexture texture, int width, int height) {
-        if (destroyed || virtualDisplay == null || texture == null) return;
+    public synchronized boolean attachSurface(SurfaceTexture texture, int width, int height) {
+        if (destroyed || virtualDisplay == null || texture == null || width < 1 || height < 1) {
+            return false;
+        }
         texture.setDefaultBufferSize(width, height);
-        Surface newSurface = new Surface(texture);
-        replaceSurface(newSurface);
-        virtualDisplay.setSurface(newSurface);
+        return bindSurface(new Surface(texture));
     }
 
     public synchronized void detachSurface() {
@@ -114,9 +112,26 @@ public final class V10DisplayController {
         releaseSurfaceOnly();
     }
 
-    private void replaceSurface(Surface newSurface) {
-        releaseSurfaceOnly();
-        surface = newSurface;
+    /**
+     * Bind the new producer before releasing the previous one. Releasing the
+     * ImageReader Surface first can leave the virtual display without a producer
+     * for a frame and cause a black screen during headless-to-TextureView handoff.
+     */
+    private boolean bindSurface(Surface newSurface) {
+        if (newSurface == null || virtualDisplay == null) return false;
+        Surface previous = surface;
+        try {
+            virtualDisplay.setSurface(newSurface);
+            surface = newSurface;
+            if (previous != null && previous != newSurface) {
+                try { previous.release(); } catch (Throwable ignored) { }
+            }
+            return true;
+        } catch (Throwable error) {
+            try { newSurface.release(); } catch (Throwable ignored) { }
+            Log.w(TAG, "Could not bind virtual display Surface", error);
+            return false;
+        }
     }
 
     private void releaseSurfaceOnly() {
