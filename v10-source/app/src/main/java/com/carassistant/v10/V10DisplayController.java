@@ -277,6 +277,7 @@ public final class V10DisplayController {
         target = component;
         launched = false;
         final int displayId = display.getDisplayId();
+        final String flat = component.flattenToString().replace("'", "'\\\"'\\\"'");
         final String command = "ROOT_TASK_ID=$(/system/bin/dumpsys activity activities 2>/dev/null"
                 + " | /system/bin/grep 'Task{'"
                 + " | /system/bin/grep -F " + shellQuote("A=" + component.getPackageName())
@@ -284,11 +285,20 @@ public final class V10DisplayController {
                 + " | /system/bin/sed -n -e 's/.*rootTaskId=\\([0-9][0-9]*\\).*/\\1/p'"
                 + " -e 's/.*Task{[^#]*#\\([0-9][0-9]*\\).*/\\1/p'"
                 + " | /system/bin/head -n 1); "
-                + "if [ -z \"$ROOT_TASK_ID\" ]; then "
-                + "echo 'CarAsistant: active media root task not found for " + component.getPackageName() + "'; "
-                + "exit 1; fi; "
+                + "if [ -n \"$ROOT_TASK_ID\" ]; then "
                 + "/system/bin/am display move-stack \"$ROOT_TASK_ID\" " + displayId
-                + " && echo 'CarAsistant: moved existing media root task to projection display'";
+                + "; else "
+                // After a reboot there is no old task to move. Create it directly on
+                // the V10 virtual display; never fall back to phone display 0.
+                + "/system/bin/am start --user " + userId
+                + " --display " + displayId
+                + " --windowingMode 1"
+                + " -a android.intent.action.MAIN"
+                + " -c android.intent.category.LAUNCHER"
+                + " -f 0x10000000"
+                + " -n '" + flat + "'"
+                + "; fi"
+                + " && echo 'CarAsistant: restored media task on projection display'";
         RootShellSession.EXEC.execute(() -> {
             try {
                 rootShell.run(10, command);
