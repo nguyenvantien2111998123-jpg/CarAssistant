@@ -492,6 +492,9 @@ public final class MediaSessionBridge extends NotificationListenerService {
     public void onListenerConnected() {
         super.onListenerConnected();
         ensureMirrorSession();
+        // Publish the CarAsistant controller before querying source sessions. This closes
+        // the startup race in which Gearhead discovers a phone player before our mirror.
+        updateMirrorSession(snapshot);
         try {
             manager = (MediaSessionManager) getSystemService(Context.MEDIA_SESSION_SERVICE);
             if (manager == null) return;
@@ -531,8 +534,13 @@ public final class MediaSessionBridge extends NotificationListenerService {
             try { manager.removeOnActiveSessionsChangedListener(sessionsListener); }
             catch (RuntimeException ignored) { }
         }
+        manager = null;
+        sessionsListener = null;
+        // Keep our own MediaSession alive across NotificationListener rebinds. Releasing it
+        // here creates a window where Gearhead falls back to the source app's generic card.
+        saveCurrentCheckpoint();
         clearActiveController();
-        releaseMirrorSession();
+        updateMirrorSession(Snapshot.empty());
         super.onListenerDisconnected();
     }
 
