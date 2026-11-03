@@ -140,6 +140,13 @@ public final class MediaAutoRestoreService extends Service {
     }
 
 
+    private void clearRecoveryAssist() {
+        getSharedPreferences("media_autoplay", MODE_PRIVATE).edit()
+                .remove("pending_projection_restore")
+                .remove("target_package").remove("query").remove("phase")
+                .remove("target_display_id").remove("started_at").remove("search_submitted_at").apply();
+    }
+
     private static String joinTitleArtist(String title, String artist) {
         if (TextUtils.isEmpty(title)) return "";
         if (TextUtils.isEmpty(artist) || title.toLowerCase(java.util.Locale.ROOT)
