@@ -300,6 +300,24 @@ public final class MediaSessionBridge extends NotificationListenerService {
         return TextUtils.isEmpty(expectedId) && TextUtils.isEmpty(expectedUri);
     }
 
+    /** True only when the saved source package is publishing the exact saved media item. */
+    public static boolean isCheckpointMediaReady(Context context, String expectedPackage) {
+        if (context == null || TextUtils.isEmpty(expectedPackage)) return false;
+        MediaController controller = checkpointController;
+        if (controller == null || !expectedPackage.equals(controller.getPackageName())) {
+            controller = activeController;
+        }
+        if (controller == null || !expectedPackage.equals(controller.getPackageName())) return false;
+        android.content.SharedPreferences prefs =
+                context.getSharedPreferences(RESUME_PREFS, Context.MODE_PRIVATE);
+        try {
+            return matchesSavedMediaIdentity(prefs, controller.getMetadata());
+        } catch (RuntimeException error) {
+            Log.w(TAG, "Could not verify checkpoint media identity", error);
+            return false;
+        }
+    }
+
     /** Apply the saved position and explicit autoplay preference to the matching player only. */
     public static boolean applyCheckpoint(Context context, String expectedPackage, boolean autoplay) {
         if (context == null || TextUtils.isEmpty(expectedPackage)) return false;
