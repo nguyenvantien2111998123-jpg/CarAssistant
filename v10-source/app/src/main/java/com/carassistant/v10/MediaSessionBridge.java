@@ -49,6 +49,8 @@ public final class MediaSessionBridge extends NotificationListenerService {
     private static final String GEARHEAD_PACKAGE = "com.google.android.projection.gearhead";
     private static final String AA_TRIGGER_PREF = "last_aa_notification_restore";
     private static final String AA_CONNECTED_PREF = "aa_connected";
+    private static final String AA_NOTIFICATION_ID_PREF = "aa_notification_id";
+    private static final String AA_NOTIFICATION_TAG_PREF = "aa_notification_tag";
     private static final long AA_TRIGGER_COOLDOWN_MS = 90000L;
     public static final String ACTION_VOICE_ASSISTANT =
             "com.carassistant.v10.MEDIA_VOICE_ASSISTANT";
@@ -658,7 +660,10 @@ public final class MediaSessionBridge extends NotificationListenerService {
 
         android.content.SharedPreferences prefs = getSharedPreferences(
                 RESUME_PREFS, Context.MODE_PRIVATE);
-        prefs.edit().putBoolean(AA_CONNECTED_PREF, true).apply();
+        prefs.edit().putBoolean(AA_CONNECTED_PREF, true)
+                .putInt(AA_NOTIFICATION_ID_PREF, sbn.getId())
+                .putString(AA_NOTIFICATION_TAG_PREF, sbn.getTag() == null ? "" : sbn.getTag())
+                .apply();
         long now = System.currentTimeMillis();
         long previous = prefs.getLong(AA_TRIGGER_PREF, 0L);
         if (previous > 0L && now - previous < AA_TRIGGER_COOLDOWN_MS) return;
@@ -685,13 +690,22 @@ public final class MediaSessionBridge extends NotificationListenerService {
     @Override
     public void onNotificationRemoved(StatusBarNotification sbn) {
         if (sbn != null && GEARHEAD_PACKAGE.equals(sbn.getPackageName())) {
-            // Android Auto removes its connection notification on disconnect. The
-            // foreground restore service observes this durable state and releases only
-            // a still-headless Display 2; it never tears down a Surface V10 has adopted.
-            getSharedPreferences(RESUME_PREFS, Context.MODE_PRIVATE).edit()
-                    .putBoolean(AA_CONNECTED_PREF, false)
-                    .remove(AA_TRIGGER_PREF).apply();
-            Log.i(TAG, "Android Auto connection notification removed; headless restore stop requested");
+            android.content.SharedPreferences prefs =
+                    getSharedPreferences(RESUME_PREFS, Context.MODE_PRIVATE);
+            int expectedId = prefs.getInt(AA_NOTIFICATION_ID_PREF, -1);
+            String expectedTag = prefs.getString(AA_NOTIFICATION_TAG_PREF, "");
+            String removedTag = sbn.getTag() == null ? "" : sbn.getTag();
+            // Gearhead posts several unrelated notifications. Only removal of the
+            // exact notification previously classified as its connected-state signal
+            // may stop the headless display owner.
+            if (sbn.getId() == expectedId && removedTag.equals(expectedTag)) {
+                prefs.edit().putBoolean(AA_CONNECTED_PREF, false)
+                        .remove(AA_TRIGGER_PREF)
+                        .remove(AA_NOTIFICATION_ID_PREF)
+                        .remove(AA_NOTIFICATION_TAG_PREF)
+                        .apply();
+                Log.i(TAG, "Android Auto connection notification removed; headless restore stop requested");
+            }
         }
         refreshFromManager();
     }
