@@ -10,11 +10,18 @@ public final class V10SurfaceManager {
     }
 
     public boolean attach(SurfaceTexture texture, int width, int height) {
+        boolean attached;
         if (!displayController.isReady()) {
-            return displayController.ensureDisplay(texture, width, height);
+            attached = displayController.ensureDisplay(texture, width, height);
+        } else {
+            attached = displayController.attachSurface(texture, width, height);
         }
-        displayController.attachSurface(texture, width, height);
-        return true;
+        if (attached) {
+            // The new TextureView Surface is now bound; only now may the headless
+            // ImageReader producer be closed.
+            HeadlessProjectionHost.onV10SurfaceAttached(displayController);
+        }
+        return attached;
     }
 
     public void detach() { displayController.detachSurface(); }
