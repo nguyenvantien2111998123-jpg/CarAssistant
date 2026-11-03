@@ -420,8 +420,31 @@ public final class V10CarActivity
         ComponentName backgroundTarget = V10SessionStore.getBackgroundTarget(this);
         if (backgroundTarget != null) launchBackgroundProjection(backgroundTarget);
 
+        android.content.SharedPreferences restorePrefs =
+                getSharedPreferences("media_autoplay", MODE_PRIVATE);
+        boolean pendingMediaRestore =
+                restorePrefs.getBoolean("pending_projection_restore", false);
         ComponentName target = V10SessionStore.getTarget(this);
-        if (target != null) launchProjection(target);
+        ComponentName checkpointTask = MediaSessionBridge.getCheckpointTaskComponent(this);
+        String checkpointPackage = MediaSessionBridge.getCheckpointPackage(this);
+        if (pendingMediaRestore && checkpointTask != null
+                && checkpointPackage != null
+                && checkpointPackage.equals(checkpointTask.getPackageName())) {
+            // Recreate the saved task only on V10's secondary virtual display.
+            // Never open the source app on the phone's default display after reboot.
+            launchActiveMediaProjection(checkpointTask);
+            startMediaRestoreWaiter();
+            restoreCheckpointContentOnProjection(checkpointTask);
+        } else if (target != null) {
+            launchProjection(target);
+        } else if (pendingMediaRestore && checkpointPackage != null) {
+            Intent launch = getPackageManager().getLaunchIntentForPackage(checkpointPackage);
+            if (launch != null && launch.getComponent() != null) {
+                launchActiveMediaProjection(launch.getComponent());
+                startMediaRestoreWaiter();
+                restoreCheckpointContentOnProjection(launch.getComponent());
+            }
+        }
 
     }
 
@@ -612,26 +635,92 @@ public final class V10CarActivity
     private void openActiveMediaOnProjection() {
         if (!ensureMediaAccess()) return;
         MediaSessionBridge.Snapshot state = MediaSessionBridge.getSnapshot();
-        if (state == null || TextUtils.isEmpty(state.packageName)) {
-            Toast.makeText(this, "Chưa có ứng dụng media đang hoạt động.",
+        String packageName = state == null || TextUtils.isEmpty(state.packageName)
+                ? MediaSessionBridge.getCheckpointPackage(this) : state.packageName;
+        if (TextUtils.isEmpty(packageName)) {
+            Toast.makeText(this, "Chưa có ứng dụng media được lưu để khôi phục.",
                     Toast.LENGTH_SHORT).show();
             return;
         }
         try {
-            Intent launch = getPackageManager().getLaunchIntentForPackage(state.packageName);
-            if (launch == null || launch.getComponent() == null) {
+            ComponentName component = MediaSessionBridge.getCheckpointTaskComponent(this);
+            if (component == null || !packageName.equals(component.getPackageName())) {
+                Intent launch = getPackageManager().getLaunchIntentForPackage(packageName);
+                component = launch == null ? null : launch.getComponent();
+            }
+            if (component == null) {
                 Toast.makeText(this, "Không tìm thấy màn hình mở của ứng dụng media.",
                         Toast.LENGTH_SHORT).show();
                 return;
             }
-            // The media app may already own a live task on the phone display.
-            // Reuse/move that task onto V10's secondary display instead of launching
-            // a second launcher task and leaving the phone-side UI visible.
-            launchActiveMediaProjection(launch.getComponent());
+            launchActiveMediaProjection(component);
+            startMediaRestoreWaiter();
+            restoreCheckpointContentOnProjection(component);
         } catch (RuntimeException error) {
+            Log.w("CarAssistantMediaResume", "Cannot restore saved media task on projection", error);
             Toast.makeText(this, "Không thể mở ứng dụng media trên màn hình phụ.",
                     Toast.LENGTH_SHORT).show();
         }
+    }
+
+    /** Keep the checkpoint applier alive until the source publishes its restored MediaSession. */
+    private void startMediaRestoreWaiter() {
+        Intent restore = new Intent(this, MediaAutoRestoreService.class)
+                .setAction(MediaAutoRestoreService.ACTION_RESTORE);
+        try {
+            if (android.os.Build.VERSION.SDK_INT >= 26) startForegroundService(restore);
+            else startService(restore);
+        } catch (RuntimeException error) {
+            Log.w("CarAssistantMediaResume", "Cannot start checkpoint waiter", error);
+        }
+    }
+
+    /**
+     * Restore the exact saved content only after the secondary display has a live task.
+     * A valid source URI is preferred; title search is the fallback and is targeted at
+     * the projection display, never display 0.
+     */
+    private void restoreCheckpointContentOnProjection(ComponentName target) {
+        if (target == null || session == null) return;
+        android.content.SharedPreferences prefs =
+                getSharedPreferences("media_autoplay", MODE_PRIVATE);
+        if (!prefs.getBoolean("pending_projection_restore", false)) return;
+        final long deadline = SystemClock.uptimeMillis() + 12000L;
+        Runnable restore = new Runnable() {
+            @Override public void run() {
+                if (session == null || !target.equals(activeTarget)) return;
+                if (!session.isActive() || session.getDisplayId() <= 0) {
+                    if (SystemClock.uptimeMillis() < deadline) handler.postDelayed(this, 250L);
+                    else Log.w("CarAssistantMediaResume",
+                            "Projection surface not ready; saved media content remains pending");
+                    return;
+                }
+                String uri = MediaSessionBridge.getCheckpointMediaUri(V10CarActivity.this);
+                String query = MediaAutoRestoreService.joinTitleArtist(
+                        MediaSessionBridge.getCheckpointTitle(V10CarActivity.this),
+                        MediaSessionBridge.getCheckpointArtist(V10CarActivity.this));
+                if (!TextUtils.isEmpty(uri)) {
+                    boolean accepted = session.launchViewIntentOnDisplay(
+                            target.getPackageName(), uri);
+                    Log.i("CarAssistantMediaResume", "Restored saved media URI on display "
+                            + session.getDisplayId() + "; accepted=" + accepted);
+                } else if (!TextUtils.isEmpty(query)) {
+                    prefs.edit()
+                            .putString("target_package", target.getPackageName())
+                            .putString("query", query)
+                            .putString("phase", "search")
+                            .putInt("target_display_id", session.getDisplayId())
+                            .putLong("started_at", System.currentTimeMillis())
+                            .putBoolean("mini_engine_active", false)
+                            .apply();
+                    session.launchSearchIntentOnDisplay(target.getPackageName(), query);
+                    if (miniAccessEngine != null) miniAccessEngine.start();
+                    Log.i("CarAssistantMediaResume", "Requested saved-title search on projection display "
+                            + session.getDisplayId());
+                }
+            }
+        };
+        handler.postDelayed(restore, 900L);
     }
 
     private boolean ensureMediaAccess() {
