@@ -35,6 +35,7 @@ public final class MediaSessionBridge extends NotificationListenerService {
     // A single rolling checkpoint: frequent durable writes keep abrupt-power-loss recovery close to real time.
     private static final long CHECKPOINT_INTERVAL_MS = 5_000L;
     private static final String CHECKPOINT_PACKAGE = "checkpoint_package";
+    private static final String CHECKPOINT_TASK_COMPONENT = "checkpoint_task_component";
     private static final String CHECKPOINT_TITLE = "checkpoint_title";
     private static final String CHECKPOINT_ARTIST = "checkpoint_artist";
     private static final String CHECKPOINT_MEDIA_ID = "checkpoint_media_id";
@@ -141,6 +142,18 @@ public final class MediaSessionBridge extends NotificationListenerService {
             }
             lastCheckpointPosition = position;
             lastCheckpointDuration = duration;
+            ComponentName projectedTask = V10SessionStore.getTarget(this);
+            String taskComponent = projectedTask != null
+                    && packageName.equals(projectedTask.getPackageName())
+                    ? projectedTask.flattenToString() : "";
+            if (TextUtils.isEmpty(taskComponent)) {
+                try {
+                    Intent launchIntent = getPackageManager().getLaunchIntentForPackage(packageName);
+                    if (launchIntent != null && launchIntent.getComponent() != null) {
+                        taskComponent = launchIntent.getComponent().flattenToString();
+                    }
+                } catch (RuntimeException ignored) { }
+            }
             boolean playing = state != null
                     && state.getState() == PlaybackState.STATE_PLAYING;
             float speed = playing && state != null ? state.getPlaybackSpeed() : 0f;
@@ -148,6 +161,7 @@ public final class MediaSessionBridge extends NotificationListenerService {
             getSharedPreferences(RESUME_PREFS, Context.MODE_PRIVATE).edit()
                     .putString(LAST_PACKAGE, packageName)
                     .putString(CHECKPOINT_PACKAGE, packageName)
+                    .putString(CHECKPOINT_TASK_COMPONENT, taskComponent)
                     .putString(CHECKPOINT_TITLE, title == null ? "" : title)
                     .putString(CHECKPOINT_ARTIST, artist == null ? "" : artist)
                     .putString(CHECKPOINT_MEDIA_ID, metadata == null ? "" : safeMetadataString(metadata, MediaMetadata.METADATA_KEY_MEDIA_ID))
@@ -172,6 +186,14 @@ public final class MediaSessionBridge extends NotificationListenerService {
         String value = context.getSharedPreferences(RESUME_PREFS, Context.MODE_PRIVATE)
                 .getString(LAST_PACKAGE, null);
         return TextUtils.isEmpty(value) ? null : value;
+    }
+
+    /** Exact app Activity previously projected by V10, when it belongs to the saved media package. */
+    public static ComponentName getCheckpointTaskComponent(Context context) {
+        if (context == null) return null;
+        String value = context.getSharedPreferences(RESUME_PREFS, Context.MODE_PRIVATE)
+                .getString(CHECKPOINT_TASK_COMPONENT, null);
+        return TextUtils.isEmpty(value) ? null : ComponentName.unflattenFromString(value);
     }
 
     /** Stable content identifier supplied by the source MediaSession, when available. */
@@ -646,6 +668,8 @@ public final class MediaSessionBridge extends NotificationListenerService {
         MediaController chosen = null;
         MediaController savedCandidate = null;
         MediaController checkpointCandidate = null;
+        MediaController playingCandidate = null;
+        MediaController metadataCandidate = null;
         String checkpointPackage = getCheckpointPackage(this);
         if (checkpointPackage == null) checkpointPackage = getLastKnownPackage(this);
         String lastPackage = getLastKnownPackage(this);
@@ -656,20 +680,21 @@ public final class MediaSessionBridge extends NotificationListenerService {
                     checkpointCandidate = candidate;
                 }
                 PlaybackState state = candidate.getPlaybackState();
-                if (state != null && state.getState() == PlaybackState.STATE_PLAYING) {
-                    chosen = candidate;
-                    break;
-                }
                 if (savedCandidate == null && lastPackage != null
                         && lastPackage.equals(candidate.getPackageName())) savedCandidate = candidate;
-                if (chosen == null && candidate.getMetadata() != null) chosen = candidate;
+                if (playingCandidate == null && state != null
+                        && state.getState() == PlaybackState.STATE_PLAYING) playingCandidate = candidate;
+                if (metadataCandidate == null && candidate.getMetadata() != null) {
+                    metadataCandidate = candidate;
+                }
             }
         }
-        if (savedCandidate != null && (chosen == null
-                || chosen.getPlaybackState() == null
-                || chosen.getPlaybackState().getState() != PlaybackState.STATE_PLAYING)) {
-            chosen = savedCandidate;
-        }
+        // After reboot, prefer the exact package from the durable checkpoint even if
+        // another app publishes a session first during Android Auto startup.
+        if (checkpointCandidate != null) chosen = checkpointCandidate;
+        else if (savedCandidate != null) chosen = savedCandidate;
+        else if (playingCandidate != null) chosen = playingCandidate;
+        else chosen = metadataCandidate;
 
         MediaController previous = activeController;
         if (previous != chosen) {
