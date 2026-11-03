@@ -24,6 +24,7 @@ public final class HeadlessProjectionHost {
     private static HandlerThread drainThread;
     private static Handler drainHandler;
     private static V10DisplayController owner;
+    private static boolean handedOff;
 
     private HeadlessProjectionHost() { }
 
@@ -34,6 +35,7 @@ public final class HeadlessProjectionHost {
     public static synchronized boolean start(Context context, int width, int height) {
         if (context == null || width < 1 || height < 1) return false;
         V10DisplayController controller = V10DisplayController.get(context, DISPLAY_INDEX);
+        if (handedOff && controller.isReady()) return true;
         if (imageReader != null) return controller.isReady();
 
         ImageReader created = null;
@@ -83,6 +85,7 @@ public final class HeadlessProjectionHost {
     /** Called only after VirtualDisplay.setSurface(TextureViewSurface) succeeds. */
     public static synchronized void onV10SurfaceAttached(V10DisplayController controller) {
         if (imageReader == null || owner != controller) return;
+        handedOff = true;
         closeReaderOnly();
         Log.i(TAG, "Display 2 Surface handed from ImageReader to V10 TextureView");
     }
