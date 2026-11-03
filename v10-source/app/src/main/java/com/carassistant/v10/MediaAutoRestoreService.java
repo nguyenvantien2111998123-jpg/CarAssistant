@@ -91,8 +91,12 @@ public final class MediaAutoRestoreService extends Service {
                 if (taskLaunchedAt == 0L) taskLaunchedAt = now;
                 boolean exactItemReady = MediaSessionBridge.isCheckpointMediaReady(
                         MediaAutoRestoreService.this, expectedPackage);
+                boolean contentAlreadyRequested = getSharedPreferences(
+                        "media_autoplay", MODE_PRIVATE)
+                        .getBoolean("content_restore_requested", false);
+                if (contentAlreadyRequested) contentRestoreRequested = true;
                 if (!exactItemReady && !contentRestoreRequested
-                        && now - taskLaunchedAt >= 4000L) {
+                        && !contentAlreadyRequested && now - taskLaunchedAt >= 4000L) {
                     requestCheckpointContent(controller);
                 } else if (!exactItemReady && contentRestoreRequested
                         && "checkpoint_uri".equals(getSharedPreferences(
