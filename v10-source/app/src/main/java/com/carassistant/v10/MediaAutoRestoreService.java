@@ -7,6 +7,11 @@ import android.app.Service;
 import android.content.ComponentName;
 import android.content.Intent;
 import android.content.pm.PackageManager;
+import android.graphics.Bitmap;
+import android.media.MediaMetadata;
+import android.media.session.MediaSession;
+import android.media.session.PlaybackState;
+import android.os.Bundle;
 import android.os.Build;
 import android.os.Handler;
 import android.os.IBinder;
@@ -34,6 +39,9 @@ public final class MediaAutoRestoreService extends Service {
     private static final int MAX_LAUNCH_ATTEMPTS = 3;
 
     private final Handler handler = new Handler(Looper.getMainLooper());
+    private static volatile MediaAutoRestoreService ownerInstance;
+    private MediaSession mirrorSession;
+    private SteeringWheelMediaKeyHandler steeringKeyHandler;
     private long startedAt;
     private String expectedPackage;
     private ComponentName expectedComponent;
@@ -159,6 +167,9 @@ public final class MediaAutoRestoreService extends Service {
         createNotificationChannel();
         startForeground(NOTIFICATION_ID, buildNotification(
                 "Đang chuẩn bị khôi phục media trên màn hình phụ"));
+        ownerInstance = this;
+        createMirrorSession();
+        updateMirrorSession(MediaSessionBridge.getSnapshot());
     }
 
     private void createNotificationChannel() {
@@ -227,9 +238,14 @@ public final class MediaAutoRestoreService extends Service {
         if (TextUtils.isEmpty(expectedPackage) || getPackageName().equals(expectedPackage)
                 || !expectedPackage.matches("[A-Za-z0-9_]+(\\.[A-Za-z0-9_]+)+")
                 || expectedComponent == null) {
-            Log.i(TAG, "No valid external media checkpoint to resume");
-            stopSelf(startId);
-            return START_NOT_STICKY;
+            // Keep the AA-facing controller available even when there is no saved source
+            // item to restore. The disconnect monitor, not checkpoint availability, owns
+            // this foreground service's lifetime.
+            expectedPackage = null;
+            expectedComponent = null;
+            updateForegroundStatus("CarAsistant Media sẵn sàng điều khiển");
+            Log.i(TAG, "No valid external media checkpoint; keeping controller session active");
+            return START_STICKY;
         }
 
         startedAt = SystemClock.uptimeMillis();
@@ -314,10 +330,147 @@ public final class MediaAutoRestoreService extends Service {
     @Override public void onDestroy() {
         handler.removeCallbacks(restoreCheckpoint);
         handler.removeCallbacks(disconnectMonitor);
+        releaseMirrorSession();
+        if (ownerInstance == this) ownerInstance = null;
         // If the service is stopped unexpectedly while the reader still owns the
         // Surface, release it. Once V10 takes over, releaseIfHeadless is a no-op.
         HeadlessProjectionHost.releaseIfHeadless(this);
         super.onDestroy();
+    }
+
+    /** Publish the latest phone-side source snapshot to the AA-facing controller session. */
+    public static void updateMediaSession(Context context, MediaSessionBridge.Snapshot snapshot) {
+        MediaAutoRestoreService owner = ownerInstance;
+        if (owner == null) return;
+        owner.handler.post(() -> owner.updateMirrorSession(snapshot));
+    }
+
+    private void createMirrorSession() {
+        mirrorSession = new MediaSession(this, "CarAsistant Media Controller");
+        mirrorSession.setFlags(MediaSession.FLAG_HANDLES_MEDIA_BUTTONS
+                | MediaSession.FLAG_HANDLES_TRANSPORT_CONTROLS);
+        steeringKeyHandler = new SteeringWheelMediaKeyHandler(
+                new SteeringWheelMediaKeyHandler.Actions() {
+                    @Override public void onNext() { MediaSessionBridge.skipNext(); }
+                    @Override public void onPrevious() { MediaSessionBridge.skipPrevious(); }
+                    @Override public void onSeekForward() { MediaSessionBridge.seekBy(15000L); }
+                    @Override public void onSeekBackward() { MediaSessionBridge.seekBy(-15000L); }
+                    @Override public void onVoiceAssistant() {
+                        Intent intent = new Intent("com.carassistant.v10.STEERING_VOICE")
+                                .setPackage(getPackageName());
+                        sendBroadcast(intent);
+                    }
+                });
+        mirrorSession.setCallback(new MediaSession.Callback() {
+            @Override public boolean onMediaButtonEvent(Intent intent) {
+                if (steeringKeyHandler != null && steeringKeyHandler.handle(intent)) return true;
+                return super.onMediaButtonEvent(intent);
+            }
+            @Override public void onPlay() { MediaSessionBridge.play(); }
+            @Override public void onPause() { MediaSessionBridge.pause(); }
+            @Override public void onSkipToNext() { MediaSessionBridge.skipNext(); }
+            @Override public void onSkipToPrevious() { MediaSessionBridge.skipPrevious(); }
+            @Override public void onFastForward() { MediaSessionBridge.seekBy(15000L); }
+            @Override public void onRewind() { MediaSessionBridge.seekBy(-15000L); }
+            @Override public void onSeekTo(long position) { MediaSessionBridge.seekTo(position); }
+            @Override public void onStop() { MediaSessionBridge.pause(); }
+            @Override public void onCustomAction(String action, Bundle extras) {
+                if (MediaSessionBridge.ACTION_VOICE_ASSISTANT.equals(action)) {
+                    Intent intent = new Intent("com.carassistant.v10.STEERING_VOICE")
+                            .setPackage(getPackageName());
+                    sendBroadcast(intent);
+                }
+            }
+        }, handler);
+        mirrorSession.setActive(true);
+    }
+
+    private void updateMirrorSession(MediaSessionBridge.Snapshot state) {
+        MediaSession session = mirrorSession;
+        if (session == null) return;
+        boolean hasPlayer = state != null && !TextUtils.isEmpty(state.packageName);
+        MediaMetadata.Builder metadata = new MediaMetadata.Builder();
+        long position;
+        long duration;
+        boolean playing;
+        if (hasPlayer) {
+            metadata.putString(MediaMetadata.METADATA_KEY_TITLE,
+                    TextUtils.isEmpty(state.title) ? "Đang phát media" : state.title)
+                    .putString(MediaMetadata.METADATA_KEY_ARTIST,
+                            TextUtils.isEmpty(state.artist) ? state.packageName : state.artist)
+                    .putString(MediaMetadata.METADATA_KEY_ALBUM, state.packageName);
+            position = Math.max(0L, state.position);
+            duration = Math.max(0L, state.duration);
+            playing = state.playing;
+            Bitmap artwork = safeMirrorArtwork(state.artwork);
+            if (artwork != null) metadata.putBitmap(MediaMetadata.METADATA_KEY_ALBUM_ART, artwork);
+        } else {
+            android.content.SharedPreferences prefs = getSharedPreferences(
+                    "carassistant_media_resume", MODE_PRIVATE);
+            String savedTitle = prefs.getString("checkpoint_title", "");
+            String savedArtist = prefs.getString("checkpoint_artist", "");
+            String savedPackage = prefs.getString("checkpoint_package", "");
+            position = Math.max(0L, prefs.getLong("checkpoint_position", 0L));
+            duration = Math.max(0L, prefs.getLong("checkpoint_duration", 0L));
+            playing = false;
+            metadata.putString(MediaMetadata.METADATA_KEY_TITLE,
+                    TextUtils.isEmpty(savedTitle) ? "CarAsistant Media" : savedTitle)
+                    .putString(MediaMetadata.METADATA_KEY_ARTIST,
+                            TextUtils.isEmpty(savedArtist)
+                                    ? (TextUtils.isEmpty(savedPackage) ? "Trình điều khiển media" : savedPackage)
+                                    : savedArtist)
+                    .putString(MediaMetadata.METADATA_KEY_ALBUM, "CarAsistant");
+        }
+        if (duration > 0L) metadata.putLong(MediaMetadata.METADATA_KEY_DURATION, duration);
+        session.setMetadata(metadata.build());
+        long actions = PlaybackState.ACTION_PLAY | PlaybackState.ACTION_PAUSE
+                | PlaybackState.ACTION_PLAY_PAUSE | PlaybackState.ACTION_SKIP_TO_NEXT
+                | PlaybackState.ACTION_SKIP_TO_PREVIOUS | PlaybackState.ACTION_SEEK_TO
+                | PlaybackState.ACTION_FAST_FORWARD | PlaybackState.ACTION_REWIND;
+        PlaybackState playback = new PlaybackState.Builder().setActions(actions)
+                .setState(playing ? PlaybackState.STATE_PLAYING : PlaybackState.STATE_PAUSED,
+                        duration > 0L ? Math.min(position, duration) : position,
+                        playing ? 1f : 0f)
+                .addCustomAction(new PlaybackState.CustomAction.Builder(
+                        MediaSessionBridge.ACTION_VOICE_ASSISTANT,
+                        "Trợ lý giọng nói CarAsistant",
+                        android.R.drawable.ic_btn_speak_now).build())
+                .build();
+        session.setPlaybackState(playback);
+        session.setActive(true);
+    }
+
+    private static Bitmap safeMirrorArtwork(Bitmap source) {
+        if (source == null || source.isRecycled()) return null;
+        try {
+            int width = source.getWidth();
+            int height = source.getHeight();
+            if (width <= 384 && height <= 384) return source;
+            float scale = Math.min(384f / width, 384f / height);
+            return Bitmap.createScaledBitmap(source,
+                    Math.max(1, Math.round(width * scale)),
+                    Math.max(1, Math.round(height * scale)), true);
+        } catch (RuntimeException error) {
+            Log.w(TAG, "Could not prepare mirrored media artwork", error);
+            return null;
+        }
+    }
+
+    private void releaseMirrorSession() {
+        if (steeringKeyHandler != null) {
+            steeringKeyHandler.dispose();
+            steeringKeyHandler = null;
+        }
+        MediaSession session = mirrorSession;
+        mirrorSession = null;
+        if (session != null) {
+            try {
+                session.setActive(false);
+                session.release();
+            } catch (RuntimeException error) {
+                Log.w(TAG, "Could not release CarAsistant media session", error);
+            }
+        }
     }
 
     @Override public IBinder onBind(Intent intent) { return null; }
