@@ -25,7 +25,7 @@ public final class MediaAutoRestoreService extends Service {
     private static final String CHANNEL = "carassistant_media_restore";
     private static final int NOTIFICATION_ID = 4038;
     private static final long RETRY_MS = 1000L;
-    private static final long RETRY_WINDOW_MS = 120000L;
+    private static final long RETRY_WINDOW_MS = 600000L;
     private static final long LAUNCH_RETRY_INTERVAL_MS = 15000L;
     private static final int MAX_LAUNCH_ATTEMPTS = 3;
 
@@ -107,46 +107,26 @@ public final class MediaAutoRestoreService extends Service {
         return START_NOT_STICKY;
     }
 
-    /** Launch exact saved URI when available; otherwise request a title search, then app home. */
+    /**
+     * Do not launch the source app on display 0. After a power-loss reboot there is
+     * no surviving Android task to move; V10 must recreate it only after its AA
+     * projection surface is attached. This service records the pending restore and
+     * waits for the matching MediaSession to appear from that projection task.
+     */
     private void requestSourceLaunch() {
-        final String packageName = expectedPackage;
-        final String mediaUri = MediaSessionBridge.getCheckpointMediaUri(this);
-        final String title = MediaSessionBridge.getCheckpointTitle(this);
-        final String artist = MediaSessionBridge.getCheckpointArtist(this);
-        RootShellSession.EXEC.execute(() -> {
-            String pkg = shellQuote(packageName);
-            if (!TextUtils.isEmpty(mediaUri)) {
-                try {
-                    rootShell.run(15, "am start --display 0 -a android.intent.action.VIEW -d "
-                            + shellQuote(mediaUri) + " -p " + pkg);
-                    Log.i(TAG, "Opened saved media URI on phone: " + packageName);
-                    return;
-                } catch (RuntimeException error) {
-                    Log.w(TAG, "Saved media URI not accepted; trying app search", error);
-                    prepareAccessibilityRecovery();
-                }
-            } else {
-                prepareAccessibilityRecovery();
-            }
-            String query = joinTitleArtist(title, artist);
-            if (!TextUtils.isEmpty(query)) {
-                try {
-                    rootShell.run(15, "am start --display 0 -a android.intent.action.SEARCH"
-                            + " --es query " + shellQuote(query) + " -p " + pkg);
-                    Log.i(TAG, "Requested saved-title search in " + packageName);
-                    return;
-                } catch (RuntimeException error) {
-                    Log.i(TAG, "No compatible SEARCH activity; opening app launcher", error);
-                }
-            }
-            try {
-                rootShell.run(15, "am start --display 0 -a android.intent.action.MAIN"
-                        + " -c android.intent.category.LAUNCHER -p " + pkg);
-                Log.i(TAG, "Launched source app on phone display 0: " + packageName);
-            } catch (Throwable error) {
-                Log.e(TAG, "Root-assisted source app launch failed: " + packageName, error);
-            }
-        });
+        String query = joinTitleArtist(MediaSessionBridge.getCheckpointTitle(this),
+                MediaSessionBridge.getCheckpointArtist(this));
+        getSharedPreferences("media_autoplay", MODE_PRIVATE).edit()
+                .putBoolean("pending_projection_restore", true)
+                .putString("target_package", expectedPackage)
+                .putString("query", query)
+                .putString("phase", "await_projection")
+                .putInt("target_display_id", -1)
+                .putLong("started_at", System.currentTimeMillis())
+                .putBoolean("mini_engine_active", false)
+                .apply();
+        Log.i(TAG, "Deferred source task launch until V10 projection display is ready; "
+                + "phone display remains untouched: " + expectedPackage);
     }
 
     private void prepareAccessibilityRecovery() {
@@ -164,6 +144,7 @@ public final class MediaAutoRestoreService extends Service {
 
     private void clearRecoveryAssist() {
         getSharedPreferences("media_autoplay", MODE_PRIVATE).edit()
+                .remove("pending_projection_restore")
                 .remove("target_package").remove("query").remove("phase")
                 .remove("target_display_id").remove("started_at").remove("search_submitted_at").apply();
     }
