@@ -696,9 +696,12 @@ public final class V10CarActivity
                     return;
                 }
                 String uri = MediaSessionBridge.getCheckpointMediaUri(V10CarActivity.this);
-                String query = MediaAutoRestoreService.joinTitleArtist(
-                        MediaSessionBridge.getCheckpointTitle(V10CarActivity.this),
-                        MediaSessionBridge.getCheckpointArtist(V10CarActivity.this));
+                String savedTitle = MediaSessionBridge.getCheckpointTitle(V10CarActivity.this);
+                String savedArtist = MediaSessionBridge.getCheckpointArtist(V10CarActivity.this);
+                String query = TextUtils.isEmpty(savedTitle) ? ""
+                        : (TextUtils.isEmpty(savedArtist)
+                        || savedTitle.toLowerCase(Locale.ROOT).contains(savedArtist.toLowerCase(Locale.ROOT))
+                        ? savedTitle : savedTitle + " " + savedArtist);
                 if (!TextUtils.isEmpty(uri)) {
                     boolean accepted = session.launchViewIntentOnDisplay(
                             target.getPackageName(), uri);
