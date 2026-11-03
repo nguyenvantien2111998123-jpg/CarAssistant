@@ -101,6 +101,14 @@ public final class V10DisplayController {
             return false;
         }
         texture.setDefaultBufferSize(width, height);
+        try {
+            // Headless mode starts at a safe 16:9 size. Once Android Auto creates
+            // the real TextureView, resize Display 2 to its exact content bounds
+            // before swapping producers.
+            virtualDisplay.resize(width, height, 160);
+        } catch (RuntimeException error) {
+            Log.w(TAG, "Virtual display resize deferred; keeping current bounds", error);
+        }
         return bindSurface(new Surface(texture));
     }
 
