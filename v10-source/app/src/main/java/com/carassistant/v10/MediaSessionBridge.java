@@ -696,6 +696,10 @@ public final class MediaSessionBridge extends NotificationListenerService {
     }
 
     private void releaseMirrorSession() {
+        if (steeringKeyHandler != null) {
+            steeringKeyHandler.dispose();
+            steeringKeyHandler = null;
+        }
         MediaSession session = mirrorSession;
         mirrorSession = null;
         if (session != null) {
