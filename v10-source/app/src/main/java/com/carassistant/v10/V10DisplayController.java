@@ -195,6 +195,35 @@ public final class V10DisplayController {
     }
 
     /**
+     * Opens the exact checkpoint URI in the existing task on this display.
+     * CLEAR_TOP reuses the just-launched source task instead of creating a second
+     * MULTIPLE_TASK root or routing the URI to the phone's default display.
+     */
+    public synchronized void launchCheckpointUriOnDisplay(String packageName, String uri) {
+        if (!isReady() || packageName == null || packageName.trim().isEmpty()
+                || uri == null || uri.trim().isEmpty()) {
+            Log.w(TAG, "Refusing invalid checkpoint URI");
+            return;
+        }
+        managedPackages.add(packageName);
+        final int displayId = display.getDisplayId();
+        final int userId = Process.myUid() / 100000;
+        final String quotedPackage = shellQuote(packageName);
+        final String quotedUri = shellQuote(uri);
+        final String command = "RESOLVED=$(/system/bin/cmd package resolve-activity --brief --user "
+                + userId + " -a android.intent.action.VIEW -d " + quotedUri
+                + " -p " + quotedPackage + " 2>/dev/null | /system/bin/tail -n 1); "
+                + "if [ -n \"$RESOLVED\" ] && [ \"$RESOLVED\" != \"No activity found\" ]; then "
+                + "/system/bin/am start --user " + userId + " --display " + displayId
+                + " --windowingMode 1 -n \"$RESOLVED\""
+                + " -a android.intent.action.VIEW -d " + quotedUri + " -f 0x14000000; "
+                + "else /system/bin/am start --user " + userId + " --display " + displayId
+                + " --windowingMode 1 -a android.intent.action.VIEW -d " + quotedUri
+                + " -p " + quotedPackage + " -f 0x14000000; fi";
+        execute(command, "Checkpoint URI launch failed");
+    }
+
+    /**
      * Starts a media deep link only on the requested projection display.
      *
      * Media apps sometimes reuse a singleTask/singleInstance activity that is already
