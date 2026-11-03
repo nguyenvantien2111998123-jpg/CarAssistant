@@ -76,10 +76,16 @@ public final class MediaAutoRestoreService extends Service {
                     checkpointApplied = true;
                     // Keep the handoff marker until V10 opens. Its CarActivity must
                     // still know that Display 2 already owns this task and adopt it.
-                    getSharedPreferences("media_autoplay", MODE_PRIVATE).edit()
-                            .putString("phase", "headless_media_applied")
-                            .putInt("target_display_id", controller.getDisplayId())
-                            .apply();
+                    if (HeadlessProjectionHost.isHeadless()) {
+                        getSharedPreferences("media_autoplay", MODE_PRIVATE).edit()
+                                .putString("phase", "headless_media_applied")
+                                .putInt("target_display_id", controller.getDisplayId())
+                                .apply();
+                    } else {
+                        // V10 has already adopted the running task; the handoff marker
+                        // is no longer needed and must not trigger a second restore.
+                        clearRecoveryAssist();
+                    }
                     updateForegroundStatus("Đã khôi phục phiên media trên màn hình phụ");
                     Log.i(TAG, "Restored source=" + expectedPackage + ", autoplay=" + autoplay
                             + ", displayId=" + controller.getDisplayId());
