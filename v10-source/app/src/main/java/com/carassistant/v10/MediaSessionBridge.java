@@ -167,6 +167,8 @@ public final class MediaSessionBridge extends NotificationListenerService {
             if (TextUtils.isEmpty(packageName) || metadata == null) return;
 
             MediaCheckpointStore.Checkpoint previous = MediaCheckpointStore.load(this);
+            boolean sameItem = previous != null && packageName.equals(previous.packageName)
+                    && matchesSavedMediaIdentity(previous, metadata);
             android.content.SharedPreferences prefs =
                     getSharedPreferences(RESUME_PREFS, Context.MODE_PRIVATE);
             boolean restorePending = prefs.getBoolean("checkpoint_restore_pending", false);
@@ -174,8 +176,7 @@ public final class MediaSessionBridge extends NotificationListenerService {
             if (restorePending) {
                 // Never let a startup placeholder, a different app, or a different
                 // track overwrite the checkpoint while the old session is being restored.
-                if (!packageName.equals(restorePackage) || previous == null
-                        || !matchesSavedMediaIdentity(previous, metadata)) return;
+                if (!packageName.equals(restorePackage) || !sameItem) return;
             }
 
             String title = safeMetadataString(metadata, MediaMetadata.METADATA_KEY_TITLE);
@@ -190,7 +191,13 @@ public final class MediaSessionBridge extends NotificationListenerService {
 
             long duration = Math.max(0L,
                     metadata.getLong(MediaMetadata.METADATA_KEY_DURATION));
-            long position = state == null ? 0L : Math.max(0L, state.getPosition());
+            if ((state == null || state.getPosition() < 0L) && !sameItem) {
+                // Do not replace a good checkpoint with a session that has not
+                // published a usable playback position yet.
+                return;
+            }
+            long position = state == null || state.getPosition() < 0L
+                    ? previous.position : state.getPosition();
             if (state != null && state.getState() == PlaybackState.STATE_PLAYING
                     && state.getPlaybackSpeed() > 0f && state.getLastPositionUpdateTime() > 0L) {
                 long stateAge = Math.max(0L, android.os.SystemClock.elapsedRealtime()
@@ -212,9 +219,10 @@ public final class MediaSessionBridge extends NotificationListenerService {
                 } catch (RuntimeException ignored) { }
             }
 
-            boolean playing = state != null
-                    && state.getState() == PlaybackState.STATE_PLAYING;
-            float speed = playing && state != null ? state.getPlaybackSpeed() : 1f;
+            boolean playing = state == null ? previous.playing
+                    : state.getState() == PlaybackState.STATE_PLAYING;
+            float speed = playing && state != null ? state.getPlaybackSpeed()
+                    : (state == null ? previous.speed : 1f);
             long elapsedRealtime = android.os.SystemClock.elapsedRealtime();
             long updatedAt = System.currentTimeMillis();
             MediaCheckpointStore.Checkpoint checkpoint = new MediaCheckpointStore.Checkpoint(
@@ -265,11 +273,6 @@ public final class MediaSessionBridge extends NotificationListenerService {
                 .remove("checkpoint_restore_package")
                 .commit();
         synchronized (MediaSessionBridge.class) { restoreAttempt = null; }
-    }
-
-    private static boolean positionMatches(PlaybackState state, long expected, long tolerance) {
-        if (state == null || state.getPosition() < 0L) return false;
-        return Math.abs(state.getPosition() - expected) <= tolerance;
     }
 
         /** Package of the last media app with a published session, persisted across AA reconnects. */
@@ -362,6 +365,9 @@ public final class MediaSessionBridge extends NotificationListenerService {
         String actualUri = safeMetadataString(current, MediaMetadata.METADATA_KEY_MEDIA_URI);
         String actualTitle = safeMetadataString(current, MediaMetadata.METADATA_KEY_TITLE);
         String actualArtist = safeMetadataString(current, MediaMetadata.METADATA_KEY_ARTIST);
+        if (TextUtils.isEmpty(actualArtist)) {
+            actualArtist = safeMetadataString(current, MediaMetadata.METADATA_KEY_ALBUM_ARTIST);
+        }
         if (!TextUtils.isEmpty(expected.mediaId)) {
             return expected.mediaId.equals(actualId);
         }
@@ -668,19 +674,14 @@ public final class MediaSessionBridge extends NotificationListenerService {
             // Inspect current notifications so a reconnect that happened during boot is not missed.
             try {
                 StatusBarNotification[] active = getActiveNotifications();
-                boolean foundGearheadConnection = false;
+                // Do not trust a connection bit persisted by the previous boot.
+                // Rebuild it only from a currently present, explicitly connected notification.
+                getSharedPreferences(RESUME_PREFS, Context.MODE_PRIVATE).edit()
+                        .putBoolean(AA_CONNECTED_PREF, false).apply();
                 if (active != null) {
                     for (StatusBarNotification notification : active) {
-                        if (notification != null
-                                && GEARHEAD_PACKAGE.equals(notification.getPackageName())) {
-                            foundGearheadConnection = true;
-                        }
                         handleAndroidAutoConnectionNotification(notification);
                     }
-                }
-                if (!foundGearheadConnection) {
-                    getSharedPreferences(RESUME_PREFS, Context.MODE_PRIVATE).edit()
-                            .putBoolean(AA_CONNECTED_PREF, false).apply();
                 }
             } catch (RuntimeException error) {
                 Log.w(TAG, "Could not inspect active Android Auto notifications", error);
