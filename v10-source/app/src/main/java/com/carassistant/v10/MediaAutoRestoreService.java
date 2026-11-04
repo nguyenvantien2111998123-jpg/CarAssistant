@@ -52,6 +52,7 @@ public final class MediaAutoRestoreService extends Service {
     private long lastLaunchElapsed;
     private boolean checkpointApplied;
     private boolean contentRestoreRequested;
+    private boolean mediaIdPrepareSent;
     private long taskLaunchedAt;
     private long contentRestoreAt;
 
@@ -110,22 +111,42 @@ public final class MediaAutoRestoreService extends Service {
                 if (!exactItemReady && !contentRestoreRequested
                         && !contentAlreadyRequested && now - taskLaunchedAt >= 4000L) {
                     requestCheckpointContent(controller);
-                } else if (!exactItemReady && contentRestoreRequested
-                        && "checkpoint_uri".equals(getSharedPreferences(
-                                "media_autoplay", MODE_PRIVATE).getString("phase", ""))
-                        && now - contentRestoreAt >= 12000L) {
-                    String fallbackQuery = joinTitleArtist(
-                            MediaSessionBridge.getCheckpointTitle(MediaAutoRestoreService.this),
-                            MediaSessionBridge.getCheckpointArtist(MediaAutoRestoreService.this));
-                    if (!TextUtils.isEmpty(fallbackQuery)) {
-                        getSharedPreferences("media_autoplay", MODE_PRIVATE).edit()
-                                .putString("phase", "search")
-                                .putLong("started_at", System.currentTimeMillis())
-                                .putInt("target_display_id", controller.getDisplayId())
-                                .apply();
-                        controller.launchSearchIntentOnDisplay(expectedPackage, fallbackQuery);
-                        contentRestoreAt = now;
-                        Log.i(TAG, "Checkpoint URI did not publish the saved item; starting title search");
+                } else if (!exactItemReady && contentRestoreRequested) {
+                    android.content.SharedPreferences restorePrefs = getSharedPreferences(
+                            "media_autoplay", MODE_PRIVATE);
+                    String phase = restorePrefs.getString("phase", "");
+                    if ("checkpoint_media_id".equals(phase) && !mediaIdPrepareSent) {
+                        mediaIdPrepareSent = MediaSessionBridge.prepareCheckpointMediaId(
+                                MediaAutoRestoreService.this, expectedPackage);
+                        if (mediaIdPrepareSent) {
+                            contentRestoreAt = now;
+                            Log.i(TAG, "Source MediaSession accepted prepareFromMediaId; waiting for exact metadata");
+                        }
+                    }
+                    if (("checkpoint_media_id".equals(phase) || "checkpoint_uri".equals(phase))
+                            && now - contentRestoreAt >= 12000L) {
+                        String uri = MediaSessionBridge.getCheckpointMediaUri(
+                                MediaAutoRestoreService.this);
+                        if (!TextUtils.isEmpty(uri) && !"checkpoint_uri".equals(phase)) {
+                            restorePrefs.edit().putString("phase", "checkpoint_uri")
+                                    .putLong("started_at", System.currentTimeMillis())
+                                    .putInt("target_display_id", controller.getDisplayId()).apply();
+                            controller.launchCheckpointUriOnDisplay(expectedPackage, uri);
+                            contentRestoreAt = now;
+                            Log.i(TAG, "MediaId preparation did not restore the item; trying saved URI");
+                        } else {
+                            String fallbackQuery = joinTitleArtist(
+                                    MediaSessionBridge.getCheckpointTitle(MediaAutoRestoreService.this),
+                                    MediaSessionBridge.getCheckpointArtist(MediaAutoRestoreService.this));
+                            if (!TextUtils.isEmpty(fallbackQuery)) {
+                                restorePrefs.edit().putString("phase", "search")
+                                        .putLong("started_at", System.currentTimeMillis())
+                                        .putInt("target_display_id", controller.getDisplayId()).apply();
+                                controller.launchSearchIntentOnDisplay(expectedPackage, fallbackQuery);
+                                contentRestoreAt = now;
+                                Log.i(TAG, "Saved URI/mediaId did not publish the item; starting title search");
+                            }
+                        }
                     }
                 }
             }
@@ -240,6 +261,7 @@ public final class MediaAutoRestoreService extends Service {
         contentRestoreRequested = false;
         taskLaunchedAt = 0L;
         contentRestoreAt = 0L;
+        mediaIdPrepareSent = false;
         expectedPackage = MediaSessionBridge.getCheckpointPackage(this);
         if (expectedPackage == null) expectedPackage = MediaSessionBridge.getLastKnownPackage(this);
         expectedComponent = MediaSessionBridge.getCheckpointTaskComponent(this);
@@ -306,6 +328,7 @@ public final class MediaAutoRestoreService extends Service {
         if (contentRestoreRequested || controller == null || !controller.isReady()) return;
         contentRestoreRequested = true;
         contentRestoreAt = SystemClock.uptimeMillis();
+        String mediaId = MediaSessionBridge.getCheckpointMediaId(this);
         String uri = MediaSessionBridge.getCheckpointMediaUri(this);
         String query = joinTitleArtist(MediaSessionBridge.getCheckpointTitle(this),
                 MediaSessionBridge.getCheckpointArtist(this));
@@ -317,7 +340,12 @@ public final class MediaAutoRestoreService extends Service {
                         .putInt("target_display_id", controller.getDisplayId())
                         .putLong("started_at", System.currentTimeMillis())
                         .putBoolean("mini_engine_active", false);
-        if (!TextUtils.isEmpty(uri)) {
+        if (!TextUtils.isEmpty(mediaId)) {
+            editor.putString("phase", "checkpoint_media_id").apply();
+            mediaIdPrepareSent = MediaSessionBridge.prepareCheckpointMediaId(this, expectedPackage);
+            Log.i(TAG, "Preparing saved mediaId on Display 2 for " + expectedPackage
+                    + "; accepted=" + mediaIdPrepareSent);
+        } else if (!TextUtils.isEmpty(uri)) {
             editor.putString("phase", "checkpoint_uri").apply();
             controller.launchCheckpointUriOnDisplay(expectedPackage, uri);
             Log.i(TAG, "Opening saved media URI on Display 2 for " + expectedPackage);
