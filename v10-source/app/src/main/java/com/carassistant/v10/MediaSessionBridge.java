@@ -129,6 +129,21 @@ public final class MediaSessionBridge extends NotificationListenerService {
             MediaMetadata metadata = controller.getMetadata();
             PlaybackState state = controller.getPlaybackState();
             String packageName = controller.getPackageName();
+            PlaybackState state = controller.getPlaybackState();
+            String savedPackage = getCheckpointPackage(this);
+            boolean sameSavedSource = TextUtils.isEmpty(savedPackage)
+                    || savedPackage.equals(packageName);
+            boolean activelyPlaying = state != null
+                    && state.getState() == PlaybackState.STATE_PLAYING;
+            // During listener rebind/reboot, an unrelated idle session can be selected
+            // temporarily while the checkpointed app is still publishing its session.
+            // Keep the durable source checkpoint until that app returns or another app
+            // actually becomes the active playing source.
+            if (!sameSavedSource && !activelyPlaying) {
+                Log.d(TAG, "Keeping checkpoint for " + savedPackage
+                        + "; ignoring transient session " + packageName);
+                return;
+            }
             String title = metadata == null ? "" :
                     metadata.getString(MediaMetadata.METADATA_KEY_TITLE);
             String artist = metadata == null ? "" :
@@ -320,7 +335,11 @@ public final class MediaSessionBridge extends NotificationListenerService {
         }
     }
 
-    /** Apply the saved position and explicit autoplay preference to the matching player only. */
+    /**
+     * Apply the saved position and explicit autoplay preference to the matching player.
+     * A command being accepted by MediaSession IPC is not proof that the player restored.
+     * Return true only after the source session reports the requested state and position.
+     */
     public static boolean applyCheckpoint(Context context, String expectedPackage, boolean autoplay) {
         if (context == null || TextUtils.isEmpty(expectedPackage)) return false;
         MediaController controller = checkpointController;
@@ -337,14 +356,57 @@ public final class MediaSessionBridge extends NotificationListenerService {
                         + expectedPackage);
                 return false;
             }
+
             long position = getAdjustedCheckpointPosition(context);
             long duration = Math.max(0L, prefs.getLong(CHECKPOINT_DURATION, 0L));
-            controller.getTransportControls().seekTo(
-                    duration > 0L ? Math.min(position, duration) : position);
-            if (autoplay) controller.getTransportControls().play();
-            else controller.getTransportControls().pause();
-            Log.i(TAG, "Applied checkpoint; autoplay=" + autoplay + ", position=" + position);
-            return true;
+            long targetPosition = duration > 0L ? Math.min(position, duration) : position;
+            PlaybackState state = controller.getPlaybackState();
+            boolean desiredStateReached = state != null && (autoplay
+                    ? state.getState() == PlaybackState.STATE_PLAYING
+                    : state.getState() == PlaybackState.STATE_PAUSED);
+            long actualPosition = state == null ? -1L : state.getPosition();
+            long positionTolerance = 8000L;
+            boolean positionReached = actualPosition >= 0L
+                    && Math.abs(actualPosition - targetPosition) <= positionTolerance;
+
+            if (desiredStateReached && positionReached) {
+                prefs.edit().remove("restore_command_package")
+                        .remove("restore_command_identity")
+                        .remove("restore_command_at").apply();
+                Log.i(TAG, "Verified checkpoint state and position; autoplay=" + autoplay
+                        + ", position=" + actualPosition);
+                return true;
+            }
+
+            String identity = safeMetadataString(currentMetadata,
+                    MediaMetadata.METADATA_KEY_MEDIA_ID);
+            if (TextUtils.isEmpty(identity)) {
+                identity = safeMetadataString(currentMetadata, MediaMetadata.METADATA_KEY_MEDIA_URI);
+            }
+            if (TextUtils.isEmpty(identity)) {
+                identity = safeMetadataString(currentMetadata, MediaMetadata.METADATA_KEY_TITLE);
+            }
+            String previousPackage = prefs.getString("restore_command_package", "");
+            String previousIdentity = prefs.getString("restore_command_identity", "");
+            long previousCommandAt = prefs.getLong("restore_command_at", 0L);
+            long now = android.os.SystemClock.elapsedRealtime();
+            boolean identityChanged = !expectedPackage.equals(previousPackage)
+                    || !identity.equals(previousIdentity);
+            boolean retryCommand = identityChanged || previousCommandAt <= 0L
+                    || now - previousCommandAt >= 2000L;
+            if (retryCommand) {
+                controller.getTransportControls().seekTo(targetPosition);
+                if (autoplay) controller.getTransportControls().play();
+                else controller.getTransportControls().pause();
+                prefs.edit()
+                        .putString("restore_command_package", expectedPackage)
+                        .putString("restore_command_identity", identity)
+                        .putLong("restore_command_at", now)
+                        .apply();
+                Log.i(TAG, "Sent checkpoint transport commands; awaiting source confirmation"
+                        + ", autoplay=" + autoplay + ", position=" + targetPosition);
+            }
+            return false;
         } catch (RuntimeException error) {
             Log.w(TAG, "Could not apply media checkpoint", error);
             return false;
