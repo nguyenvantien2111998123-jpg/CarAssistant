@@ -392,7 +392,7 @@ public final class MediaSessionBridge extends NotificationListenerService {
             boolean identityChanged = !expectedPackage.equals(previousPackage)
                     || !identity.equals(previousIdentity);
             boolean retryCommand = identityChanged || previousCommandAt <= 0L
-                    || now - previousCommandAt >= 2000L;
+                    || now < previousCommandAt || now - previousCommandAt >= 2000L;
             if (retryCommand) {
                 controller.getTransportControls().seekTo(targetPosition);
                 if (autoplay) controller.getTransportControls().play();
