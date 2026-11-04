@@ -100,13 +100,14 @@ final class MediaCheckpointStore {
             Context app = context.getApplicationContext();
             AtomicFile atomic = atomicFile(app);
             try {
-                if (atomic.getBaseFile().exists()) {
-                    Checkpoint disk = readAtomic(atomic);
-                    if (disk != null && disk.isValid()) {
-                        cached = disk;
-                        return disk;
-                    }
+                // openRead() also recovers AtomicFile's backup after an interrupted rename.
+                Checkpoint disk = readAtomic(atomic);
+                if (disk != null && disk.isValid()) {
+                    cached = disk;
+                    return disk;
                 }
+            } catch (java.io.FileNotFoundException missing) {
+                // First install or pre-AtomicFile version: migrate the legacy preferences below.
             } catch (IOException | RuntimeException error) {
                 Log.e(TAG, "Atomic checkpoint read failed; trying legacy migration", error);
             }
@@ -183,7 +184,12 @@ final class MediaCheckpointStore {
             raw = null;
             mirrorLegacy(context, value);
         } catch (IOException | RuntimeException error) {
-            if (raw != null) atomic.failWrite(raw);
+            if (raw != null) {
+                try { atomic.failWrite(raw); }
+                catch (RuntimeException cleanupError) {
+                    Log.w(TAG, "AtomicFile rollback cleanup failed", cleanupError);
+                }
+            }
             Log.e(TAG, "Atomic checkpoint write failed; previous checkpoint retained", error);
         }
     }
