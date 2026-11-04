@@ -198,7 +198,8 @@ public final class MediaSessionBridge extends NotificationListenerService {
             }
             long position = state == null || state.getPosition() < 0L
                     ? previous.position : state.getPosition();
-            if (state != null && state.getState() == PlaybackState.STATE_PLAYING
+            if (state != null && state.getPosition() >= 0L
+                    && state.getState() == PlaybackState.STATE_PLAYING
                     && state.getPlaybackSpeed() > 0f && state.getLastPositionUpdateTime() > 0L) {
                 long stateAge = Math.max(0L, android.os.SystemClock.elapsedRealtime()
                         - state.getLastPositionUpdateTime());
@@ -848,7 +849,6 @@ public final class MediaSessionBridge extends NotificationListenerService {
         String lastPackage = getLastKnownPackage(this);
         android.content.SharedPreferences prefs =
                 getSharedPreferences(RESUME_PREFS, Context.MODE_PRIVATE);
-        String restorePackage = prefs.getString("checkpoint_restore_package", "");
         boolean restorePending = prefs.getBoolean("checkpoint_restore_pending", false);
         boolean previousBootCheckpoint = checkpoint != null
                 && checkpoint.elapsedRealtime > android.os.SystemClock.elapsedRealtime();
