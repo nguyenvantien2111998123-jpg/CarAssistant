@@ -389,6 +389,13 @@ public final class MediaAutoRestoreService extends Service {
         super.onDestroy();
     }
 
+    /** True only after a non-built-in output has remained available for the stability window. */
+    public static boolean isExternalOutputStable() {
+        MediaAutoRestoreService owner = ownerInstance;
+        return owner != null && owner.audioRouteGate != null
+                && owner.audioRouteGate.isExternalOutputStable();
+    }
+
     /** Publish the latest phone-side source snapshot to the AA-facing controller session. */
     public static void updateMediaSession(Context context, MediaSessionBridge.Snapshot snapshot) {
         MediaAutoRestoreService owner = ownerInstance;
