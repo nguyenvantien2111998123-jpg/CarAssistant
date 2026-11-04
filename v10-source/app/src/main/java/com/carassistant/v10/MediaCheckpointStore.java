@@ -127,8 +127,9 @@ final class MediaCheckpointStore {
         if (context == null || checkpoint == null || !checkpoint.isValid()) return;
         Context app = context.getApplicationContext();
         synchronized (CACHE_LOCK) {
-            Checkpoint previous = cached;
-            if (previous != null && checkpoint.updatedAt < previous.updatedAt) return;
+            // Calls originate from the main-thread MediaSession observer. Do not
+            // compare wall-clock timestamps: NTP/user clock changes must not block
+            // a newer checkpoint after a clock adjustment.
             cached = checkpoint;
         }
         try {
