@@ -87,9 +87,10 @@ public final class MediaAutoRestoreService extends Service {
                     || now - lastLaunchElapsed >= LAUNCH_RETRY_INTERVAL_MS)) {
                 requestSourceLaunch(controller);
             }
+            boolean exactItemReady = false;
             if (controller.isLaunched()) {
                 if (taskLaunchedAt == 0L) taskLaunchedAt = now;
-                boolean exactItemReady = MediaSessionBridge.isCheckpointMediaReady(
+                exactItemReady = MediaSessionBridge.isCheckpointMediaReady(
                         MediaAutoRestoreService.this, expectedPackage);
                 boolean contentAlreadyRequested = getSharedPreferences(
                         "media_autoplay", MODE_PRIVATE)
@@ -118,7 +119,10 @@ public final class MediaAutoRestoreService extends Service {
                 }
             }
 
-            if (!checkpointApplied) {
+            // Never apply a checkpoint before the projection task and the exact source
+            // media item are both ready. This prevents a phone-side session from being
+            // marked restored while Display 2 is still launching or showing another app.
+            if (controller.isLaunched() && exactItemReady && !checkpointApplied) {
                 boolean autoplay = getSharedPreferences("media_autoplay", MODE_PRIVATE)
                         .getBoolean("enabled", true);
                 if (MediaSessionBridge.applyCheckpoint(
