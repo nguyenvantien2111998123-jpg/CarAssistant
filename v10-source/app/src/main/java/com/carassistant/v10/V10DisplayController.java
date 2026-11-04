@@ -330,31 +330,50 @@ public final class V10DisplayController {
         launched = false;
         final int displayId = display.getDisplayId();
         final int userId = Process.myUid() / 100000;
+        final String packageName = component.getPackageName();
         final String flat = component.flattenToString().replace("'", "'\\\"'\\\"'");
-        final String command = "ROOT_TASK_ID=$(/system/bin/dumpsys activity activities 2>/dev/null"
+        final String packageTask = shellQuote("A=" + packageName);
+        final String displayHeader = shellQuote("Display #" + displayId);
+        final String command = "ACTIVITIES=$(/system/bin/dumpsys activity activities 2>/dev/null); "
+                + "ROOT_TASK_ID=$(printf '%s\\n' \"$ACTIVITIES\""
                 + " | /system/bin/grep 'Task{'"
-                + " | /system/bin/grep -F " + shellQuote("A=" + component.getPackageName())
-                // Child tasks expose rootTaskId; a root task uses its own #taskId.
+                + " | /system/bin/grep -F " + packageTask
                 + " | /system/bin/sed -n -e 's/.*rootTaskId=\\([0-9][0-9]*\\).*/\\1/p'"
                 + " -e 's/.*Task{[^#]*#\\([0-9][0-9]*\\).*/\\1/p'"
                 + " | /system/bin/head -n 1); "
-                + "if [ -n \"$ROOT_TASK_ID\" ] && /system/bin/am display move-stack \"$ROOT_TASK_ID\" " + displayId + "; then "
-                + "echo 'CarAsistant: moved existing media task to projection display'; "
+                + "if printf '%s\\n' \"$ACTIVITIES\" | /system/bin/awk "
+                + "-v wanted=" + packageTask + " -v display=" + displayHeader + " "
+                + "'/^Display #/ { active = index($0, display) > 0 }"
+                + " active && index($0, wanted) { found=1 }"
+                + " END { exit(found ? 0 : 1) }'; then "
+                + "echo 'CarAsistant: media task already on projection display'; "
+                + "elif [ -n \"$ROOT_TASK_ID\" ]; then "
+                + "/system/bin/am display move-stack \"$ROOT_TASK_ID\" " + displayId + " || exit 1; "
                 + "else "
-                // After a reboot, or if moving the old task fails, create a distinct
-                // task directly on V10's virtual display; never use phone display 0.
+                + "if printf '%s\\n' \"$ACTIVITIES\" | /system/bin/grep -F " + packageTask + " >/dev/null; then "
+                + "echo 'CarAsistant: existing media task found but its root ID could not be resolved'; exit 1; "
+                + "fi; "
                 + "/system/bin/am start --user " + userId
                 + " --display " + displayId
                 + " --windowingMode 1"
                 + " -a android.intent.action.MAIN"
                 + " -c android.intent.category.LAUNCHER"
-                + " -f 0x18000000"
-                + " -n '" + flat + "'"
-                + "; fi"
-                + " && echo 'CarAsistant: restored media task on projection display'";
+                + " -f 0x10000000"
+                + " -n '" + flat + "' || exit 1; "
+                + "fi; "
+                + "ATTEMPT=0; while [ \"$ATTEMPT\" -lt 10 ]; do "
+                + "ACTIVITIES=$(/system/bin/dumpsys activity activities 2>/dev/null); "
+                + "if printf '%s\\n' \"$ACTIVITIES\" | /system/bin/awk "
+                + "-v wanted=" + packageTask + " -v display=" + displayHeader + " "
+                + "'/^Display #/ { active = index($0, display) > 0 }"
+                + " active && index($0, wanted) { found=1 }"
+                + " END { exit(found ? 0 : 1) }'; then "
+                + "echo 'CarAsistant: verified media task on projection display'; exit 0; "
+                + "fi; /system/bin/sleep 0.5; ATTEMPT=$((ATTEMPT + 1)); done; "
+                + "echo 'CarAsistant: media task not verified on projection display'; exit 1";
         RootShellSession.EXEC.execute(() -> {
             try {
-                rootShell.run(10, command);
+                rootShell.run(12, command);
                 synchronized (V10DisplayController.this) {
                     if (!destroyed && component.equals(target)) launched = true;
                 }
@@ -362,7 +381,8 @@ public final class V10DisplayController {
                 synchronized (V10DisplayController.this) {
                     if (component.equals(target)) launched = false;
                 }
-                Log.w(TAG, "Existing media task move failed; no duplicate task was launched", error);
+                Log.w(TAG, "Media task was not verified on projection display; retry remains enabled",
+                        error);
             }
         });
     }
