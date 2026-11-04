@@ -940,6 +940,24 @@ public final class MediaSessionBridge extends NotificationListenerService {
                         if (selectedController == activeController) saveCurrentCheckpoint();
                     }
                     @Override public void onPlaybackStateChanged(PlaybackState state) {
+                        // Some source apps auto-resume as soon as AA reconnects. If that
+                        // happens before an external output is available, stop that early
+                        // local-speaker burst; the restore service will issue Play again
+                        // only after its output-stability gate opens.
+                        boolean restorePending = getSharedPreferences(
+                                RESUME_PREFS, Context.MODE_PRIVATE)
+                                .getBoolean("checkpoint_restore_pending", false);
+                        if (state != null && state.getState() == PlaybackState.STATE_PLAYING
+                                && restorePending
+                                && !MediaAutoRestoreService.isExternalOutputStable()) {
+                            try {
+                                selectedController.getTransportControls().pause();
+                                Log.w(TAG, "Held source auto-resume until external audio output is stable: "
+                                        + selectedController.getPackageName());
+                            } catch (RuntimeException error) {
+                                Log.w(TAG, "Could not hold early source playback during AA route handoff", error);
+                            }
+                        }
                         publish(selectedController);
                         if (selectedController == activeController) saveCurrentCheckpoint();
                     }
