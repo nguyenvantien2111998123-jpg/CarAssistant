@@ -63,6 +63,10 @@ public final class MediaSessionBridge extends NotificationListenerService {
     private static volatile MediaController checkpointController;
     // Package-matched session candidate used only for non-playing prepareFromMediaId.
     private static volatile MediaController checkpointPackageController;
+    // Keep the AA-facing controller owned by the long-lived NotificationListenerService,
+    // never by the reconnect restore foreground service (which is stopped on AA disconnect).
+    private MediaSession mirrorSession;
+    private SteeringWheelMediaKeyHandler steeringKeyHandler;
     private static volatile long lastCheckpointPosition;
     private static volatile long lastCheckpointDuration;
     private static volatile MediaSessionBridge listenerInstance;
@@ -317,6 +321,141 @@ public final class MediaSessionBridge extends NotificationListenerService {
         MediaCheckpointStore.Checkpoint checkpoint = MediaCheckpointStore.load(context);
         return checkpoint == null || TextUtils.isEmpty(checkpoint.artist)
                 ? null : checkpoint.artist;
+    }
+
+    private void ensureMirrorSession() {
+        if (mirrorSession != null) return;
+        mirrorSession = new MediaSession(this, "CarAsistant Media Controller");
+        mirrorSession.setFlags(MediaSession.FLAG_HANDLES_MEDIA_BUTTONS
+                | MediaSession.FLAG_HANDLES_TRANSPORT_CONTROLS);
+        steeringKeyHandler = new SteeringWheelMediaKeyHandler(
+                new SteeringWheelMediaKeyHandler.Actions() {
+                    @Override public void onNext() { MediaSessionBridge.skipNext(); }
+                    @Override public void onPrevious() { MediaSessionBridge.skipPrevious(); }
+                    @Override public void onSeekForward() { MediaSessionBridge.seekBy(15000L); }
+                    @Override public void onSeekBackward() { MediaSessionBridge.seekBy(-15000L); }
+                    @Override public void onVoiceAssistant() {
+                        Intent intent = new Intent("com.carassistant.v10.STEERING_VOICE")
+                                .setPackage(getPackageName());
+                        sendBroadcast(intent);
+                    }
+                });
+        mirrorSession.setCallback(new MediaSession.Callback() {
+            @Override public boolean onMediaButtonEvent(Intent intent) {
+                if (steeringKeyHandler != null && steeringKeyHandler.handle(intent)) return true;
+                return super.onMediaButtonEvent(intent);
+            }
+            @Override public void onPlay() { MediaSessionBridge.play(); }
+            @Override public void onPause() { MediaSessionBridge.pause(); }
+            @Override public void onSkipToNext() { MediaSessionBridge.skipNext(); }
+            @Override public void onSkipToPrevious() { MediaSessionBridge.skipPrevious(); }
+            @Override public void onFastForward() { MediaSessionBridge.seekBy(15000L); }
+            @Override public void onRewind() { MediaSessionBridge.seekBy(-15000L); }
+            @Override public void onSeekTo(long position) { MediaSessionBridge.seekTo(position); }
+            @Override public void onStop() { MediaSessionBridge.pause(); }
+            @Override public void onCustomAction(String action, Bundle extras) {
+                if (ACTION_VOICE_ASSISTANT.equals(action)) {
+                    Intent intent = new Intent("com.carassistant.v10.STEERING_VOICE")
+                            .setPackage(getPackageName());
+                    sendBroadcast(intent);
+                }
+            }
+        }, MAIN);
+    }
+
+    private void updateMirrorSession(Snapshot state) {
+        MediaSession session = mirrorSession;
+        if (session == null) return;
+        boolean hasPlayer = state != null && !TextUtils.isEmpty(state.packageName);
+        if (!hasPlayer) {
+            String savedTitle = getCheckpointTitle(this);
+            String savedArtist = getCheckpointArtist(this);
+            String savedPackage = getCheckpointPackage(this);
+            MediaCheckpointStore.Checkpoint checkpoint = MediaCheckpointStore.load(this);
+            long savedDuration = checkpoint == null ? 0L : Math.max(0L, checkpoint.duration);
+            long savedPosition = getAdjustedCheckpointPosition(this);
+            if (!TextUtils.isEmpty(savedTitle)) {
+                session.setMetadata(new MediaMetadata.Builder()
+                        .putString(MediaMetadata.METADATA_KEY_TITLE, savedTitle)
+                        .putString(MediaMetadata.METADATA_KEY_ARTIST,
+                                TextUtils.isEmpty(savedArtist) ? savedPackage : savedArtist)
+                        .putString(MediaMetadata.METADATA_KEY_ALBUM,
+                                TextUtils.isEmpty(savedPackage) ? "CarAsistant" : savedPackage)
+                        .putLong(MediaMetadata.METADATA_KEY_DURATION, savedDuration)
+                        .build());
+                session.setPlaybackState(buildMirrorPlaybackState(false, savedPosition, savedDuration));
+            } else {
+                session.setMetadata(new MediaMetadata.Builder()
+                        .putString(MediaMetadata.METADATA_KEY_TITLE, "CarAsistant Media")
+                        .putString(MediaMetadata.METADATA_KEY_ARTIST, "Trình điều khiển media")
+                        .putString(MediaMetadata.METADATA_KEY_ALBUM, "CarAsistant")
+                        .build());
+                session.setPlaybackState(buildMirrorPlaybackState(false, 0L, 0L));
+            }
+            session.setActive(true);
+            return;
+        }
+
+        MediaMetadata.Builder metadata = new MediaMetadata.Builder()
+                .putString(MediaMetadata.METADATA_KEY_TITLE,
+                        TextUtils.isEmpty(state.title) ? "Đang phát media" : state.title)
+                .putString(MediaMetadata.METADATA_KEY_ARTIST,
+                        TextUtils.isEmpty(state.artist) ? state.packageName : state.artist)
+                .putString(MediaMetadata.METADATA_KEY_ALBUM, state.packageName)
+                .putLong(MediaMetadata.METADATA_KEY_DURATION, Math.max(0L, state.duration));
+        Bitmap artwork = safeMirrorArtwork(state.artwork);
+        if (artwork != null) metadata.putBitmap(MediaMetadata.METADATA_KEY_ALBUM_ART, artwork);
+        session.setMetadata(metadata.build());
+        session.setPlaybackState(buildMirrorPlaybackState(
+                state.playing, Math.max(0L, state.position), Math.max(0L, state.duration)));
+        session.setActive(true);
+    }
+
+    private PlaybackState buildMirrorPlaybackState(boolean playing, long position, long duration) {
+        long actions = PlaybackState.ACTION_PLAY | PlaybackState.ACTION_PAUSE
+                | PlaybackState.ACTION_PLAY_PAUSE | PlaybackState.ACTION_SKIP_TO_NEXT
+                | PlaybackState.ACTION_SKIP_TO_PREVIOUS | PlaybackState.ACTION_SEEK_TO
+                | PlaybackState.ACTION_FAST_FORWARD | PlaybackState.ACTION_REWIND;
+        return new PlaybackState.Builder().setActions(actions)
+                .setState(playing ? PlaybackState.STATE_PLAYING : PlaybackState.STATE_PAUSED,
+                        duration > 0L ? Math.min(position, duration) : position,
+                        playing ? 1f : 0f)
+                .addCustomAction(new PlaybackState.CustomAction.Builder(
+                        ACTION_VOICE_ASSISTANT, "Trợ lý giọng nói CarAsistant",
+                        android.R.drawable.ic_btn_speak_now).build())
+                .build();
+    }
+
+    private static Bitmap safeMirrorArtwork(Bitmap source) {
+        if (source == null || source.isRecycled()) return null;
+        try {
+            int width = source.getWidth();
+            int height = source.getHeight();
+            if (width <= 384 && height <= 384) return source;
+            float scale = Math.min(384f / width, 384f / height);
+            return Bitmap.createScaledBitmap(source, Math.max(1, Math.round(width * scale)),
+                    Math.max(1, Math.round(height * scale)), true);
+        } catch (RuntimeException error) {
+            Log.w(TAG, "Could not prepare mirrored media artwork", error);
+            return null;
+        }
+    }
+
+    private void releaseMirrorSession() {
+        if (steeringKeyHandler != null) {
+            steeringKeyHandler.dispose();
+            steeringKeyHandler = null;
+        }
+        MediaSession session = mirrorSession;
+        mirrorSession = null;
+        if (session != null) {
+            try {
+                session.setActive(false);
+                session.release();
+            } catch (RuntimeException error) {
+                Log.w(TAG, "Could not release mirrored media session", error);
+            }
+        }
     }
 
     private static String safeMetadataString(MediaMetadata metadata, String key) {
@@ -695,6 +834,8 @@ public final class MediaSessionBridge extends NotificationListenerService {
     public void onListenerConnected() {
         super.onListenerConnected();
         listenerInstance = this;
+        ensureMirrorSession();
+        updateMirrorSession(snapshot);
         try {
             manager = (MediaSessionManager) getSystemService(Context.MEDIA_SESSION_SERVICE);
             if (manager == null) return;
@@ -703,7 +844,6 @@ public final class MediaSessionBridge extends NotificationListenerService {
                     sessionsListener, new ComponentName(this, MediaSessionBridge.class));
             refreshControllers(manager.getActiveSessions(
                     new ComponentName(this, MediaSessionBridge.class)));
-            MediaAutoRestoreService.updateMediaSession(this, snapshot);
             // NotificationListenerService is rebound by Android after reboot.
             // Inspect current notifications so a reconnect that happened during boot is not missed.
             try {
@@ -746,6 +886,7 @@ public final class MediaSessionBridge extends NotificationListenerService {
         // Keep the last complete AtomicFile checkpoint if NotificationListener is rebound.
         saveCurrentCheckpoint();
         clearActiveController();
+        updateMirrorSession(Snapshot.empty());
         super.onListenerDisconnected();
     }
 
@@ -753,6 +894,7 @@ public final class MediaSessionBridge extends NotificationListenerService {
     public void onDestroy() {
         MAIN.removeCallbacks(checkpointTask);
         MAIN.removeCallbacks(controllerRefreshTask);
+        releaseMirrorSession();
         super.onDestroy();
     }
 
@@ -1017,7 +1159,7 @@ public final class MediaSessionBridge extends NotificationListenerService {
         }
         Snapshot latest = snapshot;
         MAIN.post(() -> {
-            MediaAutoRestoreService.updateMediaSession(this, latest);
+            updateMirrorSession(latest);
             for (Listener listener : LISTENERS) {
                 try { listener.onMediaChanged(latest); }
                 catch (RuntimeException error) { Log.w(TAG, "Media UI callback failed", error); }
