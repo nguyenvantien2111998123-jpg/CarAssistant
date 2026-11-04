@@ -59,6 +59,7 @@ public final class MediaAutoRestoreService extends Service {
                     .getBoolean("aa_connected", false);
             if (!connected) {
                 handler.removeCallbacks(restoreCheckpoint);
+                MediaSessionBridge.cancelCheckpointRestore(MediaAutoRestoreService.this);
                 HeadlessProjectionHost.releaseIfHeadless(MediaAutoRestoreService.this);
                 stopForeground(true);
                 stopSelf();
@@ -133,6 +134,7 @@ public final class MediaAutoRestoreService extends Service {
                 if (MediaSessionBridge.applyCheckpoint(
                         MediaAutoRestoreService.this, expectedPackage, autoplay)) {
                     checkpointApplied = true;
+                    MediaSessionBridge.completeCheckpointRestore(MediaAutoRestoreService.this);
                     // Keep the handoff marker until V10 opens. Its CarActivity must
                     // still know that Display 2 already owns this task and adopt it.
                     if (HeadlessProjectionHost.isHeadless()) {
@@ -207,6 +209,7 @@ public final class MediaAutoRestoreService extends Service {
         String action = intent == null ? ACTION_RESTORE : intent.getAction();
         if (ACTION_AA_DISCONNECTED.equals(action)) {
             handler.removeCallbacks(restoreCheckpoint);
+            MediaSessionBridge.cancelCheckpointRestore(this);
             HeadlessProjectionHost.releaseIfHeadless(this);
             stopForeground(true);
             stopSelf(startId);
@@ -249,6 +252,7 @@ public final class MediaAutoRestoreService extends Service {
             return START_STICKY;
         }
 
+        MediaSessionBridge.beginCheckpointRestore(this, expectedPackage);
         startedAt = SystemClock.uptimeMillis();
         String savedQuery = joinTitleArtist(MediaSessionBridge.getCheckpointTitle(this),
                 MediaSessionBridge.getCheckpointArtist(this));
