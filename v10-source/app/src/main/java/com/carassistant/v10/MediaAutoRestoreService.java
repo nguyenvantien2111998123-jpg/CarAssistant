@@ -8,6 +8,7 @@ import android.content.ComponentName;
 import android.content.Context;
 import android.content.Intent;
 import android.content.pm.PackageManager;
+import android.media.AudioManager;
 import android.graphics.Bitmap;
 import android.media.MediaMetadata;
 import android.media.session.MediaSession;
@@ -43,6 +44,7 @@ public final class MediaAutoRestoreService extends Service {
     private static volatile MediaAutoRestoreService ownerInstance;
     private MediaSession mirrorSession;
     private SteeringWheelMediaKeyHandler steeringKeyHandler;
+    private MediaAudioRouteGate audioRouteGate;
     private long startedAt;
     private String expectedPackage;
     private ComponentName expectedComponent;
@@ -131,7 +133,16 @@ public final class MediaAutoRestoreService extends Service {
             if (!checkpointApplied) {
                 boolean autoplay = getSharedPreferences("media_autoplay", MODE_PRIVATE)
                         .getBoolean("enabled", true);
-                if (MediaSessionBridge.applyCheckpoint(
+                // Do not issue an automatic Play while Android still exposes only
+                // the phone's built-in outputs. AudioDeviceInfo reports connected
+                // outputs (not the exact stream route), so this is a conservative
+                // readiness gate and never attempts to force audio routing.
+                boolean outputReady = !autoplay || (audioRouteGate != null
+                        && audioRouteGate.isExternalOutputStable());
+                if (!outputReady) {
+                    Log.i(TAG, "Deferring checkpoint autoplay until an external output "
+                            + "has remained available; phone speaker playback is not allowed");
+                } else if (MediaSessionBridge.applyCheckpoint(
                         MediaAutoRestoreService.this, expectedPackage, autoplay)) {
                     checkpointApplied = true;
                     MediaSessionBridge.completeCheckpointRestore(MediaAutoRestoreService.this);
@@ -171,6 +182,9 @@ public final class MediaAutoRestoreService extends Service {
         startForeground(NOTIFICATION_ID, buildNotification(
                 "Đang chuẩn bị khôi phục media trên màn hình phụ"));
         ownerInstance = this;
+        audioRouteGate = new MediaAudioRouteGate(this, handler, (stable, outputs) ->
+                Log.i(TAG, "Audio output readiness=" + stable + "; outputs=" + outputs));
+        audioRouteGate.start();
         createMirrorSession();
         updateMirrorSession(MediaSessionBridge.getSnapshot());
     }
@@ -336,6 +350,10 @@ public final class MediaAutoRestoreService extends Service {
         handler.removeCallbacks(restoreCheckpoint);
         handler.removeCallbacks(disconnectMonitor);
         releaseMirrorSession();
+        if (audioRouteGate != null) {
+            audioRouteGate.stop();
+            audioRouteGate = null;
+        }
         if (ownerInstance == this) ownerInstance = null;
         // If the service is stopped unexpectedly while the reader still owns the
         // Surface, release it. Once V10 takes over, releaseIfHeadless is a no-op.
