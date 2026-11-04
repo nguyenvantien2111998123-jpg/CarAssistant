@@ -129,7 +129,6 @@ public final class MediaSessionBridge extends NotificationListenerService {
             MediaMetadata metadata = controller.getMetadata();
             PlaybackState state = controller.getPlaybackState();
             String packageName = controller.getPackageName();
-            PlaybackState state = controller.getPlaybackState();
             String savedPackage = getCheckpointPackage(this);
             boolean sameSavedSource = TextUtils.isEmpty(savedPackage)
                     || savedPackage.equals(packageName);
