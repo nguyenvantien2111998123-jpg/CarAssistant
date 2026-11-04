@@ -725,8 +725,10 @@ public final class MediaSessionBridge extends NotificationListenerService {
 
     @Override
     public void onNotificationPosted(StatusBarNotification sbn) {
+        // Gearhead's connection notification is the only notification signal used
+        // for reconnect orchestration. MediaSession callbacks observe source playback.
+        if (sbn == null || !GEARHEAD_PACKAGE.equals(sbn.getPackageName())) return;
         handleAndroidAutoConnectionNotification(sbn);
-        refreshFromManager();
     }
 
     /**
@@ -807,25 +809,23 @@ public final class MediaSessionBridge extends NotificationListenerService {
 
     @Override
     public void onNotificationRemoved(StatusBarNotification sbn) {
-        if (sbn != null && GEARHEAD_PACKAGE.equals(sbn.getPackageName())) {
-            android.content.SharedPreferences prefs =
-                    getSharedPreferences(RESUME_PREFS, Context.MODE_PRIVATE);
-            int expectedId = prefs.getInt(AA_NOTIFICATION_ID_PREF, -1);
-            String expectedTag = prefs.getString(AA_NOTIFICATION_TAG_PREF, "");
-            String removedTag = sbn.getTag() == null ? "" : sbn.getTag();
-            if (sbn.getId() == expectedId && removedTag.equals(expectedTag)) {
-                prefs.edit().putBoolean(AA_CONNECTED_PREF, false)
-                        .remove(AA_TRIGGER_PREF)
-                        .remove(AA_TRIGGER_ELAPSED_PREF)
-                        .remove(AA_NOTIFICATION_ID_PREF)
-                        .remove(AA_NOTIFICATION_TAG_PREF)
-                        .apply();
-                cancelCheckpointRestore(this);
-                stopService(new Intent(this, MediaAutoRestoreService.class));
-                Log.i(TAG, "Android Auto connection notification removed; restore service stopped");
-            }
+        if (sbn == null || !GEARHEAD_PACKAGE.equals(sbn.getPackageName())) return;
+        android.content.SharedPreferences prefs =
+                getSharedPreferences(RESUME_PREFS, Context.MODE_PRIVATE);
+        int expectedId = prefs.getInt(AA_NOTIFICATION_ID_PREF, -1);
+        String expectedTag = prefs.getString(AA_NOTIFICATION_TAG_PREF, "");
+        String removedTag = sbn.getTag() == null ? "" : sbn.getTag();
+        if (sbn.getId() == expectedId && removedTag.equals(expectedTag)) {
+            prefs.edit().putBoolean(AA_CONNECTED_PREF, false)
+                    .remove(AA_TRIGGER_PREF)
+                    .remove(AA_TRIGGER_ELAPSED_PREF)
+                    .remove(AA_NOTIFICATION_ID_PREF)
+                    .remove(AA_NOTIFICATION_TAG_PREF)
+                    .apply();
+            cancelCheckpointRestore(this);
+            stopService(new Intent(this, MediaAutoRestoreService.class));
+            Log.i(TAG, "Android Auto connection notification removed; restore service stopped");
         }
-        refreshFromManager();
     }
 
     private void refreshFromManager() {
