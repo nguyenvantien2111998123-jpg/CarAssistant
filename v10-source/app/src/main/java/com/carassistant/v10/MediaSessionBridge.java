@@ -63,6 +63,31 @@ public final class MediaSessionBridge extends NotificationListenerService {
     private static volatile MediaController checkpointController;
     private static volatile long lastCheckpointPosition;
     private static volatile long lastCheckpointDuration;
+    private static volatile MediaSessionBridge listenerInstance;
+    private static volatile RestoreAttempt restoreAttempt;
+    private static final long RESTORE_POSITION_TOLERANCE_MS = 3000L;
+    private static final long RESTORE_COMMAND_TIMEOUT_MS = 6000L;
+    private static final int RESTORE_MAX_SEEK_ATTEMPTS = 3;
+
+    private static final class RestoreAttempt {
+        final MediaController controller;
+        final long checkpointUpdatedAt;
+        final long targetPosition;
+        final boolean autoplay;
+        int seekAttempts;
+        boolean seekSent;
+        boolean seekConfirmed;
+        boolean transportSent;
+        long seekSentAt;
+        long transportSentAt;
+        RestoreAttempt(MediaController controller, long checkpointUpdatedAt,
+                       long targetPosition, boolean autoplay) {
+            this.controller = controller;
+            this.checkpointUpdatedAt = checkpointUpdatedAt;
+            this.targetPosition = targetPosition;
+            this.autoplay = autoplay;
+        }
+    }
     private MediaSessionManager manager;
     private MediaSessionManager.OnActiveSessionsChangedListener sessionsListener;
     private MediaController.Callback controllerCallback;
@@ -76,7 +101,11 @@ public final class MediaSessionBridge extends NotificationListenerService {
     // observed through MediaController.Callback and does not need periodic polling.
     private final Runnable controllerRefreshTask = new Runnable() {
         @Override public void run() {
-            if (manager == null || activeController != null) return;
+            if (manager == null) return;
+            String pendingPackage = getSharedPreferences(RESUME_PREFS, Context.MODE_PRIVATE)
+                    .getString("checkpoint_restore_package", "");
+            if (activeController != null
+                    && (TextUtils.isEmpty(pendingPackage) || checkpointController != null)) return;
             refreshFromManager();
         }
     };
@@ -130,20 +159,37 @@ public final class MediaSessionBridge extends NotificationListenerService {
      */
     private void saveCurrentCheckpoint() {
         MediaController controller = activeController;
-        if (controller == null) return; // Keep the last valid checkpoint if the player disappears.
+        if (controller == null) return;
         try {
             MediaMetadata metadata = controller.getMetadata();
             PlaybackState state = controller.getPlaybackState();
             String packageName = controller.getPackageName();
-            String title = metadata == null ? "" :
-                    metadata.getString(MediaMetadata.METADATA_KEY_TITLE);
-            String artist = metadata == null ? "" :
-                    metadata.getString(MediaMetadata.METADATA_KEY_ARTIST);
-            if (TextUtils.isEmpty(artist) && metadata != null) {
-                artist = metadata.getString(MediaMetadata.METADATA_KEY_ALBUM_ARTIST);
+            if (TextUtils.isEmpty(packageName) || metadata == null) return;
+
+            MediaCheckpointStore.Checkpoint previous = MediaCheckpointStore.load(this);
+            android.content.SharedPreferences prefs =
+                    getSharedPreferences(RESUME_PREFS, Context.MODE_PRIVATE);
+            boolean restorePending = prefs.getBoolean("checkpoint_restore_pending", false);
+            String restorePackage = prefs.getString("checkpoint_restore_package", "");
+            if (restorePending) {
+                // Never let a startup placeholder, a different app, or a different
+                // track overwrite the checkpoint while the old session is being restored.
+                if (!packageName.equals(restorePackage) || previous == null
+                        || !matchesSavedMediaIdentity(previous, metadata)) return;
             }
-            long duration = metadata == null ? 0L :
-                    Math.max(0L, metadata.getLong(MediaMetadata.METADATA_KEY_DURATION));
+
+            String title = safeMetadataString(metadata, MediaMetadata.METADATA_KEY_TITLE);
+            String artist = safeMetadataString(metadata, MediaMetadata.METADATA_KEY_ARTIST);
+            if (TextUtils.isEmpty(artist)) {
+                artist = safeMetadataString(metadata, MediaMetadata.METADATA_KEY_ALBUM_ARTIST);
+            }
+            String mediaId = safeMetadataString(metadata, MediaMetadata.METADATA_KEY_MEDIA_ID);
+            String mediaUri = safeMetadataString(metadata, MediaMetadata.METADATA_KEY_MEDIA_URI);
+            if (TextUtils.isEmpty(title) && TextUtils.isEmpty(mediaId)
+                    && TextUtils.isEmpty(mediaUri)) return;
+
+            long duration = Math.max(0L,
+                    metadata.getLong(MediaMetadata.METADATA_KEY_DURATION));
             long position = state == null ? 0L : Math.max(0L, state.getPosition());
             if (state != null && state.getState() == PlaybackState.STATE_PLAYING
                     && state.getPlaybackSpeed() > 0f && state.getLastPositionUpdateTime() > 0L) {
@@ -151,8 +197,8 @@ public final class MediaSessionBridge extends NotificationListenerService {
                         - state.getLastPositionUpdateTime());
                 position += (long) (stateAge * state.getPlaybackSpeed());
             }
-            lastCheckpointPosition = position;
-            lastCheckpointDuration = duration;
+            if (duration > 0L) position = Math.min(position, duration);
+
             ComponentName projectedTask = V10SessionStore.getTarget(this);
             String taskComponent = projectedTask != null
                     && packageName.equals(projectedTask.getPackageName())
@@ -165,33 +211,68 @@ public final class MediaSessionBridge extends NotificationListenerService {
                     }
                 } catch (RuntimeException ignored) { }
             }
+
             boolean playing = state != null
                     && state.getState() == PlaybackState.STATE_PLAYING;
-            float speed = playing && state != null ? state.getPlaybackSpeed() : 0f;
-            // commit() makes this minute's checkpoint durable before the next interval.
-            getSharedPreferences(RESUME_PREFS, Context.MODE_PRIVATE).edit()
-                    .putString(LAST_PACKAGE, packageName)
-                    .putString(CHECKPOINT_PACKAGE, packageName)
-                    .putString(CHECKPOINT_TASK_COMPONENT, taskComponent)
-                    .putString(CHECKPOINT_TITLE, title == null ? "" : title)
-                    .putString(CHECKPOINT_ARTIST, artist == null ? "" : artist)
-                    .putString(CHECKPOINT_MEDIA_ID, metadata == null ? "" : safeMetadataString(metadata, MediaMetadata.METADATA_KEY_MEDIA_ID))
-                    .putString(CHECKPOINT_MEDIA_URI, metadata == null ? "" : safeMetadataString(metadata, MediaMetadata.METADATA_KEY_MEDIA_URI))
-                    .putLong(CHECKPOINT_DURATION, duration)
-                    .putLong(CHECKPOINT_POSITION, position)
-                    .putBoolean(CHECKPOINT_PLAYING, playing)
-                    .putFloat(CHECKPOINT_SPEED, speed)
-                    .putLong(CHECKPOINT_ELAPSED_REALTIME, android.os.SystemClock.elapsedRealtime())
-                    .putLong(CHECKPOINT_UPDATED_AT, System.currentTimeMillis())
-                    .commit();
-            Log.d(TAG, "Saved rolling checkpoint for " + packageName
+            float speed = playing && state != null ? state.getPlaybackSpeed() : 1f;
+            long elapsedRealtime = android.os.SystemClock.elapsedRealtime();
+            long updatedAt = System.currentTimeMillis();
+            MediaCheckpointStore.Checkpoint checkpoint = new MediaCheckpointStore.Checkpoint(
+                    packageName, taskComponent, title, artist, mediaId, mediaUri,
+                    duration, position, playing, speed, elapsedRealtime, updatedAt);
+            MediaCheckpointStore.save(this, checkpoint);
+            lastCheckpointPosition = position;
+            lastCheckpointDuration = duration;
+            Log.d(TAG, "Queued AtomicFile checkpoint for " + packageName
                     + " at " + position + "ms; playing=" + playing);
         } catch (RuntimeException error) {
-            Log.w(TAG, "Could not save media checkpoint", error);
+            Log.w(TAG, "Could not capture media checkpoint", error);
         }
     }
 
-    /** Package of the last media app with a published session, persisted across AA reconnects. */
+    /** Mark the durable checkpoint as protected while the saved task/session is reconstructed. */
+    public static void beginCheckpointRestore(Context context, String expectedPackage) {
+        if (context == null || TextUtils.isEmpty(expectedPackage)) return;
+        context.getSharedPreferences(RESUME_PREFS, Context.MODE_PRIVATE).edit()
+                .putBoolean("checkpoint_restore_pending", true)
+                .putString("checkpoint_restore_package", expectedPackage)
+                .commit();
+        synchronized (MediaSessionBridge.class) { restoreAttempt = null; }
+        MediaSessionBridge listener = listenerInstance;
+        if (listener != null) MAIN.post(listener::refreshFromManager);
+    }
+
+    /** Called only after seek position and the requested Play/Pause state are confirmed. */
+    public static void completeCheckpointRestore(Context context) {
+        if (context == null) return;
+        context.getSharedPreferences(RESUME_PREFS, Context.MODE_PRIVATE).edit()
+                .remove("checkpoint_restore_pending")
+                .remove("checkpoint_restore_package")
+                .commit();
+        synchronized (MediaSessionBridge.class) { restoreAttempt = null; }
+        MediaSessionBridge listener = listenerInstance;
+        if (listener != null) MAIN.post(() -> {
+            listener.saveCurrentCheckpoint();
+            listener.refreshFromManager();
+        });
+    }
+
+    /** Clear the restore guard after an explicit Android Auto disconnect. */
+    public static void cancelCheckpointRestore(Context context) {
+        if (context == null) return;
+        context.getSharedPreferences(RESUME_PREFS, Context.MODE_PRIVATE).edit()
+                .remove("checkpoint_restore_pending")
+                .remove("checkpoint_restore_package")
+                .commit();
+        synchronized (MediaSessionBridge.class) { restoreAttempt = null; }
+    }
+
+    private static boolean positionMatches(PlaybackState state, long expected, long tolerance) {
+        if (state == null || state.getPosition() < 0L) return false;
+        return Math.abs(state.getPosition() - expected) <= tolerance;
+    }
+
+        /** Package of the last media app with a published session, persisted across AA reconnects. */
     public static String getLastKnownPackage(Context context) {
         if (context == null) return null;
         String value = context.getSharedPreferences(RESUME_PREFS, Context.MODE_PRIVATE)
@@ -201,40 +282,35 @@ public final class MediaSessionBridge extends NotificationListenerService {
 
     /** Exact app Activity previously projected by V10, when it belongs to the saved media package. */
     public static ComponentName getCheckpointTaskComponent(Context context) {
-        if (context == null) return null;
-        String value = context.getSharedPreferences(RESUME_PREFS, Context.MODE_PRIVATE)
-                .getString(CHECKPOINT_TASK_COMPONENT, null);
-        return TextUtils.isEmpty(value) ? null : ComponentName.unflattenFromString(value);
+        MediaCheckpointStore.Checkpoint checkpoint = MediaCheckpointStore.load(context);
+        if (checkpoint == null || TextUtils.isEmpty(checkpoint.taskComponent)) return null;
+        return ComponentName.unflattenFromString(checkpoint.taskComponent);
     }
 
     /** Stable content identifier supplied by the source MediaSession, when available. */
     public static String getCheckpointMediaId(Context context) {
-        if (context == null) return null;
-        String value = context.getSharedPreferences(RESUME_PREFS, Context.MODE_PRIVATE)
-                .getString(CHECKPOINT_MEDIA_ID, null);
-        return TextUtils.isEmpty(value) ? null : value;
+        MediaCheckpointStore.Checkpoint checkpoint = MediaCheckpointStore.load(context);
+        return checkpoint == null || TextUtils.isEmpty(checkpoint.mediaId)
+                ? null : checkpoint.mediaId;
     }
 
     /** Deep link supplied by the source MediaSession, when available. */
     public static String getCheckpointMediaUri(Context context) {
-        if (context == null) return null;
-        String value = context.getSharedPreferences(RESUME_PREFS, Context.MODE_PRIVATE)
-                .getString(CHECKPOINT_MEDIA_URI, null);
-        return TextUtils.isEmpty(value) ? null : value;
+        MediaCheckpointStore.Checkpoint checkpoint = MediaCheckpointStore.load(context);
+        return checkpoint == null || TextUtils.isEmpty(checkpoint.mediaUri)
+                ? null : checkpoint.mediaUri;
     }
 
     public static String getCheckpointTitle(Context context) {
-        if (context == null) return null;
-        String value = context.getSharedPreferences(RESUME_PREFS, Context.MODE_PRIVATE)
-                .getString(CHECKPOINT_TITLE, null);
-        return TextUtils.isEmpty(value) ? null : value;
+        MediaCheckpointStore.Checkpoint checkpoint = MediaCheckpointStore.load(context);
+        return checkpoint == null || TextUtils.isEmpty(checkpoint.title)
+                ? null : checkpoint.title;
     }
 
     public static String getCheckpointArtist(Context context) {
-        if (context == null) return null;
-        String value = context.getSharedPreferences(RESUME_PREFS, Context.MODE_PRIVATE)
-                .getString(CHECKPOINT_ARTIST, null);
-        return TextUtils.isEmpty(value) ? null : value;
+        MediaCheckpointStore.Checkpoint checkpoint = MediaCheckpointStore.load(context);
+        return checkpoint == null || TextUtils.isEmpty(checkpoint.artist)
+                ? null : checkpoint.artist;
     }
 
     private static String safeMetadataString(MediaMetadata metadata, String key) {
@@ -248,10 +324,9 @@ public final class MediaSessionBridge extends NotificationListenerService {
 
     /** Package associated with the newest complete checkpoint. */
     public static String getCheckpointPackage(Context context) {
-        if (context == null) return null;
-        String value = context.getSharedPreferences(RESUME_PREFS, Context.MODE_PRIVATE)
-                .getString(CHECKPOINT_PACKAGE, null);
-        return TextUtils.isEmpty(value) ? null : value;
+        MediaCheckpointStore.Checkpoint checkpoint = MediaCheckpointStore.load(context);
+        return checkpoint == null || TextUtils.isEmpty(checkpoint.packageName)
+                ? null : checkpoint.packageName;
     }
 
     /**
@@ -260,21 +335,19 @@ public final class MediaSessionBridge extends NotificationListenerService {
      * interval; time spent with the phone powered off must never advance the track.
      */
     private static long getAdjustedCheckpointPosition(Context context) {
-        android.content.SharedPreferences prefs =
-                context.getSharedPreferences(RESUME_PREFS, Context.MODE_PRIVATE);
-        long position = Math.max(0L, prefs.getLong(CHECKPOINT_POSITION, 0L));
-        long duration = Math.max(0L, prefs.getLong(CHECKPOINT_DURATION, 0L));
-        boolean wasPlaying = prefs.getBoolean(CHECKPOINT_PLAYING, false);
-        long savedElapsed = prefs.getLong(CHECKPOINT_ELAPSED_REALTIME, 0L);
-        float speed = prefs.getFloat(CHECKPOINT_SPEED, 1f);
-        long nowElapsed = android.os.SystemClock.elapsedRealtime();
-        // elapsedRealtime resets on reboot. Only extrapolate within the same boot;
-        // never count time when the car has been off and the phone had no power.
-        if (wasPlaying && savedElapsed > 0L && nowElapsed >= savedElapsed && speed > 0f) {
-            long elapsed = Math.min(nowElapsed - savedElapsed, CHECKPOINT_INTERVAL_MS);
-            position += (long) (elapsed * speed);
+        MediaCheckpointStore.Checkpoint checkpoint = MediaCheckpointStore.load(context);
+        if (checkpoint == null) return 0L;
+        long position = checkpoint.position;
+        if (checkpoint.playing && checkpoint.elapsedRealtime > 0L
+                && android.os.SystemClock.elapsedRealtime() >= checkpoint.elapsedRealtime
+                && checkpoint.speed > 0f) {
+            long elapsed = Math.min(
+                    android.os.SystemClock.elapsedRealtime() - checkpoint.elapsedRealtime,
+                    CHECKPOINT_INTERVAL_MS);
+            position += (long) (elapsed * checkpoint.speed);
         }
-        return duration > 0L ? Math.min(position, duration) : position;
+        return checkpoint.duration > 0L
+                ? Math.min(position, checkpoint.duration) : position;
     }
 
     /**
@@ -283,29 +356,23 @@ public final class MediaSessionBridge extends NotificationListenerService {
      * the old seek position cannot be applied to a different song/video.
      */
     private static boolean matchesSavedMediaIdentity(
-            android.content.SharedPreferences prefs, MediaMetadata current) {
-        if (current == null) return false;
-        String expectedId = prefs.getString(CHECKPOINT_MEDIA_ID, "");
-        String expectedUri = prefs.getString(CHECKPOINT_MEDIA_URI, "");
-        String expectedTitle = prefs.getString(CHECKPOINT_TITLE, "");
-        String expectedArtist = prefs.getString(CHECKPOINT_ARTIST, "");
+            MediaCheckpointStore.Checkpoint expected, MediaMetadata current) {
+        if (expected == null || current == null) return false;
         String actualId = safeMetadataString(current, MediaMetadata.METADATA_KEY_MEDIA_ID);
         String actualUri = safeMetadataString(current, MediaMetadata.METADATA_KEY_MEDIA_URI);
         String actualTitle = safeMetadataString(current, MediaMetadata.METADATA_KEY_TITLE);
         String actualArtist = safeMetadataString(current, MediaMetadata.METADATA_KEY_ARTIST);
-        if (!TextUtils.isEmpty(expectedId) && !TextUtils.isEmpty(actualId)) {
-            return expectedId.equals(actualId);
+        if (!TextUtils.isEmpty(expected.mediaId)) {
+            return expected.mediaId.equals(actualId);
         }
-        if (!TextUtils.isEmpty(expectedUri) && !TextUtils.isEmpty(actualUri)) {
-            return expectedUri.equals(actualUri);
+        if (!TextUtils.isEmpty(expected.mediaUri)) {
+            return expected.mediaUri.equals(actualUri);
         }
-        if (!TextUtils.isEmpty(expectedTitle)) {
-            if (TextUtils.isEmpty(actualTitle)
-                    || !expectedTitle.trim().equalsIgnoreCase(actualTitle.trim())) return false;
-            return TextUtils.isEmpty(expectedArtist) || TextUtils.isEmpty(actualArtist)
-                    || expectedArtist.trim().equalsIgnoreCase(actualArtist.trim());
-        }
-        return TextUtils.isEmpty(expectedId) && TextUtils.isEmpty(expectedUri);
+        if (TextUtils.isEmpty(expected.title) || TextUtils.isEmpty(actualTitle)
+                || !expected.title.trim().equalsIgnoreCase(actualTitle.trim())) return false;
+        return TextUtils.isEmpty(expected.artist)
+                || (!TextUtils.isEmpty(actualArtist)
+                && expected.artist.trim().equalsIgnoreCase(actualArtist.trim()));
     }
 
     /** True only when the saved source package is publishing the exact saved media item. */
@@ -316,10 +383,9 @@ public final class MediaSessionBridge extends NotificationListenerService {
             controller = activeController;
         }
         if (controller == null || !expectedPackage.equals(controller.getPackageName())) return false;
-        android.content.SharedPreferences prefs =
-                context.getSharedPreferences(RESUME_PREFS, Context.MODE_PRIVATE);
+        MediaCheckpointStore.Checkpoint checkpoint = MediaCheckpointStore.load(context);
         try {
-            return matchesSavedMediaIdentity(prefs, controller.getMetadata());
+            return matchesSavedMediaIdentity(checkpoint, controller.getMetadata());
         } catch (RuntimeException error) {
             Log.w(TAG, "Could not verify checkpoint media identity", error);
             return false;
@@ -334,25 +400,112 @@ public final class MediaSessionBridge extends NotificationListenerService {
             controller = activeController;
         }
         if (controller == null || !expectedPackage.equals(controller.getPackageName())) return false;
+
+        MediaCheckpointStore.Checkpoint checkpoint = MediaCheckpointStore.load(context);
+        if (checkpoint == null || !expectedPackage.equals(checkpoint.packageName)) return false;
         try {
-            android.content.SharedPreferences prefs =
-                    context.getSharedPreferences(RESUME_PREFS, Context.MODE_PRIVATE);
-            MediaMetadata currentMetadata = controller.getMetadata();
-            if (!matchesSavedMediaIdentity(prefs, currentMetadata)) {
-                Log.i(TAG, "Waiting for the exact checkpointed media item before seeking; source="
-                        + expectedPackage);
+            if (!matchesSavedMediaIdentity(checkpoint, controller.getMetadata())) {
+                synchronized (MediaSessionBridge.class) { restoreAttempt = null; }
+                Log.i(TAG, "Waiting for exact saved media identity before issuing transport commands");
                 return false;
             }
-            long position = getAdjustedCheckpointPosition(context);
-            long duration = Math.max(0L, prefs.getLong(CHECKPOINT_DURATION, 0L));
-            controller.getTransportControls().seekTo(
-                    duration > 0L ? Math.min(position, duration) : position);
-            if (autoplay) controller.getTransportControls().play();
-            else controller.getTransportControls().pause();
-            Log.i(TAG, "Applied checkpoint; autoplay=" + autoplay + ", position=" + position);
-            return true;
+
+            long target = getAdjustedCheckpointPosition(context);
+            if (checkpoint.duration > 0L) target = Math.min(target, checkpoint.duration);
+            long now = android.os.SystemClock.elapsedRealtime();
+            RestoreAttempt attempt;
+            synchronized (MediaSessionBridge.class) {
+                attempt = restoreAttempt;
+                if (attempt == null || attempt.controller != controller
+                        || attempt.checkpointUpdatedAt != checkpoint.updatedAt
+                        || attempt.targetPosition != target || attempt.autoplay != autoplay) {
+                    attempt = new RestoreAttempt(controller, checkpoint.updatedAt, target, autoplay);
+                    restoreAttempt = attempt;
+                }
+            }
+
+            PlaybackState state = controller.getPlaybackState();
+            long actualPosition = state == null ? -1L : state.getPosition();
+            if (!attempt.seekSent) {
+                controller.getTransportControls().seekTo(target);
+                attempt.seekSent = true;
+                attempt.seekSentAt = now;
+                attempt.seekAttempts++;
+                Log.i(TAG, "Checkpoint seek requested at " + target + "ms; attempt "
+                        + attempt.seekAttempts);
+                return false;
+            }
+
+            if (!attempt.seekConfirmed) {
+                if (actualPosition >= 0L
+                        && Math.abs(actualPosition - target) <= RESTORE_POSITION_TOLERANCE_MS) {
+                    attempt.seekConfirmed = true;
+                    Log.i(TAG, "Checkpoint seek confirmed at " + actualPosition + "ms");
+                } else if (now - attempt.seekSentAt >= RESTORE_COMMAND_TIMEOUT_MS) {
+                    if (attempt.seekAttempts >= RESTORE_MAX_SEEK_ATTEMPTS) {
+                        synchronized (MediaSessionBridge.class) {
+                            if (restoreAttempt == attempt) restoreAttempt = null;
+                        }
+                        Log.w(TAG, "Source player did not confirm seek; restore remains pending");
+                        return false;
+                    }
+                    controller.getTransportControls().seekTo(target);
+                    attempt.seekSentAt = now;
+                    attempt.seekAttempts++;
+                    Log.w(TAG, "Seek acknowledgement timed out; retry "
+                            + attempt.seekAttempts + "/" + RESTORE_MAX_SEEK_ATTEMPTS);
+                    return false;
+                } else {
+                    return false;
+                }
+            }
+
+            if (!attempt.transportSent) {
+                if (autoplay) controller.getTransportControls().play();
+                else controller.getTransportControls().pause();
+                attempt.transportSent = true;
+                attempt.transportSentAt = now;
+                Log.i(TAG, "Checkpoint transport requested; autoplay=" + autoplay);
+                return false;
+            }
+
+            boolean stateConfirmed = state != null && (autoplay
+                    ? state.getState() == PlaybackState.STATE_PLAYING
+                    : state.getState() == PlaybackState.STATE_PAUSED);
+            long expectedPosition = target;
+            if (autoplay && now >= attempt.transportSentAt) {
+                expectedPosition += (long) ((now - attempt.transportSentAt)
+                        * Math.max(0f, checkpoint.speed));
+                if (checkpoint.duration > 0L) {
+                    expectedPosition = Math.min(expectedPosition, checkpoint.duration);
+                }
+            }
+            boolean positionConfirmed = actualPosition >= 0L
+                    && Math.abs(actualPosition - expectedPosition) <= 5000L;
+            if (stateConfirmed && positionConfirmed) {
+                synchronized (MediaSessionBridge.class) {
+                    if (restoreAttempt == attempt) restoreAttempt = null;
+                }
+                Log.i(TAG, "Checkpoint restore confirmed: package=" + expectedPackage
+                        + ", position=" + actualPosition + ", playing=" + autoplay);
+                return true;
+            }
+
+            if (now - attempt.transportSentAt >= RESTORE_COMMAND_TIMEOUT_MS) {
+                if (attempt.seekAttempts >= RESTORE_MAX_SEEK_ATTEMPTS) {
+                    synchronized (MediaSessionBridge.class) {
+                        if (restoreAttempt == attempt) restoreAttempt = null;
+                    }
+                } else {
+                    attempt.seekSent = false;
+                    attempt.seekConfirmed = false;
+                    attempt.transportSent = false;
+                    Log.w(TAG, "Playback state did not confirm; retrying seek/transport sequence");
+                }
+            }
+            return false;
         } catch (RuntimeException error) {
-            Log.w(TAG, "Could not apply media checkpoint", error);
+            Log.w(TAG, "Could not apply/verify media checkpoint", error);
             return false;
         }
     }
@@ -501,6 +654,7 @@ public final class MediaSessionBridge extends NotificationListenerService {
     @Override
     public void onListenerConnected() {
         super.onListenerConnected();
+        listenerInstance = this;
         try {
             manager = (MediaSessionManager) getSystemService(Context.MEDIA_SESSION_SERVICE);
             if (manager == null) return;
@@ -511,13 +665,22 @@ public final class MediaSessionBridge extends NotificationListenerService {
                     new ComponentName(this, MediaSessionBridge.class)));
             MediaAutoRestoreService.updateMediaSession(this, snapshot);
             // NotificationListenerService is rebound by Android after reboot.
-            // If AA's connected notification is already present, process it once.
+            // Inspect current notifications so a reconnect that happened during boot is not missed.
             try {
                 StatusBarNotification[] active = getActiveNotifications();
+                boolean foundGearheadConnection = false;
                 if (active != null) {
                     for (StatusBarNotification notification : active) {
+                        if (notification != null
+                                && GEARHEAD_PACKAGE.equals(notification.getPackageName())) {
+                            foundGearheadConnection = true;
+                        }
                         handleAndroidAutoConnectionNotification(notification);
                     }
+                }
+                if (!foundGearheadConnection) {
+                    getSharedPreferences(RESUME_PREFS, Context.MODE_PRIVATE).edit()
+                            .putBoolean(AA_CONNECTED_PREF, false).apply();
                 }
             } catch (RuntimeException error) {
                 Log.w(TAG, "Could not inspect active Android Auto notifications", error);
@@ -526,8 +689,7 @@ public final class MediaSessionBridge extends NotificationListenerService {
             MAIN.removeCallbacks(controllerRefreshTask);
             saveCurrentCheckpoint();
             MAIN.postDelayed(checkpointTask, CHECKPOINT_INTERVAL_MS);
-            // refreshControllers() starts the 2-second retry only if no source exists.
-            Log.i(TAG, "Notification access connected; durable media checkpoint scheduled every 5 seconds");
+            Log.i(TAG, "Notification access connected; AtomicFile checkpoint scheduled every 5 seconds");
         } catch (SecurityException error) {
             Log.w(TAG, "Notification access is not granted", error);
         } catch (RuntimeException error) {
@@ -545,8 +707,8 @@ public final class MediaSessionBridge extends NotificationListenerService {
         }
         manager = null;
         sessionsListener = null;
-        // The foreground MediaAutoRestoreService owns the AA-facing MediaSession.
-        // NotificationListener rebinds only affect observation of source sessions.
+        if (listenerInstance == this) listenerInstance = null;
+        // Keep the last complete AtomicFile checkpoint if NotificationListener is rebound.
         saveCurrentCheckpoint();
         clearActiveController();
         super.onListenerDisconnected();
@@ -583,7 +745,11 @@ public final class MediaSessionBridge extends NotificationListenerService {
         appendNotificationText(content, extras.getCharSequence(Notification.EXTRA_SUMMARY_TEXT));
         String message = content.toString().toLowerCase(java.util.Locale.ROOT);
 
-        // Require an explicit connected-state phrase, not just any Gearhead notification.
+        android.content.SharedPreferences prefs = getSharedPreferences(
+                RESUME_PREFS, Context.MODE_PRIVATE);
+        String notificationTag = sbn.getTag() == null ? "" : sbn.getTag();
+        boolean sameTrackedNotification = sbn.getId() == prefs.getInt(AA_NOTIFICATION_ID_PREF, -1)
+                && notificationTag.equals(prefs.getString(AA_NOTIFICATION_TAG_PREF, ""));
         boolean disconnected = message.contains("disconnected")
                 || message.contains("not connected")
                 || message.contains("đã ngắt kết nối")
@@ -592,20 +758,29 @@ public final class MediaSessionBridge extends NotificationListenerService {
                 || message.contains("đã kết nối")
                 || message.contains("connecté")
                 || message.contains("verbunden"));
+
+        if (disconnected) {
+            if (sameTrackedNotification) {
+                prefs.edit().putBoolean(AA_CONNECTED_PREF, false)
+                        .remove(AA_TRIGGER_PREF).remove(AA_TRIGGER_ELAPSED_PREF)
+                        .remove(AA_NOTIFICATION_ID_PREF).remove(AA_NOTIFICATION_TAG_PREF)
+                        .commit();
+                cancelCheckpointRestore(this);
+                stopService(new Intent(this, MediaAutoRestoreService.class));
+                Log.i(TAG, "Tracked Android Auto notification changed to disconnected");
+            }
+            return;
+        }
         if (!connected) return;
 
-        android.content.SharedPreferences prefs = getSharedPreferences(
-                RESUME_PREFS, Context.MODE_PRIVATE);
         prefs.edit().putBoolean(AA_CONNECTED_PREF, true)
                 .putInt(AA_NOTIFICATION_ID_PREF, sbn.getId())
-                .putString(AA_NOTIFICATION_TAG_PREF, sbn.getTag() == null ? "" : sbn.getTag())
+                .putString(AA_NOTIFICATION_TAG_PREF, notificationTag)
                 .apply();
         long now = System.currentTimeMillis();
         long nowElapsed = android.os.SystemClock.elapsedRealtime();
         long previous = prefs.getLong(AA_TRIGGER_PREF, 0L);
         long previousElapsed = prefs.getLong(AA_TRIGGER_ELAPSED_PREF, 0L);
-        // elapsedRealtime resets on reboot. Do not let the previous boot's
-        // 90-second notification debounce suppress the first AA reconnect.
         boolean sameBoot = previousElapsed > 0L && nowElapsed >= previousElapsed;
         if (sameBoot && previous > 0L && now - previous < AA_TRIGGER_COOLDOWN_MS) return;
 
@@ -616,8 +791,7 @@ public final class MediaSessionBridge extends NotificationListenerService {
             else startService(restore);
             prefs.edit().putLong(AA_TRIGGER_PREF, now)
                     .putLong(AA_TRIGGER_ELAPSED_PREF, nowElapsed).apply();
-            Log.i(TAG, "Android Auto connected notification detected; media restore requested: "
-                    + message);
+            Log.i(TAG, "Android Auto connected notification detected; media restore requested");
         } catch (RuntimeException error) {
             Log.w(TAG, "Could not start media restore after Android Auto notification", error);
         }
@@ -637,9 +811,6 @@ public final class MediaSessionBridge extends NotificationListenerService {
             int expectedId = prefs.getInt(AA_NOTIFICATION_ID_PREF, -1);
             String expectedTag = prefs.getString(AA_NOTIFICATION_TAG_PREF, "");
             String removedTag = sbn.getTag() == null ? "" : sbn.getTag();
-            // Gearhead posts several unrelated notifications. Only removal of the
-            // exact notification previously classified as its connected-state signal
-            // may stop the headless display owner.
             if (sbn.getId() == expectedId && removedTag.equals(expectedTag)) {
                 prefs.edit().putBoolean(AA_CONNECTED_PREF, false)
                         .remove(AA_TRIGGER_PREF)
@@ -647,7 +818,9 @@ public final class MediaSessionBridge extends NotificationListenerService {
                         .remove(AA_NOTIFICATION_ID_PREF)
                         .remove(AA_NOTIFICATION_TAG_PREF)
                         .apply();
-                Log.i(TAG, "Android Auto connection notification removed; headless restore stop requested");
+                cancelCheckpointRestore(this);
+                stopService(new Intent(this, MediaAutoRestoreService.class));
+                Log.i(TAG, "Android Auto connection notification removed; restore service stopped");
             }
         }
         refreshFromManager();
@@ -664,18 +837,26 @@ public final class MediaSessionBridge extends NotificationListenerService {
     }
 
     private void refreshControllers(List<MediaController> controllers) {
-        MediaController chosen = null;
-        MediaController savedCandidate = null;
         MediaController checkpointCandidate = null;
         MediaController playingCandidate = null;
         MediaController metadataCandidate = null;
-        String checkpointPackage = getCheckpointPackage(this);
-        if (checkpointPackage == null) checkpointPackage = getLastKnownPackage(this);
+        MediaController savedCandidate = null;
+        MediaCheckpointStore.Checkpoint checkpoint = MediaCheckpointStore.load(this);
+        String checkpointPackage = checkpoint == null ? getLastKnownPackage(this)
+                : checkpoint.packageName;
         String lastPackage = getLastKnownPackage(this);
+        android.content.SharedPreferences prefs =
+                getSharedPreferences(RESUME_PREFS, Context.MODE_PRIVATE);
+        String restorePackage = prefs.getString("checkpoint_restore_package", "");
+        boolean restorePending = prefs.getBoolean("checkpoint_restore_pending", false);
+        boolean previousBootCheckpoint = checkpoint != null
+                && checkpoint.elapsedRealtime > android.os.SystemClock.elapsedRealtime();
+
         if (controllers != null) {
             for (MediaController candidate : controllers) {
                 if (candidate == null || getPackageName().equals(candidate.getPackageName())) continue;
-                if (checkpointPackage != null && checkpointPackage.equals(candidate.getPackageName())) {
+                if (checkpointPackage != null
+                        && checkpointPackage.equals(candidate.getPackageName())) {
                     checkpointCandidate = candidate;
                 }
                 PlaybackState state = candidate.getPlaybackState();
@@ -688,12 +869,27 @@ public final class MediaSessionBridge extends NotificationListenerService {
                 }
             }
         }
-        // After reboot, prefer the exact package from the durable checkpoint even if
-        // another app publishes a session first during Android Auto startup.
-        if (checkpointCandidate != null) chosen = checkpointCandidate;
-        else if (savedCandidate != null) chosen = savedCandidate;
-        else if (playingCandidate != null) chosen = playingCandidate;
-        else chosen = metadataCandidate;
+
+        boolean checkpointIdentityMatches = checkpointCandidate != null
+                && matchesSavedMediaIdentity(checkpoint, checkpointCandidate.getMetadata());
+        MediaController verifiedCheckpointCandidate = checkpointIdentityMatches
+                ? checkpointCandidate : null;
+        boolean preserveCheckpoint = restorePending || previousBootCheckpoint;
+
+        MediaController chosen;
+        if (verifiedCheckpointCandidate != null) {
+            chosen = verifiedCheckpointCandidate;
+        } else if (preserveCheckpoint) {
+            // After a reboot, do not let another app's early MediaSession overwrite
+            // the previous car session while its source app is still starting.
+            chosen = null;
+        } else if (savedCandidate != null) {
+            chosen = savedCandidate;
+        } else if (playingCandidate != null) {
+            chosen = playingCandidate;
+        } else {
+            chosen = metadataCandidate;
+        }
 
         MediaController previous = activeController;
         if (previous != chosen) {
@@ -725,13 +921,11 @@ public final class MediaSessionBridge extends NotificationListenerService {
                 catch (RuntimeException error) { Log.w(TAG, "Cannot observe media controller", error); }
             }
         }
-        checkpointController = checkpointCandidate;
+        checkpointController = verifiedCheckpointCandidate;
         publish(chosen);
 
-        // Poll only while the source is absent. Once acquired, rely on its callback;
-        // if a later session-list update removes it, this schedules retries again.
         MAIN.removeCallbacks(controllerRefreshTask);
-        if (chosen == null && manager != null) {
+        if (chosen == null || (preserveCheckpoint && verifiedCheckpointCandidate == null)) {
             MAIN.postDelayed(controllerRefreshTask, 2000L);
         }
     }
