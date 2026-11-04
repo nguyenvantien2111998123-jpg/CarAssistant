@@ -61,6 +61,8 @@ public final class MediaSessionBridge extends NotificationListenerService {
     private static volatile Snapshot snapshot = Snapshot.empty();
     private static volatile MediaController activeController;
     private static volatile MediaController checkpointController;
+    // Package-matched session candidate used only for non-playing prepareFromMediaId.
+    private static volatile MediaController checkpointPackageController;
     private static volatile long lastCheckpointPosition;
     private static volatile long lastCheckpointDuration;
     private static volatile MediaSessionBridge listenerInstance;
@@ -395,6 +397,33 @@ public final class MediaSessionBridge extends NotificationListenerService {
             return matchesSavedMediaIdentity(checkpoint, controller.getMetadata());
         } catch (RuntimeException error) {
             Log.w(TAG, "Could not verify checkpoint media identity", error);
+            return false;
+        }
+    }
+
+    /**
+     * Ask the checkpoint package's session to prepare the saved item by stable media ID.
+     * This uses PREPARE (never PLAY) so content can load without emitting phone-speaker audio.
+     */
+    public static boolean prepareCheckpointMediaId(Context context, String expectedPackage) {
+        if (context == null || TextUtils.isEmpty(expectedPackage)) return false;
+        MediaCheckpointStore.Checkpoint checkpoint = MediaCheckpointStore.load(context);
+        if (checkpoint == null || TextUtils.isEmpty(checkpoint.mediaId)
+                || !expectedPackage.equals(checkpoint.packageName)) return false;
+        MediaController controller = checkpointPackageController;
+        if (controller == null || !expectedPackage.equals(controller.getPackageName())) {
+            controller = activeController;
+        }
+        if (controller == null || !expectedPackage.equals(controller.getPackageName())) return false;
+        try {
+            PlaybackState state = controller.getPlaybackState();
+            if (state == null || (state.getActions()
+                    & PlaybackState.ACTION_PREPARE_FROM_MEDIA_ID) == 0L) return false;
+            controller.getTransportControls().prepareFromMediaId(checkpoint.mediaId, null);
+            Log.i(TAG, "Requested non-playing mediaId preparation for " + expectedPackage);
+            return true;
+        } catch (RuntimeException error) {
+            Log.w(TAG, "Source session rejected prepareFromMediaId", error);
             return false;
         }
     }
@@ -922,6 +951,7 @@ public final class MediaSessionBridge extends NotificationListenerService {
                 catch (RuntimeException error) { Log.w(TAG, "Cannot observe media controller", error); }
             }
         }
+        checkpointPackageController = checkpointCandidate;
         checkpointController = verifiedCheckpointCandidate;
         publish(chosen);
 
@@ -981,6 +1011,7 @@ public final class MediaSessionBridge extends NotificationListenerService {
         }
         activeController = null;
         checkpointController = null;
+        checkpointPackageController = null;
         controllerCallback = null;
         publish(null);
     }
