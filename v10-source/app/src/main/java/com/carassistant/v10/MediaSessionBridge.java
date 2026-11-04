@@ -371,10 +371,14 @@ public final class MediaSessionBridge extends NotificationListenerService {
         if (TextUtils.isEmpty(actualArtist)) {
             actualArtist = safeMetadataString(current, MediaMetadata.METADATA_KEY_ALBUM_ARTIST);
         }
-        if (!TextUtils.isEmpty(expected.mediaId)) {
+        // Prefer strong identifiers when both sides publish them. Some apps expose
+        // mediaId during playback but omit it while rebuilding their session after a
+        // task/process restart; in that case safely fall back to URI, then exact title
+        // and artist instead of rejecting an otherwise matching restored item.
+        if (!TextUtils.isEmpty(expected.mediaId) && !TextUtils.isEmpty(actualId)) {
             return expected.mediaId.equals(actualId);
         }
-        if (!TextUtils.isEmpty(expected.mediaUri)) {
+        if (!TextUtils.isEmpty(expected.mediaUri) && !TextUtils.isEmpty(actualUri)) {
             return expected.mediaUri.equals(actualUri);
         }
         if (TextUtils.isEmpty(expected.title) || TextUtils.isEmpty(actualTitle)
