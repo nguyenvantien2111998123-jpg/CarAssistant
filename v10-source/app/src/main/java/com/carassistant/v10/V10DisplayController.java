@@ -334,7 +334,7 @@ public final class V10DisplayController {
         final String flat = component.flattenToString().replace("'", "'\\\"'\\\"'");
         final String packageTask = shellQuote("A=" + packageName);
         final String displayHeader = shellQuote("Display #" + displayId);
-        final String command = "ACTIVITIES=$(/system/bin/dumpsys activity activities 2>/dev/null); "
+        final String command = "STATUS=0; ACTIVITIES=$(/system/bin/dumpsys activity activities 2>/dev/null); "
                 + "ROOT_TASK_ID=$(printf '%s\\n' \"$ACTIVITIES\""
                 + " | /system/bin/grep 'Task{'"
                 + " | /system/bin/grep -F " + packageTask
@@ -348,29 +348,31 @@ public final class V10DisplayController {
                 + " END { exit(found ? 0 : 1) }'; then "
                 + "echo 'CarAsistant: media task already on projection display'; "
                 + "elif [ -n \"$ROOT_TASK_ID\" ]; then "
-                + "/system/bin/am display move-stack \"$ROOT_TASK_ID\" " + displayId + " || exit 1; "
+                + "/system/bin/am display move-stack \"$ROOT_TASK_ID\" " + displayId + " || STATUS=1; "
                 + "else "
                 + "if printf '%s\\n' \"$ACTIVITIES\" | /system/bin/grep -F " + packageTask + " >/dev/null; then "
-                + "echo 'CarAsistant: existing media task found but its root ID could not be resolved'; exit 1; "
-                + "fi; "
+                + "echo 'CarAsistant: existing media task found but its root ID could not be resolved'; STATUS=1; "
+                + "else "
                 + "/system/bin/am start --user " + userId
                 + " --display " + displayId
                 + " --windowingMode 1"
                 + " -a android.intent.action.MAIN"
                 + " -c android.intent.category.LAUNCHER"
                 + " -f 0x10000000"
-                + " -n '" + flat + "' || exit 1; "
-                + "fi; "
+                + " -n '" + flat + "' || STATUS=1; "
+                + "fi; fi; "
+                + "VERIFIED=0; if [ \"$STATUS\" -eq 0 ]; then "
                 + "ATTEMPT=0; while [ \"$ATTEMPT\" -lt 10 ]; do "
                 + "ACTIVITIES=$(/system/bin/dumpsys activity activities 2>/dev/null); "
                 + "if printf '%s\\n' \"$ACTIVITIES\" | /system/bin/awk "
                 + "-v wanted=" + packageTask + " -v display=" + displayHeader + " "
                 + "'/^Display #/ { active = index($0, display) > 0 }"
                 + " active && index($0, wanted) { found=1 }"
-                + " END { exit(found ? 0 : 1) }'; then "
-                + "echo 'CarAsistant: verified media task on projection display'; exit 0; "
-                + "fi; /system/bin/sleep 0.5; ATTEMPT=$((ATTEMPT + 1)); done; "
-                + "echo 'CarAsistant: media task not verified on projection display'; exit 1";
+                + " END { exit(found ? 0 : 1) }'; then VERIFIED=1; break; fi; "
+                + "/system/bin/sleep 0.5; ATTEMPT=$((ATTEMPT + 1)); done; fi; "
+                + "if [ \"$VERIFIED\" -eq 1 ]; then "
+                + "echo 'CarAsistant: verified media task on projection display'; "
+                + "else echo 'CarAsistant: media task not verified on projection display'; false; fi";
         RootShellSession.EXEC.execute(() -> {
             try {
                 rootShell.run(12, command);
