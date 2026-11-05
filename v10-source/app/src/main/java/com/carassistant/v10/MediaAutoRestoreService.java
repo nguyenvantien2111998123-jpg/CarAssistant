@@ -166,7 +166,7 @@ public final class MediaAutoRestoreService extends Service {
         try {
             controllers = sessionManager.getActiveSessions(
                     new ComponentName(this, MediaSessionBridge.class));
-        } catch (SecurityException | RuntimeException error) {
+        } catch (RuntimeException error) {
             Log.w(TAG, "Could not read active media sessions; will wait for the next change", error);
             updateForegroundStatus("Đang chờ quyền truy cập phiên media");
             return;
