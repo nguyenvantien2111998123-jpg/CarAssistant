@@ -6,7 +6,8 @@ import android.app.NotificationManager;
 import android.app.Service;
 import android.content.ComponentName;
 import android.content.Intent;
-import android.content.pm.PackageManager;
+import android.media.session.MediaController;
+import android.media.session.MediaSessionManager;
 import android.os.Build;
 import android.os.Handler;
 import android.os.IBinder;
@@ -15,157 +16,237 @@ import android.os.SystemClock;
 import android.text.TextUtils;
 import android.util.Log;
 
+import java.util.List;
+
 /**
- * Restores the checkpointed media task on V10 Display 2 as soon as Android Auto
- * reconnects. The headless ImageReader Surface exists before V10's CarActivity;
- * opening V10 later only replaces that Surface and adopts the already-running task.
+ * Background-only media recovery.
+ *
+ * This service never launches a source Activity, creates a virtual display, moves a task,
+ * or invokes Accessibility UI automation. It waits for the source app to publish a real
+ * MediaSession, then asks MediaSessionBridge to restore and verify the saved checkpoint.
  */
 public final class MediaAutoRestoreService extends Service {
     public static final String ACTION_RESTORE =
             "com.carassistant.v10.action.RESTORE_MEDIA_ON_AA_CONNECT";
     public static final String ACTION_AA_DISCONNECTED =
             "com.carassistant.v10.action.AA_DISCONNECTED";
+
     private static final String TAG = "CarAssistantMediaResume";
+    private static final String RESUME_PREFS = "carassistant_media_resume";
+    private static final String AUTOPLAY_PREFS = "media_autoplay";
     private static final String CHANNEL = "carassistant_media_restore";
     private static final int NOTIFICATION_ID = 4038;
-    private static final long RETRY_MS = 1000L;
-    private static final long RETRY_WINDOW_MS = 600000L;
-    private static final long LAUNCH_RETRY_INTERVAL_MS = 15000L;
-    private static final int MAX_LAUNCH_ATTEMPTS = 3;
+    private static final long INITIAL_SETTLE_MS = 4000L;
+    private static final long SESSION_RETRY_MS = 1500L;
+    private static final long DISCONNECT_CHECK_MS = 5000L;
 
     private final Handler handler = new Handler(Looper.getMainLooper());
-    private long startedAt;
-    private String expectedPackage;
-    private ComponentName expectedComponent;
-    private int launchAttempts;
-    private long lastLaunchElapsed;
-    private boolean checkpointApplied;
-    private boolean contentRestoreRequested;
-    private long taskLaunchedAt;
-    private long contentRestoreAt;
+    private MediaSessionManager sessionManager;
+    private MediaSessionManager.OnActiveSessionsChangedListener sessionsListener;
+    private String expectedPackage = "";
+    private long restoreNotBefore;
+    private boolean hasExpectedSession;
+    private String lastStatus = "";
 
     private final Runnable disconnectMonitor = new Runnable() {
         @Override public void run() {
-            boolean connected = getSharedPreferences("carassistant_media_resume", MODE_PRIVATE)
-                    .getBoolean("aa_connected", false);
-            if (!connected) {
-                handler.removeCallbacks(restoreCheckpoint);
-                HeadlessProjectionHost.releaseIfHeadless(MediaAutoRestoreService.this);
-                stopForeground(true);
-                stopSelf();
-                Log.i(TAG, "AA notification disappeared; stopped headless restore service");
+            if (!isAndroidAutoConnected()) {
+                stopRecovery("Android Auto disconnected; background recovery stopped");
                 return;
             }
-            handler.postDelayed(this, 5000L);
+            handler.postDelayed(this, DISCONNECT_CHECK_MS);
         }
     };
 
-    private final Runnable restoreCheckpoint = new Runnable() {
+    private final Runnable retryCurrentSession = new Runnable() {
         @Override public void run() {
-            if (TextUtils.isEmpty(expectedPackage) || expectedComponent == null) {
-                Log.w(TAG, "No valid saved media component; headless restore cannot continue");
+            if (!isAndroidAutoConnected()) {
+                stopRecovery("Android Auto disconnected while waiting for media session");
                 return;
             }
-
-            // Display 2 is V10 displayIndex=1. It is created by this foreground
-            // service, not by V10CarActivity, so no user tap is needed after AA connects.
-            if (!HeadlessProjectionHost.start(MediaAutoRestoreService.this)) {
-                if (SystemClock.uptimeMillis() - startedAt < RETRY_WINDOW_MS) {
-                    handler.postDelayed(this, RETRY_MS);
-                } else {
-                    Log.e(TAG, "Timed out creating headless V10 Display 2");
-                }
-                return;
-            }
-
-            V10DisplayController controller = V10DisplayController.get(
-                    MediaAutoRestoreService.this, HeadlessProjectionHost.DISPLAY_INDEX);
-            long now = SystemClock.uptimeMillis();
-            if (!controller.isLaunched()
-                    && launchAttempts < MAX_LAUNCH_ATTEMPTS
-                    && (launchAttempts == 0
-                    || now - lastLaunchElapsed >= LAUNCH_RETRY_INTERVAL_MS)) {
-                requestSourceLaunch(controller);
-            }
-            if (controller.isLaunched()) {
-                if (taskLaunchedAt == 0L) taskLaunchedAt = now;
-                boolean exactItemReady = MediaSessionBridge.isCheckpointMediaReady(
-                        MediaAutoRestoreService.this, expectedPackage);
-                boolean contentAlreadyRequested = getSharedPreferences(
-                        "media_autoplay", MODE_PRIVATE)
-                        .getBoolean("content_restore_requested", false);
-                if (contentAlreadyRequested) contentRestoreRequested = true;
-                if (!exactItemReady && !contentRestoreRequested
-                        && !contentAlreadyRequested && now - taskLaunchedAt >= 4000L) {
-                    requestCheckpointContent(controller);
-                } else if (!exactItemReady && contentRestoreRequested
-                        && "checkpoint_uri".equals(getSharedPreferences(
-                                "media_autoplay", MODE_PRIVATE).getString("phase", ""))
-                        && now - contentRestoreAt >= 12000L) {
-                    String fallbackQuery = joinTitleArtist(
-                            MediaSessionBridge.getCheckpointTitle(MediaAutoRestoreService.this),
-                            MediaSessionBridge.getCheckpointArtist(MediaAutoRestoreService.this));
-                    if (!TextUtils.isEmpty(fallbackQuery)) {
-                        getSharedPreferences("media_autoplay", MODE_PRIVATE).edit()
-                                .putString("phase", "search")
-                                .putLong("started_at", System.currentTimeMillis())
-                                .putInt("target_display_id", controller.getDisplayId())
-                                .apply();
-                        controller.launchSearchIntentOnDisplay(expectedPackage, fallbackQuery);
-                        contentRestoreAt = now;
-                        Log.i(TAG, "Checkpoint URI did not publish the saved item; starting title search");
-                    }
-                }
-            }
-
-            if (!checkpointApplied) {
-                boolean autoplay = getSharedPreferences("media_autoplay", MODE_PRIVATE)
-                        .getBoolean("enabled", true);
-                if (MediaSessionBridge.applyCheckpoint(
-                        MediaAutoRestoreService.this, expectedPackage, autoplay)) {
-                    checkpointApplied = true;
-                    // Keep the handoff marker until V10 opens. Its CarActivity must
-                    // still know that Display 2 already owns this task and adopt it.
-                    if (HeadlessProjectionHost.isHeadless()) {
-                        getSharedPreferences("media_autoplay", MODE_PRIVATE).edit()
-                                .putString("phase", "headless_media_applied")
-                                .putInt("target_display_id", controller.getDisplayId())
-                                .apply();
-                    } else {
-                        // V10 has already adopted the running task; the handoff marker
-                        // is no longer needed and must not trigger a second restore.
-                        clearRecoveryAssist();
-                    }
-                    updateForegroundStatus("Đã khôi phục phiên media trên màn hình phụ");
-                    Log.i(TAG, "Restored source=" + expectedPackage + ", autoplay=" + autoplay
-                            + ", displayId=" + controller.getDisplayId());
-                    return;
-                }
-            }
-
-            if (SystemClock.uptimeMillis() - startedAt < RETRY_WINDOW_MS) {
-                handler.postDelayed(this, RETRY_MS);
-            } else {
-                // Keep this foreground service alive while AA is connected: it owns
-                // the ImageReader producer and therefore the headless VirtualDisplay.
-                Log.w(TAG, "MediaSession did not match checkpoint within retry window: "
-                        + expectedPackage + "; keeping Display 2 alive until AA disconnect");
-            }
+            inspectCurrentSessions();
         }
     };
 
     @Override public void onCreate() {
         super.onCreate();
         createNotificationChannel();
-        startForeground(NOTIFICATION_ID, buildNotification(
-                "Đang chuẩn bị khôi phục media trên màn hình phụ"));
+        startForeground(NOTIFICATION_ID,
+                buildNotification("Đang chờ phiên media hợp lệ từ ứng dụng nguồn"));
+    }
+
+    @Override public int onStartCommand(Intent intent, int flags, int startId) {
+        String action = intent == null ? ACTION_RESTORE : intent.getAction();
+        if (ACTION_AA_DISCONNECTED.equals(action)) {
+            stopRecovery("Android Auto disconnected");
+            return START_NOT_STICKY;
+        }
+
+        if (!isAndroidAutoConnected()) {
+            stopRecovery("Không còn tín hiệu Android Auto Connected");
+            return START_NOT_STICKY;
+        }
+
+        handler.removeCallbacks(disconnectMonitor);
+        handler.removeCallbacks(retryCurrentSession);
+        expectedPackage = MediaSessionBridge.getCheckpointPackage(this);
+        if (TextUtils.isEmpty(expectedPackage)) {
+            expectedPackage = MediaSessionBridge.getLastKnownPackage(this);
+        }
+        if (TextUtils.isEmpty(expectedPackage)
+                || getPackageName().equals(expectedPackage)
+                || !expectedPackage.matches("[A-Za-z0-9_]+(\\.[A-Za-z0-9_]+)+")) {
+            Log.w(TAG, "No valid external source package in the durable media checkpoint");
+            stopRecovery("Không có checkpoint media hợp lệ");
+            return START_NOT_STICKY;
+        }
+
+        restoreNotBefore = SystemClock.elapsedRealtime() + INITIAL_SETTLE_MS;
+        hasExpectedSession = false;
+        getSharedPreferences(AUTOPLAY_PREFS, MODE_PRIVATE).edit()
+                .putString("phase", "background_waiting_for_session")
+                .putString("target_package", expectedPackage)
+                .putLong("background_wait_started_at", System.currentTimeMillis())
+                .apply();
+
+        handler.postDelayed(disconnectMonitor, DISCONNECT_CHECK_MS);
+        registerSessionObserver();
+        updateForegroundStatus("Đang chờ MediaSession của " + expectedPackage);
+        Log.i(TAG, "Background-only recovery started; waiting for source MediaSession: "
+                + expectedPackage);
+        handler.postDelayed(retryCurrentSession, INITIAL_SETTLE_MS);
+        return START_STICKY;
+    }
+
+    private boolean isAndroidAutoConnected() {
+        return getSharedPreferences(RESUME_PREFS, MODE_PRIVATE)
+                .getBoolean("aa_connected", false);
+    }
+
+    private void registerSessionObserver() {
+        try {
+            sessionManager = (MediaSessionManager) getSystemService(MEDIA_SESSION_SERVICE);
+            if (sessionManager == null) {
+                Log.e(TAG, "MediaSessionManager unavailable; cannot observe source sessions");
+                updateForegroundStatus("Không thể theo dõi MediaSession");
+                return;
+            }
+            ComponentName notificationListener =
+                    new ComponentName(this, MediaSessionBridge.class);
+            sessionsListener = controllers -> {
+                if (!isAndroidAutoConnected()) {
+                    stopRecovery("Android Auto disconnected");
+                    return;
+                }
+                handler.removeCallbacks(retryCurrentSession);
+                handler.postDelayed(retryCurrentSession, 250L);
+            };
+            sessionManager.addOnActiveSessionsChangedListener(
+                    sessionsListener, notificationListener, handler);
+            inspectCurrentSessions();
+        } catch (SecurityException error) {
+            Log.e(TAG, "Notification access is required to observe active media sessions", error);
+            updateForegroundStatus("Cần bật quyền Notification Access");
+        } catch (RuntimeException error) {
+            Log.e(TAG, "Could not register active-session observer", error);
+            updateForegroundStatus("Đang chờ kết nối MediaSession");
+        }
+    }
+
+    private void inspectCurrentSessions() {
+        if (TextUtils.isEmpty(expectedPackage) || !isAndroidAutoConnected()
+                || sessionManager == null) return;
+        long now = SystemClock.elapsedRealtime();
+        if (now < restoreNotBefore) {
+            handler.postDelayed(retryCurrentSession, restoreNotBefore - now);
+            return;
+        }
+
+        final List<MediaController> controllers;
+        try {
+            controllers = sessionManager.getActiveSessions(
+                    new ComponentName(this, MediaSessionBridge.class));
+        } catch (SecurityException | RuntimeException error) {
+            Log.w(TAG, "Could not read active media sessions; will wait for the next change", error);
+            updateForegroundStatus("Đang chờ quyền truy cập phiên media");
+            return;
+        }
+
+        boolean packageSessionFound = false;
+        if (controllers != null) {
+            for (MediaController controller : controllers) {
+                if (controller != null
+                        && expectedPackage.equals(controller.getPackageName())) {
+                    packageSessionFound = true;
+                    break;
+                }
+            }
+        }
+
+        if (!packageSessionFound) {
+            hasExpectedSession = false;
+            setWaitingState("background_waiting_for_session",
+                    "Đang chờ ứng dụng tạo MediaSession: " + expectedPackage);
+            // No polling while the source has no session. The active-session listener
+            // wakes this service when Android registers a new source session.
+            return;
+        }
+
+        hasExpectedSession = true;
+        if (!MediaSessionBridge.isCheckpointMediaReady(this, expectedPackage)) {
+            setWaitingState("background_waiting_for_exact_media",
+                    "Đã phát hiện session; đang chờ đúng nội dung checkpoint");
+            // Poll only while the expected package has a live session, because metadata
+            // can arrive after session registration without another session-list event.
+            handler.removeCallbacks(retryCurrentSession);
+            handler.postDelayed(retryCurrentSession, SESSION_RETRY_MS);
+            return;
+        }
+
+        boolean autoplay = getSharedPreferences(AUTOPLAY_PREFS, MODE_PRIVATE)
+                .getBoolean("enabled", true);
+        if (MediaSessionBridge.applyCheckpoint(this, expectedPackage, autoplay)) {
+            getSharedPreferences(AUTOPLAY_PREFS, MODE_PRIVATE).edit()
+                    .putString("phase", "background_exact_restored")
+                    .putLong("background_restored_at", System.currentTimeMillis())
+                    .apply();
+            updateForegroundStatus(autoplay
+                    ? "Đã xác minh khôi phục đúng media và trạng thái PLAY"
+                    : "Đã xác minh khôi phục đúng media và trạng thái PAUSE");
+            Log.i(TAG, "EXACT_RESTORED source=" + expectedPackage
+                    + ", autoplay=" + autoplay);
+            stopRecovery("Exact media checkpoint restored and verified");
+            return;
+        }
+
+        setWaitingState("background_verifying_exact_media",
+                "Đang xác minh vị trí và trạng thái phát thực tế");
+        handler.removeCallbacks(retryCurrentSession);
+        handler.postDelayed(retryCurrentSession, SESSION_RETRY_MS);
+    }
+
+    private void setWaitingState(String phase, String message) {
+        getSharedPreferences(AUTOPLAY_PREFS, MODE_PRIVATE).edit()
+                .putString("phase", phase)
+                .putString("target_package", expectedPackage)
+                .apply();
+        updateForegroundStatus(message);
+    }
+
+    private void updateForegroundStatus(String message) {
+        if (TextUtils.equals(lastStatus, message)) return;
+        lastStatus = message;
+        NotificationManager manager =
+                (NotificationManager) getSystemService(NOTIFICATION_SERVICE);
+        if (manager != null) manager.notify(NOTIFICATION_ID, buildNotification(message));
+        Log.i(TAG, message);
     }
 
     private void createNotificationChannel() {
         if (Build.VERSION.SDK_INT >= 26) {
             NotificationManager manager = getSystemService(NotificationManager.class);
             if (manager != null) manager.createNotificationChannel(new NotificationChannel(
-                    CHANNEL, "CarAsistant media controller", NotificationManager.IMPORTANCE_LOW));
+                    CHANNEL, "CarAsistant media recovery", NotificationManager.IMPORTANCE_LOW));
         }
     }
 
@@ -186,137 +267,26 @@ public final class MediaAutoRestoreService extends Service {
                 .build();
     }
 
-    private void updateForegroundStatus(String message) {
-        NotificationManager manager = (NotificationManager) getSystemService(NOTIFICATION_SERVICE);
-        if (manager != null) manager.notify(NOTIFICATION_ID, buildNotification(message));
-    }
-
-    @Override public int onStartCommand(Intent intent, int flags, int startId) {
-        String action = intent == null ? ACTION_RESTORE : intent.getAction();
-        if (ACTION_AA_DISCONNECTED.equals(action)) {
-            handler.removeCallbacks(restoreCheckpoint);
-            HeadlessProjectionHost.releaseIfHeadless(this);
-            stopForeground(true);
-            stopSelf(startId);
-            Log.i(TAG, "Android Auto disconnected; released headless projection resources");
-            return START_NOT_STICKY;
-        }
-
-        handler.removeCallbacks(restoreCheckpoint);
+    private void stopRecovery(String reason) {
+        Log.i(TAG, reason);
         handler.removeCallbacks(disconnectMonitor);
-        handler.postDelayed(disconnectMonitor, 5000L);
-        launchAttempts = 0;
-        lastLaunchElapsed = 0L;
-        checkpointApplied = false;
-        contentRestoreRequested = false;
-        taskLaunchedAt = 0L;
-        contentRestoreAt = 0L;
-        expectedPackage = MediaSessionBridge.getCheckpointPackage(this);
-        if (expectedPackage == null) expectedPackage = MediaSessionBridge.getLastKnownPackage(this);
-        expectedComponent = MediaSessionBridge.getCheckpointTaskComponent(this);
-        if (TextUtils.isEmpty(expectedPackage) || expectedComponent == null
-                || !expectedPackage.equals(expectedComponent.getPackageName())) {
-            try {
-                Intent launch = getPackageManager().getLaunchIntentForPackage(expectedPackage);
-                expectedComponent = launch == null ? null : launch.getComponent();
-            } catch (RuntimeException ignored) {
-                expectedComponent = null;
-            }
-        }
-
-        if (TextUtils.isEmpty(expectedPackage) || getPackageName().equals(expectedPackage)
-                || !expectedPackage.matches("[A-Za-z0-9_]+(\\.[A-Za-z0-9_]+)+")
-                || expectedComponent == null) {
-            Log.i(TAG, "No valid external media checkpoint to resume");
-            stopSelf(startId);
-            return START_NOT_STICKY;
-        }
-
-        startedAt = SystemClock.uptimeMillis();
-        String savedQuery = joinTitleArtist(MediaSessionBridge.getCheckpointTitle(this),
-                MediaSessionBridge.getCheckpointArtist(this));
-        getSharedPreferences("media_autoplay", MODE_PRIVATE).edit()
-                .putBoolean("pending_projection_restore", true)
-                .putString("target_package", expectedPackage)
-                .putString("query", savedQuery)
-                .putString("phase", "headless_display2")
-                .putInt("target_display_id", -1)
-                .putLong("started_at", System.currentTimeMillis())
-                .putBoolean("mini_engine_active", false)
-                .putBoolean("content_restore_requested", false)
-                .apply();
-
-        updateForegroundStatus("Đang khởi chạy " + expectedPackage + " trên Display 2");
-        Log.i(TAG, "AA reconnect accepted; creating headless Display 2 for "
-                + expectedComponent.flattenToString());
-        handler.post(restoreCheckpoint);
-        return START_STICKY;
-    }
-
-    private void requestSourceLaunch(V10DisplayController controller) {
-        if (controller == null || !controller.isReady() || expectedComponent == null) return;
-        launchAttempts++;
-        lastLaunchElapsed = SystemClock.uptimeMillis();
-        getSharedPreferences("media_autoplay", MODE_PRIVATE).edit()
-                .putString("phase", "launching_on_display2")
-                .putInt("target_display_id", controller.getDisplayId())
-                .apply();
-        Log.i(TAG, "Launching saved component on V10 Display 2, attempt "
-                + launchAttempts + "/" + MAX_LAUNCH_ATTEMPTS + ": "
-                + expectedComponent.flattenToString());
-        controller.launchMediaTaskOnDisplay(expectedComponent);
-    }
-
-    private void requestCheckpointContent(V10DisplayController controller) {
-        if (contentRestoreRequested || controller == null || !controller.isReady()) return;
-        contentRestoreRequested = true;
-        contentRestoreAt = SystemClock.uptimeMillis();
-        String uri = MediaSessionBridge.getCheckpointMediaUri(this);
-        String query = joinTitleArtist(MediaSessionBridge.getCheckpointTitle(this),
-                MediaSessionBridge.getCheckpointArtist(this));
-        android.content.SharedPreferences.Editor editor =
-                getSharedPreferences("media_autoplay", MODE_PRIVATE).edit()
-                        .putBoolean("content_restore_requested", true)
-                        .putString("target_package", expectedPackage)
-                        .putString("query", query)
-                        .putInt("target_display_id", controller.getDisplayId())
-                        .putLong("started_at", System.currentTimeMillis())
-                        .putBoolean("mini_engine_active", false);
-        if (!TextUtils.isEmpty(uri)) {
-            editor.putString("phase", "checkpoint_uri").apply();
-            controller.launchCheckpointUriOnDisplay(expectedPackage, uri);
-            Log.i(TAG, "Opening saved media URI on Display 2 for " + expectedPackage);
-        } else if (!TextUtils.isEmpty(query)) {
-            editor.putString("phase", "search").apply();
-            controller.launchSearchIntentOnDisplay(expectedPackage, query);
-            Log.i(TAG, "Searching saved media title on Display 2 for " + expectedPackage);
-        } else {
-            editor.putString("phase", "await_media_session").apply();
-            Log.w(TAG, "No saved media URI or title; waiting for source app's own resume");
-        }
-    }
-
-    private void clearRecoveryAssist() {
-        getSharedPreferences("media_autoplay", MODE_PRIVATE).edit()
-                .remove("pending_projection_restore")
-                .remove("target_package").remove("query").remove("phase")
-                .remove("target_display_id").remove("started_at")
-                .remove("search_submitted_at").remove("content_restore_requested").apply();
-    }
-
-    private static String joinTitleArtist(String title, String artist) {
-        if (TextUtils.isEmpty(title)) return "";
-        if (TextUtils.isEmpty(artist) || title.toLowerCase(java.util.Locale.ROOT)
-                .contains(artist.toLowerCase(java.util.Locale.ROOT))) return title;
-        return title + " " + artist;
+        handler.removeCallbacks(retryCurrentSession);
+        stopForeground(true);
+        stopSelf();
     }
 
     @Override public void onDestroy() {
-        handler.removeCallbacks(restoreCheckpoint);
         handler.removeCallbacks(disconnectMonitor);
-        // If the service is stopped unexpectedly while the reader still owns the
-        // Surface, release it. Once V10 takes over, releaseIfHeadless is a no-op.
-        HeadlessProjectionHost.releaseIfHeadless(this);
+        handler.removeCallbacks(retryCurrentSession);
+        if (sessionManager != null && sessionsListener != null) {
+            try {
+                sessionManager.removeOnActiveSessionsChangedListener(sessionsListener);
+            } catch (RuntimeException error) {
+                Log.w(TAG, "Could not unregister active-session observer", error);
+            }
+        }
+        sessionsListener = null;
+        sessionManager = null;
         super.onDestroy();
     }
 
