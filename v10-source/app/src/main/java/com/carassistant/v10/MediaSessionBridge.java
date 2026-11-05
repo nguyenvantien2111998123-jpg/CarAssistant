@@ -926,10 +926,12 @@ public final class MediaSessionBridge extends NotificationListenerService {
                     @Override public void onMetadataChanged(MediaMetadata metadata) {
                         publish(selectedController);
                         if (selectedController == activeController) saveCurrentCheckpoint();
+                        MediaAutoRestoreService.notifyMediaSessionsChanged();
                     }
                     @Override public void onPlaybackStateChanged(PlaybackState state) {
                         publish(selectedController);
                         if (selectedController == activeController) saveCurrentCheckpoint();
+                        MediaAutoRestoreService.notifyMediaSessionsChanged();
                     }
                     @Override public void onSessionDestroyed() {
                         refreshFromManager();
@@ -941,6 +943,7 @@ public final class MediaSessionBridge extends NotificationListenerService {
         }
         checkpointController = checkpointCandidate;
         publish(chosen);
+        MediaAutoRestoreService.notifyMediaSessionsChanged();
     }
 
     private void publish(MediaController controller) {
