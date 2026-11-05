@@ -59,6 +59,7 @@ public final class MediaAutoRestoreService extends Service {
             if (!connected) {
                 handler.removeCallbacks(restoreAttempt);
                 handler.removeCallbacks(connectionStabilizer);
+                HeadlessProjectionHost.releaseIfHeadless(MediaAutoRestoreService.this);
                 stopForeground(true);
                 stopSelf();
                 Log.i(TAG, "AA connected notification removed; phone-side recovery stopped");
@@ -74,13 +75,16 @@ public final class MediaAutoRestoreService extends Service {
                     .getBoolean("aa_connected", false);
             if (!connected) {
                 Log.i(TAG, "AA notification did not remain present for stabilization window");
+                HeadlessProjectionHost.releaseIfHeadless(MediaAutoRestoreService.this);
                 stopForeground(true);
                 stopSelf();
                 return;
             }
             connectionStabilized = true;
+            boolean displayReady = HeadlessProjectionHost.start(MediaAutoRestoreService.this);
             Log.i(TAG, "AA connection stable for " + INITIAL_SETTLE_MS
-                    + " ms; phone-side media recovery may begin");
+                    + " ms; headless Display 2 standby ready=" + displayReady
+                    + "; phone-side media recovery may begin");
             handler.post(restoreAttempt);
         }
     };
@@ -273,6 +277,7 @@ public final class MediaAutoRestoreService extends Service {
             handler.removeCallbacks(restoreAttempt);
             handler.removeCallbacks(disconnectMonitor);
             handler.removeCallbacks(connectionStabilizer);
+            HeadlessProjectionHost.releaseIfHeadless(this);
             stopForeground(true);
             stopSelf(startId);
             return START_NOT_STICKY;
