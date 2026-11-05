@@ -10,6 +10,7 @@ public final class V10ProjectionSession implements TextureView.SurfaceTextureLis
     private static final String TAG = "CarAssistantV10Projection";
 
     private final V10DisplayController displayController;
+    private final Context appContext;
     private final int displayIndex;
     private final V10SurfaceManager surfaceManager;
     private final V10TaskSession taskSession = new V10TaskSession();
@@ -27,6 +28,7 @@ public final class V10ProjectionSession implements TextureView.SurfaceTextureLis
 
     public V10ProjectionSession(Context context, int displayIndex) {
         Context app = context.getApplicationContext();
+        appContext = app;
         this.displayIndex = Math.max(0, displayIndex);
         displayController = V10DisplayController.get(app, this.displayIndex);
         surfaceManager = new V10SurfaceManager(displayController);
@@ -197,6 +199,10 @@ public final class V10ProjectionSession implements TextureView.SurfaceTextureLis
         boolean wasLaunched = displayController.isLaunched();
         ComponentName displayTarget = displayController.getTarget();
         surfaceManager.attach(st, width, height);
+        if (displayIndex == HeadlessProjectionHost.DISPLAY_INDEX) {
+            // Switch the already-warm ImageReader display to V10's live TextureView.
+            HeadlessProjectionHost.onV10SurfaceAttached(displayController);
+        }
 
         if (!wasReady) {
             launchTargetTask();
@@ -252,7 +258,18 @@ public final class V10ProjectionSession implements TextureView.SurfaceTextureLis
         if (destroyed) return;
         destroyed = true;
         surfaceManager.detach();
+        restoreHeadlessStandbyIfConnected();
         rootShell.destroy();
+    }
+
+    private void restoreHeadlessStandbyIfConnected() {
+        if (displayIndex != HeadlessProjectionHost.DISPLAY_INDEX) return;
+        boolean connected = appContext.getSharedPreferences(
+                "carassistant_media_resume", Context.MODE_PRIVATE)
+                .getBoolean("aa_connected", false);
+        if (connected) {
+            HeadlessProjectionHost.start(appContext);
+        }
     }
 
     private float mapX(float x) {
@@ -292,6 +309,7 @@ public final class V10ProjectionSession implements TextureView.SurfaceTextureLis
     @Override public boolean onSurfaceTextureDestroyed(SurfaceTexture surface) {
         taskSession.hidden();
         surfaceManager.detach();
+        restoreHeadlessStandbyIfConnected();
         Log.d(TAG, "[DETACH] surface");
         return true;
     }
