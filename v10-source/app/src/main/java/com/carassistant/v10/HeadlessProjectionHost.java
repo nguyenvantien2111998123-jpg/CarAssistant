@@ -35,7 +35,8 @@ public final class HeadlessProjectionHost {
     public static synchronized boolean start(Context context, int width, int height) {
         if (context == null || width < 1 || height < 1) return false;
         V10DisplayController controller = V10DisplayController.get(context, DISPLAY_INDEX);
-        if (handedOff && controller.isReady()) return true;
+        // Re-arm a drained headless sink even when the virtual display itself
+        // already exists. This is used after V10's TextureView is detached.
         if (imageReader != null) return controller.isReady();
 
         ImageReader created = null;
@@ -65,6 +66,7 @@ public final class HeadlessProjectionHost {
                 return false;
             }
             imageReader = created;
+            handedOff = false;
             drainThread = thread;
             drainHandler = handler;
             owner = controller;
