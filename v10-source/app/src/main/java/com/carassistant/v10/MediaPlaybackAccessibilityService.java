@@ -10,6 +10,7 @@ import android.util.Log;
 import android.util.SparseArray;
 import android.os.Handler;
 import android.os.Looper;
+import android.text.TextUtils;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -639,6 +640,7 @@ public final class MediaPlaybackAccessibilityService extends AccessibilityServic
                 automationHandler.postDelayed(this, 1000L);
                 return;
             }
+            if ("await_session".equals(phase)) return;
             if (targetPackage.isEmpty() || query.isEmpty()) {
                 automationHandler.postDelayed(this, 1000L);
                 return;
