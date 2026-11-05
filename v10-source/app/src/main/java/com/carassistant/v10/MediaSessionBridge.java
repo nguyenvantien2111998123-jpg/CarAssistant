@@ -287,19 +287,24 @@ public final class MediaSessionBridge extends NotificationListenerService {
         String actualUri = safeMetadataString(current, MediaMetadata.METADATA_KEY_MEDIA_URI);
         String actualTitle = safeMetadataString(current, MediaMetadata.METADATA_KEY_TITLE);
         String actualArtist = safeMetadataString(current, MediaMetadata.METADATA_KEY_ARTIST);
-        if (!TextUtils.isEmpty(expectedId) && !TextUtils.isEmpty(actualId)) {
-            return expectedId.equals(actualId);
+
+        // A saved strong identifier must never silently degrade to a title-only match.
+        if (!TextUtils.isEmpty(expectedId)) {
+            if (!TextUtils.isEmpty(actualId)) return expectedId.equals(actualId);
+            if (!TextUtils.isEmpty(expectedUri)) {
+                return !TextUtils.isEmpty(actualUri) && expectedUri.equals(actualUri);
+            }
+            return false;
         }
-        if (!TextUtils.isEmpty(expectedUri) && !TextUtils.isEmpty(actualUri)) {
-            return expectedUri.equals(actualUri);
+        if (!TextUtils.isEmpty(expectedUri)) {
+            return !TextUtils.isEmpty(actualUri) && expectedUri.equals(actualUri);
         }
-        if (!TextUtils.isEmpty(expectedTitle)) {
-            if (TextUtils.isEmpty(actualTitle)
-                    || !expectedTitle.trim().equalsIgnoreCase(actualTitle.trim())) return false;
-            return TextUtils.isEmpty(expectedArtist) || TextUtils.isEmpty(actualArtist)
-                    || expectedArtist.trim().equalsIgnoreCase(actualArtist.trim());
+        if (TextUtils.isEmpty(expectedTitle) || TextUtils.isEmpty(actualTitle)
+                || !expectedTitle.trim().equalsIgnoreCase(actualTitle.trim())) {
+            return false;
         }
-        return TextUtils.isEmpty(expectedId) && TextUtils.isEmpty(expectedUri);
+        return TextUtils.isEmpty(expectedArtist) || TextUtils.isEmpty(actualArtist)
+                || expectedArtist.trim().equalsIgnoreCase(actualArtist.trim());
     }
 
     /** True only when the saved source package is publishing the exact saved media item. */
