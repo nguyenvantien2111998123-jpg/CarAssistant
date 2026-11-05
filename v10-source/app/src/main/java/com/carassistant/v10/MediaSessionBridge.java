@@ -303,8 +303,8 @@ public final class MediaSessionBridge extends NotificationListenerService {
                 || !expectedTitle.trim().equalsIgnoreCase(actualTitle.trim())) {
             return false;
         }
-        return TextUtils.isEmpty(expectedArtist) || TextUtils.isEmpty(actualArtist)
-                || expectedArtist.trim().equalsIgnoreCase(actualArtist.trim());
+        return TextUtils.isEmpty(expectedArtist) || (!TextUtils.isEmpty(actualArtist)
+                && expectedArtist.trim().equalsIgnoreCase(actualArtist.trim()));
     }
 
     /** True only when the saved source package is publishing the exact saved media item. */
