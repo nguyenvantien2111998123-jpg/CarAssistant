@@ -213,6 +213,11 @@ public final class MediaAutoRestoreService extends Service {
         lastLaunchAt = SystemClock.elapsedRealtime();
         launchInFlight = true;
 
+        // The source app is about to be brought back to the phone for Accessibility.
+        // Invalidate only V10's cached Display 2 task marker so the next media-card
+        // tap re-checks/moves the real phone task instead of assuming it is still there.
+        V10DisplayController.get(this, HeadlessProjectionHost.DISPLAY_INDEX).markNotLaunched();
+
         String query = joinTitleArtist(MediaSessionBridge.getCheckpointTitle(this),
                 MediaSessionBridge.getCheckpointArtist(this));
         getSharedPreferences("media_autoplay", MODE_PRIVATE).edit()
