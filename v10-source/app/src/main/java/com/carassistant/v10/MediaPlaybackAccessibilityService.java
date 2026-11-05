@@ -21,6 +21,26 @@ import java.util.Locale;
  */
 public final class MediaPlaybackAccessibilityService extends AccessibilityService {
     private static volatile MediaPlaybackAccessibilityService activeService;
+
+    /** Return the source app to the background only if it is still the foreground app. */
+    static boolean requestBackgroundSourceApp(String packageName) {
+        MediaPlaybackAccessibilityService service = activeService;
+        if (service == null || TextUtils.isEmpty(packageName)) return false;
+        AccessibilityNodeInfo active = null;
+        try {
+            active = service.getRootInActiveWindow();
+            if (active == null || active.getPackageName() == null
+                    || !packageName.contentEquals(active.getPackageName())) {
+                return false;
+            }
+            return service.performGlobalAction(GLOBAL_ACTION_HOME);
+        } catch (RuntimeException error) {
+            Log.w(TAG, "Could not send restored source app to background", error);
+            return false;
+        } finally {
+            if (active != null) active.recycle();
+        }
+    }
     private final RootShellSession closeRootShell = new RootShellSession();
 
     /**
@@ -99,6 +119,20 @@ public final class MediaPlaybackAccessibilityService extends AccessibilityServic
                 Log.w(TAG, "Auto-play timed out for " + targetPackage);
                 return;
             }
+            if (MediaSessionBridge.isCheckpointMediaReady(
+                    MediaPlaybackAccessibilityService.this, targetPackage)) {
+                prefs.edit().putString("phase", "await_session")
+                        .putBoolean("accessibility_selection_done", true).apply();
+                return;
+            }
+            boolean autoplayEnabled = getSharedPreferences(PREFS, MODE_PRIVATE)
+                    .getBoolean("enabled", true);
+            if (!autoplayEnabled) {
+                prefs.edit().putString("phase", "await_session")
+                        .putBoolean("accessibility_selection_done", true).apply();
+                Log.i(TAG, "Autoplay disabled; leaving source item selected and waiting for checkpoint PAUSE");
+                return;
+            }
 
             AccessibilityNodeInfo root = findRootForPackage(targetPackage, targetDisplayId);
             if (root != null) {
@@ -107,8 +141,10 @@ public final class MediaPlaybackAccessibilityService extends AccessibilityServic
                     if (play != null) {
                         boolean clicked = clickNodeOrClickableParent(play);
                         if (clicked) {
-                            clearPending(prefs);
-                            Log.i(TAG, "Tapped a visible Play control in " + targetPackage);
+                            prefs.edit().putString("phase", "await_session")
+                                    .putBoolean("accessibility_selection_done", true).apply();
+                            Log.i(TAG, "Tapped a visible Play control in " + targetPackage
+                                    + "; waiting for MediaSession verification");
                             root.recycle();
                             return;
                         }
@@ -156,6 +192,10 @@ public final class MediaPlaybackAccessibilityService extends AccessibilityServic
         }
         try {
             if ("search".equals(phase)) {
+                if (isYouTubePackage(eventPackage)
+                        && navigateYouTubeWatchHistory(root, prefs)) {
+                    return;
+                }
                 AccessibilityNodeInfo result = findSearchResult(root, query);
                 if (result != null) {
                     boolean clicked = clickNodeOrClickableParent(result);
@@ -484,6 +524,90 @@ public final class MediaPlaybackAccessibilityService extends AccessibilityServic
         return false;
     }
 
+    private static boolean isYouTubePackage(String packageName) {
+        return "com.google.android.youtube".equals(packageName)
+                || "app.revanced.android.youtube".equals(packageName)
+                || "app.morphe.android.youtube".equals(packageName);
+    }
+
+    /**
+     * Mini phone-side accessibility fallback for YouTube: open the You tab, then
+     * Watch history, before trying to match the saved title. It uses the phone
+     * window tree and never captures or injects input into Display 2.
+     */
+    private boolean navigateYouTubeWatchHistory(
+            AccessibilityNodeInfo root, android.content.SharedPreferences prefs) {
+        int stage = prefs.getInt("youtube_history_stage", 0);
+        String[] historyLabels = new String[] {
+                "Video đã xem", "Lịch sử xem", "History", "Watch history"
+        };
+        if (stage >= 2) return false;
+
+        if (stage == 0 && containsAnyLabel(root, historyLabels, 0)) {
+            prefs.edit().putInt("youtube_history_stage", 2).apply();
+            return false;
+        }
+
+        boolean clicked;
+        if (stage == 0) {
+            clicked = clickAnyLabel(root, new String[] {"Bạn", "You"}, 0);
+            if (clicked) {
+                prefs.edit().putInt("youtube_history_stage", 1).apply();
+                Log.i(TAG, "Opened YouTube You tab on phone display");
+            }
+            return clicked;
+        }
+
+        clicked = clickAnyLabel(root, historyLabels, 0);
+        if (clicked) {
+            prefs.edit().putInt("youtube_history_stage", 2).apply();
+            Log.i(TAG, "Opened YouTube Watch history on phone display");
+        }
+        return clicked;
+    }
+
+    private boolean containsAnyLabel(
+            AccessibilityNodeInfo root, String[] labels, int depth) {
+        AccessibilityNodeInfo node = findAnyLabel(root, labels, depth);
+        if (node == null) return false;
+        node.recycle();
+        return true;
+    }
+
+    private boolean clickAnyLabel(
+            AccessibilityNodeInfo root, String[] labels, int depth) {
+        AccessibilityNodeInfo node = findAnyLabel(root, labels, depth);
+        return node != null && clickNodeOrClickableParent(node);
+    }
+
+    private AccessibilityNodeInfo findAnyLabel(
+            AccessibilityNodeInfo node, String[] labels, int depth) {
+        if (node == null || depth > MAX_DEPTH) return null;
+        String text = node.getText() == null ? "" : node.getText().toString();
+        String description = node.getContentDescription() == null
+                ? "" : node.getContentDescription().toString();
+        String normalizedText =
+                com.carassistant.v10.voice.VoiceCommandParser.normalize(text).trim();
+        String normalizedDescription =
+                com.carassistant.v10.voice.VoiceCommandParser.normalize(description).trim();
+        for (String label : labels) {
+            String expected =
+                    com.carassistant.v10.voice.VoiceCommandParser.normalize(label).trim();
+            if (expected.equals(normalizedText) || expected.equals(normalizedDescription)) {
+                return AccessibilityNodeInfo.obtain(node);
+            }
+        }
+        for (int i = 0; i < node.getChildCount(); i++) {
+            AccessibilityNodeInfo child = node.getChild(i);
+            if (child != null) {
+                AccessibilityNodeInfo match = findAnyLabel(child, labels, depth + 1);
+                child.recycle();
+                if (match != null) return match;
+            }
+        }
+        return null;
+    }
+
     private static final class Candidate {
         AccessibilityNodeInfo node;
         int score;
@@ -534,6 +658,7 @@ public final class MediaPlaybackAccessibilityService extends AccessibilityServic
                 automationHandler.post(playRetry);
                 return;
             }
+            if ("await_session".equals(phase)) return;
             if (!"search".equals(phase)) {
                 automationHandler.postDelayed(this, 1000L);
                 return;
@@ -542,6 +667,11 @@ public final class MediaPlaybackAccessibilityService extends AccessibilityServic
             AccessibilityNodeInfo root = findRootForPackage(targetPackage, targetDisplayId);
             if (root != null) {
                 try {
+                    if (isYouTubePackage(targetPackage)
+                            && navigateYouTubeWatchHistory(root, prefs)) {
+                        automationHandler.postDelayed(this, 700L);
+                        return;
+                    }
                     AccessibilityNodeInfo result = findSearchResult(root, query);
                     if (result != null) {
                         boolean clicked = clickNodeOrClickableParent(result);
