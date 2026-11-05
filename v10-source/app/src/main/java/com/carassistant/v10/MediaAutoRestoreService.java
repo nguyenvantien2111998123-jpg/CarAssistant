@@ -29,7 +29,8 @@ public final class MediaAutoRestoreService extends Service {
     private static final String TAG = "CarAssistantMediaResume";
     private static final String CHANNEL = "carassistant_media_restore";
     private static final int NOTIFICATION_ID = 4038;
-    private static final long INITIAL_SETTLE_MS = 3500L;
+    private static final long INITIAL_SETTLE_MS = 10000L;
+    private static final long AA_CONNECTION_POLL_MS = 1000L;
     private static final long VERIFY_RETRY_MS = 2000L;
     private static final long VERIFY_WINDOW_MS = 120000L;
 
@@ -50,7 +51,7 @@ public final class MediaAutoRestoreService extends Service {
                 Log.i(TAG, "AA connected notification removed; background recovery stopped");
                 return;
             }
-            handler.postDelayed(this, 5000L);
+            handler.postDelayed(this, AA_CONNECTION_POLL_MS);
         }
     };
 
@@ -188,10 +189,12 @@ public final class MediaAutoRestoreService extends Service {
                 .remove("search_submitted_at")
                 .apply();
 
-        updateForegroundStatus("Đang chờ MediaSession của " + expectedPackage);
+        updateForegroundStatus("Đang chờ Android Auto ổn định trước khi khôi phục media");
         handler.postDelayed(restoreAttempt, INITIAL_SETTLE_MS);
-        handler.postDelayed(disconnectMonitor, 5000L);
-        Log.i(TAG, "AA reconnect accepted; background MediaSession recovery only, source="
+        // Confirm the AA connected notification remains present throughout the 10-second
+        // stabilization window before attempting any media-session command.
+        handler.post(disconnectMonitor);
+        Log.i(TAG, "AA reconnect received; waiting 10 seconds of stable notification before recovery, source="
                 + expectedPackage + ", no Activity/Display2/Accessibility launch");
         return START_STICKY;
     }
