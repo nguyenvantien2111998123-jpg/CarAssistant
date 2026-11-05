@@ -310,10 +310,14 @@ public final class MediaSessionBridge extends NotificationListenerService {
         if (!TextUtils.isEmpty(expectedTitle)) {
             if (TextUtils.isEmpty(actualTitle)
                     || !expectedTitle.trim().equalsIgnoreCase(actualTitle.trim())) return false;
-            return TextUtils.isEmpty(expectedArtist) || TextUtils.isEmpty(actualArtist)
-                    || expectedArtist.trim().equalsIgnoreCase(actualArtist.trim());
+            if (!TextUtils.isEmpty(expectedArtist)) {
+                return !TextUtils.isEmpty(actualArtist)
+                        && expectedArtist.trim().equalsIgnoreCase(actualArtist.trim());
+            }
+            return true;
         }
-        return TextUtils.isEmpty(expectedId) && TextUtils.isEmpty(expectedUri);
+        // An empty checkpoint identity must never match an arbitrary session.
+        return false;
     }
 
     /** True only when the saved source package is publishing the exact saved media item. */
