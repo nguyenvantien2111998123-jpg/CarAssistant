@@ -39,6 +39,7 @@ public final class MediaAutoRestoreService extends Service {
     private String expectedPackage;
     private long verifyStartedAt;
     private boolean completed;
+    private boolean connectionStabilized;
 
     private final Runnable disconnectMonitor = new Runnable() {
         @Override public void run() {
@@ -55,9 +56,26 @@ public final class MediaAutoRestoreService extends Service {
         }
     };
 
+    private final Runnable connectionStabilizer = new Runnable() {
+        @Override public void run() {
+            boolean connected = getSharedPreferences("carassistant_media_resume", MODE_PRIVATE)
+                    .getBoolean("aa_connected", false);
+            if (!connected) {
+                Log.i(TAG, "AA notification did not remain present for stabilization window");
+                stopForeground(true);
+                stopSelf();
+                return;
+            }
+            connectionStabilized = true;
+            Log.i(TAG, "AA connection stable for " + INITIAL_SETTLE_MS
+                    + " ms; media recovery may begin");
+            handler.post(restoreAttempt);
+        }
+    };
+
     private final Runnable restoreAttempt = new Runnable() {
         @Override public void run() {
-            if (completed || TextUtils.isEmpty(expectedPackage)) return;
+            if (completed || !connectionStabilized || TextUtils.isEmpty(expectedPackage)) return;
             if (!getSharedPreferences("carassistant_media_resume", MODE_PRIVATE)
                     .getBoolean("aa_connected", false)) {
                 Log.i(TAG, "AA is no longer connected; refusing media recovery");
@@ -157,6 +175,7 @@ public final class MediaAutoRestoreService extends Service {
                     .putBoolean("aa_connected", false).apply();
             handler.removeCallbacks(restoreAttempt);
             handler.removeCallbacks(disconnectMonitor);
+            handler.removeCallbacks(connectionStabilizer);
             stopForeground(true);
             stopSelf(startId);
             return START_NOT_STICKY;
@@ -164,7 +183,9 @@ public final class MediaAutoRestoreService extends Service {
 
         handler.removeCallbacks(restoreAttempt);
         handler.removeCallbacks(disconnectMonitor);
+        handler.removeCallbacks(connectionStabilizer);
         completed = false;
+        connectionStabilized = false;
         verifyStartedAt = 0L;
         expectedPackage = MediaSessionBridge.getCheckpointPackage(this);
         if (TextUtils.isEmpty(expectedPackage)) {
@@ -190,10 +211,10 @@ public final class MediaAutoRestoreService extends Service {
                 .apply();
 
         updateForegroundStatus("Đang chờ Android Auto ổn định trước khi khôi phục media");
-        handler.postDelayed(restoreAttempt, INITIAL_SETTLE_MS);
-        // Confirm the AA connected notification remains present throughout the 10-second
-        // stabilization window before attempting any media-session command.
+        // Watch the AA notification continuously, but do not let MediaSession callbacks
+        // trigger playback until the full stabilization window has elapsed.
         handler.post(disconnectMonitor);
+        handler.postDelayed(connectionStabilizer, INITIAL_SETTLE_MS);
         Log.i(TAG, "AA reconnect received; waiting 10 seconds of stable notification before recovery, source="
                 + expectedPackage + ", no Activity/Display2/Accessibility launch");
         return START_STICKY;
@@ -202,6 +223,7 @@ public final class MediaAutoRestoreService extends Service {
     @Override public void onDestroy() {
         handler.removeCallbacks(restoreAttempt);
         handler.removeCallbacks(disconnectMonitor);
+        handler.removeCallbacks(connectionStabilizer);
         if (instance == this) instance = null;
         super.onDestroy();
     }
