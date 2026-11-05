@@ -150,6 +150,16 @@ public final class MediaSessionBridge extends NotificationListenerService {
             if (TextUtils.isEmpty(artist) && metadata != null) {
                 artist = metadata.getString(MediaMetadata.METADATA_KEY_ALBUM_ARTIST);
             }
+            String mediaId = metadata == null ? "" :
+                    safeMetadataString(metadata, MediaMetadata.METADATA_KEY_MEDIA_ID);
+            String mediaUri = metadata == null ? "" :
+                    safeMetadataString(metadata, MediaMetadata.METADATA_KEY_MEDIA_URI);
+            // Do not replace a valid rolling checkpoint with a transient empty session.
+            if (TextUtils.isEmpty(title) && TextUtils.isEmpty(mediaId)
+                    && TextUtils.isEmpty(mediaUri)) {
+                Log.d(TAG, "Keeping last complete checkpoint; current session has no media identity");
+                return;
+            }
             long duration = metadata == null ? 0L :
                     Math.max(0L, metadata.getLong(MediaMetadata.METADATA_KEY_DURATION));
             long position = state == null ? 0L : Math.max(0L, state.getPosition());
@@ -176,15 +186,15 @@ public final class MediaSessionBridge extends NotificationListenerService {
             boolean playing = state != null
                     && state.getState() == PlaybackState.STATE_PLAYING;
             float speed = playing && state != null ? state.getPlaybackSpeed() : 0f;
-            // commit() makes this minute's checkpoint durable before the next interval.
+            // commit() makes this five-second rolling checkpoint durable before the next interval.
             getSharedPreferences(RESUME_PREFS, Context.MODE_PRIVATE).edit()
                     .putString(LAST_PACKAGE, packageName)
                     .putString(CHECKPOINT_PACKAGE, packageName)
                     .putString(CHECKPOINT_TASK_COMPONENT, taskComponent)
                     .putString(CHECKPOINT_TITLE, title == null ? "" : title)
                     .putString(CHECKPOINT_ARTIST, artist == null ? "" : artist)
-                    .putString(CHECKPOINT_MEDIA_ID, metadata == null ? "" : safeMetadataString(metadata, MediaMetadata.METADATA_KEY_MEDIA_ID))
-                    .putString(CHECKPOINT_MEDIA_URI, metadata == null ? "" : safeMetadataString(metadata, MediaMetadata.METADATA_KEY_MEDIA_URI))
+                    .putString(CHECKPOINT_MEDIA_ID, mediaId)
+                    .putString(CHECKPOINT_MEDIA_URI, mediaUri)
                     .putLong(CHECKPOINT_DURATION, duration)
                     .putLong(CHECKPOINT_POSITION, position)
                     .putBoolean(CHECKPOINT_PLAYING, playing)
