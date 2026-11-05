@@ -331,20 +331,87 @@ public final class MediaSessionBridge extends NotificationListenerService {
         try {
             android.content.SharedPreferences prefs =
                     context.getSharedPreferences(RESUME_PREFS, Context.MODE_PRIVATE);
-            MediaMetadata currentMetadata = controller.getMetadata();
-            if (!matchesSavedMediaIdentity(prefs, currentMetadata)) {
-                Log.i(TAG, "Waiting for the exact checkpointed media item before seeking; source="
-                        + expectedPackage);
+            MediaMetadata metadata = controller.getMetadata();
+            if (!matchesSavedMediaIdentity(prefs, metadata)) {
+                Log.i(TAG, "Waiting for exact checkpointed media identity; source=" + expectedPackage);
                 return false;
             }
-            long position = getAdjustedCheckpointPosition(context);
+
+            long targetPosition = getAdjustedCheckpointPosition(context);
             long duration = Math.max(0L, prefs.getLong(CHECKPOINT_DURATION, 0L));
-            controller.getTransportControls().seekTo(
-                    duration > 0L ? Math.min(position, duration) : position);
-            if (autoplay) controller.getTransportControls().play();
-            else controller.getTransportControls().pause();
-            Log.i(TAG, "Applied checkpoint; autoplay=" + autoplay + ", position=" + position);
-            return true;
+            if (duration > 0L) targetPosition = Math.min(targetPosition, duration);
+            PlaybackState state = controller.getPlaybackState();
+            long actualPosition = state == null ? -1L : state.getPosition();
+            boolean desiredStateReached = state != null && (autoplay
+                    ? state.getState() == PlaybackState.STATE_PLAYING
+                    : state.getState() == PlaybackState.STATE_PAUSED);
+            boolean positionReached = actualPosition >= 0L
+                    && Math.abs(actualPosition - targetPosition) <= 8000L;
+
+            String identity = safeMetadataString(metadata, MediaMetadata.METADATA_KEY_MEDIA_ID);
+            if (TextUtils.isEmpty(identity)) {
+                identity = safeMetadataString(metadata, MediaMetadata.METADATA_KEY_MEDIA_URI);
+            }
+            if (TextUtils.isEmpty(identity)) {
+                identity = safeMetadataString(metadata, MediaMetadata.METADATA_KEY_TITLE);
+            }
+            long now = android.os.SystemClock.elapsedRealtime();
+
+            if (desiredStateReached && positionReached) {
+                if (autoplay) {
+                    String verifyPackage = prefs.getString("restore_verify_package", "");
+                    String verifyIdentity = prefs.getString("restore_verify_identity", "");
+                    long verifyAt = prefs.getLong("restore_verify_at", 0L);
+                    long verifyPosition = prefs.getLong("restore_verify_position", -1L);
+                    boolean sameSample = expectedPackage.equals(verifyPackage)
+                            && identity.equals(verifyIdentity)
+                            && verifyAt > 0L && actualPosition >= 0L && now >= verifyAt;
+                    if (sameSample && now - verifyAt >= 1000L
+                            && actualPosition >= verifyPosition + 500L) {
+                        prefs.edit().remove("restore_command_package")
+                                .remove("restore_command_identity").remove("restore_command_at")
+                                .remove("restore_verify_package").remove("restore_verify_identity")
+                                .remove("restore_verify_at").remove("restore_verify_position").apply();
+                        Log.i(TAG, "Verified exact media; PLAY position advanced to " + actualPosition);
+                        return true;
+                    }
+                    if (!sameSample || now - verifyAt >= 4000L
+                            || actualPosition < verifyPosition) {
+                        prefs.edit().putString("restore_verify_package", expectedPackage)
+                                .putString("restore_verify_identity", identity)
+                                .putLong("restore_verify_at", now)
+                                .putLong("restore_verify_position", actualPosition).apply();
+                    }
+                    return false;
+                }
+                prefs.edit().remove("restore_command_package")
+                        .remove("restore_command_identity").remove("restore_command_at")
+                        .remove("restore_verify_package").remove("restore_verify_identity")
+                        .remove("restore_verify_at").remove("restore_verify_position").apply();
+                Log.i(TAG, "Verified exact media and PAUSED position=" + actualPosition);
+                return true;
+            }
+
+            prefs.edit().remove("restore_verify_package").remove("restore_verify_identity")
+                    .remove("restore_verify_at").remove("restore_verify_position").apply();
+            String previousPackage = prefs.getString("restore_command_package", "");
+            String previousIdentity = prefs.getString("restore_command_identity", "");
+            long previousCommandAt = prefs.getLong("restore_command_at", 0L);
+            boolean identityChanged = !expectedPackage.equals(previousPackage)
+                    || !identity.equals(previousIdentity);
+            boolean retryCommand = identityChanged || previousCommandAt <= 0L
+                    || now < previousCommandAt || now - previousCommandAt >= 2000L;
+            if (retryCommand) {
+                controller.getTransportControls().seekTo(targetPosition);
+                if (autoplay) controller.getTransportControls().play();
+                else controller.getTransportControls().pause();
+                prefs.edit().putString("restore_command_package", expectedPackage)
+                        .putString("restore_command_identity", identity)
+                        .putLong("restore_command_at", now).apply();
+                Log.i(TAG, "Sent checkpoint commands; awaiting position/state confirmation"
+                        + ", autoplay=" + autoplay + ", target=" + targetPosition);
+            }
+            return false;
         } catch (RuntimeException error) {
             Log.w(TAG, "Could not apply media checkpoint", error);
             return false;
