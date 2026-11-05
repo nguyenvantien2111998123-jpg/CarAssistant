@@ -132,13 +132,14 @@ public final class MediaSessionBridge extends NotificationListenerService {
             String savedPackage = getCheckpointPackage(this);
             boolean sameSavedSource = TextUtils.isEmpty(savedPackage)
                     || savedPackage.equals(packageName);
-            boolean activelyPlaying = state != null
-                    && state.getState() == PlaybackState.STATE_PLAYING;
+            boolean hasCurrentPlaybackState = state != null
+                    && state.getState() != PlaybackState.STATE_NONE
+                    && state.getState() != PlaybackState.STATE_STOPPED;
             // During listener rebind/reboot, an unrelated idle session can be selected
             // temporarily while the checkpointed app is still publishing its session.
             // Keep the durable source checkpoint until that app returns or another app
             // actually becomes the active playing source.
-            if (!sameSavedSource && !activelyPlaying) {
+            if (!sameSavedSource && !hasCurrentPlaybackState) {
                 Log.d(TAG, "Keeping checkpoint for " + savedPackage
                         + "; ignoring transient session " + packageName);
                 return;
@@ -896,6 +897,7 @@ public final class MediaSessionBridge extends NotificationListenerService {
         MediaController savedCandidate = null;
         MediaController checkpointCandidate = null;
         MediaController playingCandidate = null;
+        MediaController activeMetadataCandidate = null;
         MediaController metadataCandidate = null;
         String checkpointPackage = getCheckpointPackage(this);
         if (checkpointPackage == null) checkpointPackage = getLastKnownPackage(this);
@@ -911,16 +913,22 @@ public final class MediaSessionBridge extends NotificationListenerService {
                         && lastPackage.equals(candidate.getPackageName())) savedCandidate = candidate;
                 if (playingCandidate == null && state != null
                         && state.getState() == PlaybackState.STATE_PLAYING) playingCandidate = candidate;
+                if (activeMetadataCandidate == null && state != null
+                        && state.getState() != PlaybackState.STATE_NONE
+                        && state.getState() != PlaybackState.STATE_STOPPED
+                        && candidate.getMetadata() != null) activeMetadataCandidate = candidate;
                 if (metadataCandidate == null && candidate.getMetadata() != null) {
                     metadataCandidate = candidate;
                 }
             }
         }
-        // After reboot, prefer the exact package from the durable checkpoint even if
-        // another app publishes a session first during Android Auto startup.
-        if (checkpointCandidate != null) chosen = checkpointCandidate;
+        // Prefer the actual playing source. If nothing is playing, prefer the first
+        // active session with real metadata (including PAUSED), then fall back to
+        // the checkpoint package while transient empty sessions settle after reboot.
+        if (playingCandidate != null) chosen = playingCandidate;
+        else if (activeMetadataCandidate != null) chosen = activeMetadataCandidate;
+        else if (checkpointCandidate != null) chosen = checkpointCandidate;
         else if (savedCandidate != null) chosen = savedCandidate;
-        else if (playingCandidate != null) chosen = playingCandidate;
         else chosen = metadataCandidate;
 
         MediaController previous = activeController;
