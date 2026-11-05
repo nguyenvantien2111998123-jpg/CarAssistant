@@ -36,7 +36,6 @@ public final class MediaAutoRestoreService extends Service {
     private static volatile MediaAutoRestoreService instance;
     private final Handler handler = new Handler(Looper.getMainLooper());
     private String expectedPackage;
-    private long startedAt;
     private long verifyStartedAt;
     private boolean completed;
 
@@ -166,7 +165,6 @@ public final class MediaAutoRestoreService extends Service {
         handler.removeCallbacks(disconnectMonitor);
         completed = false;
         verifyStartedAt = 0L;
-        startedAt = SystemClock.elapsedRealtime();
         expectedPackage = MediaSessionBridge.getCheckpointPackage(this);
         if (TextUtils.isEmpty(expectedPackage)) {
             expectedPackage = MediaSessionBridge.getLastKnownPackage(this);
@@ -181,10 +179,13 @@ public final class MediaAutoRestoreService extends Service {
         }
 
         getSharedPreferences("media_autoplay", MODE_PRIVATE).edit()
-                .putString("target_package", expectedPackage)
                 .putString("phase", "waiting_for_media_session")
+                .putBoolean("pending_projection_restore", false)
                 .putBoolean("content_restore_requested", false)
+                .remove("target_package")
+                .remove("query")
                 .remove("target_display_id")
+                .remove("search_submitted_at")
                 .apply();
 
         updateForegroundStatus("Đang chờ MediaSession của " + expectedPackage);
