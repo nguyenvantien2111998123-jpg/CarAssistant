@@ -1,7 +1,6 @@
 package com.carassistant.v10.hook;
 
 import android.app.Activity;
-import android.graphics.SurfaceTexture;
 import android.view.SurfaceView;
 import android.view.TextureView;
 import android.view.View;
