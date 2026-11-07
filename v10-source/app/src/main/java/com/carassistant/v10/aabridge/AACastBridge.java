@@ -11,7 +11,7 @@ import com.carassistant.v10.hook.InputHooks;
 import com.carassistant.v10.hook.OrientationHooks;
 import com.carassistant.v10.hook.SystemMediaKeyHooks;
 import com.carassistant.v10.hook.InstallerSpoof;
-import com.carassistant.v10.hook.WynOverlayProbe;
+import com.carassistant.v10.hook.WynHomeProbe;
 
 import de.robv.android.xposed.IXposedHookLoadPackage;
 import de.robv.android.xposed.XposedBridge;
@@ -47,9 +47,9 @@ public final class AACastBridge implements IXposedHookLoadPackage {
             return;
         }
 
-        // ---- WYN process: diagnostic-only overlay inspection; never starts WYN ----
+        // ---- WYN process: inspect only the foreground homepage Activity; never inspect popup windows ----
         if ("com.wynauto.wyn".equals(packageName)) {
-            WynOverlayProbe.install(param.classLoader);
+            WynHomeProbe.install(param.classLoader);
             return;
         }
 
