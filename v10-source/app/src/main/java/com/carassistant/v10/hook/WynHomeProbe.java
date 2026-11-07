@@ -27,7 +27,7 @@ public final class WynHomeProbe {
 
     public static void install(ClassLoader ignored) {
         try {
-            int count = XposedBridge.hookAllMethods(Activity.class, "onResume",
+            java.util.Set<XC_MethodHook.Unhook> hooks = XposedBridge.hookAllMethods(Activity.class, "onResume",
                     new XC_MethodHook() {
                         @Override
                         protected void afterHookedMethod(MethodHookParam param) {
@@ -53,7 +53,7 @@ public final class WynHomeProbe {
                             }
                         }
                     });
-            XposedBridge.log(TAG + " installed; Activity.onResume hooks=" + count);
+            XposedBridge.log(TAG + " installed; Activity.onResume hooks=" + (hooks == null ? 0 : hooks.size()));
         } catch (Throwable error) {
             XposedBridge.log(TAG + " installation failed: " + error);
         }
