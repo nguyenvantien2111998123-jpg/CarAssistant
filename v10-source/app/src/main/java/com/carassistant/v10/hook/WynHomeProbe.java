@@ -49,6 +49,7 @@ public final class WynHomeProbe {
                             try {
                                 if (!PACKAGE.equals(activity.getPackageName())) return;
                                 installDecodeImageProbe(activity.getClassLoader());
+                                WynWarningLinkProbe.install(activity.getClassLoader());
                                 Window window = activity.getWindow();
                                 if (window == null || window.getDecorView() == null) return;
                                 View decor = window.getDecorView();
