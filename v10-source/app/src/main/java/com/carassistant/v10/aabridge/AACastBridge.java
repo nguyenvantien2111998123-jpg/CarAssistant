@@ -11,6 +11,7 @@ import com.carassistant.v10.hook.InputHooks;
 import com.carassistant.v10.hook.OrientationHooks;
 import com.carassistant.v10.hook.SystemMediaKeyHooks;
 import com.carassistant.v10.hook.InstallerSpoof;
+import com.carassistant.v10.hook.WynOverlayProbe;
 
 import de.robv.android.xposed.IXposedHookLoadPackage;
 import de.robv.android.xposed.XposedBridge;
@@ -43,6 +44,12 @@ public final class AACastBridge implements IXposedHookLoadPackage {
             // Capture AVRCP steering-wheel media keys at the system media-session
             // dispatch point so single/double/hold gestures can be distinguished.
             SystemMediaKeyHooks.install(param.classLoader);
+            return;
+        }
+
+        // ---- WYN process: diagnostic-only overlay inspection; never starts WYN ----
+        if ("com.wynauto.wyn".equals(packageName)) {
+            WynOverlayProbe.install(param.classLoader);
             return;
         }
 
