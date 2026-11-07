@@ -11,6 +11,8 @@ import java.lang.ref.WeakReference;
 import java.lang.reflect.Field;
 import java.lang.reflect.Method;
 import java.lang.reflect.Modifier;
+import java.nio.ByteBuffer;
+import java.util.HashSet;
 import java.util.Collections;
 import java.util.IdentityHashMap;
 import java.util.Set;
@@ -29,6 +31,7 @@ public final class WynHomeProbe {
     private static final String[] GETTERS = {
             "getAttachedFlutterEngine", "getCurrentImageSurface", "getAttachedRenderer"
     };
+    private static final Set<String> DECODE_HOOKED_LOADERS = new HashSet<>();
     private static final String[] INTERESTING = {
             "flutter", "render", "surface", "texture", "image", "bitmap", "engine", "jni"
     };
@@ -45,6 +48,7 @@ public final class WynHomeProbe {
                             Activity activity = (Activity) param.thisObject;
                             try {
                                 if (!PACKAGE.equals(activity.getPackageName())) return;
+                                installDecodeImageProbe(activity.getClassLoader());
                                 Window window = activity.getWindow();
                                 if (window == null || window.getDecorView() == null) return;
                                 View decor = window.getDecorView();
@@ -63,6 +67,75 @@ public final class WynHomeProbe {
             XposedBridge.log(TAG + " installed; Activity.onResume hooks=" + (hooks == null ? 0 : hooks.size()));
         } catch (Throwable error) {
             XposedBridge.log(TAG + " installation failed: " + error);
+        }
+    }
+
+    /**
+     * Observes Flutter's Java image decode boundary. It records only buffer metadata
+     * and the returned Bitmap dimensions; it never reads pixels or advances the buffer.
+     */
+    private static void installDecodeImageProbe(ClassLoader loader) {
+        if (loader == null) return;
+        String loaderKey = Integer.toHexString(System.identityHashCode(loader));
+        synchronized (DECODE_HOOKED_LOADERS) {
+            if (!DECODE_HOOKED_LOADERS.add(loaderKey)) return;
+        }
+        try {
+            Class<?> flutterJni = Class.forName("io.flutter.embedding.engine.FlutterJNI", false, loader);
+            int hooked = 0;
+            for (Method method : flutterJni.getDeclaredMethods()) {
+                if (!"decodeImage".equals(method.getName())) continue;
+                Class<?>[] params = method.getParameterTypes();
+                if (params.length != 2 || !ByteBuffer.class.isAssignableFrom(params[0])
+                        || params[1] != Long.TYPE) continue;
+                XposedBridge.hookMethod(method, new XC_MethodHook() {
+                    @Override
+                    protected void beforeHookedMethod(MethodHookParam param) {
+                        try {
+                            ByteBuffer buffer = (ByteBuffer) param.args[0];
+                            int position = buffer == null ? -1 : buffer.position();
+                            int limit = buffer == null ? -1 : buffer.limit();
+                            int remaining = buffer == null ? -1 : buffer.remaining();
+                            XposedBridge.log(TAG + " decodeImage BEFORE jni="
+                                    + Integer.toHexString(System.identityHashCode(param.thisObject))
+                                    + " buffer=" + (buffer == null ? "null" : buffer.getClass().getName())
+                                    + " position=" + position + " limit=" + limit
+                                    + " remaining=" + remaining + " codecHandle=" + param.args[1]);
+                        } catch (Throwable error) {
+                            XposedBridge.log(TAG + " decodeImage beforeError="
+                                    + error.getClass().getSimpleName());
+                        }
+                    }
+
+                    @Override
+                    protected void afterHookedMethod(MethodHookParam param) {
+                        try {
+                            Object result = param.getResult();
+                            if (result instanceof android.graphics.Bitmap) {
+                                android.graphics.Bitmap bitmap = (android.graphics.Bitmap) result;
+                                XposedBridge.log(TAG + " decodeImage AFTER jni="
+                                        + Integer.toHexString(System.identityHashCode(param.thisObject))
+                                        + " bitmap=" + Integer.toHexString(System.identityHashCode(bitmap))
+                                        + " size=" + bitmap.getWidth() + "x" + bitmap.getHeight()
+                                        + " config=" + bitmap.getConfig()
+                                        + " recycled=" + bitmap.isRecycled());
+                            } else {
+                                XposedBridge.log(TAG + " decodeImage AFTER result="
+                                        + (result == null ? "null" : result.getClass().getName()));
+                            }
+                        } catch (Throwable error) {
+                            XposedBridge.log(TAG + " decodeImage afterError="
+                                    + error.getClass().getSimpleName());
+                        }
+                    }
+                });
+                hooked++;
+            }
+            XposedBridge.log(TAG + " decodeImage probe installed classLoader=" + loaderKey
+                    + " matchingMethods=" + hooked);
+        } catch (Throwable error) {
+            XposedBridge.log(TAG + " decodeImage probe unavailable classLoader=" + loaderKey
+                    + " error=" + error.getClass().getSimpleName());
         }
     }
 
