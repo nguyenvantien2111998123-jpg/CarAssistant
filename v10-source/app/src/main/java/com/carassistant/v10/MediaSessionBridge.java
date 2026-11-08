@@ -883,6 +883,10 @@ public final class MediaSessionBridge extends NotificationListenerService {
         boolean sameBoot = previousElapsed > 0L && nowElapsed >= previousElapsed;
         if (sameBoot && previous > 0L && now - previous < AA_TRIGGER_COOLDOWN_MS) return;
 
+        // WYN is started independently from media recovery. Keep this path separate so
+        // its lifecycle cannot change the Build #593 media checkpoint/autoplay flow.
+        WynLifecycleController.onAndroidAutoConnected(this);
+
         Intent restore = new Intent(this, MediaAutoRestoreService.class)
                 .setAction(MediaAutoRestoreService.ACTION_RESTORE);
         try {
