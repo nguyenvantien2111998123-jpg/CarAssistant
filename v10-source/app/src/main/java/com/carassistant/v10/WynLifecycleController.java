@@ -52,7 +52,7 @@ public final class WynLifecycleController {
                     + " >/dev/null 2>&1; then am start --user " + userId
                     + " -n '" + flattened + "'; else echo WYN_ALREADY_RUNNING; fi";
 
-            Process process = Runtime.getRuntime().exec(new String[]{"su", "-c", command});
+            java.lang.Process process = Runtime.getRuntime().exec(new String[]{"su", "-c", command});
             StringBuilder output = new StringBuilder();
             try (BufferedReader reader = new BufferedReader(
                     new InputStreamReader(process.getInputStream()))) {
