@@ -13,6 +13,7 @@ import android.net.Uri;
 import android.content.pm.ResolveInfo;
 import android.content.pm.ApplicationInfo;
 import android.content.pm.PackageManager;
+import android.graphics.Bitmap;
 import android.graphics.Color;
 import android.graphics.Typeface;
 import android.graphics.drawable.GradientDrawable;
@@ -815,7 +816,12 @@ public final class V10CarActivity
             mediaTitle.setText("Bật quyền media");
             mediaArtist.setText("Chạm để cấp quyền đồng bộ trình phát");
             mediaPlayPause.setText("⚙");
-            if (mediaArtwork != null) mediaArtwork.setImageDrawable(null);
+            if (mediaArtwork != null) {
+                Bitmap warning = MediaSessionBridge.getWynWarningBitmap();
+                Bitmap combined = WynWarningArtwork.composeMediaArtwork(null, warning);
+                if (combined != null) mediaArtwork.setImageBitmap(combined);
+                else mediaArtwork.setImageDrawable(null);
+            }
             return;
         }
         if (state == null || TextUtils.isEmpty(state.packageName)) {

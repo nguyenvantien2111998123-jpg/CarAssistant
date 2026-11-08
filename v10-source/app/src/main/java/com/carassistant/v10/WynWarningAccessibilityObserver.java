@@ -21,7 +21,7 @@ final class WynWarningAccessibilityObserver {
     private static final int MAX_DEPTH = 14;
     private static final long MIN_SCAN_INTERVAL_MS = 180L;
     private static final Pattern SIGN_CODE = Pattern.compile(
-            "(?i)(?:road[_ ]?sign[_ ]?)?\\b(DP|P|R)\\s*[-.]?\\s*(\\d{2,3}[a-z]?)\\b");
+            "(?i)(?:road[_ ]?sign[_ ]?)?\\b(DP|P|R)\\s*[-.]?\\s*(\\d{2,3}[a-z]?\\d?)\\b");
     private static final Pattern SPEED_LIMIT = Pattern.compile(
             "(?i)(?:speed\\s*limit|limit|tốc\\s*độ(?:\\s*tối\\s*đa)?|"
                     + "giới\\s*hạn(?:\\s*tốc\\s*độ)?|biển\\s*tốc\\s*độ)"
@@ -40,11 +40,38 @@ final class WynWarningAccessibilityObserver {
 
         AccessibilityNodeInfo root = null;
         try {
-            root = service.getRootInActiveWindow();
-            if (root == null || root.getPackageName() == null
-                    || !WYN_PACKAGE.contentEquals(root.getPackageName())) return;
             Candidate candidate = new Candidate();
-            scan(root, 0, candidate);
+            root = service.getRootInActiveWindow();
+            if (root != null && root.getPackageName() != null
+                    && WYN_PACKAGE.contentEquals(root.getPackageName())) {
+                scan(root, 0, candidate);
+            } else {
+                if (root != null) {
+                    root.recycle();
+                    root = null;
+                }
+                // A WYN event can still carry its source node while another window is active.
+                AccessibilityNodeInfo source = event.getSource();
+                if (source != null) {
+                    try {
+                        if (source.getPackageName() != null
+                                && WYN_PACKAGE.contentEquals(source.getPackageName())) {
+                            scan(source, 0, candidate);
+                        }
+                    } finally {
+                        source.recycle();
+                    }
+                }
+            }
+            if (candidate.key.isEmpty()) {
+                StringBuilder eventText = new StringBuilder();
+                for (CharSequence item : event.getText()) {
+                    if (item != null) eventText.append(' ').append(item);
+                }
+                CharSequence description = event.getContentDescription();
+                if (description != null) eventText.append(' ').append(description);
+                consider(eventText.toString(), candidate);
+            }
             if (TextUtils.isEmpty(candidate.key)
                     || candidate.key.equals(lastPublishedKey)) return;
 
