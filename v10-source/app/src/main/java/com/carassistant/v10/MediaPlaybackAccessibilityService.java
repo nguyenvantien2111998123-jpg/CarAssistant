@@ -95,6 +95,36 @@ public final class MediaPlaybackAccessibilityService extends AccessibilityServic
         });
     }
 
+    /**
+     * Move WYN to the background only after its first launch has had time to initialise.
+     * This preserves the live task; it does not force-stop or remove WYN.
+     */
+    static void requestBackgroundWynWhenReady() {
+        MediaPlaybackAccessibilityService service = activeService;
+        if (service == null) return;
+        service.automationHandler.postDelayed(() -> service.backgroundWynIfForeground(8), 25000L);
+    }
+
+    private void backgroundWynIfForeground(int retriesRemaining) {
+        AccessibilityNodeInfo root = null;
+        try {
+            root = getRootInActiveWindow();
+            if (root != null && root.getPackageName() != null
+                    && "com.wynauto.wyn".contentEquals(root.getPackageName())) {
+                performGlobalAction(GLOBAL_ACTION_HOME);
+                return;
+            }
+        } catch (RuntimeException error) {
+            Log.w(TAG, "Could not background WYN after initialisation", error);
+        } finally {
+            if (root != null) root.recycle();
+        }
+        if (retriesRemaining > 0) {
+            automationHandler.postDelayed(
+                    () -> backgroundWynIfForeground(retriesRemaining - 1), 1500L);
+        }
+    }
+
     private static final String TAG = "CarAsstMediaA11y";
     private static final String PREFS = "media_autoplay";
     private static final long MAX_PENDING_MS = 30_000L;
