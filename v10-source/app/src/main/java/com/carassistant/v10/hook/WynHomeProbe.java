@@ -32,7 +32,7 @@ public final class WynHomeProbe {
                         if (!PACKAGE.equals(activity.getPackageName())) return;
                         WynWarningLinkProbe.install(
                                 activity.getClassLoader(), activity.getApplicationContext());
-                    } catch (Throwable ignored) { }
+                    } catch (Throwable error) { }
                 }
             });
         } catch (Throwable ignored) { }

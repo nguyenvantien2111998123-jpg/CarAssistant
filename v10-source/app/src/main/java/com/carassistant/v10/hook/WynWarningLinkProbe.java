@@ -25,8 +25,7 @@ public final class WynWarningLinkProbe {
     private static final String PUBLISH_URI = "content://com.carassistant.v10.wynwarning";
     private static final Set<String> INSTALLED =
             Collections.synchronizedSet(new HashSet<String>());
-    private static final Set<String> PUBLISHED =
-            Collections.synchronizedSet(new HashSet<String>());
+    private static volatile String lastPublishedKey = "";
     private static volatile Context appContext;
     private static final ExecutorService PUBLISHER = Executors.newSingleThreadExecutor(
             new ThreadFactory() {
@@ -103,13 +102,13 @@ public final class WynWarningLinkProbe {
         }
         if (lower.contains("horizontal-traffic-light.png")) return "traffic_light";
         if (lower.contains("speed_camera.png")) return "speed_camera";
-        if (lower.contains("settings/speed_sign.png")) return "speed:50";
         return null;
     }
 
-    private static void publishWarningAsset(String key) {
+    private static synchronized void publishWarningAsset(String key) {
         Context context = appContext;
-        if (context == null || key == null || !PUBLISHED.add(key)) return;
+        if (context == null || key == null || key.equals(lastPublishedKey)) return;
+        lastPublishedKey = key;
         PUBLISHER.execute(() -> {
             try {
                 Bundle extras = new Bundle();
@@ -117,10 +116,14 @@ public final class WynWarningLinkProbe {
                 Bundle result = context.getContentResolver().call(
                         Uri.parse(PUBLISH_URI), "publish_asset", null, extras);
                 if (result == null || !result.getBoolean("accepted", false)) {
-                    PUBLISHED.remove(key);
+                    synchronized (WynWarningLinkProbe.class) {
+                        if (key.equals(lastPublishedKey)) lastPublishedKey = "";
+                    }
                 }
             } catch (Throwable error) {
-                PUBLISHED.remove(key);
+                synchronized (WynWarningLinkProbe.class) {
+                    if (key.equals(lastPublishedKey)) lastPublishedKey = "";
+                }
             }
         });
     }
