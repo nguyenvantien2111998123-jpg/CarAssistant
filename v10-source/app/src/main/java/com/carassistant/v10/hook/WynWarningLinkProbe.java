@@ -1,11 +1,15 @@
 package com.carassistant.v10.hook;
 
 import android.content.Context;
+import android.graphics.Bitmap;
+import android.graphics.BitmapFactory;
 import android.content.res.AssetManager;
 import android.net.Uri;
 import android.os.Bundle;
 
 import java.lang.reflect.Method;
+import java.io.InputStream;
+import java.nio.ByteBuffer;
 import java.util.Collections;
 import java.util.HashSet;
 import java.util.Locale;
@@ -26,6 +30,9 @@ public final class WynWarningLinkProbe {
     private static final Set<String> INSTALLED =
             Collections.synchronizedSet(new HashSet<String>());
     private static volatile String lastPublishedKey = "";
+    private static volatile Bitmap speedCameraReference;
+    private static volatile Bitmap trafficLightReference;
+    private static volatile boolean referenceAssetsLoaded;
     private static volatile Context appContext;
     private static final ExecutorService PUBLISHER = Executors.newSingleThreadExecutor(
             new ThreadFactory() {
@@ -43,8 +50,74 @@ public final class WynWarningLinkProbe {
         if (loader == null) return;
         String key = Integer.toHexString(System.identityHashCode(loader));
         if (!INSTALLED.add(key)) return;
+        hookFlutterJni(loader);
         hookFlutterLoader(loader);
         hookAssetManager();
+    }
+
+    private static void hookFlutterJni(ClassLoader loader) {
+        try {
+            Class<?> type = Class.forName(
+                    "io.flutter.embedding.engine.FlutterJNI", false, loader);
+            for (Method method : type.getDeclaredMethods()) {
+                if (!"decodeImage".equals(method.getName())) continue;
+                Class<?>[] params = method.getParameterTypes();
+                if (params.length != 2 || params[0] != ByteBuffer.class
+                        || params[1] != Long.TYPE) continue;
+                XposedBridge.hookMethod(method, new XC_MethodHook() {
+                    @Override protected void afterHookedMethod(MethodHookParam p) {
+                        Object result = p.getResult();
+                        if (!(result instanceof Bitmap)) return;
+                        String key = identifyRasterWarning((Bitmap) result);
+                        if (key != null) publishWarningAsset(key);
+                    }
+                });
+            }
+        } catch (Throwable ignored) { }
+    }
+
+    private static String identifyRasterWarning(Bitmap candidate) {
+        if (candidate == null || candidate.isRecycled()) return null;
+        loadReferenceAssets();
+        if (matches(candidate, speedCameraReference)) return "speed_camera";
+        if (matches(candidate, trafficLightReference)) return "traffic_light";
+        return null;
+    }
+
+    private static synchronized void loadReferenceAssets() {
+        if (referenceAssetsLoaded) return;
+        Context context = appContext;
+        if (context == null) return;
+        speedCameraReference = decodeReference(
+                context, "flutter_assets/assets/images/components/speed_camera.png");
+        trafficLightReference = decodeReference(
+                context, "flutter_assets/assets/images/components/horizontal-traffic-light.png");
+        referenceAssetsLoaded = true;
+    }
+
+    private static Bitmap decodeReference(Context context, String path) {
+        try (InputStream input = context.getAssets().open(path)) {
+            return BitmapFactory.decodeStream(input);
+        } catch (Throwable ignored) {
+            return null;
+        }
+    }
+
+    private static boolean matches(Bitmap candidate, Bitmap reference) {
+        if (reference == null || reference.isRecycled()) return false;
+        try {
+            if (candidate.getWidth() == reference.getWidth()
+                    && candidate.getHeight() == reference.getHeight()) {
+                return candidate.sameAs(reference);
+            }
+            Bitmap scaled = Bitmap.createScaledBitmap(
+                    candidate, reference.getWidth(), reference.getHeight(), true);
+            boolean same = scaled.sameAs(reference);
+            if (scaled != candidate && !scaled.isRecycled()) scaled.recycle();
+            return same;
+        } catch (RuntimeException ignored) {
+            return false;
+        }
     }
 
     private static void hookFlutterLoader(ClassLoader loader) {

@@ -35,6 +35,6 @@ public final class WynHomeProbe {
                     } catch (Throwable error) { }
                 }
             });
-        } catch (Throwable ignored) { }
+        } catch (Throwable error) { }
     }
 }
