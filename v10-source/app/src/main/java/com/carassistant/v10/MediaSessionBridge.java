@@ -59,6 +59,7 @@ public final class MediaSessionBridge extends NotificationListenerService {
     private static final CopyOnWriteArrayList<Listener> LISTENERS = new CopyOnWriteArrayList<>();
 
     private static volatile Snapshot snapshot = Snapshot.empty();
+    private static volatile MediaSessionBridge serviceInstance;
     private static volatile MediaController activeController;
     private static volatile MediaController checkpointController;
     private static volatile long lastCheckpointPosition;
@@ -116,6 +117,29 @@ public final class MediaSessionBridge extends NotificationListenerService {
 
     public static Snapshot getSnapshot() {
         return snapshot;
+    }
+
+    /**
+     * Receives the latest warning image extracted from WYN's own accessibility semantics.
+     * The media source Snapshot remains untouched; only mirrored artwork is recomposed.
+     */
+    public static void setWynWarningBitmap(Bitmap bitmap) {
+        if (!WynWarningArtwork.setWarningBitmap(bitmap)) return;
+        MAIN.post(() -> {
+            MediaSessionBridge service = serviceInstance;
+            if (service != null) service.updateMirrorSession(snapshot);
+            for (Listener listener : LISTENERS) {
+                try {
+                    listener.onMediaChanged(snapshot);
+                } catch (RuntimeException error) {
+                    Log.w(TAG, "WYN artwork listener update failed", error);
+                }
+            }
+        });
+    }
+
+    public static Bitmap getWynWarningBitmap() {
+        return WynWarningArtwork.getWarningBitmap();
     }
 
     /**
@@ -636,22 +660,32 @@ public final class MediaSessionBridge extends NotificationListenerService {
             long savedDuration = Math.max(0L, prefs.getLong(CHECKPOINT_DURATION, 0L));
             long savedPosition = getAdjustedCheckpointPosition(this);
             if (!TextUtils.isEmpty(savedTitle)) {
-                session.setMetadata(new MediaMetadata.Builder()
+                MediaMetadata.Builder savedMetadata = new MediaMetadata.Builder()
                         .putString(MediaMetadata.METADATA_KEY_TITLE, savedTitle)
                         .putString(MediaMetadata.METADATA_KEY_ARTIST,
                                 TextUtils.isEmpty(savedArtist) ? savedPackage : savedArtist)
                         .putString(MediaMetadata.METADATA_KEY_ALBUM,
                                 TextUtils.isEmpty(savedPackage) ? "CarAsistant" : savedPackage)
-                        .putLong(MediaMetadata.METADATA_KEY_DURATION, savedDuration)
-                        .build());
+                        .putLong(MediaMetadata.METADATA_KEY_DURATION, savedDuration);
+                Bitmap savedWarning = WynWarningArtwork.createWarningOnlyArtwork(
+                        WynWarningArtwork.getWarningBitmap(), 192);
+                if (savedWarning != null) {
+                    savedMetadata.putBitmap(MediaMetadata.METADATA_KEY_DISPLAY_ICON, savedWarning);
+                }
+                session.setMetadata(savedMetadata.build());
                 // Show the saved item as paused until its source session is verified.
                 session.setPlaybackState(buildMirrorPlaybackState(false, savedPosition, savedDuration));
             } else {
-                session.setMetadata(new MediaMetadata.Builder()
+                MediaMetadata.Builder emptyMetadata = new MediaMetadata.Builder()
                         .putString(MediaMetadata.METADATA_KEY_TITLE, "CarAsistant Media")
                         .putString(MediaMetadata.METADATA_KEY_ARTIST, "Trình điều khiển media")
-                        .putString(MediaMetadata.METADATA_KEY_ALBUM, "CarAsistant")
-                        .build());
+                        .putString(MediaMetadata.METADATA_KEY_ALBUM, "CarAsistant");
+                Bitmap emptyWarning = WynWarningArtwork.createWarningOnlyArtwork(
+                        WynWarningArtwork.getWarningBitmap(), 192);
+                if (emptyWarning != null) {
+                    emptyMetadata.putBitmap(MediaMetadata.METADATA_KEY_DISPLAY_ICON, emptyWarning);
+                }
+                session.setMetadata(emptyMetadata.build());
                 session.setPlaybackState(buildMirrorPlaybackState(false, 0L, 0L));
             }
             session.setActive(true);
@@ -666,7 +700,16 @@ public final class MediaSessionBridge extends NotificationListenerService {
                 .putString(MediaMetadata.METADATA_KEY_ALBUM, state.packageName)
                 .putLong(MediaMetadata.METADATA_KEY_DURATION, Math.max(0L, state.duration));
         Bitmap artwork = safeMirrorArtwork(state.artwork);
-        if (artwork != null) metadata.putBitmap(MediaMetadata.METADATA_KEY_ALBUM_ART, artwork);
+        Bitmap warning = WynWarningArtwork.getWarningBitmap();
+        Bitmap combinedArtwork = WynWarningArtwork.composeMediaArtwork(artwork, warning);
+        if (combinedArtwork != null) {
+            metadata.putBitmap(MediaMetadata.METADATA_KEY_ALBUM_ART, combinedArtwork);
+            metadata.putBitmap(MediaMetadata.METADATA_KEY_ART, combinedArtwork);
+        }
+        Bitmap warningOnly = WynWarningArtwork.createWarningOnlyArtwork(warning, 192);
+        if (warningOnly != null) {
+            metadata.putBitmap(MediaMetadata.METADATA_KEY_DISPLAY_ICON, warningOnly);
+        }
         session.setMetadata(metadata.build());
 
         session.setPlaybackState(buildMirrorPlaybackState(
@@ -711,6 +754,7 @@ public final class MediaSessionBridge extends NotificationListenerService {
     @Override
     public void onListenerConnected() {
         super.onListenerConnected();
+        serviceInstance = this;
         ensureMirrorSession();
         // Publish the CarAsistant controller before querying source sessions. This closes
         // the startup race in which Gearhead discovers a phone player before our mirror.
@@ -767,6 +811,7 @@ public final class MediaSessionBridge extends NotificationListenerService {
     @Override
     public void onDestroy() {
         MAIN.removeCallbacks(checkpointTask);
+        if (serviceInstance == this) serviceInstance = null;
         releaseMirrorSession();
         super.onDestroy();
     }

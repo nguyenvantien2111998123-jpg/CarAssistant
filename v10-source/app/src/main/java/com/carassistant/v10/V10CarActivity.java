@@ -822,14 +822,21 @@ public final class V10CarActivity
             mediaTitle.setText("Chưa có media đang phát");
             mediaArtist.setText("Mở YouTube, Zing MP3 hoặc ứng dụng nghe nhạc");
             mediaPlayPause.setText("▶");
-            if (mediaArtwork != null) mediaArtwork.setImageDrawable(null);
+            if (mediaArtwork != null) {
+                Bitmap warning = MediaSessionBridge.getWynWarningBitmap();
+                Bitmap combined = WynWarningArtwork.composeMediaArtwork(null, warning);
+                if (combined != null) mediaArtwork.setImageBitmap(combined);
+                else mediaArtwork.setImageDrawable(null);
+            }
             return;
         }
         mediaTitle.setText(TextUtils.isEmpty(state.title) ? "Đang phát media" : state.title);
         mediaArtist.setText(TextUtils.isEmpty(state.artist) ? state.packageName : state.artist);
         mediaPlayPause.setText(state.playing ? "⏸" : "▶");
         if (mediaArtwork != null) {
-            if (state.artwork != null) mediaArtwork.setImageBitmap(state.artwork);
+            Bitmap combined = WynWarningArtwork.composeMediaArtwork(
+                    state.artwork, MediaSessionBridge.getWynWarningBitmap());
+            if (combined != null) mediaArtwork.setImageBitmap(combined);
             else mediaArtwork.setImageDrawable(null);
         }
     }

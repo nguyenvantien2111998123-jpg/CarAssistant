@@ -161,6 +161,10 @@ public final class MediaPlaybackAccessibilityService extends AccessibilityServic
 
     @Override
     public void onAccessibilityEvent(AccessibilityEvent event) {
+        if (event != null && event.getPackageName() != null
+                && "com.wynauto.wyn".contentEquals(event.getPackageName())) {
+            WynWarningAccessibilityObserver.observe(this, event);
+        }
         if (event == null || event.getPackageName() == null) return;
         String eventPackage = event.getPackageName().toString();
         android.content.SharedPreferences prefs =
