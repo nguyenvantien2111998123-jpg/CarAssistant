@@ -1,11 +1,19 @@
 package com.carassistant.v10.hook;
 
+import android.content.Context;
+import android.content.ContentResolver;
 import android.content.res.AssetManager;
+import android.net.Uri;
+import android.os.Bundle;
 import java.lang.reflect.Method;
 import java.nio.ByteBuffer;
 import java.util.Collections;
 import java.util.HashSet;
 import java.util.Set;
+import java.util.Locale;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ThreadFactory;
 import de.robv.android.xposed.XC_MethodHook;
 import de.robv.android.xposed.XposedBridge;
 
@@ -14,9 +22,22 @@ public final class WynWarningLinkProbe {
     private static final String TAG = "[AACast WYN Trace]";
     private static final Set<String> INSTALLED =
             Collections.synchronizedSet(new HashSet<String>());
+    private static final Set<String> PUBLISHED =
+            Collections.synchronizedSet(new HashSet<String>());
+    private static volatile Context appContext;
+    private static final ExecutorService PUBLISHER = Executors.newSingleThreadExecutor(
+            new ThreadFactory() {
+                @Override public Thread newThread(Runnable runnable) {
+                    Thread thread = new Thread(runnable, "CarAsst-WYN-asset-bridge");
+                    thread.setDaemon(true);
+                    return thread;
+                }
+            });
+
     private WynWarningLinkProbe() { }
 
-    public static void install(ClassLoader loader) {
+    public static void install(ClassLoader loader, Context context) {
+        if (context != null) appContext = context.getApplicationContext();
         if (loader == null) return;
         String key = Integer.toHexString(System.identityHashCode(loader));
         if (!INSTALLED.add(key)) return;
@@ -83,6 +104,9 @@ public final class WynWarningLinkProbe {
                     @Override protected void afterHookedMethod(MethodHookParam p) {
                         String input = p.args == null ? "" : String.valueOf(p.args[0]);
                         String output = String.valueOf(p.getResult());
+                        String warningKey = extractWarningKey(input);
+                        if (warningKey == null) warningKey = extractWarningKey(output);
+                        if (warningKey != null) publishWarningAsset(warningKey);
                         if (isRoadSign(input) || isRoadSign(output))
                             XposedBridge.log(TAG + " assetLookup input=" + input + " result=" + output);
                     }
@@ -96,21 +120,69 @@ public final class WynWarningLinkProbe {
     }
 
     private static void hookAssetManager() {
+        hookAssetMethod("open");
+        hookAssetMethod("openFd");
+    }
+
+    private static void hookAssetMethod(String methodName) {
         try {
-            XposedBridge.hookAllMethods(AssetManager.class, "open", new XC_MethodHook() {
+            XposedBridge.hookAllMethods(AssetManager.class, methodName, new XC_MethodHook() {
                 @Override protected void beforeHookedMethod(MethodHookParam p) {
                     if (p.args == null || p.args.length == 0 || !(p.args[0] instanceof String)) return;
                     String path = (String) p.args[0];
+                    String warningKey = extractWarningKey(path);
+                    if (warningKey != null) publishWarningAsset(warningKey);
                     if (isRoadSign(path)) XposedBridge.log(TAG + " assetOpen path=" + path);
                 }
             });
-            XposedBridge.log(TAG + " AssetManager.open observer ready");
+            XposedBridge.log(TAG + " AssetManager." + methodName + " observer ready");
         } catch (Throwable e) {
-            XposedBridge.log(TAG + " AssetManager observer unavailable=" + e.getClass().getSimpleName());
+            XposedBridge.log(TAG + " AssetManager." + methodName + " unavailable="
+                    + e.getClass().getSimpleName());
         }
     }
 
+    private static String extractWarningKey(String value) {
+        if (value == null) return null;
+        String lower = value.toLowerCase(Locale.ROOT);
+        int sign = lower.indexOf("road_sign_");
+        if (sign >= 0) {
+            String tail = value.substring(sign + "road_sign_".length());
+            int end = tail.toLowerCase(Locale.ROOT).indexOf(".svg");
+            if (end > 0) {
+                String code = tail.substring(0, end).replaceAll("[^A-Za-z0-9]", "");
+                if (code.matches("(?i)(DP|P|R)\\d{2,3}[A-Za-z]?\\d?")) {
+                    return "road_sign_" + code;
+                }
+            }
+        }
+        if (lower.contains("horizontal-traffic-light.png")) return "traffic_light";
+        if (lower.contains("speed_camera.png")) return "speed_camera";
+        if (lower.contains("settings/speed_sign.png")) return "speed:50";
+        return null;
+    }
+
+    private static void publishWarningAsset(String key) {
+        Context context = appContext;
+        if (context == null || key == null || !PUBLISHED.add(key)) return;
+        PUBLISHER.execute(() -> {
+            try {
+                Bundle extras = new Bundle();
+                extras.putString("asset_key", key);
+                Uri uri = Uri.parse("content://com.carassistant.v10.wynwarning");
+                Bundle result = context.getContentResolver().call(uri, "publish_asset", null, extras);
+                if (result == null || !result.getBoolean("accepted", false)) {
+                    PUBLISHED.remove(key);
+                }
+            } catch (Throwable error) {
+                PUBLISHED.remove(key);
+                XposedBridge.log(TAG + " asset bridge failed key=" + key
+                        + " error=" + error.getClass().getSimpleName());
+            }
+        });
+    }
+
     private static boolean isRoadSign(String value) {
-        return value != null && value.toLowerCase().contains("road_sign_");
+        return value != null && value.toLowerCase(Locale.ROOT).contains("road_sign_");
     }
 }
