@@ -7,6 +7,7 @@ import android.database.Cursor;
 import android.graphics.Bitmap;
 import android.net.Uri;
 import android.os.Binder;
+import android.os.Build;
 import android.os.Bundle;
 import android.text.TextUtils;
 
@@ -20,6 +21,7 @@ public final class WynWarningProvider extends ContentProvider {
     private static final String WYN_PACKAGE = "com.wynauto.wyn";
     private static final String METHOD_PUBLISH_ASSET = "publish_asset";
     private static final String METHOD_PUBLISH_WARNING = "publish_warning";
+    private static final String METHOD_PUBLISH_BITMAP = "publish_bitmap";
     private static final String METHOD_CLEAR_TEMPORARY = "clear_temporary_alert";
 
     @Override public boolean onCreate() { return true; }
@@ -32,6 +34,30 @@ public final class WynWarningProvider extends ContentProvider {
 
         if (METHOD_CLEAR_TEMPORARY.equals(method)) {
             MediaSessionBridge.clearWynTemporaryAlert();
+            return accepted();
+        }
+
+        if (METHOD_PUBLISH_BITMAP.equals(method)) {
+            String bitmapType = extras.getString("warning_type", "");
+            if (!("speed_sign".equals(bitmapType)
+                    || "temporary_alert".equals(bitmapType))) return rejected();
+            Bitmap liveBitmap;
+            if (Build.VERSION.SDK_INT >= 33) {
+                liveBitmap = extras.getParcelable("warning_bitmap", Bitmap.class);
+            } else {
+                //noinspection deprecation
+                liveBitmap = (Bitmap) extras.getParcelable("warning_bitmap");
+            }
+            if (liveBitmap == null || liveBitmap.isRecycled()
+                    || liveBitmap.getWidth() <= 0 || liveBitmap.getHeight() <= 0
+                    || liveBitmap.getWidth() > 256 || liveBitmap.getHeight() > 256) {
+                return rejected();
+            }
+            if ("speed_sign".equals(bitmapType)) {
+                MediaSessionBridge.setWynSpeedSignBitmap(liveBitmap);
+            } else {
+                MediaSessionBridge.setWynTemporaryAlertBitmap(liveBitmap);
+            }
             return accepted();
         }
 
