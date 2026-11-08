@@ -4,82 +4,67 @@ import android.graphics.Bitmap;
 import android.graphics.Canvas;
 import android.graphics.Color;
 import android.graphics.Paint;
-import android.graphics.Rect;
 import android.graphics.RectF;
 
-/**
- * Keeps WYN warning art separate from the source media artwork and composes
- * the two only at the CarAsistant presentation boundary.
- */
+/** Independent WYN speed-sign and temporary-alert artwork channels. */
 public final class WynWarningArtwork {
-    private static volatile Bitmap currentWarning;
+    private static volatile Bitmap speedSign;
+    private static volatile Bitmap temporaryAlert;
 
     private WynWarningArtwork() { }
 
-    public static synchronized boolean setWarningBitmap(Bitmap source) {
-        if (source == null || source.isRecycled()) return false;
-        Bitmap copy;
-        try {
-            int width = source.getWidth();
-            int height = source.getHeight();
-            if (width <= 0 || height <= 0) return false;
-            float scale = Math.min(1f, 512f / Math.max(width, height));
-            copy = scale < 1f
-                    ? Bitmap.createScaledBitmap(source,
-                            Math.max(1, Math.round(width * scale)),
-                            Math.max(1, Math.round(height * scale)), true)
-                    : source.copy(Bitmap.Config.ARGB_8888, false);
-        } catch (RuntimeException error) {
+    public static synchronized boolean setSpeedSignBitmap(Bitmap source) {
+        Bitmap copy = copyForBridge(source);
+        if (copy == null || sameBitmap(speedSign, copy)) {
+            recycleIfOwned(copy, source);
             return false;
         }
-        if (copy == null) return false;
-        Bitmap previous = currentWarning;
-        if (previous != null && !previous.isRecycled()
-                && previous.getWidth() == copy.getWidth()
-                && previous.getHeight() == copy.getHeight()) {
-            try {
-                if (previous.sameAs(copy)) {
-                    if (copy != source && !copy.isRecycled()) copy.recycle();
-                    return false;
-                }
-            } catch (RuntimeException ignored) { }
-        }
-        currentWarning = copy;
+        speedSign = copy;
         return true;
     }
 
-    public static Bitmap getWarningBitmap() {
-        Bitmap value = currentWarning;
-        return value == null || value.isRecycled() ? null : value;
+    public static synchronized boolean setTemporaryAlertBitmap(Bitmap source) {
+        Bitmap copy = copyForBridge(source);
+        if (copy == null || sameBitmap(temporaryAlert, copy)) {
+            recycleIfOwned(copy, source);
+            return false;
+        }
+        temporaryAlert = copy;
+        return true;
     }
 
-    /**
-     * Android Auto's main artwork: warning occupies the top third; source media
-     * artwork remains intact in the lower two thirds.
-     */
-    public static Bitmap composeMediaArtwork(Bitmap media, Bitmap warning) {
-        if (warning == null || warning.isRecycled()) return media;
-        final int width = 384;
-        final int height = 384;
-        final int warningHeight = height / 3;
-        Bitmap output;
-        try {
-            output = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888);
-        } catch (RuntimeException error) {
-            return media;
-        }
+    public static synchronized boolean clearTemporaryAlert() {
+        if (temporaryAlert == null) return false;
+        temporaryAlert = null;
+        return true;
+    }
+
+    public static synchronized boolean clearAllWarnings() {
+        boolean changed = speedSign != null || temporaryAlert != null;
+        speedSign = null;
+        temporaryAlert = null;
+        return changed;
+    }
+
+    public static boolean hasWarnings() {
+        return isUsable(speedSign) || isUsable(temporaryAlert);
+    }
+
+    /** Media card: warnings in the upper third, media artwork in the lower two thirds. */
+    public static Bitmap composeMediaArtwork(Bitmap media) {
+        Bitmap sign = isUsable(speedSign) ? speedSign : null;
+        Bitmap alert = isUsable(temporaryAlert) ? temporaryAlert : null;
+        if (sign == null && alert == null) return isUsable(media) ? media : null;
+
+        final int width = 384, height = 384, warningHeight = height / 3;
+        Bitmap output = createOutput(width, height);
+        if (output == null) return isUsable(media) ? media : null;
         Canvas canvas = new Canvas(output);
         canvas.drawColor(Color.rgb(10, 13, 17));
-        Paint paint = new Paint(Paint.ANTI_ALIAS_FLAG | Paint.FILTER_BITMAP_FLAG
-                | Paint.DITHER_FLAG);
-
-        RectF warningBounds = containBounds(warning, new RectF(8, 8, width - 8, warningHeight - 8));
-        canvas.save();
-        canvas.clipRect(0, 0, width, warningHeight);
-        canvas.drawBitmap(warning, null, warningBounds, paint);
-        canvas.restore();
-
-        if (media != null && !media.isRecycled()) {
+        Paint paint = warningPaint();
+        drawWarningPair(canvas, sign, alert,
+                new RectF(8, 8, width - 8, warningHeight - 8), paint);
+        if (isUsable(media)) {
             RectF mediaBounds = new RectF(0, warningHeight, width, height);
             canvas.save();
             canvas.clipRect(mediaBounds);
@@ -89,40 +74,93 @@ public final class WynWarningArtwork {
         return output;
     }
 
-    /** Small Android Auto widget artwork: warning only, without media artwork. */
-    public static Bitmap createWarningOnlyArtwork(Bitmap warning, int size) {
-        if (warning == null || warning.isRecycled() || size <= 0) return null;
-        try {
-            Bitmap output = Bitmap.createBitmap(size, size, Bitmap.Config.ARGB_8888);
-            Canvas canvas = new Canvas(output);
-            Paint paint = new Paint(Paint.ANTI_ALIAS_FLAG | Paint.FILTER_BITMAP_FLAG
-                    | Paint.DITHER_FLAG);
-            RectF bounds = containBounds(warning,
-                    new RectF(4, 4, size - 4, size - 4));
-            canvas.drawBitmap(warning, null, bounds, paint);
-            return output;
-        } catch (RuntimeException error) {
-            return null;
+    /** Media widget: speed sign and temporary alert only. */
+    public static Bitmap createWarningOnlyArtwork(int size) {
+        if (size <= 0) return null;
+        Bitmap sign = isUsable(speedSign) ? speedSign : null;
+        Bitmap alert = isUsable(temporaryAlert) ? temporaryAlert : null;
+        if (sign == null && alert == null) return null;
+        Bitmap output = createOutput(size, size);
+        if (output == null) return null;
+        Canvas canvas = new Canvas(output);
+        canvas.drawColor(Color.rgb(10, 13, 17));
+        drawWarningPair(canvas, sign, alert, new RectF(6, 6, size - 6, size - 6), warningPaint());
+        return output;
+    }
+
+    private static void drawWarningPair(Canvas canvas, Bitmap sign, Bitmap alert,
+                                        RectF target, Paint paint) {
+        if (sign != null && alert != null) {
+            float gap = Math.max(4f, target.width() * 0.025f);
+            float half = (target.width() - gap) / 2f;
+            drawContained(canvas, sign, new RectF(target.left, target.top,
+                    target.left + half, target.bottom), paint);
+            drawContained(canvas, alert, new RectF(target.left + half + gap,
+                    target.top, target.right, target.bottom), paint);
+        } else {
+            drawContained(canvas, sign != null ? sign : alert, target, paint);
         }
     }
 
-    private static RectF containBounds(Bitmap bitmap, RectF target) {
+    private static void drawContained(Canvas canvas, Bitmap bitmap, RectF target, Paint paint) {
+        if (!isUsable(bitmap)) return;
         float scale = Math.min(target.width() / bitmap.getWidth(),
                 target.height() / bitmap.getHeight());
-        float width = bitmap.getWidth() * scale;
-        float height = bitmap.getHeight() * scale;
-        float left = target.centerX() - width / 2f;
-        float top = target.centerY() - height / 2f;
-        return new RectF(left, top, left + width, top + height);
+        float width = bitmap.getWidth() * scale, height = bitmap.getHeight() * scale;
+        float left = target.centerX() - width / 2f, top = target.centerY() - height / 2f;
+        canvas.drawBitmap(bitmap, null, new RectF(left, top, left + width, top + height), paint);
     }
 
     private static RectF centerCropBounds(Bitmap bitmap, RectF target) {
         float scale = Math.max(target.width() / bitmap.getWidth(),
                 target.height() / bitmap.getHeight());
-        float width = bitmap.getWidth() * scale;
-        float height = bitmap.getHeight() * scale;
-        float left = target.centerX() - width / 2f;
-        float top = target.centerY() - height / 2f;
+        float width = bitmap.getWidth() * scale, height = bitmap.getHeight() * scale;
+        float left = target.centerX() - width / 2f, top = target.centerY() - height / 2f;
         return new RectF(left, top, left + width, top + height);
+    }
+
+    private static Bitmap copyForBridge(Bitmap source) {
+        if (!isUsable(source)) return null;
+        try {
+            int width = source.getWidth(), height = source.getHeight();
+            float scale = Math.min(1f, 512f / Math.max(width, height));
+            return scale < 1f
+                    ? Bitmap.createScaledBitmap(source, Math.max(1, Math.round(width * scale)),
+                            Math.max(1, Math.round(height * scale)), true)
+                    : source.copy(Bitmap.Config.ARGB_8888, false);
+        } catch (RuntimeException error) {
+            return null;
+        }
+    }
+
+    private static boolean sameBitmap(Bitmap current, Bitmap candidate) {
+        if (!isUsable(current) || !isUsable(candidate)) return false;
+        try {
+            return current.getWidth() == candidate.getWidth()
+                    && current.getHeight() == candidate.getHeight() && current.sameAs(candidate);
+        } catch (RuntimeException ignored) {
+            return false;
+        }
+    }
+
+    private static boolean isUsable(Bitmap bitmap) {
+        return bitmap != null && !bitmap.isRecycled()
+                && bitmap.getWidth() > 0 && bitmap.getHeight() > 0;
+    }
+
+    private static Bitmap createOutput(int width, int height) {
+        try {
+            return Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888);
+        } catch (RuntimeException error) {
+            return null;
+        }
+    }
+
+    private static Paint warningPaint() {
+        return new Paint(Paint.ANTI_ALIAS_FLAG | Paint.FILTER_BITMAP_FLAG | Paint.DITHER_FLAG);
+    }
+
+    private static void recycleIfOwned(Bitmap copy, Bitmap source) {
+        if (copy != null && copy != source && !copy.isRecycled()) copy.recycle();
     }
 }

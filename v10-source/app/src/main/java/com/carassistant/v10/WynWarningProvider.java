@@ -19,25 +19,41 @@ import java.util.Arrays;
 public final class WynWarningProvider extends ContentProvider {
     private static final String WYN_PACKAGE = "com.wynauto.wyn";
     private static final String METHOD_PUBLISH_ASSET = "publish_asset";
+    private static final String METHOD_PUBLISH_WARNING = "publish_warning";
+    private static final String METHOD_CLEAR_TEMPORARY = "clear_temporary_alert";
 
     @Override public boolean onCreate() { return true; }
 
     @Override
     public Bundle call(String method, String arg, Bundle extras) {
-        if (!METHOD_PUBLISH_ASSET.equals(method) || extras == null) return new Bundle();
+        if (extras == null) return rejected();
         Context context = getContext();
         if (context == null || !isWynCaller(context)) return rejected();
 
+        if (METHOD_CLEAR_TEMPORARY.equals(method)) {
+            MediaSessionBridge.clearWynTemporaryAlert();
+            return accepted();
+        }
+
         String key = extras.getString("asset_key", "");
         if (!isAllowedKey(key)) return rejected();
+        String warningType = extras.getString("warning_type", "");
+        if (METHOD_PUBLISH_WARNING.equals(method)
+                && !("speed_sign".equals(warningType)
+                || "temporary_alert".equals(warningType))) return rejected();
+        if (!METHOD_PUBLISH_WARNING.equals(method)
+                && !METHOD_PUBLISH_ASSET.equals(method)) return rejected();
 
         Bitmap warning = WynWarningAssetLoader.load(context, key);
         if (warning == null) return rejected();
-        MediaSessionBridge.setWynWarningBitmap(warning);
-
-        Bundle result = new Bundle();
-        result.putBoolean("accepted", true);
-        return result;
+        if ("speed_sign".equals(warningType)
+                || (METHOD_PUBLISH_ASSET.equals(method)
+                && (key.startsWith("road_sign_") || key.startsWith("speed:")))) {
+            MediaSessionBridge.setWynSpeedSignBitmap(warning);
+        } else {
+            MediaSessionBridge.setWynTemporaryAlertBitmap(warning);
+        }
+        return accepted();
     }
 
     private static boolean isWynCaller(Context context) {
@@ -51,6 +67,12 @@ public final class WynWarningProvider extends ContentProvider {
         if ("traffic_light".equals(key) || "speed_camera".equals(key)
                 || key.matches("speed:[0-9]{2,3}")) return true;
         return key.matches("road_sign_(?i:DP|P|R)[0-9]{2,3}[A-Za-z]?[0-9]?");
+    }
+
+    private static Bundle accepted() {
+        Bundle result = new Bundle();
+        result.putBoolean("accepted", true);
+        return result;
     }
 
     private static Bundle rejected() {

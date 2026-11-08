@@ -119,12 +119,31 @@ public final class MediaSessionBridge extends NotificationListenerService {
         return snapshot;
     }
 
-    /**
-     * Receives the latest warning image extracted from WYN's own accessibility semantics.
-     * The media source Snapshot remains untouched; only mirrored artwork is recomposed.
-     */
+    /** Publish one of WYN's independent warning image channels. */
+    public static void setWynSpeedSignBitmap(Bitmap bitmap) {
+        if (WynWarningArtwork.setSpeedSignBitmap(bitmap)) dispatchWynArtworkChanged();
+    }
+
+    public static void setWynTemporaryAlertBitmap(Bitmap bitmap) {
+        if (WynWarningArtwork.setTemporaryAlertBitmap(bitmap)) dispatchWynArtworkChanged();
+    }
+
+    /** Called only when WYN's temporary-alert state actually becomes inactive. */
+    public static void clearWynTemporaryAlert() {
+        if (WynWarningArtwork.clearTemporaryAlert()) dispatchWynArtworkChanged();
+    }
+
+    public static void clearWynWarnings() {
+        if (WynWarningArtwork.clearAllWarnings()) dispatchWynArtworkChanged();
+    }
+
+    /** Compatibility for the previous single-image diagnostic bridge. */
+    @Deprecated
     public static void setWynWarningBitmap(Bitmap bitmap) {
-        if (!WynWarningArtwork.setWarningBitmap(bitmap)) return;
+        setWynTemporaryAlertBitmap(bitmap);
+    }
+
+    private static void dispatchWynArtworkChanged() {
         MAIN.post(() -> {
             MediaSessionBridge service = serviceInstance;
             if (service != null) service.updateMirrorSession(snapshot);
@@ -136,10 +155,6 @@ public final class MediaSessionBridge extends NotificationListenerService {
                 }
             }
         });
-    }
-
-    public static Bitmap getWynWarningBitmap() {
-        return WynWarningArtwork.getWarningBitmap();
     }
 
     /**
@@ -667,8 +682,7 @@ public final class MediaSessionBridge extends NotificationListenerService {
                         .putString(MediaMetadata.METADATA_KEY_ALBUM,
                                 TextUtils.isEmpty(savedPackage) ? "CarAsistant" : savedPackage)
                         .putLong(MediaMetadata.METADATA_KEY_DURATION, savedDuration);
-                Bitmap savedWarning = WynWarningArtwork.createWarningOnlyArtwork(
-                        WynWarningArtwork.getWarningBitmap(), 192);
+                Bitmap savedWarning = WynWarningArtwork.createWarningOnlyArtwork(192);
                 if (savedWarning != null) {
                     savedMetadata.putBitmap(MediaMetadata.METADATA_KEY_DISPLAY_ICON, savedWarning);
                 }
@@ -680,8 +694,7 @@ public final class MediaSessionBridge extends NotificationListenerService {
                         .putString(MediaMetadata.METADATA_KEY_TITLE, "CarAsistant Media")
                         .putString(MediaMetadata.METADATA_KEY_ARTIST, "Trình điều khiển media")
                         .putString(MediaMetadata.METADATA_KEY_ALBUM, "CarAsistant");
-                Bitmap emptyWarning = WynWarningArtwork.createWarningOnlyArtwork(
-                        WynWarningArtwork.getWarningBitmap(), 192);
+                Bitmap emptyWarning = WynWarningArtwork.createWarningOnlyArtwork(192);
                 if (emptyWarning != null) {
                     emptyMetadata.putBitmap(MediaMetadata.METADATA_KEY_DISPLAY_ICON, emptyWarning);
                 }
@@ -700,13 +713,12 @@ public final class MediaSessionBridge extends NotificationListenerService {
                 .putString(MediaMetadata.METADATA_KEY_ALBUM, state.packageName)
                 .putLong(MediaMetadata.METADATA_KEY_DURATION, Math.max(0L, state.duration));
         Bitmap artwork = safeMirrorArtwork(state.artwork);
-        Bitmap warning = WynWarningArtwork.getWarningBitmap();
-        Bitmap combinedArtwork = WynWarningArtwork.composeMediaArtwork(artwork, warning);
+        Bitmap combinedArtwork = WynWarningArtwork.composeMediaArtwork(artwork);
         if (combinedArtwork != null) {
             metadata.putBitmap(MediaMetadata.METADATA_KEY_ALBUM_ART, combinedArtwork);
             metadata.putBitmap(MediaMetadata.METADATA_KEY_ART, combinedArtwork);
         }
-        Bitmap warningOnly = WynWarningArtwork.createWarningOnlyArtwork(warning, 192);
+        Bitmap warningOnly = WynWarningArtwork.createWarningOnlyArtwork(192);
         if (warningOnly != null) {
             metadata.putBitmap(MediaMetadata.METADATA_KEY_DISPLAY_ICON, warningOnly);
         }

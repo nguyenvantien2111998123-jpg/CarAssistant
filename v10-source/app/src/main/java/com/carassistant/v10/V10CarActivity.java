@@ -817,8 +817,7 @@ public final class V10CarActivity
             mediaArtist.setText("Chạm để cấp quyền đồng bộ trình phát");
             mediaPlayPause.setText("⚙");
             if (mediaArtwork != null) {
-                Bitmap warning = MediaSessionBridge.getWynWarningBitmap();
-                Bitmap combined = WynWarningArtwork.composeMediaArtwork(null, warning);
+                Bitmap combined = WynWarningArtwork.composeMediaArtwork(null);
                 if (combined != null) mediaArtwork.setImageBitmap(combined);
                 else mediaArtwork.setImageDrawable(null);
             }
@@ -829,8 +828,7 @@ public final class V10CarActivity
             mediaArtist.setText("Mở YouTube, Zing MP3 hoặc ứng dụng nghe nhạc");
             mediaPlayPause.setText("▶");
             if (mediaArtwork != null) {
-                Bitmap warning = MediaSessionBridge.getWynWarningBitmap();
-                Bitmap combined = WynWarningArtwork.composeMediaArtwork(null, warning);
+                Bitmap combined = WynWarningArtwork.composeMediaArtwork(null);
                 if (combined != null) mediaArtwork.setImageBitmap(combined);
                 else mediaArtwork.setImageDrawable(null);
             }
@@ -840,8 +838,7 @@ public final class V10CarActivity
         mediaArtist.setText(TextUtils.isEmpty(state.artist) ? state.packageName : state.artist);
         mediaPlayPause.setText(state.playing ? "⏸" : "▶");
         if (mediaArtwork != null) {
-            Bitmap combined = WynWarningArtwork.composeMediaArtwork(
-                    state.artwork, MediaSessionBridge.getWynWarningBitmap());
+            Bitmap combined = WynWarningArtwork.composeMediaArtwork(state.artwork);
             if (combined != null) mediaArtwork.setImageBitmap(combined);
             else mediaArtwork.setImageDrawable(null);
         }
