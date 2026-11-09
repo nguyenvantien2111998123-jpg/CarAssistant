@@ -21,6 +21,7 @@ import android.widget.TextView;
 import com.carassistant.v10.RootShellSession;
 import com.carassistant.v10.engine.warning.TrafficWarningEngine;
 import com.carassistant.v10.engine.warning.TrafficWarningSource;
+import com.carassistant.v10.MediaSessionBridge;
 
 import java.util.ArrayList;
 import java.util.Collections;
@@ -124,6 +125,7 @@ public final class V10SettingsActivity extends Activity {
                 sourceSwitch.setOnCheckedChangeListener((button, checked) -> {
                     TrafficWarningEngine.getInstance().setSourceEnabled(
                             V10SettingsActivity.this, source, checked);
+                    MediaSessionBridge.refreshTrafficWarningArtwork();
                 });
                 body.addView(sourceSwitch, params(-1, -2));
 
