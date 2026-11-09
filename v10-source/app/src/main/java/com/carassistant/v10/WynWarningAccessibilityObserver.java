@@ -1,7 +1,7 @@
 package com.carassistant.v10;
 
 import android.accessibilityservice.AccessibilityService;
-import android.graphics.Rect;
+import android.graphics.Bitmap;
 import android.os.SystemClock;
 import android.text.TextUtils;
 import android.view.accessibility.AccessibilityEvent;
@@ -12,50 +12,56 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 /**
- * Reads only WYN's exposed accessibility semantics. WYN remains responsible for
- * GPS, warning selection, spoken alerts and sequencing; this class mirrors its
- * current sign asset and never calculates a warning from location.
+ * Mirrors WYN's exposed home-screen warning semantics into two independent
+ * channels. WYN remains responsible for GPS, selection, timing and speech.
  */
 final class WynWarningAccessibilityObserver {
     private static final String WYN_PACKAGE = "com.wynauto.wyn";
     private static final int MAX_DEPTH = 14;
     private static final long MIN_SCAN_INTERVAL_MS = 180L;
+    private static final int EMPTY_ALERT_SCANS_TO_CLEAR = 3;
+
     private static final Pattern SIGN_CODE = Pattern.compile(
             "(?i)(?:road[_ ]?sign[_ ]?)?\\b(DP|P|R)\\s*[-.]?\\s*(\\d{2,3}[a-z]?\\d?)\\b");
     private static final Pattern SPEED_LIMIT = Pattern.compile(
-            "(?i)(?:speed\\s*limit|limit|tốc\\s*độ(?:\\s*tối\\s*đa)?|"
+            "(?i)(?:speed\\s*limit|speedLimit|limit|tốc\\s*độ(?:\\s*tối\\s*đa)?|"
                     + "giới\\s*hạn(?:\\s*tốc\\s*độ)?|biển\\s*tốc\\s*độ)"
                     + "[^0-9]{0,24}(\\d{2,3})");
+    private static final Pattern SPEED_WITH_UNIT = Pattern.compile(
+            "(?i)(?<!\\d)(\\d{2,3})\\s*(?:km\\s*/?\\s*h|km/giờ)\\b");
+
     private static volatile long lastScanAt;
-    private static volatile String lastPublishedKey = "";
+    private static volatile String lastSpeedKey = "";
+    private static volatile String lastAlertKey = "";
+    private static int consecutiveNoAlertScans;
 
     private WynWarningAccessibilityObserver() { }
 
     static void observe(AccessibilityService service, AccessibilityEvent event) {
         if (service == null || event == null || event.getPackageName() == null
                 || !WYN_PACKAGE.contentEquals(event.getPackageName())) return;
+
         long now = SystemClock.uptimeMillis();
         if (now - lastScanAt < MIN_SCAN_INTERVAL_MS) return;
         lastScanAt = now;
 
         AccessibilityNodeInfo root = null;
+        boolean scannedWynHome = false;
         try {
             Candidate candidate = new Candidate();
             root = service.getRootInActiveWindow();
-            if (root != null && root.getPackageName() != null
-                    && WYN_PACKAGE.contentEquals(root.getPackageName())) {
+            if (root != null && WYN_PACKAGE.contentEquals(value(root.getPackageName()))) {
+                scannedWynHome = true;
                 scan(root, 0, candidate);
             } else {
                 if (root != null) {
                     root.recycle();
                     root = null;
                 }
-                // A WYN event can still carry its source node while another window is active.
                 AccessibilityNodeInfo source = event.getSource();
                 if (source != null) {
                     try {
-                        if (source.getPackageName() != null
-                                && WYN_PACKAGE.contentEquals(source.getPackageName())) {
+                        if (WYN_PACKAGE.contentEquals(value(source.getPackageName()))) {
                             scan(source, 0, candidate);
                         }
                     } finally {
@@ -63,7 +69,8 @@ final class WynWarningAccessibilityObserver {
                     }
                 }
             }
-            if (candidate.key.isEmpty()) {
+
+            if (candidate.speedKey == null && candidate.alertKey == null) {
                 StringBuilder eventText = new StringBuilder();
                 for (CharSequence item : event.getText()) {
                     if (item != null) eventText.append(' ').append(item);
@@ -72,18 +79,47 @@ final class WynWarningAccessibilityObserver {
                 if (description != null) eventText.append(' ').append(description);
                 consider(eventText.toString(), candidate);
             }
-            if (TextUtils.isEmpty(candidate.key)
-                    || candidate.key.equals(lastPublishedKey)) return;
 
-            android.graphics.Bitmap bitmap = WynWarningAssetLoader.load(service, candidate.key);
-            if (bitmap != null) {
-                lastPublishedKey = candidate.key;
-                MediaSessionBridge.setWynWarningBitmap(bitmap);
+            publishSpeed(service, candidate.speedKey);
+            publishAlert(service, candidate.alertKey);
+
+            // Only clear after repeated complete scans of WYN's own home window
+            // confirm that a speed sign remains but no temporary warning is exposed.
+            // A missing/hidden window is not evidence that a warning has expired.
+            if (scannedWynHome && candidate.speedKey != null
+                    && candidate.alertKey == null) {
+                consecutiveNoAlertScans++;
+                if (consecutiveNoAlertScans >= EMPTY_ALERT_SCANS_TO_CLEAR) {
+                    MediaSessionBridge.clearWynTemporaryAlert();
+                    lastAlertKey = "";
+                }
+            } else if (candidate.alertKey != null || !scannedWynHome) {
+                consecutiveNoAlertScans = 0;
             }
         } catch (RuntimeException ignored) {
             // Accessibility windows can disappear while WYN changes pages.
         } finally {
             if (root != null) root.recycle();
+        }
+    }
+
+    private static void publishSpeed(AccessibilityService service, String key) {
+        if (TextUtils.isEmpty(key) || key.equals(lastSpeedKey)) return;
+        Bitmap bitmap = WynWarningAssetLoader.load(service, key);
+        if (bitmap != null) {
+            lastSpeedKey = key;
+            MediaSessionBridge.setWynSpeedSignBitmap(bitmap);
+        }
+    }
+
+    private static void publishAlert(AccessibilityService service, String key) {
+        if (TextUtils.isEmpty(key)) return;
+        consecutiveNoAlertScans = 0;
+        if (key.equals(lastAlertKey)) return;
+        Bitmap bitmap = WynWarningAssetLoader.load(service, key);
+        if (bitmap != null) {
+            lastAlertKey = key;
+            MediaSessionBridge.setWynTemporaryAlertBitmap(bitmap);
         }
     }
 
@@ -106,43 +142,34 @@ final class WynWarningAccessibilityObserver {
 
     private static void consider(String label, Candidate best) {
         String lower = label.toLowerCase(Locale.ROOT);
-        Matcher sign = SIGN_CODE.matcher(label);
-        if (sign.find()) {
-            String code = (sign.group(1) + sign.group(2)).replaceAll("[^A-Za-z0-9]", "");
-            String key = "road_sign_" + code;
-            if (best.score < 100) {
-                best.key = key;
-                best.score = 100;
-            }
-            return;
-        }
 
         Matcher speed = SPEED_LIMIT.matcher(label);
         if (speed.find()) {
-            String key = "speed:" + speed.group(1);
-            if (best.score < 90) {
-                best.key = key;
-                best.score = 90;
-            }
+            best.speedKey = "speed:" + speed.group(1);
+        } else {
+            Matcher speedWithUnit = SPEED_WITH_UNIT.matcher(label);
+            if (speedWithUnit.find()) best.speedKey = "speed:" + speedWithUnit.group(1);
+        }
+
+        Matcher sign = SIGN_CODE.matcher(label);
+        if (sign.find()) {
+            String code = (sign.group(1) + sign.group(2))
+                    .replaceAll("[^A-Za-z0-9]", "");
+            best.alertKey = "road_sign_" + code;
             return;
         }
 
-        if (lower.contains("trafficlightid") || lower.contains("traffic light")
-                || lower.contains("đèn giao thông") || lower.contains("đèn tín hiệu")) {
-            if (best.score < 80) {
-                best.key = "traffic_light";
-                best.score = 80;
-            }
+        if (lower.contains("trafficlightid") || lower.contains("traffic_light")
+                || lower.contains("traffic light") || lower.contains("đèn giao thông")
+                || lower.contains("đèn tín hiệu")) {
+            best.alertKey = "traffic_light";
             return;
         }
 
-        if (lower.contains("speed camera") || lower.contains("camera tốc độ")
-                || lower.contains("camera phạt nguội")
+        if (lower.contains("speed camera") || lower.contains("speed_camera")
+                || lower.contains("camera tốc độ") || lower.contains("camera phạt nguội")
                 || lower.contains("traffic camera")) {
-            if (best.score < 70) {
-                best.key = "speed_camera";
-                best.score = 70;
-            }
+            best.alertKey = "speed_camera";
         }
     }
 
@@ -151,7 +178,7 @@ final class WynWarningAccessibilityObserver {
     }
 
     private static final class Candidate {
-        String key = "";
-        int score;
+        String speedKey;
+        String alertKey;
     }
 }
