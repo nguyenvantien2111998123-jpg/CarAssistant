@@ -128,16 +128,16 @@ public final class MediaSessionBridge extends NotificationListenerService {
     }
 
     public static void setWynTemporaryAlertBitmap(Bitmap bitmap) {
-        if (WynWarningArtwork.setTemporaryAlertBitmap(bitmap)) dispatchWynArtworkChanged();
+        if (WynWarningArtwork.setTemporaryAlertBitmap(bitmap)) dispatchWarningArtworkChanged();
     }
 
     /** Called only when WYN's temporary-alert state actually becomes inactive. */
     public static void clearWynTemporaryAlert() {
-        if (WynWarningArtwork.clearTemporaryAlert()) dispatchWynArtworkChanged();
+        if (WynWarningArtwork.clearTemporaryAlert()) dispatchWarningArtworkChanged();
     }
 
     public static void clearWynWarnings() {
-        if (WynWarningArtwork.clearAllWarnings()) dispatchWynArtworkChanged();
+        if (WynWarningArtwork.clearAllWarnings()) dispatchWarningArtworkChanged();
     }
 
     /** Compatibility for the previous single-image diagnostic bridge. */
@@ -187,7 +187,12 @@ public final class MediaSessionBridge extends NotificationListenerService {
         }
     }
 
-    private static void dispatchWynArtworkChanged() {
+    /** Rebuild the mirror session and notify the projected dashboard after source toggles. */
+    public static void refreshTrafficWarningArtwork() {
+        dispatchWarningArtworkChanged();
+    }
+
+    private static void dispatchWarningArtworkChanged() {
         MAIN.post(() -> {
             MediaSessionBridge service = serviceInstance;
             if (service != null) service.updateMirrorSession(snapshot);
