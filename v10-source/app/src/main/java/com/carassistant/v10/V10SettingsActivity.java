@@ -19,6 +19,8 @@ import android.widget.ScrollView;
 import android.widget.TextView;
 
 import com.carassistant.v10.RootShellSession;
+import com.carassistant.v10.engine.warning.TrafficWarningEngine;
+import com.carassistant.v10.engine.warning.TrafficWarningSource;
 
 import java.util.ArrayList;
 import java.util.Collections;
@@ -52,6 +54,7 @@ public final class V10SettingsActivity extends Activity {
     @Override protected void onCreate(Bundle state) {
         super.onCreate(state);
         returnAfterMicPermission = getIntent().getBooleanExtra(EXTRA_REQUEST_MICROPHONE, false);
+        TrafficWarningEngine.getInstance().initialize(this);
         loadAvailableApps();
         buildUi();
         if (!returnAfterMicPermission) getWindow().getDecorView().post(this::startFirstLaunchPermissionFlow);
@@ -100,6 +103,44 @@ public final class V10SettingsActivity extends Activity {
         list.addView(intro, params(-1, -2));
 
         addPermissionGuideCard();
+
+        addSection("NGUỒN CẢNH BÁO GIAO THÔNG",
+                "Chọn một hoặc nhiều nguồn cảnh báo độc lập", body -> {
+            TextView sourceHint = text(
+                    "Có thể bật đồng thời nhiều nguồn. Cảnh báo tạm thời mới nhận sẽ được ưu tiên; "
+                    + "khi hết cảnh báo, hệ thống quay lại biển giới hạn tốc độ đang còn hiệu lực.",
+                    13, Color.LTGRAY);
+            sourceHint.setPadding(dp(4), dp(4), dp(4), dp(10));
+            body.addView(sourceHint, params(-1, -2));
+
+            for (TrafficWarningSource source : TrafficWarningSource.values()) {
+                Switch sourceSwitch = new Switch(this);
+                sourceSwitch.setText(source.getDisplayName());
+                sourceSwitch.setTextColor(Color.WHITE);
+                sourceSwitch.setTextSize(14);
+                sourceSwitch.setPadding(dp(4), dp(8), dp(4), dp(8));
+                sourceSwitch.setChecked(
+                        TrafficWarningEngine.getInstance().isSourceEnabled(source));
+                sourceSwitch.setOnCheckedChangeListener((button, checked) -> {
+                    TrafficWarningEngine.getInstance().setSourceEnabled(
+                            V10SettingsActivity.this, source, checked);
+                });
+                body.addView(sourceSwitch, params(-1, -2));
+
+                TextView sourceDetail = text(
+                        source.getIntegrationNote(), 12, Color.rgb(157, 172, 188));
+                sourceDetail.setPadding(dp(8), 0, dp(8), dp(8));
+                body.addView(sourceDetail, params(-1, -2));
+            }
+
+            TextView sourceNote = text(
+                    "CarStream 1.24.57 dùng một lựa chọn nguồn tại một thời điểm. "
+                    + "CarAsistant chuyển sang cấu hình nhiều nguồn. Mã nguồn CarStream "
+                    + "không được thêm làm nguồn cảnh báo.",
+                    12, Color.rgb(157, 172, 188));
+            sourceNote.setPadding(dp(4), dp(8), dp(4), dp(4));
+            body.addView(sourceNote, params(-1, -2));
+        });
 
         addSection("NỀN HOME", "Chọn ứng dụng chạy ở lớp nền", body -> {
             selectedBackground = text("", 14, Color.LTGRAY);
