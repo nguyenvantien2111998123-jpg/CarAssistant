@@ -39,6 +39,19 @@ public final class WynWarningArtwork {
         return TrafficWarningEngine.getInstance().composeWarningOnlyArtwork(size);
     }
 
+    /** Generic multi-source publication facade used by source adapters. */
+    public static synchronized boolean publishWarning(
+            com.carassistant.v10.engine.warning.TrafficWarningSource source,
+            String carStreamWarningId, Bitmap bitmap) {
+        return TrafficWarningEngine.getInstance()
+                .publishWarning(source, carStreamWarningId, bitmap);
+    }
+
+    public static synchronized boolean clearSource(
+            com.carassistant.v10.engine.warning.TrafficWarningSource source) {
+        return TrafficWarningEngine.getInstance().clearSource(source);
+    }
+
     public static long getGeneration() {
         return TrafficWarningEngine.getInstance().getSnapshot().generation;
     }
