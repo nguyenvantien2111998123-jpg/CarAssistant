@@ -72,9 +72,11 @@ public final class WynWarningProvider extends ContentProvider {
 
         Bitmap warning = WynWarningAssetLoader.load(context, key);
         if (warning == null) return rejected();
+        // The numeric speed-limit artwork is a separate channel. Road-sign SVGs,
+        // traffic lights and speed-camera images are transient alerts; treating every
+        // road_sign_* asset as the permanent speed sign caused the two channels to swap.
         if ("speed_sign".equals(warningType)
-                || (METHOD_PUBLISH_ASSET.equals(method)
-                && (key.startsWith("road_sign_") || key.startsWith("speed:")))) {
+                || (METHOD_PUBLISH_ASSET.equals(method) && key.startsWith("speed:"))) {
             MediaSessionBridge.setWynSpeedSignBitmap(warning);
         } else {
             MediaSessionBridge.setWynTemporaryAlertBitmap(warning);
