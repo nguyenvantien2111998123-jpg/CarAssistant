@@ -176,7 +176,6 @@ public final class WynWarningLinkProbe {
         }
         if (lower.contains("horizontal-traffic-light.png")) return "traffic_light";
         if (lower.contains("speed_camera.png")) return "speed_camera";
-        if (lower.contains("settings/speed_sign.png")) return "speed:50";
         return null;
     }
 
