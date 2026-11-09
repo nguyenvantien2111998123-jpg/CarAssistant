@@ -24,7 +24,8 @@ public final class WynWarningArtwork {
     }
 
     public static synchronized boolean clearAllWarnings() {
-        return TrafficWarningEngine.getInstance().clearAllWarnings();
+        return TrafficWarningEngine.getInstance().clearSource(
+                com.carassistant.v10.engine.warning.TrafficWarningSource.WYN);
     }
 
     public static boolean hasWarnings() {
