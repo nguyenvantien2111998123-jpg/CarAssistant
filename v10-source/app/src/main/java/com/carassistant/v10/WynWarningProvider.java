@@ -13,6 +13,8 @@ import android.text.TextUtils;
 
 import java.util.Arrays;
 
+import com.carassistant.v10.engine.warning.TrafficWarningEngine;
+
 /**
  * Narrow IPC bridge for WYN's own Flutter asset requests. The caller must be the
  * installed WYN package; arbitrary apps cannot replace CarAsistant artwork.
@@ -24,7 +26,12 @@ public final class WynWarningProvider extends ContentProvider {
     private static final String METHOD_PUBLISH_BITMAP = "publish_bitmap";
     private static final String METHOD_CLEAR_TEMPORARY = "clear_temporary_alert";
 
-    @Override public boolean onCreate() { return true; }
+    @Override public boolean onCreate() {
+        if (getContext() != null) {
+            TrafficWarningEngine.getInstance().initialize(getContext());
+        }
+        return true;
+    }
 
     @Override
     public Bundle call(String method, String arg, Bundle extras) {
