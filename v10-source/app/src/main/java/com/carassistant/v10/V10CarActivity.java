@@ -35,6 +35,7 @@ import android.widget.ScrollView;
 import android.widget.TextView;
 import android.widget.Toast;
 
+import com.carassistant.v10.engine.warning.TrafficWarningEngine;
 import com.carassistant.v10.voice.VoiceAssistantController;
 import com.carassistant.v10.voice.VoiceCommandRouter;
 import com.carassistant.v10.voice.VoiceCommandParser;
@@ -166,6 +167,7 @@ public final class V10CarActivity
 
         super.onCreate(state);
 
+        TrafficWarningEngine.getInstance().initialize(this);
         setIgnoreConfigChanges(-1);
 
         V10SessionStore
