@@ -36,11 +36,10 @@ public final class TrafficWarningEngine {
         if (context == null || source == null) return false;
         initialize(context);
         if (!TrafficWarningSourceSettings.setEnabled(context, source, enabled)) {
-            // A false return from commit() can mean persistence failed; do not change runtime state.
-            return repository.isSourceEnabled(source) == enabled;
+            // A false return from commit() means persistence failed; do not change runtime state.
+            return false;
         }
-        return repository.setSourceEnabled(source, enabled)
-                || repository.isSourceEnabled(source) == enabled;
+        return repository.setSourceEnabled(source, enabled);
     }
 
     public boolean isSourceEnabled(TrafficWarningSource source) {
