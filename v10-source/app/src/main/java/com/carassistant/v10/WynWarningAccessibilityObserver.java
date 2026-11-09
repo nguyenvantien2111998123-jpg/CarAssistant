@@ -24,7 +24,7 @@ final class WynWarningAccessibilityObserver {
     private static final Pattern SIGN_CODE = Pattern.compile(
             "(?i)(?:road[_ ]?sign[_ ]?)?\\b(DP|P|R)\\s*[-.]?\\s*(\\d{2,3}[a-z]?\\d?)\\b");
     private static final Pattern SPEED_LIMIT = Pattern.compile(
-            "(?i)(?:speed\\s*limit|speedLimit|limit|tốc\\s*độ(?:\\s*tối\\s*đa)?|"
+            "(?i)(?:speed\\s*limit|speedLimit|tốc\\s*độ(?:\\s*tối\\s*đa)?|"
                     + "giới\\s*hạn(?:\\s*tốc\\s*độ)?|biển\\s*tốc\\s*độ)"
                     + "[^0-9]{0,24}(\\d{2,3})");
     private static final Pattern SPEED_WITH_UNIT = Pattern.compile(
