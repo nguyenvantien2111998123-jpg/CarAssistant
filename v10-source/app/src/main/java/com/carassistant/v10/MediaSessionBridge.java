@@ -23,6 +23,9 @@ import android.util.Log;
 import java.util.List;
 import java.util.concurrent.CopyOnWriteArrayList;
 
+import com.carassistant.v10.engine.warning.TrafficWarningEngine;
+import com.carassistant.v10.engine.warning.TrafficWarningSource;
+
 /**
  * Reads the active phone media session so the CarAsistant dashboard can mirror
  * the currently playing app and send transport commands to that session.
@@ -121,7 +124,7 @@ public final class MediaSessionBridge extends NotificationListenerService {
 
     /** Publish one of WYN's independent warning image channels. */
     public static void setWynSpeedSignBitmap(Bitmap bitmap) {
-        if (WynWarningArtwork.setSpeedSignBitmap(bitmap)) dispatchWynArtworkChanged();
+        if (WynWarningArtwork.setSpeedSignBitmap(bitmap)) dispatchWarningArtworkChanged();
     }
 
     public static void setWynTemporaryAlertBitmap(Bitmap bitmap) {
@@ -141,6 +144,47 @@ public final class MediaSessionBridge extends NotificationListenerService {
     @Deprecated
     public static void setWynWarningBitmap(Bitmap bitmap) {
         setWynTemporaryAlertBitmap(bitmap);
+    }
+
+    /** Publish an image using the source and warning IDs recovered from CarStream. */
+    public static void publishTrafficWarning(
+            TrafficWarningSource source, String carStreamWarningId, Bitmap bitmap) {
+        if (TrafficWarningEngine.getInstance()
+                .publishWarning(source, carStreamWarningId, bitmap)) {
+            dispatchWarningArtworkChanged();
+        }
+    }
+
+    /** Publish a persistent speed-limit sign for one selected source. */
+    public static void publishTrafficSpeedSign(
+            TrafficWarningSource source, String warningCode, Bitmap bitmap) {
+        if (TrafficWarningEngine.getInstance()
+                .updateSpeedSign(source, warningCode, bitmap)) {
+            dispatchWarningArtworkChanged();
+        }
+    }
+
+    /** Publish a temporary warning for one selected source. */
+    public static void publishTrafficTemporaryAlert(
+            TrafficWarningSource source, String warningCode, Bitmap bitmap) {
+        if (TrafficWarningEngine.getInstance()
+                .updateTemporaryAlert(source, warningCode, bitmap)) {
+            dispatchWarningArtworkChanged();
+        }
+    }
+
+    /** Clear only this source's temporary warning; other sources remain intact. */
+    public static void clearTrafficTemporaryAlert(TrafficWarningSource source) {
+        if (TrafficWarningEngine.getInstance().clearTemporaryAlert(source)) {
+            dispatchWarningArtworkChanged();
+        }
+    }
+
+    /** Remove both channels from one source, for an explicit disconnect/disable event. */
+    public static void clearTrafficSource(TrafficWarningSource source) {
+        if (TrafficWarningEngine.getInstance().clearSource(source)) {
+            dispatchWarningArtworkChanged();
+        }
     }
 
     private static void dispatchWynArtworkChanged() {
@@ -766,6 +810,7 @@ public final class MediaSessionBridge extends NotificationListenerService {
     @Override
     public void onListenerConnected() {
         super.onListenerConnected();
+        TrafficWarningEngine.getInstance().initialize(this);
         serviceInstance = this;
         ensureMirrorSession();
         // Publish the CarAsistant controller before querying source sessions. This closes
