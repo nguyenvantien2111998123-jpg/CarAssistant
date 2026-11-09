@@ -9,14 +9,14 @@ import android.graphics.RectF;
 
 import com.carassistant.v10.engine.warning.WarningStateRepository;
 
-/** Renders the WYN warning strip and original media artwork without distorting either. */
+/** Renders the active traffic-warning strip and original media artwork without distorting either. */
 public final class MediaCardArtworkComposer {
     private static final int CARD_SIZE = 384;
     private static final int WARNING_HEIGHT = CARD_SIZE / 3;
 
     private MediaCardArtworkComposer() { }
 
-    /** Top one-third: active WYN warning. Bottom two-thirds: original media artwork. */
+    /** Top one-third: active traffic warning. Bottom two-thirds: original media artwork. */
     public static Bitmap composeCard(Bitmap mediaArtwork,
                                      WarningStateRepository.Snapshot warningState) {
         Bitmap warning = warningState == null ? null : warningState.activeWarning();
