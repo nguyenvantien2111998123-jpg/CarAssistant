@@ -50,9 +50,10 @@ public final class WynWarningLinkProbe {
         if (loader == null) return;
         String key = Integer.toHexString(System.identityHashCode(loader));
         if (!INSTALLED.add(key)) return;
-        hookFlutterJni(loader);
+        // Observe Flutter's asset-key resolution only. Raw AssetManager opens and
+        // decodeImage also fire for preloaded/cached assets that are not the active
+        // warning on WYN's home screen, so they must not drive the mirror.
         hookFlutterLoader(loader);
-        hookAssetManager();
     }
 
     private static void hookFlutterJni(ClassLoader loader) {
@@ -175,6 +176,7 @@ public final class WynWarningLinkProbe {
         }
         if (lower.contains("horizontal-traffic-light.png")) return "traffic_light";
         if (lower.contains("speed_camera.png")) return "speed_camera";
+        if (lower.contains("settings/speed_sign.png")) return "speed:50";
         return null;
     }
 
