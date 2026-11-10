@@ -28,7 +28,7 @@ public final class WynWarningAdapter implements WarningDataSource {
     @Override public boolean publish(String warningCode, Bitmap image) {
         TrafficWarningType type = TrafficWarningType.fromCarStreamId(warningCode);
         if (type == null) return false;
-        return engine.publishWarning(TrafficWarningSource.WYN, warningCode, image);
+        return engine.publishWarning(TrafficWarningSource.WYN, type, image);
     }
 
     public boolean publishSpeedSign(Bitmap image) {
