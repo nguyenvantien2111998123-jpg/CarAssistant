@@ -14,10 +14,14 @@ import android.text.TextUtils;
 import java.util.Arrays;
 
 import com.carassistant.v10.engine.warning.TrafficWarningEngine;
+import com.carassistant.v10.engine.warning.WynWarningAdapter;
 
 /**
- * Narrow IPC bridge for WYN's own Flutter asset requests. The caller must be the
- * installed WYN package; arbitrary apps cannot replace CarAsistant artwork.
+ * Secured IPC ingress for WYN warning images.
+ *
+ * This provider validates caller identity and payload shape, then delegates
+ * classification/state changes to WynWarningAdapter. It does not inspect or
+ * hook WYN's Flutter rendering pipeline.
  */
 public final class WynWarningProvider extends ContentProvider {
     private static final String WYN_PACKAGE = "com.wynauto.wyn";
@@ -26,22 +30,26 @@ public final class WynWarningProvider extends ContentProvider {
     private static final String METHOD_PUBLISH_BITMAP = "publish_bitmap";
     private static final String METHOD_CLEAR_TEMPORARY = "clear_temporary_alert";
 
+    private WynWarningAdapter adapter;
+
     @Override public boolean onCreate() {
         if (getContext() != null) {
             TrafficWarningEngine.getInstance().initialize(getContext());
+            adapter = new WynWarningAdapter();
         }
         return true;
     }
 
     @Override
     public Bundle call(String method, String arg, Bundle extras) {
-        if (extras == null) return rejected();
+        if (extras == null || adapter == null) return rejected();
         Context context = getContext();
         if (context == null || !isWynCaller(context)) return rejected();
 
         if (METHOD_CLEAR_TEMPORARY.equals(method)) {
-            MediaSessionBridge.clearWynTemporaryAlert();
-            return accepted();
+            boolean changed = adapter.clearTemporary();
+            if (changed) MediaSessionBridge.refreshTrafficWarningArtwork();
+            return result(changed);
         }
 
         if (METHOD_PUBLISH_BITMAP.equals(method)) {
@@ -55,17 +63,12 @@ public final class WynWarningProvider extends ContentProvider {
                 //noinspection deprecation
                 liveBitmap = (Bitmap) extras.getParcelable("warning_bitmap");
             }
-            if (liveBitmap == null || liveBitmap.isRecycled()
-                    || liveBitmap.getWidth() <= 0 || liveBitmap.getHeight() <= 0
-                    || liveBitmap.getWidth() > 256 || liveBitmap.getHeight() > 256) {
-                return rejected();
-            }
-            if ("speed_sign".equals(bitmapType)) {
-                MediaSessionBridge.setWynSpeedSignBitmap(liveBitmap);
-            } else {
-                MediaSessionBridge.setWynTemporaryAlertBitmap(liveBitmap);
-            }
-            return accepted();
+            if (!isValidBitmap(liveBitmap)) return rejected();
+            boolean changed = "speed_sign".equals(bitmapType)
+                    ? adapter.publishSpeedSign(liveBitmap)
+                    : adapter.publishTemporaryImage(liveBitmap);
+            if (changed) MediaSessionBridge.refreshTrafficWarningArtwork();
+            return result(changed);
         }
 
         String key = extras.getString("asset_key", "");
@@ -78,23 +81,27 @@ public final class WynWarningProvider extends ContentProvider {
                 && !METHOD_PUBLISH_ASSET.equals(method)) return rejected();
 
         Bitmap warning = WynWarningAssetLoader.load(context, key);
-        if (warning == null) return rejected();
-        // The numeric speed-limit artwork is a separate channel. Road-sign SVGs,
-        // traffic lights and speed-camera images are transient alerts; treating every
-        // road_sign_* asset as the permanent speed sign caused the two channels to swap.
-        if ("speed_sign".equals(warningType)
-                || (METHOD_PUBLISH_ASSET.equals(method) && key.startsWith("speed:"))) {
-            MediaSessionBridge.setWynSpeedSignBitmap(warning);
-        } else {
-            MediaSessionBridge.setWynTemporaryAlertBitmap(warning);
-        }
-        return accepted();
+        if (!isValidBitmap(warning)) return rejected();
+
+        boolean speedSign = "speed_sign".equals(warningType)
+                || (METHOD_PUBLISH_ASSET.equals(method) && key.startsWith("speed:"));
+        boolean changed = speedSign
+                ? adapter.publishSpeedSign(warning)
+                : adapter.publishTemporaryImage(warning);
+        if (changed) MediaSessionBridge.refreshTrafficWarningArtwork();
+        return result(changed);
     }
 
     private static boolean isWynCaller(Context context) {
         String[] packages = context.getPackageManager()
                 .getPackagesForUid(Binder.getCallingUid());
         return packages != null && Arrays.asList(packages).contains(WYN_PACKAGE);
+    }
+
+    private static boolean isValidBitmap(Bitmap bitmap) {
+        return bitmap != null && !bitmap.isRecycled()
+                && bitmap.getWidth() > 0 && bitmap.getHeight() > 0
+                && bitmap.getWidth() <= 256 && bitmap.getHeight() <= 256;
     }
 
     private static boolean isAllowedKey(String key) {
@@ -104,16 +111,14 @@ public final class WynWarningProvider extends ContentProvider {
         return key.matches("road_sign_(?i:DP|P|R)[0-9]{2,3}[A-Za-z]?[0-9]?");
     }
 
-    private static Bundle accepted() {
+    private static Bundle result(boolean changed) {
         Bundle result = new Bundle();
-        result.putBoolean("accepted", true);
+        result.putBoolean("accepted", changed);
         return result;
     }
 
     private static Bundle rejected() {
-        Bundle result = new Bundle();
-        result.putBoolean("accepted", false);
-        return result;
+        return result(false);
     }
 
     @Override public Cursor query(Uri uri, String[] projection, String selection,
