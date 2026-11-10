@@ -41,6 +41,11 @@ public final class WynWarningAdapter implements WarningDataSource {
         return engine.updateTemporaryAlert(TrafficWarningSource.WYN, warningCode, image);
     }
 
+    /** Publish a real WYN temporary image when WYN exposes no stable warning ID. */
+    public boolean publishTemporaryImage(Bitmap image) {
+        return engine.updateTemporaryAlert(TrafficWarningSource.WYN, null, image);
+    }
+
     @Override public boolean clearTemporary() {
         return engine.clearTemporaryAlert(TrafficWarningSource.WYN);
     }
