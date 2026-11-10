@@ -74,14 +74,25 @@ public final class TrafficWarningEngine {
      * Normalize a CarStream warning ID into the persistent speed-limit channel or
      * the temporary-alert channel. Unknown IDs are rejected rather than guessed.
      */
+    /** Core entry point: adapters must normalize external IDs before calling it. */
     public boolean publishWarning(
-            TrafficWarningSource source, String carStreamWarningId, Bitmap bitmap) {
-        if (source == null || carStreamWarningId == null) return false;
-        TrafficWarningType type = TrafficWarningType.fromCarStreamId(carStreamWarningId);
-        if (type == null || !isSourceEnabled(source)) return false;
+            TrafficWarningSource source, TrafficWarningType type, Bitmap bitmap) {
+        if (source == null || type == null || !isSourceEnabled(source)) return false;
+        String normalizedCode = type.getCarStreamId();
         return type.isTemporary()
-                ? updateTemporaryAlert(source, carStreamWarningId, bitmap)
-                : updateSpeedSign(source, carStreamWarningId, bitmap);
+                ? updateTemporaryAlert(source, normalizedCode, bitmap)
+                : updateSpeedSign(source, normalizedCode, bitmap);
+    }
+
+    /**
+     * Compatibility entry point for existing callers. New source integrations
+     * should use CarStreamWarningAdapter or WynWarningAdapter instead.
+     */
+    @Deprecated
+    public boolean publishWarning(
+            TrafficWarningSource source, String externalWarningId, Bitmap bitmap) {
+        TrafficWarningType type = TrafficWarningType.fromCarStreamId(externalWarningId);
+        return publishWarning(source, type, bitmap);
     }
 
     public boolean clearTemporaryAlert() {
