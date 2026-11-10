@@ -25,6 +25,7 @@ import java.util.concurrent.CopyOnWriteArrayList;
 
 import com.carassistant.v10.engine.warning.TrafficWarningEngine;
 import com.carassistant.v10.engine.warning.TrafficWarningSource;
+import com.carassistant.v10.engine.warning.TrafficWarningAdapterFactory;
 
 /**
  * Reads the active phone media session so the CarAsistant dashboard can mirror
@@ -149,8 +150,7 @@ public final class MediaSessionBridge extends NotificationListenerService {
     /** Publish an image using the source and warning IDs recovered from CarStream. */
     public static void publishTrafficWarning(
             TrafficWarningSource source, String carStreamWarningId, Bitmap bitmap) {
-        if (TrafficWarningEngine.getInstance()
-                .publishWarning(source, carStreamWarningId, bitmap)) {
+        if (TrafficWarningAdapterFactory.publish(source, carStreamWarningId, bitmap)) {
             dispatchWarningArtworkChanged();
         }
     }
@@ -158,8 +158,7 @@ public final class MediaSessionBridge extends NotificationListenerService {
     /** Publish a persistent speed-limit sign for one selected source. */
     public static void publishTrafficSpeedSign(
             TrafficWarningSource source, String warningCode, Bitmap bitmap) {
-        if (TrafficWarningEngine.getInstance()
-                .updateSpeedSign(source, warningCode, bitmap)) {
+        if (TrafficWarningAdapterFactory.publish(source, warningCode, bitmap)) {
             dispatchWarningArtworkChanged();
         }
     }
@@ -167,22 +166,21 @@ public final class MediaSessionBridge extends NotificationListenerService {
     /** Publish a temporary warning for one selected source. */
     public static void publishTrafficTemporaryAlert(
             TrafficWarningSource source, String warningCode, Bitmap bitmap) {
-        if (TrafficWarningEngine.getInstance()
-                .updateTemporaryAlert(source, warningCode, bitmap)) {
+        if (TrafficWarningAdapterFactory.publish(source, warningCode, bitmap)) {
             dispatchWarningArtworkChanged();
         }
     }
 
     /** Clear only this source's temporary warning; other sources remain intact. */
     public static void clearTrafficTemporaryAlert(TrafficWarningSource source) {
-        if (TrafficWarningEngine.getInstance().clearTemporaryAlert(source)) {
+        if (TrafficWarningAdapterFactory.clearTemporary(source)) {
             dispatchWarningArtworkChanged();
         }
     }
 
     /** Remove both channels from one source, for an explicit disconnect/disable event. */
     public static void clearTrafficSource(TrafficWarningSource source) {
-        if (TrafficWarningEngine.getInstance().clearSource(source)) {
+        if (TrafficWarningAdapterFactory.clear(source)) {
             dispatchWarningArtworkChanged();
         }
     }
