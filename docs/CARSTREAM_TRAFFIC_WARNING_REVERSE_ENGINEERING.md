@@ -128,3 +128,22 @@ The existing CarAsistant media path already has the correct two output channels:
 The supplied Full APK does not contain the Control-side source adapters or the source payload schemas. Therefore this branch can port the complete *recoverable HUD/source catalogue and media-artwork architecture*, but it cannot honestly claim live data ingestion for VietMap, Gofa, Waze, or Waze HLP from this APK alone. Waze HLP's endpoint is known, but its frame format and message schema are not.
 
 No physical POCO F1 / Honda BR-V / Android Auto test is claimed by this reverse-engineering report.
+
+
+## 10. Adapter architecture refactor
+
+The follow-up implementation separates external-source translation from the Core Warning Engine:
+
+- `WarningDataSource` is the common adapter contract: source identity, publish, clear temporary alert, and clear source.
+- `CarStreamWarningAdapter` accepts the recovered CarStream warning IDs, validates them against `TrafficWarningType`, and only then publishes a normalized type to Core. It is a compatibility/translation adapter, not a live CarStream feed.
+- `WynWarningAdapter` maps WYN's persistent speed-sign and temporary-image channels to the same Core API. It deliberately does not claim to extract Flutter frames or inspect WYN internals.
+- `TrafficWarningAdapterFactory` selects the adapter for a source.
+- `TrafficWarningEngine.publishWarning(source, TrafficWarningType, bitmap)` is the normalized Core ingress. The string-ID overload remains deprecated for compatibility.
+- `WynWarningProvider` now performs caller/payload validation and delegates state changes to `WynWarningAdapter`; artwork refresh is requested only after an accepted state change.
+- `MediaSessionBridge` routes generic source publication and clearing through the adapter factory. The artwork composition and MediaSession metadata channels remain unchanged.
+
+### Runtime integration status
+
+The adapter boundary and normalized state pipeline are implemented. However, the supplied WYN APK/CarStream Full APK do not prove that WYN calls CarAsistant's provider, nor do they reveal a verified Flutter callback that supplies the live warning images. Therefore live WYN acquisition remains **unverified**. The next integration milestone is to establish the actual WYN-to-provider caller path or implement a verified in-process hook; no synthetic warning image or fabricated source payload is used as a fallback.
+
+The Android Auto presentation contract remains: Media card top 1/3 warning + bottom 2/3 media artwork; Media widget warning-only; media metadata, playback controls, autoplay/checkpoint and steering-wheel handlers remain outside the adapter refactor.
