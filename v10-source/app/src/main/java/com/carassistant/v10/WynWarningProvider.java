@@ -49,7 +49,7 @@ public final class WynWarningProvider extends ContentProvider {
         if (METHOD_CLEAR_TEMPORARY.equals(method)) {
             boolean changed = adapter.clearTemporary();
             if (changed) MediaSessionBridge.refreshTrafficWarningArtwork();
-            return result(changed);
+            return accepted();
         }
 
         if (METHOD_PUBLISH_BITMAP.equals(method)) {
@@ -68,7 +68,7 @@ public final class WynWarningProvider extends ContentProvider {
                     ? adapter.publishSpeedSign(liveBitmap)
                     : adapter.publishTemporaryImage(liveBitmap);
             if (changed) MediaSessionBridge.refreshTrafficWarningArtwork();
-            return result(changed);
+            return accepted();
         }
 
         String key = extras.getString("asset_key", "");
@@ -89,7 +89,7 @@ public final class WynWarningProvider extends ContentProvider {
                 ? adapter.publishSpeedSign(warning)
                 : adapter.publishTemporaryImage(warning);
         if (changed) MediaSessionBridge.refreshTrafficWarningArtwork();
-        return result(changed);
+        return accepted();
     }
 
     private static boolean isWynCaller(Context context) {
@@ -111,14 +111,16 @@ public final class WynWarningProvider extends ContentProvider {
         return key.matches("road_sign_(?i:DP|P|R)[0-9]{2,3}[A-Za-z]?[0-9]?");
     }
 
-    private static Bundle result(boolean changed) {
+    private static Bundle accepted() {
         Bundle result = new Bundle();
-        result.putBoolean("accepted", changed);
+        result.putBoolean("accepted", true);
         return result;
     }
 
     private static Bundle rejected() {
-        return result(false);
+        Bundle result = new Bundle();
+        result.putBoolean("accepted", false);
+        return result;
     }
 
     @Override public Cursor query(Uri uri, String[] projection, String selection,
