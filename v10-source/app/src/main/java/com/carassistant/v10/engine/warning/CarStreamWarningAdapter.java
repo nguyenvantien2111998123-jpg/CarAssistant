@@ -26,8 +26,9 @@ public final class CarStreamWarningAdapter implements WarningDataSource {
     }
 
     @Override public boolean publish(String warningCode, Bitmap image) {
-        if (TrafficWarningType.fromCarStreamId(warningCode) == null) return false;
-        return engine.publishWarning(source, warningCode, image);
+        TrafficWarningType normalized = TrafficWarningType.fromCarStreamId(warningCode);
+        if (normalized == null) return false;
+        return engine.publishWarning(source, normalized, image);
     }
 
     @Override public boolean clearTemporary() {
