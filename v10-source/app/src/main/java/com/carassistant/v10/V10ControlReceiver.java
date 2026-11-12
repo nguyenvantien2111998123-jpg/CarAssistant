@@ -30,9 +30,9 @@ public final class V10ControlReceiver
         }
         if ("com.carassistant.v10.STEERING_VOICE".equals(action)) {
             Log.i("CarAssistantSteering", "Receiver got STEERING_VOICE");
-            V10CarActivity activity = V10SessionStore.getCurrentActivity();
-            if (activity != null) activity.handleSteeringVoice();
-            else Log.w("CarAssistantSteering", "V10 activity is not active; voice request ignored");
+            if (!CarAsistantVoiceService.toggleListening(context)) {
+                Log.w("CarAssistantSteering", "Voice service unavailable; microphone permission or foreground-service start is required");
+            }
             return;
         }
         if ("com.carassistant.v10.STEERING_MEDIA_NEXT".equals(action)) {
