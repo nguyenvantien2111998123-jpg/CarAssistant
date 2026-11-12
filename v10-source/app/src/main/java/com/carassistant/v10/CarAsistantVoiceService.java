@@ -199,36 +199,8 @@ public final class CarAsistantVoiceService extends Service {
     }
 
     private VoiceCommandRouter createCommandRouter() {
-        return new VoiceCommandRouter(new VoiceCommandRouter.Host() {
-            private V10CarActivity activity() {
-                return V10SessionStore.getCurrentActivity();
-            }
-
-            @Override
-            public String openApp(String spokenName) {
-                V10CarActivity current = activity();
-                return current == null ? null : current.executeVoiceOpenApp(spokenName);
-            }
-
-            @Override
-            public String openVoiceTask(String category, String query, String explicitProvider) {
-                V10CarActivity current = activity();
-                return current == null ? null
-                        : current.executeVoiceTask(category, query, explicitProvider);
-            }
-
-            @Override
-            public void showAppPicker() {
-                V10CarActivity current = activity();
-                if (current != null) current.executeVoiceShowApps();
-            }
-
-            @Override
-            public void goHome() {
-                V10CarActivity current = activity();
-                if (current != null) current.executeVoiceHome();
-            }
-        });
+        return new VoiceCommandRouter(
+                new VoiceCommandExecutionGateway(getApplicationContext()));
     }
 
     private void createNotificationChannel() {
