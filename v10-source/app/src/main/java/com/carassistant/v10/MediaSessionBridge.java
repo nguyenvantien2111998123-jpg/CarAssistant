@@ -773,7 +773,8 @@ public final class MediaSessionBridge extends NotificationListenerService {
         if (intent == null || context == null) return false;
         MediaSessionBridge bridge = steeringBridgeInstance;
         SteeringWheelMediaKeyHandler handler = bridge == null
-                ? getFallbackSteeringHandler(context) : bridge.steeringKeyHandler;
+                ? null : bridge.steeringKeyHandler;
+        if (handler == null) handler = getFallbackSteeringHandler(context);
         if (handler == null) return false;
         try {
             return handler.handle(intent);
