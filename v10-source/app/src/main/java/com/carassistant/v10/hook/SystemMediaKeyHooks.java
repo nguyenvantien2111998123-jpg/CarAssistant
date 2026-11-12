@@ -5,8 +5,6 @@ import android.content.Context;
 import android.content.Intent;
 import android.media.session.MediaSession;
 import android.os.Build;
-import android.provider.Settings;
-import android.text.TextUtils;
 import android.view.KeyEvent;
 
 import java.lang.reflect.Field;
@@ -37,6 +35,12 @@ public final class SystemMediaKeyHooks {
     private static long lastNextClickUp;
     private static boolean secondNextTapCandidate;
 
+    private static final Object ROUTE_LOCK = new Object();
+    private static long lastRoutedEventTime = -1L;
+    private static int lastRoutedKey = KeyEvent.KEYCODE_UNKNOWN;
+    private static int lastRoutedAction = -1;
+    private static int lastRoutedDevice = -1;
+
     private static final AtomicBoolean INSTALLED = new AtomicBoolean();
     private static final AtomicLong RAW_EVENT_COUNT = new AtomicLong();
 
@@ -45,9 +49,9 @@ public final class SystemMediaKeyHooks {
     public static void install(ClassLoader loader) {
         if (!INSTALLED.compareAndSet(false, true)) return;
         try {
+            int hooked = 0;
             Class<?> managerClass = XposedHelpers.findClass(
                     "com.android.server.media.MediaSessionService$SessionManagerImpl", loader);
-            int hooked = 0;
             for (Method method : managerClass.getDeclaredMethods()) {
                 if (!"dispatchMediaKeyEvent".equals(method.getName())) continue;
                 Class<?>[] types = method.getParameterTypes();
@@ -64,36 +68,59 @@ public final class SystemMediaKeyHooks {
                     @Override protected void beforeHookedMethod(MethodHookParam param) {
                         KeyEvent event = findKeyEvent(param.args);
                         if (!isTargetKey(event)) return;
-
                         logRawEvent(param, event);
                         try {
                             Object service = getOuterService(param.thisObject);
                             if (service == null) return;
-
                             Context context = (Context) XposedHelpers.getObjectField(
                                     service, "mContext");
-                            if (!hasMediaAccess(context)) return;
-
-                            // The system process is the caller for this explicit FGS start.
-                            // This avoids asking the app's background BroadcastReceiver to
-                            // create a while-in-use microphone service.
-                            maybePrepareVoiceService(context, event);
-
-                            // Route the raw hardware event directly to the phone-side app.
-                            // This path does not depend on an active/playing MediaSession.
-                            Intent relay = new Intent(
-                                    "com.carassistant.v10.STEERING_KEY_EVENT");
-                            relay.setComponent(new ComponentName(
-                                    SELF, SELF + ".V10ControlReceiver"));
-                            relay.putExtra(Intent.EXTRA_KEY_EVENT, event);
-                            context.sendBroadcast(relay);
-                            // Prevent the same physical event from being delivered a second time
-                            // through normal MediaSession routing.
-                            param.setResult(null);
+                            if (routeToCarAsistant(context, event)) {
+                                // This entry point has no return value. Suppress the
+                                // normal dispatch only after our app relay was issued.
+                                param.setResult(null);
+                            }
                         } catch (Throwable error) {
-                            // Fail open: never disable the steering controls of other players.
-                            XposedBridge.log(TAG + " route failed; allowing framework fallback: "
+                            XposedBridge.log(TAG + " manager route failed; framework fallback: "
                                     + error);
+                        }
+                    }
+                });
+                hooked++;
+            }
+
+            // Android Auto may dispatch directly to the currently selected app's
+            // MediaSession instead of using SessionManagerImpl.dispatchMediaKeyEvent.
+            // Hook that targeted path as well, otherwise the native AA media card
+            // bypasses CarAsistant's steering gesture recognizer while playing.
+            Class<?> serviceClass = XposedHelpers.findClass(
+                    "com.android.server.media.MediaSessionService", loader);
+            for (Method method : serviceClass.getDeclaredMethods()) {
+                if (!"dispatchMediaKeyEventToSessionAsSystemService".equals(method.getName())) {
+                    continue;
+                }
+                Class<?>[] types = method.getParameterTypes();
+                if (types.length != 3 || types[0] != String.class
+                        || !KeyEvent.class.isAssignableFrom(types[1])
+                        || types[2] != MediaSession.Token.class
+                        || method.getReturnType() != boolean.class) {
+                    continue;
+                }
+                XposedBridge.hookMethod(method, new XC_MethodHook() {
+                    @Override protected void beforeHookedMethod(MethodHookParam param) {
+                        KeyEvent event = findKeyEvent(param.args);
+                        if (!isTargetKey(event)) return;
+                        logRawEvent(param, event);
+                        try {
+                            Context context = (Context) XposedHelpers.getObjectField(
+                                    param.thisObject, "mContext");
+                            if (routeToCarAsistant(context, event)) {
+                                // The targeted dispatch returns whether the event
+                                // was handled; true prevents delivery to the media app.
+                                param.setResult(Boolean.TRUE);
+                            }
+                        } catch (Throwable error) {
+                            XposedBridge.log(TAG + " targeted-session route failed; "
+                                    + "allowing target session fallback: " + error);
                         }
                     }
                 });
@@ -102,14 +129,44 @@ public final class SystemMediaKeyHooks {
 
             if (hooked == 0) {
                 INSTALLED.set(false);
-                XposedBridge.log(TAG + " Android 12 dispatchMediaKeyEvent signature not found");
+                XposedBridge.log(TAG + " no supported Android media-key dispatch methods found");
             } else {
-                XposedBridge.log(TAG + " installed on SessionManagerImpl (" + hooked + ")");
+                XposedBridge.log(TAG + " installed media-key routes (" + hooked + ")");
             }
         } catch (Throwable error) {
             INSTALLED.set(false);
             XposedBridge.log(TAG + " install failed: " + error);
         }
+    }
+
+    /**
+     * Relay each physical KeyEvent once even if Android traverses both dispatch
+     * entry points. This path deliberately does not depend on Notification Access:
+     * voice gestures must remain available when no media session/widget exists.
+     */
+    private static boolean routeToCarAsistant(Context context, KeyEvent event) {
+        if (context == null || !isTargetKey(event)) return false;
+        synchronized (ROUTE_LOCK) {
+            if (event.getEventTime() == lastRoutedEventTime
+                    && event.getKeyCode() == lastRoutedKey
+                    && event.getAction() == lastRoutedAction
+                    && event.getDeviceId() == lastRoutedDevice) {
+                return false;
+            }
+            lastRoutedEventTime = event.getEventTime();
+            lastRoutedKey = event.getKeyCode();
+            lastRoutedAction = event.getAction();
+            lastRoutedDevice = event.getDeviceId();
+        }
+
+        // The system process starts/prepares the microphone FGS before the app
+        // receiver handles the double-tap callback.
+        maybePrepareVoiceService(context, event);
+        Intent relay = new Intent("com.carassistant.v10.STEERING_KEY_EVENT");
+        relay.setComponent(new ComponentName(SELF, SELF + ".V10ControlReceiver"));
+        relay.putExtra(Intent.EXTRA_KEY_EVENT, event);
+        context.sendBroadcast(relay);
+        return true;
     }
 
     /**
@@ -261,23 +318,6 @@ public final class SystemMediaKeyHooks {
         return null;
     }
 
-    private static boolean hasMediaAccess(Context context) {
-        if (context == null) return false;
-        try {
-            String enabled = Settings.Secure.getString(
-                    context.getContentResolver(), "enabled_notification_listeners");
-            if (TextUtils.isEmpty(enabled)) return false;
-            String expected = new ComponentName(
-                    SELF, SELF + ".MediaSessionBridge").flattenToString();
-            for (String item : enabled.split(":")) {
-                ComponentName parsed = ComponentName.unflattenFromString(item);
-                if (parsed != null && expected.equals(parsed.flattenToString())) return true;
-            }
-        } catch (Throwable error) {
-            XposedBridge.log(TAG + " could not verify Notification Access: " + error);
-        }
-        return false;
-    }
 
     private static void logRawEvent(XC_MethodHook.MethodHookParam param, KeyEvent event) {
         String callerPackage = "unknown";
