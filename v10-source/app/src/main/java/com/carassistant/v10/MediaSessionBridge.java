@@ -5,9 +5,7 @@ import android.app.NotificationManager;
 import android.content.ComponentName;
 import android.content.Context;
 import android.content.Intent;
-import android.media.AudioAttributes;
 import android.media.MediaMetadata;
-import android.media.MediaPlayer;
 import android.media.session.MediaController;
 import android.media.session.MediaSession;
 import android.media.session.MediaSessionManager;
@@ -21,11 +19,8 @@ import android.text.TextUtils;
 import android.service.notification.NotificationListenerService;
 import android.service.notification.StatusBarNotification;
 import android.util.Log;
+import android.view.KeyEvent;
 
-import java.io.ByteArrayOutputStream;
-import java.io.File;
-import java.io.FileOutputStream;
-import java.io.InputStream;
 import java.util.List;
 import java.util.concurrent.CopyOnWriteArrayList;
 
@@ -66,15 +61,13 @@ public final class MediaSessionBridge extends NotificationListenerService {
 
     private static volatile Snapshot snapshot = Snapshot.empty();
     private static volatile MediaController activeController;
+    private static volatile MediaSessionBridge instance;
     private static volatile MediaController checkpointController;
     private static volatile long lastCheckpointPosition;
     private static volatile long lastCheckpointDuration;
     private MediaSession mirrorSession;
     private SteeringWheelMediaKeyHandler steeringKeyHandler;
     private MediaSessionManager manager;
-    // A muted looping player keeps CarAsistant's MediaSession eligible for hardware keys
-    // when no other app currently publishes a usable media item.
-    private MediaPlayer silentPlayer;
     private MediaSessionManager.OnActiveSessionsChangedListener sessionsListener;
     private MediaController.Callback controllerCallback;
     private final Runnable checkpointTask = new Runnable() {
@@ -577,6 +570,13 @@ public final class MediaSessionBridge extends NotificationListenerService {
         seekTo(Math.max(0L, state.getPosition() + offsetMs));
     }
 
+    /** Receives raw steering events relayed by the Android Framework hook. */
+    public static boolean dispatchSteeringKeyEvent(KeyEvent event) {
+        MediaSessionBridge service = instance;
+        if (service == null || service.steeringKeyHandler == null) return false;
+        return service.steeringKeyHandler.handle(event);
+    }
+
     private void ensureMirrorSession() {
         if (mirrorSession != null) return;
         mirrorSession = new MediaSession(this, "CarAsistant Media Controller");
@@ -630,128 +630,19 @@ public final class MediaSessionBridge extends NotificationListenerService {
         }, MAIN);
     }
 
-    /**
-     * A paused third-party session with metadata is still a real media item and must remain
-     * the owner of the dashboard. A session that is merely present but has no media identity
-     * must not prevent the silent fallback from keeping steering-wheel key routing alive.
-     */
-    private boolean hasExternalMediaSession() {
-        MediaController controller = activeController;
-        if (controller == null) return false;
-        try {
-            PlaybackState playback = controller.getPlaybackState();
-            if (playback != null && playback.getState() == PlaybackState.STATE_PLAYING) {
-                return true;
-            }
-            MediaMetadata metadata = controller.getMetadata();
-            if (metadata == null) return false;
-            return !TextUtils.isEmpty(safeMetadataString(metadata, MediaMetadata.METADATA_KEY_TITLE))
-                    || !TextUtils.isEmpty(safeMetadataString(metadata, MediaMetadata.METADATA_KEY_MEDIA_ID))
-                    || !TextUtils.isEmpty(safeMetadataString(metadata, MediaMetadata.METADATA_KEY_MEDIA_URI))
-                    || !TextUtils.isEmpty(safeMetadataString(metadata, MediaMetadata.METADATA_KEY_ARTIST))
-                    || !TextUtils.isEmpty(safeMetadataString(metadata, MediaMetadata.METADATA_KEY_ALBUM))
-                    || metadata.getLong(MediaMetadata.METADATA_KEY_DURATION) > 0L
-                    || metadata.getBitmap(MediaMetadata.METADATA_KEY_ALBUM_ART) != null
-                    || metadata.getBitmap(MediaMetadata.METADATA_KEY_ART) != null
-                    || metadata.getBitmap(MediaMetadata.METADATA_KEY_DISPLAY_ICON) != null;
-        } catch (RuntimeException error) {
-            Log.w(TAG, "Could not inspect external media session; using silent fallback", error);
-            return false;
-        }
-    }
-
-    /**
-     * Play a zero-volume GitHub blank-audio track only while no external media item exists.
-     * No audio focus is requested, so this fallback cannot take focus away from real players.
-     */
-    private boolean startSilentPlayback() {
-        if (silentPlayer != null) {
-            try {
-                if (!silentPlayer.isPlaying()) silentPlayer.start();
-                return true;
-            } catch (RuntimeException error) {
-                Log.w(TAG, "Silent player could not resume; recreating it", error);
-                stopSilentPlayback();
-            }
-        }
-
-        MediaPlayer player = null;
-        try {
-            File audioFile = new File(getCacheDir(), "carassistant-silent-audio.mp3");
-            if (!audioFile.isFile() || audioFile.length() == 0L) {
-                ByteArrayOutputStream encoded = new ByteArrayOutputStream();
-                try (InputStream input = getAssets().open("silent_audio.mp3.b64")) {
-                    byte[] buffer = new byte[8192];
-                    int count;
-                    while ((count = input.read(buffer)) != -1) encoded.write(buffer, 0, count);
-                }
-                byte[] decoded = android.util.Base64.decode(
-                        encoded.toByteArray(), android.util.Base64.DEFAULT);
-                try (FileOutputStream output = new FileOutputStream(audioFile)) {
-                    output.write(decoded);
-                    output.flush();
-                }
-            }
-
-            player = new MediaPlayer();
-            player.setAudioAttributes(new AudioAttributes.Builder()
-                    .setUsage(AudioAttributes.USAGE_MEDIA)
-                    .setContentType(AudioAttributes.CONTENT_TYPE_MUSIC)
-                    .build());
-            player.setDataSource(audioFile.getAbsolutePath());
-            player.setVolume(0f, 0f);
-            player.setLooping(true);
-            player.setOnErrorListener((failedPlayer, what, extra) -> {
-                Log.w(TAG, "Silent audio playback failed: what=" + what + ", extra=" + extra);
-                if (silentPlayer == failedPlayer) silentPlayer = null;
-                try { failedPlayer.release(); } catch (RuntimeException ignored) { }
-                return true;
-            });
-            player.prepare();
-            player.start();
-            silentPlayer = player;
-            Log.i(TAG, "Silent fallback playback started (muted, looping, no audio focus)");
-            return true;
-        } catch (Exception error) {
-            if (player != null) {
-                try { player.release(); } catch (RuntimeException ignored) { }
-            }
-            Log.e(TAG, "Could not start silent fallback playback", error);
-            return false;
-        }
-    }
-
-    private void stopSilentPlayback() {
-        MediaPlayer player = silentPlayer;
-        silentPlayer = null;
-        if (player == null) return;
-        try {
-            if (player.isPlaying()) player.stop();
-        } catch (RuntimeException ignored) { }
-        try { player.release(); }
-        catch (RuntimeException error) { Log.w(TAG, "Could not release silent player", error); }
-        Log.i(TAG, "Silent fallback stopped; external media owns playback");
-    }
-
     private void updateMirrorSession(Snapshot state) {
         MediaSession session = mirrorSession;
         if (session == null) return;
-        boolean hasPlayer = hasExternalMediaSession();
-        if (hasPlayer) stopSilentPlayback();
-        else startSilentPlayback();
+        boolean hasPlayer = state != null && !TextUtils.isEmpty(state.packageName);
         if (!hasPlayer) {
-            // Do not advertise an old checkpoint as if it were currently playing. The
-            // checkpoint remains persisted for MediaAutoRestoreService; the live card
-            // represents the silent fallback until a real source session appears.
+            // Keep the mirror discoverable for Android Auto, but never fabricate playback.
+            // Steering keys arrive through the direct Framework relay, not dummy audio.
             session.setMetadata(new MediaMetadata.Builder()
                     .putString(MediaMetadata.METADATA_KEY_TITLE, "CarAsistant Media")
                     .putString(MediaMetadata.METADATA_KEY_ARTIST, "Đang chờ ứng dụng phát media")
                     .putString(MediaMetadata.METADATA_KEY_ALBUM, "CarAsistant")
                     .build());
-            // The real player is a muted looping track, so publish PLAYING while idle.
-            // If decoding failed, retain a paused but active session as a safe fallback.
-            session.setPlaybackState(buildMirrorPlaybackState(
-                    silentPlayer != null, 0L, 0L));
+            session.setPlaybackState(buildMirrorPlaybackState(false, 0L, 0L));
             session.setActive(true);
             return;
         }
@@ -809,6 +700,7 @@ public final class MediaSessionBridge extends NotificationListenerService {
     @Override
     public void onListenerConnected() {
         super.onListenerConnected();
+        instance = this;
         ensureMirrorSession();
         // Publish the CarAsistant controller before querying source sessions. This closes
         // the startup race in which Gearhead discovers a phone player before our mirror.
@@ -865,7 +757,7 @@ public final class MediaSessionBridge extends NotificationListenerService {
     @Override
     public void onDestroy() {
         MAIN.removeCallbacks(checkpointTask);
-        stopSilentPlayback();
+        if (instance == this) instance = null;
         releaseMirrorSession();
         super.onDestroy();
     }
