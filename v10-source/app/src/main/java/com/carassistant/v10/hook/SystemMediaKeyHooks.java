@@ -2,7 +2,9 @@ package com.carassistant.v10.hook;
 
 import android.content.ComponentName;
 import android.content.Context;
+import android.content.Intent;
 import android.media.session.MediaSession;
+import android.os.Build;
 import android.provider.Settings;
 import android.text.TextUtils;
 import android.view.KeyEvent;
@@ -21,14 +23,19 @@ import de.robv.android.xposed.XposedHelpers;
  * Routes hardware media keys directly to CarAsistant's active MediaSession.
  *
  * The hook is installed on MediaSessionService.SessionManagerImpl, the actual
- * Android 12 Binder implementation. Gesture recognition remains exclusively
- * inside SteeringWheelMediaKeyHandler in the app process.
+ * Android 12 Binder implementation. It also prepares the microphone service
+ * from the system process when the steering-wheel NEXT double press is complete.
  */
 public final class SystemMediaKeyHooks {
     private static final String TAG = "[CarAsistant SystemMediaKey]";
     private static final String SELF = "com.carassistant.v10";
     private static final int NEXT = KeyEvent.KEYCODE_MEDIA_NEXT;
     private static final int PREVIOUS = KeyEvent.KEYCODE_MEDIA_PREVIOUS;
+    private static final long DOUBLE_CLICK_MS = 350L;
+    private static final long LONG_PRESS_MS = 500L;
+    private static final Object VOICE_GESTURE_LOCK = new Object();
+    private static long lastNextClickUp;
+    private static boolean secondNextTapCandidate;
 
     private static final AtomicBoolean INSTALLED = new AtomicBoolean();
     private static final AtomicLong RAW_EVENT_COUNT = new AtomicLong();
@@ -67,13 +74,18 @@ public final class SystemMediaKeyHooks {
                                     service, "mContext");
                             if (!hasMediaAccess(context)) return;
 
+                            // The system process is the caller for this explicit FGS start.
+                            // This avoids asking the app's background BroadcastReceiver to
+                            // create a while-in-use microphone service.
+                            maybePrepareVoiceService(context, event);
+
                             // Route the raw hardware event directly to the phone-side app.
                             // This path does not depend on an active/playing MediaSession.
-                            android.content.Intent relay = new android.content.Intent(
+                            Intent relay = new Intent(
                                     "com.carassistant.v10.STEERING_KEY_EVENT");
                             relay.setComponent(new ComponentName(
                                     SELF, SELF + ".V10ControlReceiver"));
-                            relay.putExtra(android.content.Intent.EXTRA_KEY_EVENT, event);
+                            relay.putExtra(Intent.EXTRA_KEY_EVENT, event);
                             context.sendBroadcast(relay);
                             // Prevent the same physical event from being delivered a second time
                             // through normal MediaSession routing.
@@ -97,6 +109,54 @@ public final class SystemMediaKeyHooks {
         } catch (Throwable error) {
             INSTALLED.set(false);
             XposedBridge.log(TAG + " install failed: " + error);
+        }
+    }
+
+    /**
+     * Mirrors the existing NEXT double-tap gesture (350 ms, with a 500 ms
+     * long-press exclusion). The app-side handler still owns media actions;
+     * this only starts the voice FGS before the app receives STEERING_VOICE.
+     */
+    private static void maybePrepareVoiceService(Context context, KeyEvent event) {
+        if (context == null || event == null || event.getKeyCode() != NEXT) return;
+
+        boolean prepare = false;
+        synchronized (VOICE_GESTURE_LOCK) {
+            if (event.getAction() == KeyEvent.ACTION_DOWN && event.getRepeatCount() == 0) {
+                long delta = event.getEventTime() - lastNextClickUp;
+                secondNextTapCandidate = lastNextClickUp > 0L
+                        && delta >= 0L && delta <= DOUBLE_CLICK_MS;
+                if (secondNextTapCandidate) lastNextClickUp = 0L;
+            } else if (event.getAction() == KeyEvent.ACTION_UP) {
+                long held = event.getEventTime() - event.getDownTime();
+                if (held >= LONG_PRESS_MS) {
+                    secondNextTapCandidate = false;
+                    lastNextClickUp = 0L;
+                } else if (secondNextTapCandidate) {
+                    prepare = true;
+                    secondNextTapCandidate = false;
+                    lastNextClickUp = 0L;
+                } else {
+                    lastNextClickUp = event.getEventTime();
+                }
+            }
+        }
+
+        if (!prepare) return;
+        try {
+            Intent serviceIntent = new Intent();
+            serviceIntent.setComponent(new ComponentName(
+                    SELF, SELF + ".CarAsistantVoiceService"));
+            serviceIntent.setAction("com.carassistant.v10.voice.PREPARE");
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                context.startForegroundService(serviceIntent);
+            } else {
+                context.startService(serviceIntent);
+            }
+        } catch (Throwable error) {
+            // The steering event is still relayed; the app receiver can report
+            // that voice is unavailable without breaking media-key handling.
+            XposedBridge.log(TAG + " voice service preparation failed: " + error);
         }
     }
 
