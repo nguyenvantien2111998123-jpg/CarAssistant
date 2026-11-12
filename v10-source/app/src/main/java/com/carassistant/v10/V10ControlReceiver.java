@@ -30,9 +30,10 @@ public final class V10ControlReceiver
         }
         if ("com.carassistant.v10.STEERING_VOICE".equals(action)) {
             Log.i("CarAssistantSteering", "Receiver got STEERING_VOICE");
-            if (!CarAsistantVoiceService.toggleListening(context)) {
-                Log.w("CarAssistantSteering", "Voice service unavailable; microphone permission or foreground-service start is required");
-            }
+            // The System Framework hook has already prepared the microphone FGS
+            // for this double press. Queue the toggle if Service.onCreate is still
+            // completing; never start a microphone FGS from this background receiver.
+            CarAsistantVoiceService.requestSteeringToggle(context);
             return;
         }
         if ("com.carassistant.v10.STEERING_MEDIA_NEXT".equals(action)) {
