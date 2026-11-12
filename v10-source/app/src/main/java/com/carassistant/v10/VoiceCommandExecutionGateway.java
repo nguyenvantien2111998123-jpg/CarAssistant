@@ -85,20 +85,18 @@ public final class VoiceCommandExecutionGateway implements VoiceCommandRouter.Ho
         V10DisplayController display = prepareHeadlessProjection(selected.component);
         if (display == null) return null;
 
-        if (!cleanQuery.isEmpty() && ("music".equals(category) || "video".equals(category))) {
-            prepareAccessibilitySearch(selected.component.getPackageName(),
-                    cleanQuery, display.getDisplayId());
-        }
-
         if (!cleanQuery.isEmpty() && "tv".equals(category)) {
             final String search = cleanQuery;
             queueAfterLaunch(display, selected.component, () ->
                     display.launchSearchIntentOnDisplay(selected.component.getPackageName(), search));
         } else if (!cleanQuery.isEmpty() && ("music".equals(category) || "video".equals(category))) {
             final String searchUri = uri;
-            queueAfterLaunch(display, selected.component, () ->
-                    display.launchMediaViewIntentOnDisplay(
-                            selected.component.getPackageName(), searchUri));
+            queueAfterLaunch(display, selected.component, () -> {
+                prepareAccessibilitySearch(selected.component.getPackageName(),
+                        cleanQuery, display.getDisplayId());
+                display.launchMediaViewIntentOnDisplay(
+                        selected.component.getPackageName(), searchUri);
+            });
         } else if (!cleanQuery.isEmpty()
                 && ("navigation".equals(category) || "nearby".equals(category))) {
             final String mapUri = uri;
