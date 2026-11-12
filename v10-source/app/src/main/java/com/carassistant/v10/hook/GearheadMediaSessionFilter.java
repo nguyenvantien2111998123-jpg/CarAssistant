@@ -131,7 +131,12 @@ public final class GearheadMediaSessionFilter {
                     XposedBridge.log(TAG + " cached V10 mirror is no longer reachable: " + error);
                 }
             }
-            return value;
+            // Strict ownership: do not expose a third-party media session to Gearhead
+            // while the V10 mirror is starting/rebinding. This prevents the source app's
+            // automatically generated dashboard widget from racing ahead of CarAsistant.
+            XposedBridge.log(TAG + " no V10 mirror yet; suppressing competing Gearhead sessions "
+                    + sessions.size());
+            return filtered;
         }
 
         XposedBridge.log(TAG + " V10 mirror active; filtered Gearhead session list "
