@@ -151,7 +151,9 @@ public final class SystemMediaKeyHooks {
                     && event.getKeyCode() == lastRoutedKey
                     && event.getAction() == lastRoutedAction
                     && event.getDeviceId() == lastRoutedDevice) {
-                return false;
+                // It is the same physical event entering through the second
+                // framework dispatch path; suppress the duplicate as handled.
+                return true;
             }
             lastRoutedEventTime = event.getEventTime();
             lastRoutedKey = event.getKeyCode();
