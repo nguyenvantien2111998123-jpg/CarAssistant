@@ -113,11 +113,10 @@ public final class SystemMediaKeyHooks {
     }
 
     /**
-     * Owns the system-side NEXT double-tap trigger (350 ms, with a 500 ms
-     * long-press exclusion). The app-side handler still delays NEXT single-click
-     * to preserve media behavior, but it must not trigger voice a second time.
+     * Prepares the microphone foreground service before the app-side steering
+     * handler delivers the single authoritative NEXT double-tap callback.
      */
-    private static void maybeToggleVoiceService(Context context, KeyEvent event) {
+    private static void maybePrepareVoiceService(Context context, KeyEvent event) {
         if (context == null || event == null || event.getKeyCode() != NEXT) return;
 
         boolean prepare = false;
@@ -147,7 +146,7 @@ public final class SystemMediaKeyHooks {
             Intent serviceIntent = new Intent();
             serviceIntent.setComponent(new ComponentName(
                     SELF, SELF + ".CarAsistantVoiceService"));
-            serviceIntent.setAction("com.carassistant.v10.voice.TOGGLE");
+            serviceIntent.setAction("com.carassistant.v10.voice.PREPARE");
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
                 context.startForegroundService(serviceIntent);
             } else {
