@@ -35,7 +35,7 @@ public final class SteeringWheelInputPolicyHooks {
                 if (!"interceptKeyBeforeQueueing".equals(method.getName())
                         || method.getReturnType() != int.class) continue;
                 Class<?>[] types = method.getParameterTypes();
-                if (types.length < 2 || !KeyEvent.class.isAssignableFrom(types[0])
+                if (types.length != 2 || !KeyEvent.class.isAssignableFrom(types[0])
                         || types[1] != int.class) continue;
 
                 XposedBridge.hookMethod(method, new XC_MethodHook() {
@@ -87,7 +87,7 @@ public final class SteeringWheelInputPolicyHooks {
     }
 
     private static boolean isSteeringMediaKey(KeyEvent event) {
-        if (event == null || event.isCanceled()) return false;
+        if (event == null) return false;
         int key = event.getKeyCode();
         return key == KeyEvent.KEYCODE_MEDIA_NEXT
                 || key == KeyEvent.KEYCODE_MEDIA_PREVIOUS
