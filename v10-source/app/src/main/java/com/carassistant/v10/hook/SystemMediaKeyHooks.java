@@ -4,8 +4,6 @@ import android.content.ComponentName;
 import android.content.Context;
 import android.content.Intent;
 import android.media.session.MediaSession;
-import android.provider.Settings;
-import android.text.TextUtils;
 import android.view.KeyEvent;
 
 import java.lang.reflect.Field;
@@ -66,8 +64,6 @@ public final class SystemMediaKeyHooks {
 
                             Context context = (Context) XposedHelpers.getObjectField(
                                     service, "mContext");
-                            if (!hasMediaAccess(context)) return;
-
                             MediaSession.Token token = findCarAsistantSessionToken(service);
                             if (token == null) {
                                 dispatchRawKeyToApp(context, event);
@@ -218,24 +214,6 @@ public final class SystemMediaKeyHooks {
                 .addFlags(Intent.FLAG_INCLUDE_STOPPED_PACKAGES
                         | Intent.FLAG_RECEIVER_FOREGROUND);
         context.sendBroadcast(intent);
-    }
-
-    private static boolean hasMediaAccess(Context context) {
-        if (context == null) return false;
-        try {
-            String enabled = Settings.Secure.getString(
-                    context.getContentResolver(), "enabled_notification_listeners");
-            if (TextUtils.isEmpty(enabled)) return false;
-            String expected = new ComponentName(
-                    SELF, SELF + ".MediaSessionBridge").flattenToString();
-            for (String item : enabled.split(":")) {
-                ComponentName parsed = ComponentName.unflattenFromString(item);
-                if (parsed != null && expected.equals(parsed.flattenToString())) return true;
-            }
-        } catch (Throwable error) {
-            XposedBridge.log(TAG + " could not verify Notification Access: " + error);
-        }
-        return false;
     }
 
     private static void logRawEvent(XC_MethodHook.MethodHookParam param, KeyEvent event) {
