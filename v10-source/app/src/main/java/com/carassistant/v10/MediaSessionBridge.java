@@ -64,6 +64,8 @@ public final class MediaSessionBridge extends NotificationListenerService {
     private static volatile long lastCheckpointPosition;
     private static volatile long lastCheckpointDuration;
     private static volatile MediaSessionBridge steeringBridgeInstance;
+    private static final Object FALLBACK_STEERING_LOCK = new Object();
+    private static volatile SteeringWheelMediaKeyHandler fallbackSteeringKeyHandler;
     private MediaSession mirrorSession;
     private SteeringWheelMediaKeyHandler steeringKeyHandler;
     private MediaSessionManager manager;
@@ -767,15 +769,51 @@ public final class MediaSessionBridge extends NotificationListenerService {
     }
 
     /** Receives a raw steering key captured before Android media-session routing. */
-    public static boolean dispatchRawSteeringKey(Intent intent) {
+    public static boolean dispatchRawSteeringKey(Context context, Intent intent) {
+        if (intent == null || context == null) return false;
         MediaSessionBridge bridge = steeringBridgeInstance;
-        if (bridge == null || bridge.steeringKeyHandler == null || intent == null) return false;
+        SteeringWheelMediaKeyHandler handler = bridge == null
+                ? getFallbackSteeringHandler(context) : bridge.steeringKeyHandler;
+        if (handler == null) return false;
         try {
-            return bridge.steeringKeyHandler.handle(intent);
+            return handler.handle(intent);
         } catch (RuntimeException error) {
             Log.w(TAG, "Raw steering-key dispatch failed", error);
             return false;
         }
+    }
+
+    /**
+     * Keeps double-click recognition available even if NotificationListenerService is
+     * between binds. This fallback owns no MediaSession and never creates silent audio.
+     */
+    private static SteeringWheelMediaKeyHandler getFallbackSteeringHandler(Context context) {
+        SteeringWheelMediaKeyHandler current = fallbackSteeringKeyHandler;
+        if (current != null) return current;
+        synchronized (FALLBACK_STEERING_LOCK) {
+            current = fallbackSteeringKeyHandler;
+            if (current == null) {
+                Context app = context.getApplicationContext();
+                current = new SteeringWheelMediaKeyHandler(
+                        new SteeringWheelMediaKeyHandler.Actions() {
+                            @Override public void onNext() { MediaSessionBridge.skipNext(); }
+                            @Override public void onPrevious() { MediaSessionBridge.skipPrevious(); }
+                            @Override public void onSeekForward() {
+                                MediaSessionBridge.seekBy(15000L);
+                            }
+                            @Override public void onSeekBackward() {
+                                MediaSessionBridge.seekBy(-15000L);
+                            }
+                            @Override public void onVoiceAssistant() {
+                                Intent voice = new Intent("com.carassistant.v10.STEERING_VOICE")
+                                        .setPackage(app.getPackageName());
+                                app.sendBroadcast(voice);
+                            }
+                        });
+                fallbackSteeringKeyHandler = current;
+            }
+        }
+        return current;
     }
 
     @Override
