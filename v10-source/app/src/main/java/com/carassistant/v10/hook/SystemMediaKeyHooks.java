@@ -77,7 +77,7 @@ public final class SystemMediaKeyHooks {
                             // The system process is the caller for this explicit FGS start.
                             // This avoids asking the app's background BroadcastReceiver to
                             // create a while-in-use microphone service.
-                            maybeToggleVoiceService(context, event);
+                            maybePrepareVoiceService(context, event);
 
                             // Route the raw hardware event directly to the phone-side app.
                             // This path does not depend on an active/playing MediaSession.
