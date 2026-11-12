@@ -114,6 +114,7 @@ public final class CarAsistantVoiceService extends Service {
                 != PackageManager.PERMISSION_GRANTED) {
             Log.w(TAG, "Microphone permission is missing");
             instance = null;
+            publishUnavailable(this, "Cần cấp quyền micro cho CarAsistant.");
             stopSelf();
             return;
         }
@@ -136,6 +137,7 @@ public final class CarAsistantVoiceService extends Service {
         } catch (RuntimeException error) {
             Log.e(TAG, "Voice service initialization failed", error);
             instance = null;
+            publishUnavailable(this, "Không thể khởi động dịch vụ trợ lý giọng nói.");
             stopSelf();
         }
     }
