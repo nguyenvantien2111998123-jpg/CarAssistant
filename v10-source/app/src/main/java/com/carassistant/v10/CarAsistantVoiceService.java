@@ -11,7 +11,9 @@ import android.content.Intent;
 import android.content.pm.PackageManager;
 import android.content.pm.ServiceInfo;
 import android.os.Build;
+import android.os.Handler;
 import android.os.IBinder;
+import android.os.Looper;
 import android.util.Log;
 
 import com.carassistant.v10.voice.VoiceAssistantController;
@@ -21,15 +23,17 @@ import com.carassistant.v10.voice.VoiceCommandRouter;
  * Owns speech recognition, command routing and Vietnamese TTS independently
  * of the Android Auto Activity. The Activity is only a projection/UI adapter.
  *
- * Start this microphone FGS while V10CarActivity is visible. It intentionally
- * survives Activity pause/destroy so steering-wheel requests do not depend on
- * an Activity instance being resumed.
+ * A steering-wheel double press can prepare this microphone FGS through the
+ * existing System Framework LSPosed hook. The actual listening session remains
+ * push-to-talk and is requested separately by the steering event receiver.
  */
 public final class CarAsistantVoiceService extends Service {
     private static final String TAG = "CarAsistantVoice";
     private static final String CHANNEL_ID = "carassistant_voice";
     private static final int NOTIFICATION_ID = 7301;
+    private static final long PENDING_TOGGLE_TIMEOUT_MS = 3000L;
 
+    public static final String ACTION_PREPARE = "com.carassistant.v10.voice.PREPARE";
     public static final String ACTION_TOGGLE = "com.carassistant.v10.voice.TOGGLE";
     public static final String ACTION_CANCEL = "com.carassistant.v10.voice.CANCEL";
     public static final String ACTION_STATE_CHANGED = "com.carassistant.v10.voice.STATE_CHANGED";
@@ -38,6 +42,15 @@ public final class CarAsistantVoiceService extends Service {
     public static final String EXTRA_STATUS = "status";
     public static final String EXTRA_TRANSCRIPT = "transcript";
     public static final String EXTRA_SHOW_TRANSCRIPT = "show_transcript";
+
+    private static final Object PENDING_TOGGLE_LOCK = new Object();
+    private static final Handler MAIN_HANDLER = new Handler(Looper.getMainLooper());
+    private static boolean pendingSteeringToggle;
+    private static final Runnable EXPIRE_PENDING_TOGGLE = () -> {
+        synchronized (PENDING_TOGGLE_LOCK) {
+            pendingSteeringToggle = false;
+        }
+    };
 
     private static volatile CarAsistantVoiceService instance;
     private VoiceAssistantController controller;
@@ -58,6 +71,7 @@ public final class CarAsistantVoiceService extends Service {
         return start(context, null);
     }
 
+    /** Used by visible UI controls; starting here is allowed while the Activity is visible. */
     public static boolean toggleListening(Context context) {
         if (context == null) return false;
         if (context.checkSelfPermission(Manifest.permission.RECORD_AUDIO)
@@ -71,6 +85,35 @@ public final class CarAsistantVoiceService extends Service {
             return true;
         }
         return start(context, ACTION_TOGGLE);
+    }
+
+    /**
+     * Steering receiver must never attempt to create a microphone FGS from the
+     * app's background UID. The System Framework hook prepares the service first.
+     * This method queues the toggle briefly to cover the service-start race.
+     */
+    public static void requestSteeringToggle(Context context) {
+        if (context == null) return;
+        if (context.checkSelfPermission(Manifest.permission.RECORD_AUDIO)
+                != PackageManager.PERMISSION_GRANTED) {
+            publishUnavailable(context, "Cần cấp quyền micro cho CarAsistant.");
+            return;
+        }
+
+        CarAsistantVoiceService current = instance;
+        if (current != null && current.controller != null) {
+            current.controller.toggleListening();
+            return;
+        }
+
+        synchronized (PENDING_TOGGLE_LOCK) {
+            pendingSteeringToggle = true;
+        }
+        MAIN_HANDLER.removeCallbacks(EXPIRE_PENDING_TOGGLE);
+        MAIN_HANDLER.postDelayed(EXPIRE_PENDING_TOGGLE, PENDING_TOGGLE_TIMEOUT_MS);
+        if (current != null) {
+            MAIN_HANDLER.post(current::consumePendingSteeringToggle);
+        }
     }
 
     public static void requestState(Context context) {
@@ -134,11 +177,24 @@ public final class CarAsistantVoiceService extends Service {
                     this::publishState,
                     createCommandRouter());
             publishState(false, "Trợ lý giọng nói sẵn sàng.", "", false);
+            consumePendingSteeringToggle();
         } catch (RuntimeException error) {
             Log.e(TAG, "Voice service initialization failed", error);
             instance = null;
             publishUnavailable(this, "Không thể khởi động dịch vụ trợ lý giọng nói.");
             stopSelf();
+        }
+    }
+
+    private void consumePendingSteeringToggle() {
+        boolean pending;
+        synchronized (PENDING_TOGGLE_LOCK) {
+            pending = pendingSteeringToggle;
+            pendingSteeringToggle = false;
+        }
+        if (pending) {
+            MAIN_HANDLER.removeCallbacks(EXPIRE_PENDING_TOGGLE);
+            if (controller != null) controller.toggleListening();
         }
     }
 
@@ -213,6 +269,8 @@ public final class CarAsistantVoiceService extends Service {
             controller.toggleListening();
         } else if (ACTION_CANCEL.equals(action)) {
             controller.cancelListening();
+        } else if (ACTION_PREPARE.equals(action)) {
+            consumePendingSteeringToggle();
         }
         return START_STICKY;
     }
