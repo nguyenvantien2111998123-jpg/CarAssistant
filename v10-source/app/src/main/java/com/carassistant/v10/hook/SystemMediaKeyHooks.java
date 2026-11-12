@@ -2,6 +2,7 @@ package com.carassistant.v10.hook;
 
 import android.content.ComponentName;
 import android.content.Context;
+import android.content.Intent;
 import android.media.session.MediaSession;
 import android.provider.Settings;
 import android.text.TextUtils;
@@ -69,8 +70,10 @@ public final class SystemMediaKeyHooks {
 
                             MediaSession.Token token = findCarAsistantSessionToken(service);
                             if (token == null) {
-                                XposedBridge.log(TAG + " no active CarAsistant MediaSession; "
-                                        + "allowing framework fallback");
+                                dispatchRawKeyToApp(context, event);
+                                param.setResult(null);
+                                XposedBridge.log(TAG + " no active CarAsistant session; "
+                                        + "routed through raw-key fallback");
                                 return;
                             }
 
@@ -206,6 +209,15 @@ public final class SystemMediaKeyHooks {
             }
         }
         return null;
+    }
+
+    private static void dispatchRawKeyToApp(Context context, KeyEvent event) {
+        Intent intent = new Intent("com.carassistant.v10.STEERING_RAW_KEY")
+                .setComponent(new ComponentName(SELF, SELF + ".V10ControlReceiver"))
+                .putExtra(Intent.EXTRA_KEY_EVENT, new KeyEvent(event))
+                .addFlags(Intent.FLAG_INCLUDE_STOPPED_PACKAGES
+                        | Intent.FLAG_RECEIVER_FOREGROUND);
+        context.sendBroadcast(intent);
     }
 
     private static boolean hasMediaAccess(Context context) {
