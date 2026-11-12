@@ -77,7 +77,7 @@ public final class SystemMediaKeyHooks {
                             // The system process is the caller for this explicit FGS start.
                             // This avoids asking the app's background BroadcastReceiver to
                             // create a while-in-use microphone service.
-                            maybePrepareVoiceService(context, event);
+                            maybeToggleVoiceService(context, event);
 
                             // Route the raw hardware event directly to the phone-side app.
                             // This path does not depend on an active/playing MediaSession.
@@ -113,11 +113,11 @@ public final class SystemMediaKeyHooks {
     }
 
     /**
-     * Mirrors the existing NEXT double-tap gesture (350 ms, with a 500 ms
-     * long-press exclusion). The app-side handler still owns media actions;
-     * this only starts the voice FGS before the app receives STEERING_VOICE.
+     * Owns the system-side NEXT double-tap trigger (350 ms, with a 500 ms
+     * long-press exclusion). The app-side handler still delays NEXT single-click
+     * to preserve media behavior, but it must not trigger voice a second time.
      */
-    private static void maybePrepareVoiceService(Context context, KeyEvent event) {
+    private static void maybeToggleVoiceService(Context context, KeyEvent event) {
         if (context == null || event == null || event.getKeyCode() != NEXT) return;
 
         boolean prepare = false;
@@ -147,7 +147,7 @@ public final class SystemMediaKeyHooks {
             Intent serviceIntent = new Intent();
             serviceIntent.setComponent(new ComponentName(
                     SELF, SELF + ".CarAsistantVoiceService"));
-            serviceIntent.setAction("com.carassistant.v10.voice.PREPARE");
+            serviceIntent.setAction("com.carassistant.v10.voice.TOGGLE");
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
                 context.startForegroundService(serviceIntent);
             } else {
