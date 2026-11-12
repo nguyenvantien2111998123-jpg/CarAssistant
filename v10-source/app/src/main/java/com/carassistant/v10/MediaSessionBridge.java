@@ -63,6 +63,7 @@ public final class MediaSessionBridge extends NotificationListenerService {
     private static volatile MediaController checkpointController;
     private static volatile long lastCheckpointPosition;
     private static volatile long lastCheckpointDuration;
+    private static volatile MediaSessionBridge steeringBridgeInstance;
     private MediaSession mirrorSession;
     private SteeringWheelMediaKeyHandler steeringKeyHandler;
     private MediaSessionManager manager;
@@ -711,6 +712,7 @@ public final class MediaSessionBridge extends NotificationListenerService {
     @Override
     public void onListenerConnected() {
         super.onListenerConnected();
+        steeringBridgeInstance = this;
         ensureMirrorSession();
         // Publish the CarAsistant controller before querying source sessions. This closes
         // the startup race in which Gearhead discovers a phone player before our mirror.
@@ -764,8 +766,21 @@ public final class MediaSessionBridge extends NotificationListenerService {
         super.onListenerDisconnected();
     }
 
+    /** Receives a raw steering key captured before Android media-session routing. */
+    public static boolean dispatchRawSteeringKey(Intent intent) {
+        MediaSessionBridge bridge = steeringBridgeInstance;
+        if (bridge == null || bridge.steeringKeyHandler == null || intent == null) return false;
+        try {
+            return bridge.steeringKeyHandler.handle(intent);
+        } catch (RuntimeException error) {
+            Log.w(TAG, "Raw steering-key dispatch failed", error);
+            return false;
+        }
+    }
+
     @Override
     public void onDestroy() {
+        if (steeringBridgeInstance == this) steeringBridgeInstance = null;
         MAIN.removeCallbacks(checkpointTask);
         releaseMirrorSession();
         super.onDestroy();
