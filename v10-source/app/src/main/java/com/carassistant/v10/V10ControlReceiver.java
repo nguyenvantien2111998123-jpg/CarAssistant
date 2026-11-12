@@ -4,9 +4,44 @@ import android.content.BroadcastReceiver;
 import android.content.Context;
 import android.content.Intent;
 import android.util.Log;
+import android.view.KeyEvent;
 
 public final class V10ControlReceiver
         extends BroadcastReceiver {
+
+    private static volatile SteeringWheelMediaKeyHandler steeringKeyHandler;
+
+    private static synchronized SteeringWheelMediaKeyHandler getSteeringKeyHandler(
+            Context context) {
+        if (steeringKeyHandler == null) {
+            final Context appContext = context.getApplicationContext();
+            steeringKeyHandler = new SteeringWheelMediaKeyHandler(
+                    new SteeringWheelMediaKeyHandler.Actions() {
+                        @Override public void onNext() {
+                            MediaSessionBridge.skipNext();
+                        }
+
+                        @Override public void onPrevious() {
+                            MediaSessionBridge.skipPrevious();
+                        }
+
+                        @Override public void onSeekForward() {
+                            MediaSessionBridge.seekBy(15000L);
+                        }
+
+                        @Override public void onSeekBackward() {
+                            MediaSessionBridge.seekBy(-15000L);
+                        }
+
+                        @Override public void onVoiceAssistant() {
+                            Intent voice = new Intent("com.carassistant.v10.STEERING_VOICE")
+                                    .setPackage(appContext.getPackageName());
+                            appContext.sendBroadcast(voice);
+                        }
+                    });
+        }
+        return steeringKeyHandler;
+    }
 
     public static final String ACTION =
             "com.carassistant.v10.CONTROL";
@@ -24,8 +59,11 @@ public final class V10ControlReceiver
 
         String action = intent.getAction();
         if ("com.carassistant.v10.STEERING_KEY_EVENT".equals(action)) {
-            android.view.KeyEvent event = intent.getParcelableExtra(Intent.EXTRA_KEY_EVENT);
-            MediaSessionBridge.dispatchSteeringKeyEvent(event);
+            KeyEvent event = intent.getParcelableExtra(Intent.EXTRA_KEY_EVENT);
+            // Gesture recognition lives in this receiver, not in the optional
+            // NotificationListener/MediaSession mirror. Android Auto can replace
+            // its visible media card without disabling steering gestures.
+            if (event != null) getSteeringKeyHandler(context).handle(event);
             return;
         }
         if ("com.carassistant.v10.STEERING_VOICE".equals(action)) {
