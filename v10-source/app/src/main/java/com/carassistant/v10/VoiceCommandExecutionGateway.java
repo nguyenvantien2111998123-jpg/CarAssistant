@@ -159,7 +159,7 @@ public final class VoiceCommandExecutionGateway implements VoiceCommandRouter.Ho
                 .putInt("target_display_id", displayId)
                 .putLong("started_at", System.currentTimeMillis())
                 .putLong("search_submitted_at", 0L)
-                .putInt("youtube_history_stage", 0)
+                .putInt("youtube_history_stage", 2)
                 .putBoolean("mini_engine_active", false)
                 .putBoolean("accessibility_selection_done", false)
                 .apply();
