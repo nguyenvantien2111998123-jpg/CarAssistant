@@ -65,8 +65,11 @@ final class SteeringWheelMediaKeyHandler {
         } catch (RuntimeException error) {
             return false;
         }
-        if (event == null) return false;
+        return handle(event);
+    }
 
+    boolean handle(KeyEvent event) {
+        if (event == null) return false;
         int key = event.getKeyCode();
         if (key == KeyEvent.KEYCODE_MEDIA_NEXT
                 || key == KeyEvent.KEYCODE_MEDIA_FAST_FORWARD) {
