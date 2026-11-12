@@ -589,9 +589,9 @@ public final class MediaSessionBridge extends NotificationListenerService {
                     @Override public void onSeekForward() { MediaSessionBridge.seekBy(15000L); }
                     @Override public void onSeekBackward() { MediaSessionBridge.seekBy(-15000L); }
                     @Override public void onVoiceAssistant() {
-                        Intent intent = new Intent("com.carassistant.v10.STEERING_VOICE")
-                                .setPackage(getPackageName());
-                        sendBroadcast(intent);
+                        // NEXT double-tap is triggered exactly once by SystemMediaKeyHooks.
+                        // Keep this gesture callback only to suppress NEXT single-click;
+                        // do not toggle voice here or the same double-tap would cancel itself.
                     }
                 });
         mirrorSession.setCallback(new MediaSession.Callback() {
