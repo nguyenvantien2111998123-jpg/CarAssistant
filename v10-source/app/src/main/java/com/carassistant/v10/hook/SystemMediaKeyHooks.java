@@ -74,7 +74,7 @@ public final class SystemMediaKeyHooks {
                             relay.setComponent(new ComponentName(
                                     SELF, SELF + ".V10ControlReceiver"));
                             relay.putExtra(android.content.Intent.EXTRA_KEY_EVENT, event);
-                            context.sendBroadcastAsUser(relay, android.os.UserHandle.CURRENT);
+                            context.sendBroadcast(relay);
                             // Prevent the same physical event from being delivered a second time
                             // through normal MediaSession routing.
                             param.setResult(null);
