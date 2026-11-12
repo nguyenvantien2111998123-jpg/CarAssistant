@@ -24,7 +24,7 @@ public final class V10ControlReceiver
 
         String action = intent.getAction();
         if ("com.carassistant.v10.STEERING_RAW_KEY".equals(action)) {
-            boolean handled = MediaSessionBridge.dispatchRawSteeringKey(intent);
+            boolean handled = MediaSessionBridge.dispatchRawSteeringKey(context, intent);
             Log.i("CarAssistantSteering", "Input-policy raw key handled=" + handled);
             return;
         }
