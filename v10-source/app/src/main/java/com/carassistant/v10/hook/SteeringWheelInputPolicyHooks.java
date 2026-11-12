@@ -15,7 +15,9 @@ import de.robv.android.xposed.XposedHelpers;
  * MediaSessionService.dispatchMediaKeyEvent is too late for some head units: when
  * there is no source MediaSession, Android may never route the AVRCP key there.
  * PhoneWindowManager.interceptKeyBeforeQueueing sees the hardware KeyEvent before
- * media-session selection, so the gesture recognizer remains reachable while idle.
+ * Audio/MediaSession routing and forwards the DOWN/UP pair as one gesture stream.
+ *
+ *  * media-session selection, so the gesture recognizer remains reachable while idle.
  */
 public final class SteeringWheelInputPolicyHooks {
     private static final String TAG = "[CarAsistant SteeringInput]";
