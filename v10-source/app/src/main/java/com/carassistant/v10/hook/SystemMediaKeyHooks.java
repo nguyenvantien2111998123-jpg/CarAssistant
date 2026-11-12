@@ -67,23 +67,17 @@ public final class SystemMediaKeyHooks {
                                     service, "mContext");
                             if (!hasMediaAccess(context)) return;
 
-                            MediaSession.Token token = findCarAsistantSessionToken(service);
-                            if (token == null) {
-                                XposedBridge.log(TAG + " no active CarAsistant MediaSession; "
-                                        + "allowing framework fallback");
-                                return;
-                            }
-
-                            if (dispatchToSession(service, event, token)) {
-                                // dispatchMediaKeyEvent is void on Android 12.
-                                // Consume only after the framework confirms the target accepted it.
-                                param.setResult(null);
-                                XposedBridge.log(TAG + " routed " + describe(event)
-                                        + " to CarAsistant MediaSession");
-                            } else {
-                                XposedBridge.log(TAG + " direct session dispatch returned false; "
-                                        + "allowing framework fallback");
-                            }
+                            // Route the raw hardware event directly to the phone-side app.
+                            // This path does not depend on an active/playing MediaSession.
+                            android.content.Intent relay = new android.content.Intent(
+                                    "com.carassistant.v10.STEERING_KEY_EVENT");
+                            relay.setComponent(new ComponentName(
+                                    SELF, SELF + ".V10ControlReceiver"));
+                            relay.putExtra(android.content.Intent.EXTRA_KEY_EVENT, event);
+                            context.sendBroadcastAsUser(relay, android.os.UserHandle.CURRENT);
+                            // Prevent the same physical event from being delivered a second time
+                            // through normal MediaSession routing.
+                            param.setResult(null);
                         } catch (Throwable error) {
                             // Fail open: never disable the steering controls of other players.
                             XposedBridge.log(TAG + " route failed; allowing framework fallback: "
