@@ -23,6 +23,11 @@ public final class V10ControlReceiver
         }
 
         String action = intent.getAction();
+        if ("com.carassistant.v10.STEERING_KEY_EVENT".equals(action)) {
+            android.view.KeyEvent event = intent.getParcelableExtra(Intent.EXTRA_KEY_EVENT);
+            MediaSessionBridge.dispatchSteeringKeyEvent(event);
+            return;
+        }
         if ("com.carassistant.v10.STEERING_VOICE".equals(action)) {
             Log.i("CarAssistantSteering", "Receiver got STEERING_VOICE");
             V10CarActivity activity = V10SessionStore.getCurrentActivity();
