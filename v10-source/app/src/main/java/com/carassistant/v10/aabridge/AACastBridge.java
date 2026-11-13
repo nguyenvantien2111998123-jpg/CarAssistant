@@ -3,6 +3,7 @@ package com.carassistant.v10.aabridge;
 import android.os.Build;
 
 import com.carassistant.v10.AACastDisplay;
+import com.carassistant.v10.hook.BluetoothAvrcpInputHooks;
 import com.carassistant.v10.hook.DisplayHooks;
 import com.carassistant.v10.hook.GearheadAllow;
 import com.carassistant.v10.hook.GearheadDockPatcher;
@@ -22,17 +23,27 @@ import de.robv.android.xposed.callbacks.XC_LoadPackage;
  *
  * Scope cần bật trong LSPosed:
  *   • android                                  (system_server)
+ *   • com.android.bluetooth                   (Bluetooth AVRCP ingress)
  *   • com.google.android.projection.gearhead   (Android Auto)
  */
 public final class AACastBridge implements IXposedHookLoadPackage {
 
     private static final String SELF = AACastDisplay.PACKAGE;
     private static final String GEARHEAD = "com.google.android.projection.gearhead";
+    private static final String BLUETOOTH = "com.android.bluetooth";
     private static final String PLAY = "com.android.vending";
 
     @Override
     public void handleLoadPackage(XC_LoadPackage.LoadPackageParam param) {
         String packageName = param.packageName;
+
+        // ---- Bluetooth AVRCP ingress ----
+        // Capture the AVRCP DOWN/UP pair before Android attempts to select a
+        // media-session recipient. This path remains available with no player.
+        if (BLUETOOTH.equals(packageName)) {
+            BluetoothAvrcpInputHooks.install(param.classLoader);
+            return;
+        }
 
         // ---- system_server ----
         if ("android".equals(packageName)) {
@@ -41,8 +52,8 @@ public final class AACastBridge implements IXposedHookLoadPackage {
             DisplayHooks.installV10RootLaunchPolicy(param.classLoader);
             OrientationHooks.install(param.classLoader);
             InputHooks.install(param.classLoader);
-            // Capture AVRCP steering-wheel media keys at the system media-session
-            // dispatch point so single/double/hold gestures can be distinguished.
+            // Retain system-level capture for media keys arriving through other
+            // Android input routes; Bluetooth AVRCP is consumed earlier above.
             SteeringWheelInputPolicyHooks.install(param.classLoader);
             SystemMediaKeyHooks.install(param.classLoader);
             return;
