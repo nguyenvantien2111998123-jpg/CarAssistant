@@ -40,6 +40,10 @@ public final class CarAssistantVoiceService extends Service {
     private static final int NOTIFICATION_ID = 4041;
 
     private VoiceAssistantController controller;
+    private boolean lastListening;
+    private String lastStatus = "Trợ lý giọng nói sẵn sàng.";
+    private String lastTranscript = "";
+    private boolean lastShowTranscript;
 
     @Override
     public void onCreate() {
@@ -98,16 +102,22 @@ public final class CarAssistantVoiceService extends Service {
             if (controller != null) controller.toggleListening();
         } else if (ACTION_CANCEL.equals(action)) {
             if (controller != null) controller.cancelListening();
+        } else {
+            publishState(lastListening, lastStatus, lastTranscript, lastShowTranscript);
         }
         return START_STICKY;
     }
 
     private void publishState(boolean listening, String status,
                               String transcript, boolean showTranscript) {
+        lastListening = listening;
+        lastStatus = status == null ? "" : status;
+        lastTranscript = transcript == null ? "" : transcript;
+        lastShowTranscript = showTranscript;
         Intent state = new Intent(ACTION_STATE).setPackage(getPackageName());
         state.putExtra(EXTRA_LISTENING, listening);
-        state.putExtra(EXTRA_STATUS, status == null ? "" : status);
-        state.putExtra(EXTRA_TRANSCRIPT, transcript == null ? "" : transcript);
+        state.putExtra(EXTRA_STATUS, lastStatus);
+        state.putExtra(EXTRA_TRANSCRIPT, lastTranscript);
         state.putExtra(EXTRA_SHOW_TRANSCRIPT, showTranscript);
         sendBroadcast(state);
     }
