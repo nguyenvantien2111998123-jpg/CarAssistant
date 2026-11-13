@@ -26,8 +26,22 @@ public final class V10ControlReceiver
         if ("com.carassistant.v10.STEERING_VOICE".equals(action)) {
             Log.i("CarAssistantSteering", "Receiver got STEERING_VOICE");
             V10CarActivity activity = V10SessionStore.getCurrentActivity();
-            if (activity != null) activity.handleSteeringVoice();
-            else Log.w("CarAssistantSteering", "V10 activity is not active; voice request ignored");
+            if (activity != null) {
+                activity.handleSteeringVoice();
+            } else {
+                // In State A the microphone foreground service survives the CarActivity.
+                // Deliver the request to that already-running service without requiring
+                // the projection Activity to remain in the foreground.
+                try {
+                    Intent voice = new Intent(context, CarAssistantVoiceService.class)
+                            .setAction(CarAssistantVoiceService.ACTION_TOGGLE);
+                    context.startService(voice);
+                } catch (RuntimeException error) {
+                    Log.w("CarAssistantSteering",
+                            "Voice service is not running; background microphone start is not allowed",
+                            error);
+                }
+            }
             return;
         }
         if ("com.carassistant.v10.STEERING_MEDIA_NEXT".equals(action)) {
