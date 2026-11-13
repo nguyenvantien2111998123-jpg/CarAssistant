@@ -1775,10 +1775,6 @@ private void hideTaskSwitcher() {
                         V10CarActivity.this.returnToLauncher();
                     }
 
-   }
-                    });
-    }
-
     /** Called by the LSPosed steering-key bridge when Next is double-pressed. */
     public void handleSteeringVoice() {
         handler.post(this::activateVoiceAssistant);
