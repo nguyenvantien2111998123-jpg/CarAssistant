@@ -37,6 +37,10 @@ public final class V10ControlReceiver
                 // Deliver the request to that already-running service without requiring
                 // the projection Activity to remain in the foreground.
                 try {
+                    // Normally the system_server Gearhead hook has already warmed this
+                    // foreground service on the first NEXT down event. Calling the same
+                    // running service only delivers the gesture toggle; it does not create
+                    // a second microphone service.
                     Intent voice = new Intent(context, CarAssistantVoiceService.class)
                             .setAction(CarAssistantVoiceService.ACTION_TOGGLE);
                     context.startService(voice);
