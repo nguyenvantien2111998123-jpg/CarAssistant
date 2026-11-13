@@ -2,7 +2,6 @@ package com.carassistant.v10;
 
 import android.content.Context;
 import android.content.Intent;
-import android.view.KeyEvent;
 
 /**
  * Process-wide steering gesture dispatcher.
