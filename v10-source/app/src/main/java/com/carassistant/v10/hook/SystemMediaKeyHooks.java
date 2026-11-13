@@ -70,15 +70,24 @@ public final class SystemMediaKeyHooks {
                             Context context = (Context) XposedHelpers.getObjectField(
                                     service, "mContext");
                             boolean fromGearhead = isGearheadCaller(param.args);
-                            // Warm the microphone service from system_server on the first
-                            // Gearhead NEXT press. This is deliberately a no-listen start:
-                            // the shared app-side gesture classifier still decides whether
-                            // the user double-pressed NEXT. Starting here avoids asking an
-                            // ordinary background BroadcastReceiver to create a mic FGS.
-                            if (fromGearhead && event.getKeyCode() == NEXT
-                                    && event.getAction() == KeyEvent.ACTION_DOWN
-                                    && event.getRepeatCount() == 0) {
-                                ensureVoiceServiceStartedBySystem(context);
+                            if (fromGearhead) {
+                                // Keep Gearhead steering gestures on one classifier regardless
+                                // of whether CarAsistant currently owns an active MediaSession.
+                                // Transport callbacks such as onSkipToNext bypass the double-tap
+                                // classifier, so never route Gearhead directly to that session.
+                                // Warm the microphone service from system_server on the first
+                                // NEXT down; this does not start listening by itself.
+                                if (event.getKeyCode() == NEXT
+                                        && event.getAction() == KeyEvent.ACTION_DOWN
+                                        && event.getRepeatCount() == 0) {
+                                    ensureVoiceServiceStartedBySystem(context);
+                                }
+                                if (dispatchRawKeyToApp(context, event)) {
+                                    param.setResult(null);
+                                    XposedBridge.log(TAG + " forwarded Gearhead "
+                                            + describe(event) + " to shared raw gesture classifier");
+                                    return;
+                                }
                             }
                             MediaSession.Token token = hasMediaAccess(context)
                                     ? findCarAsistantSessionToken(service) : null;
