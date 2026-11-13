@@ -58,33 +58,26 @@ public final class CarAssistantVoiceService extends Service {
         }
 
         VoiceCommandRouter router = new VoiceCommandRouter(new VoiceCommandRouter.Host() {
-            private V10CarActivity currentActivity() {
-                return V10SessionStore.getCurrentActivity();
-            }
-
             @Override
             public String openApp(String spokenName) {
-                V10CarActivity activity = currentActivity();
-                return activity == null ? null : activity.openApp(spokenName);
+                return V10ProjectionCoordinator.openApp(
+                        CarAssistantVoiceService.this, spokenName);
             }
 
             @Override
             public String openVoiceTask(String category, String query, String explicitProvider) {
-                V10CarActivity activity = currentActivity();
-                return activity == null ? null
-                        : activity.openVoiceTask(category, query, explicitProvider);
+                return V10ProjectionCoordinator.openVoiceTask(
+                        CarAssistantVoiceService.this, category, query, explicitProvider);
             }
 
             @Override
             public void showAppPicker() {
-                V10CarActivity activity = currentActivity();
-                if (activity != null) activity.showAppPicker();
+                V10ProjectionCoordinator.showAppPicker(CarAssistantVoiceService.this);
             }
 
             @Override
             public void goHome() {
-                V10CarActivity activity = currentActivity();
-                if (activity != null) activity.goHome();
+                V10ProjectionCoordinator.goHome(CarAssistantVoiceService.this);
             }
         });
 
