@@ -1773,7 +1773,7 @@ private void hideTaskSwitcher() {
                         public void goHome() {
                             V10CarActivity.this.returnToLauncher();
                         }
-                    };
+                    });
     }
 
     /** Called by the LSPosed steering-key bridge when Next is double-pressed. */
