@@ -2,6 +2,8 @@
 package com.carassistant.v10;
 
 import android.Manifest;
+import android.content.BroadcastReceiver;
+import android.content.IntentFilter;
 import android.content.ComponentName;
 import android.content.SharedPreferences;
 import android.os.SystemClock;
@@ -18,6 +20,7 @@ import android.graphics.Typeface;
 import android.graphics.drawable.GradientDrawable;
 import android.graphics.drawable.Drawable;
 import android.os.Bundle;
+import android.os.Build;
 import android.os.Handler;
 import android.os.Looper;
 import android.provider.Settings;
@@ -34,7 +37,6 @@ import android.widget.ScrollView;
 import android.widget.TextView;
 import android.widget.Toast;
 
-import com.carassistant.v10.voice.VoiceAssistantController;
 import com.carassistant.v10.voice.VoiceCommandRouter;
 import com.carassistant.v10.voice.VoiceCommandParser;
 
@@ -76,9 +78,21 @@ public final class V10CarActivity
     private TextView mediaPlayPause;
     private LinearLayout mediaCard;
     private final MediaSessionBridge.Listener mediaSessionListener = this::updateMediaCard;
+    private final BroadcastReceiver voiceStateReceiver = new BroadcastReceiver() {
+        @Override
+        public void onReceive(Context context, Intent intent) {
+            if (intent == null || !CarAssistantVoiceService.ACTION_STATE.equals(intent.getAction())) return;
+            updateVoiceUi(
+                    intent.getBooleanExtra(CarAssistantVoiceService.EXTRA_LISTENING, false),
+                    intent.getStringExtra(CarAssistantVoiceService.EXTRA_STATUS),
+                    intent.getStringExtra(CarAssistantVoiceService.EXTRA_TRANSCRIPT),
+                    intent.getBooleanExtra(CarAssistantVoiceService.EXTRA_SHOW_TRANSCRIPT, false));
+        }
+    };
+    private boolean voiceStateReceiverRegistered;
+
     private TextView floatingVoiceButton;
     private TextView voiceTranscriptView;
-    private VoiceAssistantController voiceAssistantController;
     private MiniAccessEngine miniAccessEngine;
 
     private TextView floatingTouchKey;
@@ -190,39 +204,8 @@ public final class V10CarActivity
         MediaSessionBridge.addListener(mediaSessionListener);
         updateMediaCard(MediaSessionBridge.getSnapshot());
 
-        if (voiceAssistantController == null) {
-            voiceAssistantController = new VoiceAssistantController(
-                    this,
-                    (listening, status, transcript, showTranscript) -> {
-                        String icon = listening ? "🔴" : "🎙";
-                        float scale = listening ? 1.10f : 1.0f;
-                        if (dashboardVoiceButton != null) {
-                            dashboardVoiceButton.setText(icon);
-                            dashboardVoiceButton.setContentDescription(status);
-                            dashboardVoiceButton.setScaleX(scale);
-                            dashboardVoiceButton.setScaleY(scale);
-                            dashboardVoiceButton.setAlpha(listening ? 0.82f : 1.0f);
-                        }
-                        if (floatingVoiceButton != null) {
-                            floatingVoiceButton.setText(icon);
-                            floatingVoiceButton.setContentDescription(status);
-                            floatingVoiceButton.setScaleX(scale);
-                            floatingVoiceButton.setScaleY(scale);
-                            floatingVoiceButton.setAlpha(listening ? 0.82f : 1.0f);
-                        }
-                        if (voiceTranscriptView != null) {
-                            String words = transcript == null ? "" : transcript.trim();
-                            voiceTranscriptView.setText(words);
-                            voiceTranscriptView.setVisibility(showTranscript && !words.isEmpty()
-                                    ? View.VISIBLE : View.GONE);
-                            if (showTranscript && !words.isEmpty()) {
-                                voiceTranscriptView.setSelected(true);
-                                voiceTranscriptView.bringToFront();
-                            }
-                        }
-                    },
-                    createVoiceCommandRouter());
-        }
+        ensureVoiceAssistantService();
+        registerVoiceStateReceiver();
 
         loadApps();
         rebuildDock();
@@ -1781,10 +1764,6 @@ public void goHome() {
     }
 
     private void activateVoiceAssistant() {
-        if (voiceAssistantController == null) {
-            Toast.makeText(this, "Trợ lý giọng nói chưa sẵn sàng.", Toast.LENGTH_SHORT).show();
-            return;
-        }
         if (checkSelfPermission(Manifest.permission.RECORD_AUDIO)
                 != PackageManager.PERMISSION_GRANTED) {
             Intent permissionIntent = new Intent(this, V10SettingsActivity.class);
@@ -1793,7 +1772,72 @@ public void goHome() {
             startActivity(permissionIntent);
             return;
         }
-        voiceAssistantController.toggleListening();
+        startVoiceAssistantService(CarAssistantVoiceService.ACTION_TOGGLE);
+    }
+
+    private void ensureVoiceAssistantService() {
+        if (checkSelfPermission(Manifest.permission.RECORD_AUDIO)
+                == PackageManager.PERMISSION_GRANTED) {
+            startVoiceAssistantService(CarAssistantVoiceService.ACTION_START);
+        }
+    }
+
+    private void startVoiceAssistantService(String action) {
+        Intent serviceIntent = new Intent(this, CarAssistantVoiceService.class).setAction(action);
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            startForegroundService(serviceIntent);
+        } else {
+            startService(serviceIntent);
+        }
+    }
+
+    private void registerVoiceStateReceiver() {
+        if (voiceStateReceiverRegistered) return;
+        IntentFilter filter = new IntentFilter(CarAssistantVoiceService.ACTION_STATE);
+        if (Build.VERSION.SDK_INT >= 33) {
+            registerReceiver(voiceStateReceiver, filter, Context.RECEIVER_NOT_EXPORTED);
+        } else {
+            registerReceiver(voiceStateReceiver, filter);
+        }
+        voiceStateReceiverRegistered = true;
+    }
+
+    private void unregisterVoiceStateReceiver() {
+        if (!voiceStateReceiverRegistered) return;
+        try {
+            unregisterReceiver(voiceStateReceiver);
+        } catch (IllegalArgumentException ignored) { }
+        voiceStateReceiverRegistered = false;
+    }
+
+    private void updateVoiceUi(boolean listening, String status,
+                               String transcript, boolean showTranscript) {
+        String icon = listening ? "🔴" : "🎙";
+        float scale = listening ? 1.10f : 1.0f;
+        if (dashboardVoiceButton != null) {
+            dashboardVoiceButton.setText(icon);
+            dashboardVoiceButton.setContentDescription(status);
+            dashboardVoiceButton.setScaleX(scale);
+            dashboardVoiceButton.setScaleY(scale);
+            dashboardVoiceButton.setAlpha(listening ? 0.82f : 1.0f);
+        }
+        if (floatingVoiceButton != null) {
+            floatingVoiceButton.setText(icon);
+            floatingVoiceButton.setContentDescription(status);
+            floatingVoiceButton.setScaleX(scale);
+            floatingVoiceButton.setScaleY(scale);
+            floatingVoiceButton.setAlpha(listening ? 0.82f : 1.0f);
+        }
+        if (voiceTranscriptView != null) {
+            String words = transcript == null ? "" : transcript.trim();
+            voiceTranscriptView.setText(words);
+            voiceTranscriptView.setVisibility(showTranscript && !words.isEmpty()
+                    ? View.VISIBLE : View.GONE);
+            if (showTranscript && !words.isEmpty()) {
+                voiceTranscriptView.setSelected(true);
+                voiceTranscriptView.bringToFront();
+            }
+        }
     }
 
     private String buildMapUri(ComponentName component, String query, boolean nearby) {
@@ -1886,7 +1930,7 @@ public void goHome() {
         MediaSessionBridge.removeListener(mediaSessionListener);
 
         if (keyboardController != null) keyboardController.hide();
-        if (voiceAssistantController != null) voiceAssistantController.cancelListening();
+        unregisterVoiceStateReceiver();
         resumed = false;
 
         handler.removeCallbacks(
@@ -1935,11 +1979,6 @@ public void goHome() {
 
         handler.removeCallbacks(
                 targetPoller);
-
-        if (voiceAssistantController != null) {
-            voiceAssistantController.destroy();
-            voiceAssistantController = null;
-        }
 
         if (session != null) { session.destroy(); session = null; }
         if (backgroundSession != null) { backgroundSession.destroy(); backgroundSession = null; }
