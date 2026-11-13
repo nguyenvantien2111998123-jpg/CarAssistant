@@ -49,7 +49,7 @@ import java.util.List;
 import java.util.Locale;
 
 public final class V10CarActivity
-        extends CarActivity {
+        extends CarActivity implements VoiceCommandRouter.Host {
 
     private final Handler handler =
             new Handler(Looper.getMainLooper());
@@ -1589,190 +1589,193 @@ private void hideTaskSwitcher() {
      * Builds the projection-backed command host separately from voice recognition setup.
      * This is the first extraction boundary for moving recognition out of the CarActivity;
      * command execution intentionally remains projection-session-bound until the
-     * ProjectionCoordinator can own that lifecycle safely.
-     */
-    private VoiceCommandRouter createVoiceCommandRouter() {
-        return new VoiceCommandRouter(new VoiceCommandRouter.Host() {
-                        @Override
-                        public String openApp(String spokenName) {
-                            return openAppByVoice(spokenName);
-                        }
+     * ProjectionCoordinator can     private VoiceCommandRouter createVoiceCommandRouter() {
+        return new VoiceCommandRouter(this);
+    }
 
-                        @Override
-                        public String openVoiceTask(String category, String query, String explicitProvider) {
-                            if ("navigation".equals(category) || "nearby".equals(category)) {
-                                AppInfo selectedApp = null;
-                                if (explicitProvider != null && !explicitProvider.trim().isEmpty()) {
-                                    selectedApp = findAppByVoice(explicitProvider);
-                                } else {
-                                    ComponentName configured = V10SessionStore.getDefaultVoiceApp(
-                                            V10CarActivity.this, "navigation");
-                                    if (configured != null) {
-                                        selectedApp = findAppByVoice(appLabelForComponent(configured));
-                                        if (selectedApp == null) {
-                                            for (AppInfo app : apps) {
-                                                if (configured.getPackageName().equals(app.component.getPackageName())) {
-                                                    selectedApp = app;
-                                                    break;
-                                                }
-                                            }
-                                        }
-                                    } else {
-                                        String[] candidates = new String[]{"Google Maps", "Vietmap", "Navitel", "Maps"};
-                                        for (String candidate : candidates) {
-                                            selectedApp = findAppByVoice(candidate);
-                                            if (selectedApp != null) break;
-                                        }
-                                    }
-                                }
-                                if (selectedApp == null) return null;
-                                launchProjection(selectedApp.component);
-                                if (query != null && !query.trim().isEmpty() && session != null) {
-                                    String mapUri = buildMapUri(selectedApp.component, query,
-                                            "nearby".equals(category));
-                                    if (mapUri != null) {
-                                        session.launchViewIntentOnDisplay(
-                                                selectedApp.component.getPackageName(), mapUri);
-                                    }
-                                }
-                                return selectedApp.name;
-                            }
 
-                            if ("music".equals(category) || "video".equals(category)) {
-                                ComponentName selected = null;
-                                String selectedLabel = null;
+                    @Override
+                    public String openApp(String spokenName) {
+                        return openAppByVoice(spokenName);
+                    }
 
-                                // Media must be visible on the car-side secondary projection display
-                                // (session/display 1), not the hidden ImageReader-only virtual display.
-                                if (explicitProvider != null && !explicitProvider.trim().isEmpty()) {
-                                    String normalizedProvider = VoiceCommandParser.normalize(explicitProvider);
-                                    if ("youtube".equals(normalizedProvider)) {
-                                        // "on YouTube" is the generic video-provider wording. Respect the
-                                        // user's configured video app even when it is ReVanced/Morphe or
-                                        // another selected variant; don't pick an arbitrary installed copy.
-                                        ComponentName configured = V10SessionStore.getDefaultVoiceApp(
-                                                V10CarActivity.this, "video");
-                                        if (configured == null) {
-                                            configured = V10SessionStore.getDefaultVoiceApp(
-                                                    V10CarActivity.this, category);
-                                        }
-                                        if (configured != null) {
-                                            selected = configured;
-                                            selectedLabel = appLabelForComponent(configured);
-                                        } else {
-                                            AppInfo explicitApp = findAppByVoice("youtube");
-                                            if (explicitApp == null) return null;
-                                            selected = explicitApp.component;
-                                            selectedLabel = explicitApp.name;
-                                        }
-                                    } else {
-                                        // Explicit names such as YouTube Music Morphe, YouTube Morphe,
-                                        // YouTube ReVanced and Zing MP3 resolve to that exact installed app.
-                                        AppInfo explicitApp = findAppByVoice(explicitProvider);
-                                        if (explicitApp == null) return null;
-                                        selected = explicitApp.component;
-                                        selectedLabel = explicitApp.name;
-                                    }
-                                } else {
-                                    selected = V10SessionStore.getDefaultVoiceApp(
-                                            V10CarActivity.this, category);
-                                    if (selected != null) {
-                                        selectedLabel = appLabelForComponent(selected);
-                                    } else {
-                                        String[] candidates = "music".equals(category)
-                                                ? new String[]{"Zing MP3", "Spotify", "YouTube Music", "NhacCuaTui"}
-                                                : new String[]{"YouTube"};
-                                        for (String candidate : candidates) {
-                                            AppInfo app = findAppByVoice(candidate);
-                                            if (app != null) {
-                                                selected = app.component;
-                                                selectedLabel = app.name;
-                                                break;
-                                            }
-                                        }
-                                    }
-                                }
-
-                                if (selected == null || session == null) return null;
-                                String mediaUri = null;
-                                if (query != null && !query.trim().isEmpty()) {
-                                    mediaUri = VoiceBackgroundTaskManager.buildSearchUri(
-                                            selected, query.trim(), category);
-                                    if (mediaUri == null) return null;
-                                }
-
-                                // Launch on the real projection surface, then send the search
-                                // intent to that same display. Keep the phone UI out of this flow.
-                                launchProjection(selected);
-                                if (mediaUri != null) {
-                                    dispatchMediaSearchOnProjection(selected, mediaUri, query.trim());
-                                }
-                                return selectedLabel == null ? selected.getPackageName() : selectedLabel;
-                            }
-                            if ("tv".equals(category)) {
-                                AppInfo selectedApp = null;
-                                if (explicitProvider != null && !explicitProvider.trim().isEmpty()) {
-                                    selectedApp = findAppByVoice(explicitProvider);
-                                } else {
-                                    ComponentName configured = V10SessionStore.getDefaultVoiceApp(
-                                            V10CarActivity.this, "tv");
-                                    if (configured != null) {
+                    @Override
+                    public String openVoiceTask(String category, String query, String explicitProvider) {
+                        if ("navigation".equals(category) || "nearby".equals(category)) {
+                            AppInfo selectedApp = null;
+                            if (explicitProvider != null && !explicitProvider.trim().isEmpty()) {
+                                selectedApp = findAppByVoice(explicitProvider);
+                            } else {
+                                ComponentName configured = V10SessionStore.getDefaultVoiceApp(
+                                        V10CarActivity.this, "navigation");
+                                if (configured != null) {
+                                    selectedApp = findAppByVoice(appLabelForComponent(configured));
+                                    if (selectedApp == null) {
                                         for (AppInfo app : apps) {
                                             if (configured.getPackageName().equals(app.component.getPackageName())) {
                                                 selectedApp = app;
                                                 break;
                                             }
                                         }
+                                    }
+                                } else {
+                                    String[] candidates = new String[]{"Google Maps", "Vietmap", "Navitel", "Maps"};
+                                    for (String candidate : candidates) {
+                                        selectedApp = findAppByVoice(candidate);
+                                        if (selectedApp != null) break;
+                                    }
+                                }
+                            }
+                            if (selectedApp == null) return null;
+                            launchProjection(selectedApp.component);
+                            if (query != null && !query.trim().isEmpty() && session != null) {
+                                String mapUri = buildMapUri(selectedApp.component, query,
+                                        "nearby".equals(category));
+                                if (mapUri != null) {
+                                    session.launchViewIntentOnDisplay(
+                                            selectedApp.component.getPackageName(), mapUri);
+                                }
+                            }
+                            return selectedApp.name;
+                        }
+
+                        if ("music".equals(category) || "video".equals(category)) {
+                            ComponentName selected = null;
+                            String selectedLabel = null;
+
+                            // Media must be visible on the car-side secondary projection display
+                            // (session/display 1), not the hidden ImageReader-only virtual display.
+                            if (explicitProvider != null && !explicitProvider.trim().isEmpty()) {
+                                String normalizedProvider = VoiceCommandParser.normalize(explicitProvider);
+                                if ("youtube".equals(normalizedProvider)) {
+                                    // "on YouTube" is the generic video-provider wording. Respect the
+                                    // user's configured video app even when it is ReVanced/Morphe or
+                                    // another selected variant; don't pick an arbitrary installed copy.
+                                    ComponentName configured = V10SessionStore.getDefaultVoiceApp(
+                                            V10CarActivity.this, "video");
+                                    if (configured == null) {
+                                        configured = V10SessionStore.getDefaultVoiceApp(
+                                                V10CarActivity.this, category);
+                                    }
+                                    if (configured != null) {
+                                        selected = configured;
+                                        selectedLabel = appLabelForComponent(configured);
                                     } else {
-                                        String[] candidates = new String[]{"VTV Go", "FPT Play", "TV"};
-                                        for (String candidate : candidates) {
-                                            selectedApp = findAppByVoice(candidate);
-                                            if (selectedApp != null) break;
+                                        AppInfo explicitApp = findAppByVoice("youtube");
+                                        if (explicitApp == null) return null;
+                                        selected = explicitApp.component;
+                                        selectedLabel = explicitApp.name;
+                                    }
+                                } else {
+                                    // Explicit names such as YouTube Music Morphe, YouTube Morphe,
+                                    // YouTube ReVanced and Zing MP3 resolve to that exact installed app.
+                                    AppInfo explicitApp = findAppByVoice(explicitProvider);
+                                    if (explicitApp == null) return null;
+                                    selected = explicitApp.component;
+                                    selectedLabel = explicitApp.name;
+                                }
+                            } else {
+                                selected = V10SessionStore.getDefaultVoiceApp(
+                                        V10CarActivity.this, category);
+                                if (selected != null) {
+                                    selectedLabel = appLabelForComponent(selected);
+                                } else {
+                                    String[] candidates = "music".equals(category)
+                                            ? new String[]{"Zing MP3", "Spotify", "YouTube Music", "NhacCuaTui"}
+                                            : new String[]{"YouTube"};
+                                    for (String candidate : candidates) {
+                                        AppInfo app = findAppByVoice(candidate);
+                                        if (app != null) {
+                                            selected = app.component;
+                                            selectedLabel = app.name;
+                                            break;
                                         }
                                     }
                                 }
-                                if (selectedApp == null) return null;
-                                launchProjection(selectedApp.component);
-                                if (query != null && !query.trim().isEmpty() && session != null) {
-                                    session.launchSearchIntentOnDisplay(
-                                            selectedApp.component.getPackageName(), query);
-                                }
-                                return selectedApp.name;
                             }
 
+                            if (selected == null || session == null) return null;
+                            String mediaUri = null;
+                            if (query != null && !query.trim().isEmpty()) {
+                                mediaUri = VoiceBackgroundTaskManager.buildSearchUri(
+                                        selected, query.trim(), category);
+                                if (mediaUri == null) return null;
+                            }
+
+                            // Launch on the real projection surface, then send the search
+                            // intent to that same display. Keep the phone UI out of this flow.
+                            launchProjection(selected);
+                            if (mediaUri != null) {
+                                dispatchMediaSearchOnProjection(selected, mediaUri, query.trim());
+                            }
+                            return selectedLabel == null ? selected.getPackageName() : selectedLabel;
+                        }
+                        if ("tv".equals(category)) {
+                            AppInfo selectedApp = null;
                             if (explicitProvider != null && !explicitProvider.trim().isEmpty()) {
-                                return openAppByVoice(explicitProvider);
-                            }
-
-                            ComponentName configured = V10SessionStore.getDefaultVoiceApp(
-                                    V10CarActivity.this, category);
-                            if (configured != null) {
-                                launchProjection(configured);
-                                return appLabelForComponent(configured);
-                            }
-
-                            String[] candidates;
-                            if ("navigation".equals(category)) {
-                                candidates = new String[]{"Google Maps", "Vietmap", "Navitel", "Maps"};
+                                selectedApp = findAppByVoice(explicitProvider);
                             } else {
-                                candidates = new String[]{"VTV Go", "FPT Play", "TV"};
+                                ComponentName configured = V10SessionStore.getDefaultVoiceApp(
+                                        V10CarActivity.this, "tv");
+                                if (configured != null) {
+                                    for (AppInfo app : apps) {
+                                        if (configured.getPackageName().equals(app.component.getPackageName())) {
+                                            selectedApp = app;
+                                            break;
+                                        }
+                                    }
+                                } else {
+                                    String[] candidates = new String[]{"VTV Go", "FPT Play", "TV"};
+                                    for (String candidate : candidates) {
+                                        selectedApp = findAppByVoice(candidate);
+                                        if (selectedApp != null) break;
+                                    }
+                                }
                             }
-                            for (String candidate : candidates) {
-                                String opened = openAppByVoice(candidate);
-                                if (opened != null) return opened;
+                            if (selectedApp == null) return null;
+                            launchProjection(selectedApp.component);
+                            if (query != null && !query.trim().isEmpty() && session != null) {
+                                session.launchSearchIntentOnDisplay(
+                                        selectedApp.component.getPackageName(), query);
                             }
-                            return null;
+                            return selectedApp.name;
                         }
 
-                        @Override
-                        public void showAppPicker() {
-                            V10CarActivity.this.showApps();
+                        if (explicitProvider != null && !explicitProvider.trim().isEmpty()) {
+                            return openAppByVoice(explicitProvider);
                         }
 
-                        @Override
-                        public void goHome() {
-                            V10CarActivity.this.returnToLauncher();
+                        ComponentName configured = V10SessionStore.getDefaultVoiceApp(
+                                V10CarActivity.this, category);
+                        if (configured != null) {
+                            launchProjection(configured);
+                            return appLabelForComponent(configured);
                         }
+
+                        String[] candidates;
+                        if ("navigation".equals(category)) {
+                            candidates = new String[]{"Google Maps", "Vietmap", "Navitel", "Maps"};
+                        } else {
+                            candidates = new String[]{"VTV Go", "FPT Play", "TV"};
+                        }
+                        for (String candidate : candidates) {
+                            String opened = openAppByVoice(candidate);
+                            if (opened != null) return opened;
+                        }
+                        return null;
+                    }
+
+                    @Override
+                    public void showAppPicker() {
+                        V10CarActivity.this.showApps();
+                    }
+
+                    @Override
+                    public void goHome() {
+                        V10CarActivity.this.returnToLauncher();
+                    }
+
+   }
                     });
     }
 
