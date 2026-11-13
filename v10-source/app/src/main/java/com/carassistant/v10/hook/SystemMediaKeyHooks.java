@@ -2,6 +2,7 @@ package com.carassistant.v10.hook;
 
 import android.content.ComponentName;
 import android.content.Context;
+import android.content.Intent;
 import android.media.session.MediaSession;
 import android.provider.Settings;
 import android.text.TextUtils;
@@ -27,6 +28,7 @@ import de.robv.android.xposed.XposedHelpers;
 public final class SystemMediaKeyHooks {
     private static final String TAG = "[CarAsistant SystemMediaKey]";
     private static final String SELF = "com.carassistant.v10";
+    private static final String GEARHEAD = "com.google.android.projection.gearhead";
     private static final int NEXT = KeyEvent.KEYCODE_MEDIA_NEXT;
     private static final int PREVIOUS = KeyEvent.KEYCODE_MEDIA_PREVIOUS;
 
@@ -65,12 +67,24 @@ public final class SystemMediaKeyHooks {
 
                             Context context = (Context) XposedHelpers.getObjectField(
                                     service, "mContext");
-                            if (!hasMediaAccess(context)) return;
+                            boolean fromGearhead = isGearheadCaller(param.args);
+                            MediaSession.Token token = hasMediaAccess(context)
+                                    ? findCarAsistantSessionToken(service) : null;
 
-                            MediaSession.Token token = findCarAsistantSessionToken(service);
                             if (token == null) {
-                                XposedBridge.log(TAG + " no active CarAsistant MediaSession; "
-                                        + "allowing framework fallback");
+                                // Android Auto can still deliver steering media keys while
+                                // CarAsistant has no active MediaSession record. Forward only
+                                // Gearhead-originated keys to the process-wide dispatcher.
+                                // The same gesture classifier is also used by MediaSession
+                                // callbacks, so single/double/hold timing remains unchanged.
+                                if (fromGearhead && dispatchRawKeyToApp(context, event)) {
+                                    param.setResult(null);
+                                    XposedBridge.log(TAG + " forwarded Gearhead "
+                                            + describe(event) + " to raw input gateway");
+                                } else {
+                                    XposedBridge.log(TAG + " no active CarAsistant MediaSession; "
+                                            + "allowing framework fallback");
+                                }
                                 return;
                             }
 
@@ -80,6 +94,10 @@ public final class SystemMediaKeyHooks {
                                 param.setResult(null);
                                 XposedBridge.log(TAG + " routed " + describe(event)
                                         + " to CarAsistant MediaSession");
+                            } else if (fromGearhead && dispatchRawKeyToApp(context, event)) {
+                                param.setResult(null);
+                                XposedBridge.log(TAG + " direct session dispatch failed; "
+                                        + "forwarded Gearhead key to raw input gateway");
                             } else {
                                 XposedBridge.log(TAG + " direct session dispatch returned false; "
                                         + "allowing framework fallback");
@@ -103,6 +121,28 @@ public final class SystemMediaKeyHooks {
         } catch (Throwable error) {
             INSTALLED.set(false);
             XposedBridge.log(TAG + " install failed: " + error);
+        }
+    }
+
+    private static boolean isGearheadCaller(Object[] args) {
+        if (args == null) return false;
+        for (Object arg : args) {
+            if (GEARHEAD.equals(arg)) return true;
+        }
+        return false;
+    }
+
+    private static boolean dispatchRawKeyToApp(Context context, KeyEvent event) {
+        if (context == null || event == null) return false;
+        try {
+            Intent raw = new Intent("com.carassistant.v10.STEERING_RAW_KEY")
+                    .setPackage(SELF);
+            raw.putExtra(Intent.EXTRA_KEY_EVENT, new KeyEvent(event));
+            context.sendBroadcast(raw);
+            return true;
+        } catch (Throwable error) {
+            XposedBridge.log(TAG + " raw input broadcast failed: " + error);
+            return false;
         }
     }
 
