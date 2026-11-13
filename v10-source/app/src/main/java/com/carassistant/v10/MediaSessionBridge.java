@@ -859,7 +859,8 @@ public final class MediaSessionBridge extends NotificationListenerService {
                         .remove(AA_NOTIFICATION_ID_PREF)
                         .remove(AA_NOTIFICATION_TAG_PREF)
                         .apply();
-                Log.i(TAG, "Android Auto connection notification removed; headless restore stop requested");
+                stopService(new Intent(this, CarAssistantVoiceService.class));
+                Log.i(TAG, "Android Auto connection notification removed; voice and headless services stop requested");
             }
         }
         refreshFromManager();
