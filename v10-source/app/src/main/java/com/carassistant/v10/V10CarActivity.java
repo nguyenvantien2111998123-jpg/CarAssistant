@@ -221,7 +221,7 @@ public final class V10CarActivity
                             }
                         }
                     },
-                    createVoiceCommandRouter()));
+                    createVoiceCommandRouter());
         }
 
         loadApps();
