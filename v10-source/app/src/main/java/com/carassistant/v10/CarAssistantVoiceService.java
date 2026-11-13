@@ -105,7 +105,8 @@ public final class CarAssistantVoiceService extends Service {
         } else {
             publishState(lastListening, lastStatus, lastTranscript, lastShowTranscript);
         }
-        return START_STICKY;
+        // Do not let Android restart a microphone FGS in the background after process death.
+        return START_NOT_STICKY;
     }
 
     private void publishState(boolean listening, String status,
