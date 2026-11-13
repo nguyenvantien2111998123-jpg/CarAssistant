@@ -23,6 +23,10 @@ public final class V10ControlReceiver
         }
 
         String action = intent.getAction();
+        if (SteeringWheelInputDispatcher.ACTION_RAW_KEY.equals(action)) {
+            SteeringWheelInputDispatcher.dispatch(context, intent);
+            return;
+        }
         if ("com.carassistant.v10.STEERING_VOICE".equals(action)) {
             Log.i("CarAssistantSteering", "Receiver got STEERING_VOICE");
             V10CarActivity activity = V10SessionStore.getCurrentActivity();
