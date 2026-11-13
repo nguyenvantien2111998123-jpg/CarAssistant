@@ -3,7 +3,6 @@ package com.carassistant.v10;
 import android.content.ComponentName;
 import android.content.Context;
 import android.content.Intent;
-import android.content.pm.PackageManager;
 import android.content.pm.ResolveInfo;
 
 import com.carassistant.v10.voice.MediaSearchUriBuilder;
@@ -43,7 +42,7 @@ public final class V10AppManager {
         Intent intent = new Intent(Intent.ACTION_MAIN);
         intent.addCategory(Intent.CATEGORY_LAUNCHER);
         List<ResolveInfo> resolved = appContext.getPackageManager()
-                .queryIntentActivities(intent, PackageManager.MATCH_DEFAULT_ONLY);
+                .queryIntentActivities(intent, 0);
         ArrayList<App> apps = new ArrayList<>();
         for (ResolveInfo info : resolved) {
             if (info.activityInfo == null) continue;
