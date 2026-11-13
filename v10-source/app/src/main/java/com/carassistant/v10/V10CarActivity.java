@@ -212,6 +212,8 @@ public final class V10CarActivity
 
         loadApps();
         rebuildDock();
+        V10ProjectionCoordinator.attach(this);
+        V10ProjectionCoordinator.dispatchPending(this, this);
 
         handler.removeCallbacks(
                 clockTicker);
@@ -1896,6 +1898,8 @@ public void goHome() {
 
         if (session != null) { session.destroy(); session = null; }
         if (backgroundSession != null) { backgroundSession.destroy(); backgroundSession = null; }
+
+        V10ProjectionCoordinator.detach(this);
 
         V10SessionStore
                 .clearCurrentActivity(
