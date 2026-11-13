@@ -3,6 +3,8 @@ package com.carassistant.v10.hook;
 import android.content.ComponentName;
 import android.content.Context;
 import android.content.Intent;
+import android.content.pm.PackageManager;
+import android.os.Build;
 import android.media.session.MediaSession;
 import android.provider.Settings;
 import android.text.TextUtils;
@@ -68,6 +70,16 @@ public final class SystemMediaKeyHooks {
                             Context context = (Context) XposedHelpers.getObjectField(
                                     service, "mContext");
                             boolean fromGearhead = isGearheadCaller(param.args);
+                            // Warm the microphone service from system_server on the first
+                            // Gearhead NEXT press. This is deliberately a no-listen start:
+                            // the shared app-side gesture classifier still decides whether
+                            // the user double-pressed NEXT. Starting here avoids asking an
+                            // ordinary background BroadcastReceiver to create a mic FGS.
+                            if (fromGearhead && event.getKeyCode() == NEXT
+                                    && event.getAction() == KeyEvent.ACTION_DOWN
+                                    && event.getRepeatCount() == 0) {
+                                ensureVoiceServiceStartedBySystem(context);
+                            }
                             MediaSession.Token token = hasMediaAccess(context)
                                     ? findCarAsistantSessionToken(service) : null;
 
@@ -130,6 +142,34 @@ public final class SystemMediaKeyHooks {
             if (GEARHEAD.equals(arg)) return true;
         }
         return false;
+    }
+
+    /**
+     * system_server is the privileged initiator for this service start. Android 12
+     * restricts background app-initiated FGS starts, especially microphone services;
+     * do not attempt to solve that restriction from V10ControlReceiver.
+     */
+    private static void ensureVoiceServiceStartedBySystem(Context context) {
+        if (context == null) return;
+        try {
+            if (context.getPackageManager().checkPermission(
+                    "android.permission.RECORD_AUDIO", SELF)
+                    != PackageManager.PERMISSION_GRANTED) {
+                return;
+            }
+            Intent service = new Intent()
+                    .setClassName(SELF,
+                            "com.carassistant.v10.CarAssistantVoiceService")
+                    .setAction("com.carassistant.v10.voice.action.START");
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                context.startForegroundService(service);
+            } else {
+                context.startService(service);
+            }
+        } catch (Throwable error) {
+            XposedBridge.log(TAG + " system-initiated voice service warm start failed: "
+                    + error);
+        }
     }
 
     private static boolean dispatchRawKeyToApp(Context context, KeyEvent event) {
