@@ -24,7 +24,7 @@ final class SilentAudioTrackFallback {
     private volatile boolean running;
     private volatile AudioTrack audioTrack;
     private Thread writerThread;
-    private long generation;
+    private volatile long generation;
 
     SilentAudioTrackFallback(Runnable failureListener) {
         this.failureListener = failureListener;
