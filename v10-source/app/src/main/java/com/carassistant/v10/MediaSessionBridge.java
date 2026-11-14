@@ -66,7 +66,13 @@ public final class MediaSessionBridge extends NotificationListenerService {
     private MediaSession mirrorSession;
     private MediaSessionManager manager;
     private final SilentAudioTrackFallback silentAudioFallback =
-            new SilentAudioTrackFallback();
+            new SilentAudioTrackFallback(() -> MAIN.post(() -> {
+                silentFallbackActive = false;
+                if (androidAutoConnected && !mediaRestorePending) {
+                    MAIN.removeCallbacks(silentFallbackRetry);
+                    MAIN.postDelayed(silentFallbackRetry, 3000L);
+                }
+            }));
     private boolean androidAutoConnected;
     private boolean mediaRestorePending;
     private boolean silentFallbackActive;
