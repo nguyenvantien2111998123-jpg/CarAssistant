@@ -140,6 +140,10 @@ final class SilentAudioTrackFallback {
                 written = AudioTrack.ERROR_DEAD_OBJECT;
             }
             if (written > 0) continue;
+            if (written == 0) {
+                Thread.yield();
+                continue;
+            }
             if (written == AudioTrack.ERROR_DEAD_OBJECT
                     && recoveries++ < MAX_DEAD_OBJECT_RECOVERIES) {
                 if (!replaceDeadTrack(current)) break;
