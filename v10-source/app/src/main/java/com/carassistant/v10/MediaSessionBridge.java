@@ -880,7 +880,13 @@ public final class MediaSessionBridge extends NotificationListenerService {
         // elapsedRealtime resets on reboot. Do not let the previous boot's
         // 90-second notification debounce suppress the first AA reconnect.
         boolean sameBoot = previousElapsed > 0L && nowElapsed >= previousElapsed;
-        if (sameBoot && previous > 0L && now - previous < AA_TRIGGER_COOLDOWN_MS) return;
+        if (sameBoot && previous > 0L && now - previous < AA_TRIGGER_COOLDOWN_MS) {
+            // A duplicate connected notification must not leave fallback blocked
+            // after an earlier restore attempt has already completed.
+            mediaRestorePending = MediaAutoRestoreService.isRestoreInProgress();
+            if (!mediaRestorePending) MAIN.post(this::evaluateSilentFallback);
+            return;
+        }
 
         Intent restore = new Intent(this, MediaAutoRestoreService.class)
                 .setAction(MediaAutoRestoreService.ACTION_RESTORE);
