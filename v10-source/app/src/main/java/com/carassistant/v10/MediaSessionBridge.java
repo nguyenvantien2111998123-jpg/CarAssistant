@@ -138,7 +138,11 @@ public final class MediaSessionBridge extends NotificationListenerService {
     /** Stops the phone-side silent source when the AA connection signal disappears. */
     public static void notifyAndroidAutoDisconnected() {
         MediaSessionBridge bridge = bridgeInstance;
-        if (bridge != null) MAIN.post(bridge::stopSilentFallback);
+        if (bridge != null) MAIN.post(() -> {
+            bridge.androidAutoConnected = false;
+            bridge.mediaRestorePending = false;
+            bridge.stopSilentFallback();
+        });
     }
 
     /**
@@ -146,6 +150,7 @@ public final class MediaSessionBridge extends NotificationListenerService {
      * are overwritten on each run, so only the newest checkpoint is retained.
      */
     private void saveCurrentCheckpoint() {
+        if (silentFallbackActive) return; // Never let synthetic silence replace a real-media checkpoint.
         MediaController controller = activeController;
         if (controller == null) return; // Keep the last valid checkpoint if the player disappears.
         try {
@@ -617,22 +622,29 @@ public final class MediaSessionBridge extends NotificationListenerService {
                 MediaSessionBridge.pause();
             }
             @Override public void onSkipToNext() {
+                if (silentFallbackActive) return;
                 Log.i(TAG, "CarAsistant MediaSession callback: onSkipToNext");
                 MediaSessionBridge.skipNext();
             }
             @Override public void onSkipToPrevious() {
+                if (silentFallbackActive) return;
                 Log.i(TAG, "CarAsistant MediaSession callback: onSkipToPrevious");
                 MediaSessionBridge.skipPrevious();
             }
             @Override public void onFastForward() {
+                if (silentFallbackActive) return;
                 Log.i(TAG, "CarAsistant MediaSession callback: onFastForward");
                 MediaSessionBridge.seekBy(15000L);
             }
             @Override public void onRewind() {
+                if (silentFallbackActive) return;
                 Log.i(TAG, "CarAsistant MediaSession callback: onRewind");
                 MediaSessionBridge.seekBy(-15000L);
             }
-            @Override public void onSeekTo(long position) { MediaSessionBridge.seekTo(position); }
+            @Override public void onSeekTo(long position) {
+                if (silentFallbackActive) return;
+                MediaSessionBridge.seekTo(position);
+            }
             @Override public void onStop() {
                 if (silentFallbackActive) {
                     MAIN.post(() -> updateMirrorSession(snapshot));
