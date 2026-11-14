@@ -65,6 +65,15 @@ public final class MediaSessionBridge extends NotificationListenerService {
     private static volatile long lastCheckpointDuration;
     private MediaSession mirrorSession;
     private MediaSessionManager manager;
+    private final SilentAudioTrackFallback silentAudioFallback =
+            new SilentAudioTrackFallback();
+    private boolean androidAutoConnected;
+    private boolean mediaRestorePending;
+    private boolean silentFallbackActive;
+    private final Runnable silentFallbackRetry = new Runnable() {
+        @Override public void run() { evaluateSilentFallback(); }
+    };
+    private static volatile MediaSessionBridge bridgeInstance;
     private MediaSessionManager.OnActiveSessionsChangedListener sessionsListener;
     private MediaController.Callback controllerCallback;
     private final Runnable checkpointTask = new Runnable() {
@@ -115,6 +124,21 @@ public final class MediaSessionBridge extends NotificationListenerService {
 
     public static Snapshot getSnapshot() {
         return snapshot;
+    }
+
+    /** Called by MediaAutoRestoreService only after its restore attempt has a final outcome. */
+    public static void notifyMediaRestoreFinished() {
+        MediaSessionBridge bridge = bridgeInstance;
+        if (bridge != null) MAIN.post(() -> {
+            bridge.mediaRestorePending = false;
+            bridge.evaluateSilentFallback();
+        });
+    }
+
+    /** Stops the phone-side silent source when the AA connection signal disappears. */
+    public static void notifyAndroidAutoDisconnected() {
+        MediaSessionBridge bridge = bridgeInstance;
+        if (bridge != null) MAIN.post(bridge::stopSilentFallback);
     }
 
     /**
@@ -578,8 +602,20 @@ public final class MediaSessionBridge extends NotificationListenerService {
                         MediaSessionBridge.this, mediaButtonIntent)) return true;
                 return super.onMediaButtonEvent(mediaButtonIntent);
             }
-            @Override public void onPlay() { MediaSessionBridge.play(); }
-            @Override public void onPause() { MediaSessionBridge.pause(); }
+            @Override public void onPlay() {
+                if (silentFallbackActive) {
+                    MAIN.post(() -> updateMirrorSession(snapshot));
+                    return;
+                }
+                MediaSessionBridge.play();
+            }
+            @Override public void onPause() {
+                if (silentFallbackActive) {
+                    MAIN.post(() -> updateMirrorSession(snapshot));
+                    return;
+                }
+                MediaSessionBridge.pause();
+            }
             @Override public void onSkipToNext() {
                 Log.i(TAG, "CarAsistant MediaSession callback: onSkipToNext");
                 MediaSessionBridge.skipNext();
@@ -597,7 +633,13 @@ public final class MediaSessionBridge extends NotificationListenerService {
                 MediaSessionBridge.seekBy(-15000L);
             }
             @Override public void onSeekTo(long position) { MediaSessionBridge.seekTo(position); }
-            @Override public void onStop() { MediaSessionBridge.pause(); }
+            @Override public void onStop() {
+                if (silentFallbackActive) {
+                    MAIN.post(() -> updateMirrorSession(snapshot));
+                    return;
+                }
+                MediaSessionBridge.pause();
+            }
             @Override public void onCustomAction(String action, Bundle extras) {
                 if (ACTION_VOICE_ASSISTANT.equals(action)) {
                     Intent intent = new Intent("com.carassistant.v10.STEERING_VOICE")
@@ -611,6 +653,17 @@ public final class MediaSessionBridge extends NotificationListenerService {
     private void updateMirrorSession(Snapshot state) {
         MediaSession session = mirrorSession;
         if (session == null) return;
+        if (silentFallbackActive && silentAudioFallback.isPlaying()) {
+            session.setMetadata(new MediaMetadata.Builder()
+                    .putString(MediaMetadata.METADATA_KEY_TITLE, "CarAsistant Silent Audio")
+                    .putString(MediaMetadata.METADATA_KEY_ARTIST, "CarAsistant")
+                    .putString(MediaMetadata.METADATA_KEY_ALBUM, "Phone-side fallback")
+                    .build());
+            session.setPlaybackState(buildMirrorPlaybackState(true, 0L, 0L));
+            session.setActive(true);
+            return;
+        }
+        if (silentFallbackActive) silentFallbackActive = false;
         boolean hasPlayer = state != null && !TextUtils.isEmpty(state.packageName);
         if (!hasPlayer) {
             // After a phone reboot the source app has no MediaSession yet. Publish the
@@ -698,6 +751,9 @@ public final class MediaSessionBridge extends NotificationListenerService {
     @Override
     public void onListenerConnected() {
         super.onListenerConnected();
+        bridgeInstance = this;
+        androidAutoConnected = getSharedPreferences(RESUME_PREFS, Context.MODE_PRIVATE)
+                .getBoolean(AA_CONNECTED_PREF, false);
         ensureMirrorSession();
         // Publish the CarAsistant controller before querying source sessions. This closes
         // the startup race in which Gearhead discovers a phone player before our mirror.
@@ -754,6 +810,9 @@ public final class MediaSessionBridge extends NotificationListenerService {
     @Override
     public void onDestroy() {
         MAIN.removeCallbacks(checkpointTask);
+        MAIN.removeCallbacks(silentFallbackRetry);
+        stopSilentFallback();
+        if (bridgeInstance == this) bridgeInstance = null;
         releaseMirrorSession();
         super.onDestroy();
     }
@@ -806,6 +865,8 @@ public final class MediaSessionBridge extends NotificationListenerService {
                 || message.contains("verbunden"));
         if (!connected) return;
 
+        androidAutoConnected = true;
+        mediaRestorePending = true;
         android.content.SharedPreferences prefs = getSharedPreferences(
                 RESUME_PREFS, Context.MODE_PRIVATE);
         prefs.edit().putBoolean(AA_CONNECTED_PREF, true)
@@ -832,6 +893,9 @@ public final class MediaSessionBridge extends NotificationListenerService {
                     + message);
         } catch (RuntimeException error) {
             Log.w(TAG, "Could not start media restore after Android Auto notification", error);
+            mediaRestorePending = false;
+            MAIN.removeCallbacks(silentFallbackRetry);
+            MAIN.postDelayed(silentFallbackRetry, 1500L);
         }
     }
 
@@ -853,6 +917,9 @@ public final class MediaSessionBridge extends NotificationListenerService {
             // exact notification previously classified as its connected-state signal
             // may stop the headless display owner.
             if (sbn.getId() == expectedId && removedTag.equals(expectedTag)) {
+                androidAutoConnected = false;
+                mediaRestorePending = false;
+                stopSilentFallback();
                 prefs.edit().putBoolean(AA_CONNECTED_PREF, false)
                         .remove(AA_TRIGGER_PREF)
                         .remove(AA_TRIGGER_ELAPSED_PREF)
@@ -949,6 +1016,7 @@ public final class MediaSessionBridge extends NotificationListenerService {
         }
         checkpointController = checkpointCandidate;
         publish(chosen);
+        MAIN.post(this::evaluateSilentFallback);
         MediaAutoRestoreService.notifyMediaSessionsChanged();
     }
 
@@ -987,11 +1055,76 @@ public final class MediaSessionBridge extends NotificationListenerService {
         Snapshot latest = snapshot;
         MAIN.post(() -> {
             updateMirrorSession(latest);
+            evaluateSilentFallback();
             for (Listener listener : LISTENERS) {
                 try { listener.onMediaChanged(latest); }
                 catch (RuntimeException error) { Log.w(TAG, "Media UI callback failed", error); }
             }
         });
+    }
+
+    /**
+     * A checkpoint package or stale session is not a live media source. A real
+     * source must still own a non-terminal playback state and publish an item
+     * identity. PAUSED is deliberately accepted as a real source state.
+     */
+    private boolean hasRealMediaSource() {
+        MediaController controller = activeController;
+        if (controller == null || getPackageName().equals(controller.getPackageName())) {
+            return false;
+        }
+        try {
+            PlaybackState playback = controller.getPlaybackState();
+            MediaMetadata metadata = controller.getMetadata();
+            if (playback == null || metadata == null) return false;
+            int state = playback.getState();
+            if (state == PlaybackState.STATE_NONE
+                    || state == PlaybackState.STATE_STOPPED
+                    || state == PlaybackState.STATE_ERROR) return false;
+            String title = safeMetadataString(metadata, MediaMetadata.METADATA_KEY_TITLE);
+            String displayTitle = safeMetadataString(
+                    metadata, MediaMetadata.METADATA_KEY_DISPLAY_TITLE);
+            String mediaId = safeMetadataString(metadata, MediaMetadata.METADATA_KEY_MEDIA_ID);
+            String mediaUri = safeMetadataString(metadata, MediaMetadata.METADATA_KEY_MEDIA_URI);
+            return !TextUtils.isEmpty(title) || !TextUtils.isEmpty(displayTitle)
+                    || !TextUtils.isEmpty(mediaId) || !TextUtils.isEmpty(mediaUri);
+        } catch (RuntimeException error) {
+            Log.d(TAG, "Could not validate current media source", error);
+            return false;
+        }
+    }
+
+    private void evaluateSilentFallback() {
+        if (!androidAutoConnected) {
+            stopSilentFallback();
+            return;
+        }
+        if (hasRealMediaSource()) {
+            stopSilentFallback();
+            return;
+        }
+        if (mediaRestorePending) return;
+        if (silentFallbackActive && silentAudioFallback.isPlaying()) return;
+
+        if (silentAudioFallback.start()) {
+            silentFallbackActive = true;
+            MAIN.removeCallbacks(silentFallbackRetry);
+            updateMirrorSession(snapshot);
+            Log.i(TAG, "Silent fallback active: AA connected and no live phone media source");
+        } else {
+            silentFallbackActive = false;
+            MAIN.removeCallbacks(silentFallbackRetry);
+            MAIN.postDelayed(silentFallbackRetry, 3000L);
+            Log.w(TAG, "Silent fallback could not start; retry scheduled");
+        }
+    }
+
+    private void stopSilentFallback() {
+        MAIN.removeCallbacks(silentFallbackRetry);
+        boolean wasActive = silentFallbackActive || silentAudioFallback.isPlaying();
+        silentFallbackActive = false;
+        silentAudioFallback.stop();
+        if (wasActive && mirrorSession != null) updateMirrorSession(snapshot);
     }
 
     private void clearActiveController() {
