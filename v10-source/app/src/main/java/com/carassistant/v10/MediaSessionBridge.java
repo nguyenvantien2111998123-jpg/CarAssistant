@@ -772,6 +772,7 @@ public final class MediaSessionBridge extends NotificationListenerService {
         bridgeInstance = this;
         androidAutoConnected = getSharedPreferences(RESUME_PREFS, Context.MODE_PRIVATE)
                 .getBoolean(AA_CONNECTED_PREF, false);
+        mediaRestorePending = MediaAutoRestoreService.isRestoreInProgress();
         ensureMirrorSession();
         // Publish the CarAsistant controller before querying source sessions. This closes
         // the startup race in which Gearhead discovers a phone player before our mirror.
