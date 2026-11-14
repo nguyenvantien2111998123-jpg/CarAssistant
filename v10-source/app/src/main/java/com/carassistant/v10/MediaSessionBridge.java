@@ -926,7 +926,7 @@ public final class MediaSessionBridge extends NotificationListenerService {
             // after an earlier restore attempt has already completed.
             mediaRestorePending = MediaAutoRestoreService.isRestoreInProgress();
             if (!mediaRestorePending) MAIN.post(this::evaluateSilentFallback);
-            return false;
+            return true;
         }
 
         Intent restore = new Intent(this, MediaAutoRestoreService.class)
