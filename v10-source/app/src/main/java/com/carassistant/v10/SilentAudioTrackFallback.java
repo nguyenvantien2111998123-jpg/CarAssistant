@@ -24,6 +24,7 @@ final class SilentAudioTrackFallback {
     private volatile boolean running;
     private volatile AudioTrack audioTrack;
     private Thread writerThread;
+    private long generation;
 
     SilentAudioTrackFallback(Runnable failureListener) {
         this.failureListener = failureListener;
@@ -50,7 +51,9 @@ final class SilentAudioTrackFallback {
 
         audioTrack = created;
         running = true;
-        writerThread = new Thread(this::writeSilence, "CarAsistant-SilentPCM");
+        long writerGeneration = ++generation;
+        writerThread = new Thread(() -> writeSilence(writerGeneration),
+                "CarAsistant-SilentPCM");
         writerThread.setPriority(Thread.NORM_PRIORITY - 1);
         writerThread.start();
         Log.i(TAG, "Phone-side silent PCM AudioTrack started");
@@ -73,6 +76,7 @@ final class SilentAudioTrackFallback {
         AudioTrack oldTrack;
         synchronized (this) {
             running = false;
+            generation++;
             oldWriter = writerThread;
             writerThread = null;
             oldTrack = audioTrack;
@@ -126,10 +130,10 @@ final class SilentAudioTrackFallback {
         }
     }
 
-    private void writeSilence() {
+    private void writeSilence(long writerGeneration) {
         short[] silence = new short[CHUNK_SAMPLES];
         int recoveries = 0;
-        while (running) {
+        while (running && generation == writerGeneration) {
             AudioTrack current = audioTrack;
             if (current == null) break;
             int written;
@@ -146,16 +150,17 @@ final class SilentAudioTrackFallback {
             }
             if (written == AudioTrack.ERROR_DEAD_OBJECT
                     && recoveries++ < MAX_DEAD_OBJECT_RECOVERIES) {
-                if (!replaceDeadTrack(current)) break;
+                if (!replaceDeadTrack(current, writerGeneration)) break;
                 continue;
             }
             if (running) Log.w(TAG, "Silent PCM writer stopped; write result=" + written);
             break;
         }
 
-        boolean failedUnexpectedly = running;
-        if (failedUnexpectedly) {
-            synchronized (this) {
+        boolean failedUnexpectedly = false;
+        synchronized (this) {
+            if (running && generation == writerGeneration) {
+                failedUnexpectedly = true;
                 running = false;
                 AudioTrack current = audioTrack;
                 audioTrack = null;
@@ -164,12 +169,13 @@ final class SilentAudioTrackFallback {
                     try { current.release(); } catch (RuntimeException ignored) { }
                 }
             }
-            if (failureListener != null) failureListener.run();
         }
+        if (failedUnexpectedly && failureListener != null) failureListener.run();
     }
 
-    private synchronized boolean replaceDeadTrack(AudioTrack deadTrack) {
-        if (!running || audioTrack != deadTrack) return false;
+    private synchronized boolean replaceDeadTrack(
+            AudioTrack deadTrack, long writerGeneration) {
+        if (!running || generation != writerGeneration || audioTrack != deadTrack) return false;
         audioTrack = null;
         try { deadTrack.release(); } catch (RuntimeException ignored) { }
         AudioTrack replacement = createTrack();
