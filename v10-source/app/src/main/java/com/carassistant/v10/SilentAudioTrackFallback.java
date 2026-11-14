@@ -20,9 +20,14 @@ final class SilentAudioTrackFallback {
     private static final int CHUNK_SAMPLES = 2048;
     private static final int MAX_DEAD_OBJECT_RECOVERIES = 3;
 
+    private final Runnable failureListener;
     private volatile boolean running;
     private volatile AudioTrack audioTrack;
     private Thread writerThread;
+
+    SilentAudioTrackFallback(Runnable failureListener) {
+        this.failureListener = failureListener;
+    }
 
     synchronized boolean start() {
         if (isPlaying()) return true;
@@ -144,7 +149,8 @@ final class SilentAudioTrackFallback {
             break;
         }
 
-        if (running) {
+        boolean failedUnexpectedly = running;
+        if (failedUnexpectedly) {
             synchronized (this) {
                 running = false;
                 AudioTrack current = audioTrack;
@@ -154,6 +160,7 @@ final class SilentAudioTrackFallback {
                     try { current.release(); } catch (RuntimeException ignored) { }
                 }
             }
+            if (failureListener != null) failureListener.run();
         }
     }
 
