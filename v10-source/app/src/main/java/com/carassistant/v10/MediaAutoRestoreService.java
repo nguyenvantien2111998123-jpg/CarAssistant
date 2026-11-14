@@ -145,6 +145,7 @@ public final class MediaAutoRestoreService extends Service {
             } else {
                 updateForegroundStatus("Chưa xác minh được media; giữ checkpoint");
                 Log.w(TAG, "Phone-side restore verification expired; checkpoint retained");
+                completed = true;
                 MediaSessionBridge.notifyMediaRestoreFinished();
             }
         }
@@ -204,6 +205,7 @@ public final class MediaAutoRestoreService extends Service {
         if (launchAttempts >= MAX_LAUNCH_ATTEMPTS) {
             updateForegroundStatus("Không thể khởi chạy ứng dụng media nguồn");
             Log.e(TAG, "Phone source launch exhausted retries for " + expectedPackage);
+            completed = true;
             MediaSessionBridge.notifyMediaRestoreFinished();
             return;
         }
@@ -217,6 +219,7 @@ public final class MediaAutoRestoreService extends Service {
                 || !expectedPackage.equals(expectedComponent.getPackageName())) {
             updateForegroundStatus("Không tìm thấy màn hình khởi chạy ứng dụng media");
             Log.e(TAG, "No launchable source Activity for " + expectedPackage);
+            completed = true;
             MediaSessionBridge.notifyMediaRestoreFinished();
             return;
         }
@@ -274,6 +277,8 @@ public final class MediaAutoRestoreService extends Service {
                     handler.postDelayed(restoreAttempt, delay);
                 } else {
                     updateForegroundStatus("Không thể mở ứng dụng nguồn; giữ checkpoint");
+                    completed = true;
+                    MediaSessionBridge.notifyMediaRestoreFinished();
                 }
             });
         });
