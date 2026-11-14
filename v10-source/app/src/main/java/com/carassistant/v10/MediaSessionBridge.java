@@ -156,7 +156,7 @@ public final class MediaSessionBridge extends NotificationListenerService {
      * are overwritten on each run, so only the newest checkpoint is retained.
      */
     private void saveCurrentCheckpoint() {
-        if (silentFallbackActive) return; // Never let synthetic silence replace a real-media checkpoint.
+        if (silentFallbackActive && !hasRealMediaSource()) return;
         MediaController controller = activeController;
         if (controller == null) return; // Keep the last valid checkpoint if the player disappears.
         try {
