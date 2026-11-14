@@ -788,15 +788,33 @@ public final class MediaSessionBridge extends NotificationListenerService {
             updateMirrorSession(snapshot);
             // NotificationListenerService is rebound by Android after reboot.
             // If AA's connected notification is already present, process it once.
+            boolean notificationSnapshotRead = false;
+            boolean connectedNotificationFound = false;
             try {
                 StatusBarNotification[] active = getActiveNotifications();
+                notificationSnapshotRead = true;
                 if (active != null) {
                     for (StatusBarNotification notification : active) {
-                        handleAndroidAutoConnectionNotification(notification);
+                        if (handleAndroidAutoConnectionNotification(notification)) {
+                            connectedNotificationFound = true;
+                        }
                     }
                 }
             } catch (RuntimeException error) {
                 Log.w(TAG, "Could not inspect active Android Auto notifications", error);
+            }
+            // AA_CONNECTED_PREF can survive a hard phone power loss. Reconcile it
+            // against the current notification snapshot so fallback never starts
+            // merely because the previous car session left a stale preference.
+            if (notificationSnapshotRead && !connectedNotificationFound) {
+                androidAutoConnected = false;
+                mediaRestorePending = false;
+                stopSilentFallback();
+                getSharedPreferences(RESUME_PREFS, Context.MODE_PRIVATE).edit()
+                        .putBoolean(AA_CONNECTED_PREF, false)
+                        .remove(AA_NOTIFICATION_ID_PREF)
+                        .remove(AA_NOTIFICATION_TAG_PREF)
+                        .apply();
             }
             MAIN.removeCallbacks(checkpointTask);
             saveCurrentCheckpoint();
@@ -859,10 +877,10 @@ public final class MediaSessionBridge extends NotificationListenerService {
      * Android Auto's phone-side notification is the single reconnect signal.
      * USB power/data state and Gearhead Activity lifecycle are deliberately not used.
      */
-    private void handleAndroidAutoConnectionNotification(StatusBarNotification sbn) {
-        if (sbn == null || !GEARHEAD_PACKAGE.equals(sbn.getPackageName())) return;
+    private boolean handleAndroidAutoConnectionNotification(StatusBarNotification sbn) {
+        if (sbn == null || !GEARHEAD_PACKAGE.equals(sbn.getPackageName())) return false;
         Notification notification = sbn.getNotification();
-        if (notification == null || notification.extras == null) return;
+        if (notification == null || notification.extras == null) return false;
 
         Bundle extras = notification.extras;
         StringBuilder content = new StringBuilder();
@@ -882,7 +900,7 @@ public final class MediaSessionBridge extends NotificationListenerService {
                 || message.contains("đã kết nối")
                 || message.contains("connecté")
                 || message.contains("verbunden"));
-        if (!connected) return;
+        if (!connected) return false;
 
         androidAutoConnected = true;
         mediaRestorePending = true;
@@ -904,7 +922,7 @@ public final class MediaSessionBridge extends NotificationListenerService {
             // after an earlier restore attempt has already completed.
             mediaRestorePending = MediaAutoRestoreService.isRestoreInProgress();
             if (!mediaRestorePending) MAIN.post(this::evaluateSilentFallback);
-            return;
+            return false;
         }
 
         Intent restore = new Intent(this, MediaAutoRestoreService.class)
@@ -922,6 +940,7 @@ public final class MediaSessionBridge extends NotificationListenerService {
             MAIN.removeCallbacks(silentFallbackRetry);
             MAIN.postDelayed(silentFallbackRetry, 1500L);
         }
+        return true;
     }
 
     private static void appendNotificationText(StringBuilder target, CharSequence value) {
