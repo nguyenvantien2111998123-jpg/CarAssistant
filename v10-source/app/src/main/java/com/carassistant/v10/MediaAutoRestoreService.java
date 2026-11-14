@@ -60,6 +60,7 @@ public final class MediaAutoRestoreService extends Service {
                 handler.removeCallbacks(restoreAttempt);
                 handler.removeCallbacks(connectionStabilizer);
                 HeadlessProjectionHost.releaseIfHeadless(MediaAutoRestoreService.this);
+                MediaSessionBridge.notifyAndroidAutoDisconnected();
                 stopForeground(true);
                 stopSelf();
                 Log.i(TAG, "AA connected notification removed; phone-side recovery stopped");
@@ -76,6 +77,7 @@ public final class MediaAutoRestoreService extends Service {
             if (!connected) {
                 Log.i(TAG, "AA notification did not remain present for stabilization window");
                 HeadlessProjectionHost.releaseIfHeadless(MediaAutoRestoreService.this);
+                MediaSessionBridge.notifyAndroidAutoDisconnected();
                 stopForeground(true);
                 stopSelf();
                 return;
@@ -110,6 +112,7 @@ public final class MediaAutoRestoreService extends Service {
                 if (MediaSessionBridge.applyCheckpoint(
                         MediaAutoRestoreService.this, expectedPackage, autoplay)) {
                     completed = true;
+                    MediaSessionBridge.notifyMediaRestoreFinished();
                     getSharedPreferences("media_autoplay", MODE_PRIVATE).edit()
                             .putString("phase", "verified_phone_background_restore")
                             .putBoolean("content_restore_requested", false)
@@ -142,6 +145,7 @@ public final class MediaAutoRestoreService extends Service {
             } else {
                 updateForegroundStatus("Chưa xác minh được media; giữ checkpoint");
                 Log.w(TAG, "Phone-side restore verification expired; checkpoint retained");
+                MediaSessionBridge.notifyMediaRestoreFinished();
             }
         }
     };
@@ -158,6 +162,12 @@ public final class MediaAutoRestoreService extends Service {
     public static void notifyMediaSessionsChanged() {
         MediaAutoRestoreService service = instance;
         if (service != null) service.handler.post(service.restoreAttempt);
+    }
+
+    /** True while a reconnect restore is still waiting for its final verification result. */
+    public static boolean isRestoreInProgress() {
+        MediaAutoRestoreService service = instance;
+        return service != null && !service.completed;
     }
 
     private void createNotificationChannel() {
@@ -194,6 +204,7 @@ public final class MediaAutoRestoreService extends Service {
         if (launchAttempts >= MAX_LAUNCH_ATTEMPTS) {
             updateForegroundStatus("Không thể khởi chạy ứng dụng media nguồn");
             Log.e(TAG, "Phone source launch exhausted retries for " + expectedPackage);
+            MediaSessionBridge.notifyMediaRestoreFinished();
             return;
         }
 
@@ -206,6 +217,7 @@ public final class MediaAutoRestoreService extends Service {
                 || !expectedPackage.equals(expectedComponent.getPackageName())) {
             updateForegroundStatus("Không tìm thấy màn hình khởi chạy ứng dụng media");
             Log.e(TAG, "No launchable source Activity for " + expectedPackage);
+            MediaSessionBridge.notifyMediaRestoreFinished();
             return;
         }
 
@@ -283,6 +295,7 @@ public final class MediaAutoRestoreService extends Service {
             handler.removeCallbacks(disconnectMonitor);
             handler.removeCallbacks(connectionStabilizer);
             HeadlessProjectionHost.releaseIfHeadless(this);
+            MediaSessionBridge.notifyAndroidAutoDisconnected();
             stopForeground(true);
             stopSelf(startId);
             return START_NOT_STICKY;
@@ -307,6 +320,8 @@ public final class MediaAutoRestoreService extends Service {
         if (TextUtils.isEmpty(expectedPackage) || getPackageName().equals(expectedPackage)
                 || !expectedPackage.matches("[A-Za-z0-9_]+(\\.[A-Za-z0-9_]+)+")) {
             Log.w(TAG, "No valid external media checkpoint package; phone recovery not started");
+            // No restore work remains, so the bridge may start phone-side silent PCM.
+            MediaSessionBridge.notifyMediaRestoreFinished();
             stopForeground(true);
             stopSelf(startId);
             return START_NOT_STICKY;
