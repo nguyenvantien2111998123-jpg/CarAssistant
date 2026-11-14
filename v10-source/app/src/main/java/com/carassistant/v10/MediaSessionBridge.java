@@ -79,6 +79,7 @@ public final class MediaSessionBridge extends NotificationListenerService {
     private boolean androidAutoConnected;
     private boolean mediaRestorePending;
     private boolean silentFallbackActive;
+    private boolean connectionStateInitialized;
     private static volatile MediaSessionBridge bridgeInstance;
     private MediaSessionManager.OnActiveSessionsChangedListener sessionsListener;
     private MediaController.Callback controllerCallback;
@@ -770,6 +771,7 @@ public final class MediaSessionBridge extends NotificationListenerService {
     public void onListenerConnected() {
         super.onListenerConnected();
         bridgeInstance = this;
+        connectionStateInitialized = false;
         androidAutoConnected = getSharedPreferences(RESUME_PREFS, Context.MODE_PRIVATE)
                 .getBoolean(AA_CONNECTED_PREF, false);
         mediaRestorePending = MediaAutoRestoreService.isRestoreInProgress();
@@ -816,6 +818,7 @@ public final class MediaSessionBridge extends NotificationListenerService {
                         .remove(AA_NOTIFICATION_TAG_PREF)
                         .apply();
             }
+            if (notificationSnapshotRead) connectionStateInitialized = true;
             MAIN.removeCallbacks(checkpointTask);
             saveCurrentCheckpoint();
             MAIN.postDelayed(checkpointTask, CHECKPOINT_INTERVAL_MS);
@@ -829,6 +832,7 @@ public final class MediaSessionBridge extends NotificationListenerService {
 
     @Override
     public void onListenerDisconnected() {
+        connectionStateInitialized = false;
         MAIN.removeCallbacks(checkpointTask);
         if (manager != null && sessionsListener != null) {
             try { manager.removeOnActiveSessionsChangedListener(sessionsListener); }
@@ -1139,6 +1143,7 @@ public final class MediaSessionBridge extends NotificationListenerService {
     }
 
     private void evaluateSilentFallback() {
+        if (!connectionStateInitialized) return;
         if (!androidAutoConnected) {
             stopSilentFallback();
             return;
