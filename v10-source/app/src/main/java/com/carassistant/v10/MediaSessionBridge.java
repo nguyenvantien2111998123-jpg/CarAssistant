@@ -16,6 +16,8 @@ import android.os.Handler;
 import android.os.Looper;
 import android.provider.Settings;
 import android.text.TextUtils;
+import android.os.SystemClock;
+import android.view.KeyEvent;
 import android.service.notification.NotificationListenerService;
 import android.service.notification.StatusBarNotification;
 import android.util.Log;
@@ -629,14 +631,12 @@ public final class MediaSessionBridge extends NotificationListenerService {
                 MediaSessionBridge.pause();
             }
             @Override public void onSkipToNext() {
-                if (silentFallbackActive) return;
                 Log.i(TAG, "CarAsistant MediaSession callback: onSkipToNext");
-                MediaSessionBridge.skipNext();
+                dispatchTransportGesture(KeyEvent.KEYCODE_MEDIA_NEXT);
             }
             @Override public void onSkipToPrevious() {
-                if (silentFallbackActive) return;
                 Log.i(TAG, "CarAsistant MediaSession callback: onSkipToPrevious");
-                MediaSessionBridge.skipPrevious();
+                dispatchTransportGesture(KeyEvent.KEYCODE_MEDIA_PREVIOUS);
             }
             @Override public void onFastForward() {
                 if (silentFallbackActive) return;
@@ -667,6 +667,25 @@ public final class MediaSessionBridge extends NotificationListenerService {
                 }
             }
         }, MAIN);
+    }
+
+    /**
+     * Some Android Auto builds deliver transport callbacks instead of the original
+     * DOWN/UP KeyEvents. Recreate a short tap and feed the same process-wide gesture
+     * classifier, so two callbacks inside its double-tap window still invoke voice.
+     */
+    private void dispatchTransportGesture(int keyCode) {
+        long now = SystemClock.uptimeMillis();
+        Intent down = new Intent(Intent.ACTION_MEDIA_BUTTON);
+        down.putExtra(Intent.EXTRA_KEY_EVENT,
+                new KeyEvent(now, now, KeyEvent.ACTION_DOWN, keyCode, 0));
+        SteeringWheelInputDispatcher.dispatch(this, down);
+
+        Intent up = new Intent(Intent.ACTION_MEDIA_BUTTON);
+        up.putExtra(Intent.EXTRA_KEY_EVENT,
+                new KeyEvent(now, SystemClock.uptimeMillis(),
+                        KeyEvent.ACTION_UP, keyCode, 0));
+        SteeringWheelInputDispatcher.dispatch(this, up);
     }
 
     private void updateMirrorSession(Snapshot state) {
@@ -1144,28 +1163,12 @@ public final class MediaSessionBridge extends NotificationListenerService {
 
     private void evaluateSilentFallback() {
         if (!connectionStateInitialized) return;
-        if (!androidAutoConnected) {
-            stopSilentFallback();
-            return;
-        }
-        if (hasRealMediaSource()) {
-            stopSilentFallback();
-            return;
-        }
-        if (mediaRestorePending) return;
-        if (silentFallbackActive && silentAudioFallback.isPlaying()) return;
 
-        if (silentAudioFallback.start()) {
-            silentFallbackActive = true;
-            MAIN.removeCallbacks(silentFallbackRetry);
-            updateMirrorSession(snapshot);
-            Log.i(TAG, "Silent fallback active: AA connected and no live phone media source");
-        } else {
-            silentFallbackActive = false;
-            MAIN.removeCallbacks(silentFallbackRetry);
-            MAIN.postDelayed(silentFallbackRetry, 3000L);
-            Log.w(TAG, "Silent fallback could not start; retry scheduled");
-        }
+        // A zero-volume USAGE_MEDIA AudioTrack still creates a phone playback route.
+        // It is not required for Gearhead key dispatch: keep the single mirrored
+        // MediaSession active/PAUSED instead of opening a competing audio output.
+        stopSilentFallback();
+        Log.i(TAG, "Silent PCM disabled; keeping the CarAsistant MediaSession available");
     }
 
     private void stopSilentFallback() {
