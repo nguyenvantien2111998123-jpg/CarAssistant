@@ -326,6 +326,7 @@ public final class MediaAutoRestoreService extends Service {
                 || !expectedPackage.matches("[A-Za-z0-9_]+(\\.[A-Za-z0-9_]+)+")) {
             Log.w(TAG, "No valid external media checkpoint package; phone recovery not started");
             // No restore work remains, so the bridge may start phone-side silent PCM.
+            completed = true;
             MediaSessionBridge.notifyMediaRestoreFinished();
             stopForeground(true);
             stopSelf(startId);
