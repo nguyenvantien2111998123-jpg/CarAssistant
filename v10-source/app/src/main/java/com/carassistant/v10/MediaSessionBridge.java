@@ -65,6 +65,9 @@ public final class MediaSessionBridge extends NotificationListenerService {
     private static volatile long lastCheckpointDuration;
     private MediaSession mirrorSession;
     private MediaSessionManager manager;
+    private final Runnable silentFallbackRetry = new Runnable() {
+        @Override public void run() { evaluateSilentFallback(); }
+    };
     private final SilentAudioTrackFallback silentAudioFallback =
             new SilentAudioTrackFallback(() -> MAIN.post(() -> {
                 silentFallbackActive = false;
@@ -76,9 +79,6 @@ public final class MediaSessionBridge extends NotificationListenerService {
     private boolean androidAutoConnected;
     private boolean mediaRestorePending;
     private boolean silentFallbackActive;
-    private final Runnable silentFallbackRetry = new Runnable() {
-        @Override public void run() { evaluateSilentFallback(); }
-    };
     private static volatile MediaSessionBridge bridgeInstance;
     private MediaSessionManager.OnActiveSessionsChangedListener sessionsListener;
     private MediaController.Callback controllerCallback;
