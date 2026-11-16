@@ -1,12 +1,12 @@
 package com.carassistant.v10.core.car;
 
 /**
- * Coordinates three separate facts: Android Auto host connection, CarActivity
- * session lifecycle, and availability of the selected display backend.
- * A connection notification never starts an Activity or steals Android Auto
- * foreground. The backend attaches only after the host opens our car session.
+ * Coordinates host connection signals, the real CarActivity lifecycle and a
+ * pluggable display backend. Connection notifications are informational only:
+ * they never create/end a car session or attach/detach a display.
  */
 public final class CarSessionCoordinator {
+    private final Object lock = new Object();
     private final CarConnectionMonitor connectionMonitor;
     private final CarDisplayBackend displayBackend;
     private CarConnectionState connectionState = CarConnectionState.UNKNOWN;
@@ -22,71 +22,84 @@ public final class CarSessionCoordinator {
     }
 
     public void start() {
-        synchronized (this) {
+        synchronized (lock) {
             if (monitorStarted) return;
             monitorStarted = true;
         }
         try {
             connectionMonitor.start(this::onConnectionChanged);
         } catch (RuntimeException error) {
-            synchronized (this) { monitorStarted = false; }
+            synchronized (lock) { monitorStarted = false; }
             throw error;
         }
     }
 
     public void stop() {
         boolean stopMonitor;
-        synchronized (this) {
+        boolean detach;
+        synchronized (lock) {
             stopMonitor = monitorStarted;
             monitorStarted = false;
-            endSessionLocked();
+            sessionActive = false;
+            detach = displayAttached;
+            displayAttached = false;
         }
         if (stopMonitor) connectionMonitor.stop();
+        if (detach) displayBackend.detach();
     }
 
-    /** Called by the Android Auto adapter from the real CarActivity lifecycle. */
-    public synchronized boolean onCarSessionStarted() {
-        sessionActive = true;
-        return attachBackendLocked();
+    /** Called only from the host-owned CarActivity lifecycle after UI surfaces exist. */
+    public boolean onCarSessionStarted() {
+        synchronized (lock) {
+            sessionActive = true;
+            if (displayAttached) return true;
+        }
+        if (!displayBackend.isAvailable()) return false;
+        boolean attached = displayBackend.attach();
+        boolean keep;
+        synchronized (lock) {
+            keep = attached && sessionActive;
+            displayAttached = keep;
+        }
+        if (attached && !keep) displayBackend.detach();
+        return keep;
     }
 
-    public synchronized void onCarSessionStopped() { endSessionLocked(); }
+    public void onCarSessionStopped() {
+        boolean detach;
+        synchronized (lock) {
+            sessionActive = false;
+            detach = displayAttached;
+            displayAttached = false;
+        }
+        if (detach) displayBackend.detach();
+    }
 
-    /** Connection state is informational; CONNECTED alone never attaches a display. */
-    public synchronized void onConnectionChanged(CarConnectionState next) {
+    /** Host connection state is diagnostic; only CarActivity lifecycle owns session lifetime. */
+    public void onConnectionChanged(CarConnectionState next) {
         if (next == null) return;
-        connectionState = next;
-        if (next == CarConnectionState.DISCONNECTED) endSessionLocked();
+        synchronized (lock) { connectionState = next; }
     }
 
-    public synchronized boolean launchApp(String packageName, String activityName) {
-        if (!sessionActive || !displayAttached || !isNonEmpty(packageName)
-                || !isNonEmpty(activityName)) return false;
+    public boolean launchApp(String packageName, String activityName) {
+        synchronized (lock) {
+            if (!sessionActive || !displayAttached || !isNonEmpty(packageName)
+                    || !isNonEmpty(activityName)) return false;
+        }
         return displayBackend.launchApp(packageName, activityName);
     }
 
-    public synchronized boolean showHome() {
-        return sessionActive && displayAttached && displayBackend.showHome();
+    public boolean showHome() {
+        synchronized (lock) {
+            if (!sessionActive || !displayAttached) return false;
+        }
+        return displayBackend.showHome();
     }
 
-    public synchronized Snapshot snapshot() {
-        return new Snapshot(connectionState, monitorStarted, sessionActive,
-                displayAttached, displayBackend.getId());
-    }
-
-    private boolean attachBackendLocked() {
-        if (!sessionActive) return false;
-        if (displayAttached) return true;
-        if (!displayBackend.isAvailable()) return false;
-        displayAttached = displayBackend.attach();
-        return displayAttached;
-    }
-
-    private void endSessionLocked() {
-        sessionActive = false;
-        if (displayAttached) {
-            displayAttached = false;
-            displayBackend.detach();
+    public Snapshot snapshot() {
+        synchronized (lock) {
+            return new Snapshot(connectionState, monitorStarted, sessionActive,
+                    displayAttached, displayBackend.getId());
         }
     }
 
