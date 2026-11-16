@@ -28,8 +28,17 @@ public final class CarSessionCoordinator {
         }
         try {
             connectionMonitor.start(this::onConnectionChanged);
+            com.carassistant.v10.CarAssistantCore.reportCoreComponent(
+                    "CONNECTION_MONITOR", true, "Android Auto connection monitor started");
+            com.carassistant.v10.CarAssistantCore.reportCoreComponent(
+                    "SESSION_COORDINATOR", true, "Car session coordinator started");
         } catch (RuntimeException error) {
             synchronized (lock) { monitorStarted = false; }
+            com.carassistant.v10.CarAssistantCore.reportCoreComponent(
+                    "CONNECTION_MONITOR", false, "Connection monitor start failed: "
+                            + error.getClass().getSimpleName());
+            com.carassistant.v10.CarAssistantCore.reportCoreComponent(
+                    "SESSION_COORDINATOR", false, "Coordinator start failed");
             throw error;
         }
     }
@@ -46,6 +55,12 @@ public final class CarSessionCoordinator {
         }
         if (stopMonitor) connectionMonitor.stop();
         if (detach) displayBackend.detach();
+        com.carassistant.v10.CarAssistantCore.reportCoreComponent(
+                "CONNECTION_MONITOR", false, "Android Auto connection monitor stopped");
+        com.carassistant.v10.CarAssistantCore.reportCoreComponent(
+                "SESSION_COORDINATOR", false, "Car session coordinator stopped");
+        com.carassistant.v10.CarAssistantCore.reportCoreComponent(
+                "DISPLAY_BACKEND", false, "Display backend detached during coordinator stop");
     }
 
     /** Called only from the host-owned CarActivity lifecycle after UI surfaces exist. */
@@ -54,7 +69,12 @@ public final class CarSessionCoordinator {
             sessionActive = true;
             if (displayAttached) return true;
         }
-        if (!displayBackend.isAvailable()) return false;
+        if (!displayBackend.isAvailable()) {
+            com.carassistant.v10.CarAssistantCore.reportCoreComponent(
+                    "DISPLAY_BACKEND", false, "Display backend unavailable: "
+                            + displayBackend.getId());
+            return false;
+        }
         boolean attached = displayBackend.attach();
         boolean keep;
         synchronized (lock) {
@@ -62,6 +82,10 @@ public final class CarSessionCoordinator {
             displayAttached = keep;
         }
         if (attached && !keep) displayBackend.detach();
+        com.carassistant.v10.CarAssistantCore.reportCoreComponent(
+                "DISPLAY_BACKEND", keep, keep
+                        ? "Display backend attached: " + displayBackend.getId()
+                        : "Display backend attach failed: " + displayBackend.getId());
         return keep;
     }
 
@@ -73,12 +97,16 @@ public final class CarSessionCoordinator {
             displayAttached = false;
         }
         if (detach) displayBackend.detach();
+        com.carassistant.v10.CarAssistantCore.reportCoreComponent(
+                "DISPLAY_BACKEND", false, "Display backend detached from car session");
     }
 
     /** Host connection state is diagnostic; only CarActivity lifecycle owns session lifetime. */
     public void onConnectionChanged(CarConnectionState next) {
         if (next == null) return;
         synchronized (lock) { connectionState = next; }
+        com.carassistant.v10.CarAssistantCore.reportAndroidAutoConnection(
+                next == CarConnectionState.CONNECTED);
     }
 
     public boolean launchApp(String packageName, String activityName) {
