@@ -24,7 +24,12 @@ public final class CoreRecoveryPolicy {
         return RecoveryReason.PROCESS_RESTART;
     }
 
-    /** Required Core components; display and feature services are reported separately. */
+    /** Core readiness is independent from the Activity-owned display/session coordinator. */
+    public static boolean isCoreReady(boolean projectionServiceReady, boolean coreConnectionMonitorReady) {
+        return projectionServiceReady && coreConnectionMonitorReady;
+    }
+
+    /** Legacy three-component overload retained for existing tests and callers. */
     public static boolean isCoreReady(boolean projectionServiceReady,
                                       boolean coordinatorReady,
                                       boolean connectionMonitorReady) {
