@@ -78,6 +78,7 @@ public final class GearheadDockPatcher {
     private volatile long visibleUntil;
     private volatile long projectionLaunchRequestedAt;
     private boolean facetBarReady;
+    private boolean autoLaunchAttemptedForHost;
     private long lastAutoLaunchRequest;
     private boolean leaseActive;
     private boolean rootsDirty = true;
@@ -147,8 +148,28 @@ public final class GearheadDockPatcher {
                             }
                         }
                     });
+            Class<?> windowManagerGlobal = XposedHelpers.findClass(
+                    "android.view.WindowManagerGlobal", (ClassLoader) null);
             XposedBridge.hookAllMethods(
-                    XposedHelpers.findClass("android.view.WindowManagerGlobal", (ClassLoader) null),
+                    windowManagerGlobal,
+                    "removeView",
+                    new XC_MethodHook() {
+                        @Override
+                        protected void afterHookedMethod(MethodHookParam param) {
+                            if (param.args.length == 0 || !(param.args[0] instanceof View)) return;
+                            View removed = (View) param.args[0];
+                            Display display = removed.getDisplay();
+                            if (display != null && "GhFacetBar".equals(display.getName())) {
+                                patcher.main.post(() -> {
+                                    patcher.facetBarReady = false;
+                                    patcher.autoLaunchAttemptedForHost = false;
+                                    log("Android Auto GhFacetBar removed; auto-open re-armed for next connection");
+                                });
+                            }
+                        }
+                    });
+            XposedBridge.hookAllMethods(
+                    windowManagerGlobal,
                     "addView",
                     new XC_MethodHook() {
                         @Override
@@ -353,20 +374,14 @@ public final class GearheadDockPatcher {
     }
 
     /**
-     * Android Auto's connected notification is converted by the app process into
-     * an authenticated provider request. Wait until Gearhead has inflated its real
-     * projection facet bar, then invoke the same static launcher used by AADisplay.
+     * AADisplay's AutoOpen implementation launches from the projection UI's
+     * facet-bar inflation callback, not from a phone-side notification. Match
+     * that lifecycle: once Gearhead's projection UI is ready, open CarAsistant
+     * exactly once for this host session. Retry while the internal launcher is
+     * not yet available; reset when GhFacetBar is removed on disconnect.
      */
     private void maybeAutoLaunchProjection() {
-        if (!facetBarReady) {
-            return;
-        }
-        long requestedAt = projectionLaunchRequestedAt;
-        long now = SystemClock.uptimeMillis();
-        if (requestedAt <= 0L || requestedAt <= lastAutoLaunchRequest
-                || requestedAt > now || now - requestedAt > 30_000L) {
-            return;
-        }
+        if (!facetBarReady || autoLaunchAttemptedForHost) return;
         Context appContext = context;
         if (appContext == null) return;
         try {
@@ -376,7 +391,7 @@ public final class GearheadDockPatcher {
                     loader);
             Method launcher = findCarAppLauncher(controller);
             if (launcher == null) {
-                log("Auto-projection request is pending; Gearhead car-app launcher not ready");
+                log("Auto-open waiting for Gearhead car-app launcher initialization");
                 return;
             }
             launcher.setAccessible(true);
@@ -385,8 +400,9 @@ public final class GearheadDockPatcher {
                     "com.carassistant.v10", "com.carassistant.v10.AACastCarService"));
             intent.putExtra("android.intent.extra.PACKAGE_NAME", "com.carassistant.v10");
             launcher.invoke(null, intent);
-            lastAutoLaunchRequest = requestedAt;
-            log("Automatically launched CarAsistant projection after Android Auto connected");
+            autoLaunchAttemptedForHost = true;
+            lastAutoLaunchRequest = SystemClock.uptimeMillis();
+            log("Automatically opened CarAsistant after Android Auto projection UI became ready");
         } catch (Throwable error) {
             log("Automatic CarAsistant projection launch failed; will retry: " + error);
         }
