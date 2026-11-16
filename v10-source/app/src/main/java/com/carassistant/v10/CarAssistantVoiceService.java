@@ -57,7 +57,7 @@ public final class CarAssistantVoiceService extends Service {
         }
 
         CarAssistantCommandExecutor commandExecutor =
-                new CarAssistantCommandExecutor(getApplicationContext());
+                CarAssistantCore.createCommandExecutor(getApplicationContext());
 
         controller = new VoiceAssistantController(getApplicationContext(),
                 (listening, status, transcript, showTranscript) -> publishState(
