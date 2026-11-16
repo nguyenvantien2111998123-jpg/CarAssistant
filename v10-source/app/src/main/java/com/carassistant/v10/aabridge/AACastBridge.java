@@ -47,34 +47,35 @@ public final class AACastBridge implements IXposedHookLoadPackage {
             return;
         }
 
-        // ---- Android Auto (và chính app, để mọi code path nhất quán) ----
-        if (GEARHEAD.equals(packageName) || SELF.equals(packageName)) {
-            InstallerSpoof.hookLegacy(param.classLoader, PLAY);
+        // ---- Android Auto ----
+        if (GEARHEAD.equals(packageName)) {
+            String processName = param.processName == null ? "" : param.processName;
 
-            if (GEARHEAD.equals(packageName)) {
-                GearheadAllow.install(param.classLoader);
-                GearheadMediaSessionFilter.install();
-                GearheadDockPatcher.install();
-                // Android Auto routes projected media-button events through a receiver
-                // in its :projection process. Capture there as a fallback when no
-                // active media app/session exists to receive the steering keys.
-                if (param.processName != null && param.processName.endsWith(":projection")) {
-                    GearheadSteeringKeyHooks.install();
-                }
+            // Only spoof source information for CarAsistant, and only in Gearhead.
+            InstallerSpoof.hookLegacy(param.classLoader, PLAY);
+            if (Build.VERSION.SDK_INT >= 30) {
+                InstallerSpoof.hookInstallSourceInfo(param.classLoader, PLAY);
             }
 
-            if (Build.VERSION.SDK_INT >= 30) {
-                InstallerSpoof.hookInstallSource("getInitiatingPackageName", PLAY);
-                InstallerSpoof.hookInstallSource("getInstallingPackageName", PLAY);
-                if (Build.VERSION.SDK_INT >= 33) {
-                    InstallerSpoof.hookInstallSource("getPackageSource", 2);
-                }
-                if (Build.VERSION.SDK_INT >= 34) {
-                    InstallerSpoof.hookInstallSource("getUpdateOwnerPackageName", PLAY);
-                }
+            GearheadAllow.install(param.classLoader);
+            GearheadMediaSessionFilter.install();
+            GearheadDockPatcher.install();
+
+            // Receiver ownership differs between AA releases. Keep system_server as
+            // the primary key path; observe both candidate Gearhead processes as fallback.
+            if (processName.endsWith(":projection") || processName.endsWith(":car")) {
+                GearheadSteeringKeyHooks.install(processName);
+            } else {
+                XposedBridge.log("[AACast] Steering receiver fallback not installed in "
+                        + processName);
             }
             XposedBridge.log("[AACast] Module loaded in " + packageName
-                    + " process=" + param.processName);
+                    + " process=" + processName);
+            return;
+        }
+
+        if (SELF.equals(packageName)) {
+            XposedBridge.log("[AACast] App process loaded: " + param.processName);
         }
     }
 }
