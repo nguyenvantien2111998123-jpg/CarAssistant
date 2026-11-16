@@ -230,7 +230,7 @@ public final class V10SettingsActivity extends Activity {
             TextView autoplayHint = text(
                     "Bật: khôi phục ứng dụng media trên màn hình phụ và tiếp tục phát từ checkpoint gần nhất. "
                     + "Tắt: vẫn khôi phục ứng dụng/vị trí nhưng giữ tạm dừng. "
-                    + "Checkpoint mới ghi đè checkpoint cũ mỗi 60 giây. Việc khôi phục nội dung phụ thuộc "
+                    + "Checkpoint được cập nhật định kỳ để lưu vị trí gần nhất. Việc khôi phục nội dung phụ thuộc "
                     + "ứng dụng media còn giữ phiên phát; Android không cung cấp cách ép mọi ứng dụng "
                     + "mở lại đúng video/bài hát nếu ứng dụng đã xóa phiên.",
                     13, Color.LTGRAY);
@@ -267,7 +267,6 @@ public final class V10SettingsActivity extends Activity {
             body.addView(note, params(-1, -2));
         });
 
-        addButton(list, "QUAY LẠI", this::finish);
         refreshStatus();
         refreshPermissionGuide();
         setActivePage("home");
