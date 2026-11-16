@@ -64,7 +64,18 @@ public final class CarAssistantCoreRuntime {
         }
     }
 
-    public String getDiagnostics() {
-        return recoveryMonitor.getSnapshot();
+    public static void reportComponent(String component, boolean ready, String detail) {
+        CarAssistantCoreRuntime current = instance;
+        if (current != null) current.recoveryMonitor.reportComponent(component, ready, detail);
+    }
+
+    public static void reportAndroidAutoConnection(boolean connected) {
+        CarAssistantCoreRuntime current = instance;
+        if (current != null) current.recoveryMonitor.reportAndroidAutoConnection(connected);
+    }
+
+    public static String getDiagnostics() {
+        CarAssistantCoreRuntime current = instance;
+        return current == null ? "CORE_NOT_STARTED" : current.recoveryMonitor.getSnapshot();
     }
 }
