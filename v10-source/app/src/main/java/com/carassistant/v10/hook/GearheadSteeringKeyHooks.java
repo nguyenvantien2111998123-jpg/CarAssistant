@@ -33,8 +33,8 @@ public final class GearheadSteeringKeyHooks {
     private static final String ACTION_MEDIA_BUTTON = Intent.ACTION_MEDIA_BUTTON;
     private static final String ACTION_PROJECTED_KEY = "android.intent.action.projected.KEY_EVENT";
 
-    private static final Set<Class<?>> HOOKED_RECEIVER_CLASSES =
-            Collections.newSetFromMap(new WeakHashMap<Class<?>, Boolean>());
+    private static final Set<String> HOOKED_RECEIVER_METHODS =
+            Collections.newSetFromMap(new WeakHashMap<String, Boolean>());
     private static final GearheadGestureRouter GESTURES = new GearheadGestureRouter();
 
     private GearheadSteeringKeyHooks() { }
@@ -81,8 +81,9 @@ public final class GearheadSteeringKeyHooks {
     }
 
     private static void hookReceiver(Class<?> receiverClass, String registeredAction) {
-        synchronized (HOOKED_RECEIVER_CLASSES) {
-            if (!HOOKED_RECEIVER_CLASSES.add(receiverClass)) return;
+        String hookKey = receiverClass.getName() + "#" + registeredAction;
+        synchronized (HOOKED_RECEIVER_METHODS) {
+            if (!HOOKED_RECEIVER_METHODS.add(hookKey)) return;
         }
         try {
             Method onReceive = findOnReceive(receiverClass);
@@ -191,7 +192,7 @@ public final class GearheadSteeringKeyHooks {
                     if (pressedKey != KeyEvent.KEYCODE_UNKNOWN) {
                         // Recover from a missing ACTION_UP. A real hold repeats
                         // with the same downTime; a new press has a new downTime.
-                        if (key != pressedKey || event.getDownTime() == pressedDownTime) return;
+                        if (key == pressedKey && event.getDownTime() == pressedDownTime) return;
                         cancelLongPressLocked();
                         pressedKey = KeyEvent.KEYCODE_UNKNOWN;
                         pressedDownTime = 0L;
