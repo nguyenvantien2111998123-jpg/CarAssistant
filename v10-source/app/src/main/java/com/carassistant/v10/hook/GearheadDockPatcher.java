@@ -21,6 +21,7 @@ import android.widget.TextView;
 import com.carassistant.v10.DockStateProvider;
 
 import java.lang.reflect.Field;
+import java.lang.reflect.Method;
 import java.lang.reflect.Modifier;
 import java.util.ArrayList;
 import java.util.Collections;
@@ -283,6 +284,22 @@ public final class GearheadDockPatcher {
         } catch (Throwable error) {
             log("Could not open V10 from media metadata click: " + error);
         }
+    }
+
+
+    private static Method findCarAppLauncher(Class<?> controller) {
+        if (controller == null) return null;
+        for (Class<?> type = controller; type != null; type = type.getSuperclass()) {
+            for (Method method : type.getDeclaredMethods()) {
+                if (Modifier.isStatic(method.getModifiers())
+                        && "a".equals(method.getName())
+                        && method.getParameterTypes().length == 1
+                        && Intent.class.equals(method.getParameterTypes()[0])) {
+                    return method;
+                }
+            }
+        }
+        return null;
     }
 
     private static void log(String message) {
