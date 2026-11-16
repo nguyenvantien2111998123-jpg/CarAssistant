@@ -21,7 +21,6 @@ import android.widget.TextView;
 import com.carassistant.v10.DockStateProvider;
 
 import java.lang.reflect.Field;
-import java.lang.reflect.Method;
 import java.lang.reflect.Modifier;
 import java.util.ArrayList;
 import java.util.Collections;
@@ -286,20 +285,6 @@ public final class GearheadDockPatcher {
         }
     }
 
-    private static Method findCarAppLauncher(Class<?> controller) {
-        for (Class<?> type = controller; type != null; type = type.getSuperclass()) {
-            for (Method method : type.getDeclaredMethods()) {
-                if (Modifier.isStatic(method.getModifiers())
-                        && "a".equals(method.getName())
-                        && method.getParameterTypes().length == 1
-                        && Intent.class.equals(method.getParameterTypes()[0])) {
-                    return method;
-                }
-            }
-        }
-        return null;
-    }
-
     private static void log(String message) {
         Log.i(LOG_TAG, message);
         XposedBridge.log(TAG + " " + message);
@@ -410,28 +395,21 @@ public final class GearheadDockPatcher {
         Context appContext = context;
         if (appContext == null) return;
         try {
-            ClassLoader loader = appContext.getClassLoader();
-            Class<?> controller = XposedHelpers.findClassIfExists(
-                    "com.google.android.projection.gearhead.service.CarSystemUiControllerService",
-                    loader);
-            Method launcher = findCarAppLauncher(controller);
-            if (controller == null || launcher == null) {
-                log("Auto-open launcher not ready in " + processName
-                        + "; class=" + (controller != null) + "; retry scheduled");
+            Intent intent = new Intent();
+            intent.setComponent(new ComponentName(
+                    "com.carassistant.v10", "com.carassistant.v10.AaAutoOpenService"));
+            ComponentName started = appContext.startService(intent);
+            if (started == null) {
+                log("CarAsistant Car API bridge service was not started in " + processName
+                        + "; retry scheduled");
                 scheduleAutoLaunchRetry();
                 return;
             }
-            launcher.setAccessible(true);
-            Intent intent = new Intent();
-            intent.setComponent(new ComponentName(
-                    "com.carassistant.v10", "com.carassistant.v10.AACastCarService"));
-            intent.putExtra("android.intent.extra.PACKAGE_NAME", "com.carassistant.v10");
-            launcher.invoke(null, intent);
             autoLaunchAttemptedForHost = true;
             autoLaunchRetryScheduled = false;
             lastAutoLaunchRequest = SystemClock.uptimeMillis();
-            log("CarAsistant launch request accepted by Gearhead launcher in " + processName
-                    + "; component=" + intent.getComponent());
+            log("Started CarAsistant Car API bridge from " + processName
+                    + "; service=" + started.flattenToShortString());
         } catch (Throwable error) {
             log("Automatic CarAsistant projection launch failed in " + processName
                     + "; retry scheduled: " + error);
