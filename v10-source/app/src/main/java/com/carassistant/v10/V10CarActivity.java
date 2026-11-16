@@ -38,7 +38,6 @@ import android.widget.ScrollView;
 import android.widget.TextView;
 import android.widget.Toast;
 
-import com.carassistant.v10.voice.VoiceCommandRouter;
 import com.carassistant.v10.voice.VoiceCommandParser;
 
 import com.google.android.apps.auto.sdk.CarActivity;
@@ -52,7 +51,7 @@ import java.util.List;
 import java.util.Locale;
 
 public final class V10CarActivity
-        extends CarActivity implements VoiceCommandRouter.Host {
+        extends CarActivity {
 
     private final Handler handler =
             new Handler(Looper.getMainLooper());
@@ -69,6 +68,7 @@ public final class V10CarActivity
     private FrameLayout appProjectionLayer;
     private TextureView appTextureView;
     private V10ProjectionSession backgroundSession;
+    private V10ActivityVoiceCommandHost voiceCommandHost;
     private ComponentName activeBackgroundTarget;
     private ComponentName selectedAppTarget;
     private TextView selectedAppLabel;
@@ -212,8 +212,11 @@ public final class V10CarActivity
 
         loadApps();
         rebuildDock();
-        V10ProjectionCoordinator.attach(this);
-        V10ProjectionCoordinator.dispatchPending(this, this);
+        if (voiceCommandHost == null) {
+            voiceCommandHost = new V10ActivityVoiceCommandHost(this);
+        }
+        V10ProjectionCoordinator.attach(voiceCommandHost);
+        V10ProjectionCoordinator.dispatchPending(this, voiceCommandHost);
 
         handler.removeCallbacks(
                 clockTicker);
@@ -1531,21 +1534,11 @@ private void hideTaskSwitcher() {
     }
 
 
-    /**
-     * Builds the projection-backed command router independently of recognition setup.
-     * Command execution remains attached to the live projection Activity until the
-     * ProjectionCoordinator can safely own that lifecycle.
-     */
-    private VoiceCommandRouter createVoiceCommandRouter() {
-        return new VoiceCommandRouter(this);
-    }
-
-@Override
-public String openApp(String spokenName) {
+    /** Voice command entry point exposed through V10ActivityVoiceCommandHost. */
+    public String openApp(String spokenName) {
     return openAppByVoice(spokenName);
 }
 
-@Override
 public String openVoiceTask(String category, String query, String explicitProvider) {
     if ("navigation".equals(category) || "nearby".equals(category)) {
         AppInfo selectedApp = null;
@@ -1711,14 +1704,12 @@ public String openVoiceTask(String category, String query, String explicitProvid
     return null;
 }
 
-@Override
-public void showAppPicker() {
-    V10CarActivity.this.showApps();
+public void showAppPickerFromVoice() {
+    showApps();
 }
 
-@Override
-public void goHome() {
-    V10CarActivity.this.returnToLauncher();
+public void goHomeFromVoice() {
+    returnToLauncher();
 }
 
     /** Called by the LSPosed steering-key bridge when Next is double-pressed. */
@@ -1899,7 +1890,8 @@ public void goHome() {
         if (session != null) { session.destroy(); session = null; }
         if (backgroundSession != null) { backgroundSession.destroy(); backgroundSession = null; }
 
-        V10ProjectionCoordinator.detach(this);
+        V10ProjectionCoordinator.detach(voiceCommandHost);
+        voiceCommandHost = null;
 
         V10SessionStore
                 .clearCurrentActivity(
