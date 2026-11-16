@@ -24,12 +24,19 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Comparator;
 import java.util.List;
+import java.util.LinkedHashMap;
+import java.util.Map;
 
 /** Phone-side setup screen with tap-to-expand sections. */
 public final class V10SettingsActivity extends Activity {
     public static final String EXTRA_REQUEST_MICROPHONE = "request_microphone_permission";
     private boolean returnAfterMicPermission;
     private LinearLayout list;
+    private LinearLayout pageHost;
+    private final Map<String, LinearLayout> pages = new LinkedHashMap<>();
+    private final Map<String, TextView> pageTabs = new LinkedHashMap<>();
+    private String activePage = "home";
+    private TextView overviewStatus;
     private LinearLayout favoriteChoices;
     private LinearLayout backgroundChoices;
     private TextView favoriteStatus;
@@ -76,28 +83,62 @@ public final class V10SettingsActivity extends Activity {
     }
 
     private void buildUi() {
+        LinearLayout root = new LinearLayout(this);
+        root.setOrientation(LinearLayout.VERTICAL);
+        root.setBackgroundColor(Color.rgb(9, 14, 21));
+        setContentView(root);
+
+        LinearLayout header = new LinearLayout(this);
+        header.setOrientation(LinearLayout.VERTICAL);
+        header.setPadding(dp(20), dp(18), dp(20), dp(12));
+        root.addView(header, params(-1, -2));
+
+        TextView title = text("CarAsistant", 26, Color.WHITE);
+        title.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
+        header.addView(title, params(-1, dp(36)));
+        TextView eyebrow = text("PHONE CONTROL CENTER  •  ANDROID BOX", 10, Color.rgb(90, 190, 207));
+        eyebrow.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
+        header.addView(eyebrow, params(-1, dp(22)));
+
+        LinearLayout tabBar = new LinearLayout(this);
+        tabBar.setOrientation(LinearLayout.HORIZONTAL);
+        tabBar.setPadding(dp(10), dp(5), dp(10), dp(8));
+        root.addView(tabBar, params(-1, dp(58)));
+
+        pageHost = new LinearLayout(this);
+        pageHost.setOrientation(LinearLayout.VERTICAL);
         ScrollView scroll = new ScrollView(this);
         scroll.setFillViewport(true);
-        scroll.setBackgroundColor(Color.rgb(10, 14, 20));
+        scroll.setClipToPadding(false);
+        scroll.addView(pageHost, new ScrollView.LayoutParams(-1, -1));
+        root.addView(scroll, new LinearLayout.LayoutParams(-1, 0, 1f));
 
-        list = new LinearLayout(this);
-        list.setOrientation(LinearLayout.VERTICAL);
-        list.setPadding(dp(18), dp(20), dp(18), dp(24));
-        scroll.addView(list);
-        setContentView(scroll);
+        pages.clear();
+        pageTabs.clear();
+        createPage("home");
+        createPage("apps");
+        createPage("media");
+        createPage("display");
+        createPage("system");
+        addPageTab(tabBar, "home", "Tổng quan");
+        addPageTab(tabBar, "apps", "Ứng dụng");
+        addPageTab(tabBar, "media", "Media");
+        addPageTab(tabBar, "display", "Màn hình");
+        addPageTab(tabBar, "system", "Hệ thống");
 
-        TextView title = text("CarAsistant", 27, Color.WHITE);
-        title.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
-        list.addView(title, params(-1, dp(42)));
-        TextView eyebrow = text("TRUNG TÂM ĐIỀU KHIỂN & CÀI ĐẶT", 11, Color.rgb(91, 190, 207));
-        eyebrow.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
-        list.addView(eyebrow, params(-1, dp(24)));
-
+        list = pages.get("home");
         TextView intro = text(
-                "Quản lý quyền, ứng dụng mặc định và cấu hình màn hình chiếu tại một nơi.",
+                "Quản lý CarAsistant trên điện thoại. Các thiết lập chiếu xe, trợ lý và media được tách thành từng khu vực.",
                 14, Color.rgb(183, 194, 207));
-        intro.setPadding(0, 0, 0, dp(12));
+        intro.setPadding(0, dp(4), 0, dp(12));
         list.addView(intro, params(-1, -2));
+
+        overviewStatus = text("", 13, Color.WHITE);
+        overviewStatus.setPadding(dp(14), dp(12), dp(14), dp(12));
+        overviewStatus.setBackgroundColor(Color.rgb(20, 35, 45));
+        LinearLayout.LayoutParams overviewParams = params(-1, -2);
+        overviewParams.setMargins(0, 0, 0, dp(12));
+        list.addView(overviewStatus, overviewParams);
 
         addPermissionGuideCard();
 
@@ -228,6 +269,52 @@ public final class V10SettingsActivity extends Activity {
 
         addButton(list, "QUAY LẠI", this::finish);
         refreshStatus();
+        refreshPermissionGuide();
+        setActivePage("home");
+    }
+
+    private void createPage(String key) {
+        LinearLayout page = new LinearLayout(this);
+        page.setOrientation(LinearLayout.VERTICAL);
+        page.setPadding(dp(18), dp(14), dp(18), dp(24));
+        pageHost.addView(page, params(-1, -2));
+        pages.put(key, page);
+    }
+
+    private void addPageTab(LinearLayout parent, String key, String label) {
+        TextView tab = text(label, 11, Color.rgb(170, 184, 198));
+        tab.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
+        tab.setGravity(Gravity.CENTER);
+        tab.setPadding(dp(2), 0, dp(2), 0);
+        tab.setBackgroundColor(Color.rgb(20, 28, 38));
+        LinearLayout.LayoutParams p = new LinearLayout.LayoutParams(0, dp(44), 1f);
+        p.setMargins(dp(2), 0, dp(2), 0);
+        parent.addView(tab, p);
+        tab.setOnClickListener(v -> setActivePage(key));
+        pageTabs.put(key, tab);
+    }
+
+    private void setActivePage(String key) {
+        if (!pages.containsKey(key)) key = "home";
+        activePage = key;
+        for (Map.Entry<String, LinearLayout> entry : pages.entrySet()) {
+            entry.getValue().setVisibility(entry.getKey().equals(key) ? View.VISIBLE : View.GONE);
+        }
+        for (Map.Entry<String, TextView> entry : pageTabs.entrySet()) {
+            boolean selected = entry.getKey().equals(key);
+            entry.getValue().setTextColor(selected ? Color.WHITE : Color.rgb(170, 184, 198));
+            entry.getValue().setBackgroundColor(selected
+                    ? Color.rgb(22, 111, 132) : Color.rgb(20, 28, 38));
+        }
+    }
+
+    private LinearLayout pageForHeading(String heading) {
+        if (heading.startsWith("NỀN HOME")
+                || heading.startsWith("ỨNG DỤNG HAY DÙNG")
+                || heading.startsWith("ỨNG DỤNG MẶC ĐỊNH")) return pages.get("apps");
+        if (heading.startsWith("TỰ ĐỘNG PHÁT MEDIA")) return pages.get("media");
+        if (heading.startsWith("HƯỚNG MÀN HÌNH CHIẾU")) return pages.get("display");
+        return pages.get("system");
     }
 
     /** Every setup section starts collapsed and toggles when its header is tapped. */
@@ -237,7 +324,8 @@ public final class V10SettingsActivity extends Activity {
         section.setBackgroundColor(Color.rgb(17, 25, 34));
         LinearLayout.LayoutParams sectionParams = params(-1, -2);
         sectionParams.setMargins(0, dp(5), 0, dp(5));
-        list.addView(section, sectionParams);
+        LinearLayout targetPage = pageForHeading(heading);
+        targetPage.addView(section, sectionParams);
 
         TextView header = text("", 15, Color.WHITE);
         header.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
@@ -582,6 +670,13 @@ public final class V10SettingsActivity extends Activity {
                 + "\nTruy cập thông báo / Media Session: " + (notification ? "ĐÃ CẤP" : "CẦN BẬT")
                 + "\nTrợ năng Media Auto Play: " + (accessibility ? "ĐÃ BẬT" : "TÙY CHỌN – CẦN BẬT")
                 + "\nRoot / LSPosed: bật thủ công trong ứng dụng quản lý root và LSPosed.");
+        if (overviewStatus != null) {
+            overviewStatus.setText("TRẠNG THÁI THIẾT LẬP"
+                    + "\nMicro: " + (runtime ? "Đã cấp" : "Cần cấp")
+                    + "\nMedia Session: " + (notification ? "Đã bật" : "Cần bật")
+                    + "\nMedia Auto Play: " + (accessibility ? "Đã bật" : "Chưa bật")
+                    + "\nRoot / LSPosed: quản lý trong ứng dụng tương ứng");
+        }
         permissionGuideAction.setText(!runtime ? "CẤP QUYỀN MICRO"
                 : !notification ? "MỞ CÀI ĐẶT TRUY CẬP MEDIA"
                 : !accessibility ? "MỞ CÀI ĐẶT TRỢ NĂNG"
