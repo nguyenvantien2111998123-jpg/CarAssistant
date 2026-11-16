@@ -155,7 +155,7 @@ public final class GearheadDockPatcher {
                     "removeView",
                     new XC_MethodHook() {
                         @Override
-                        protected void afterHookedMethod(MethodHookParam param) {
+                        protected void beforeHookedMethod(MethodHookParam param) {
                             if (param.args.length == 0 || !(param.args[0] instanceof View)) return;
                             View removed = (View) param.args[0];
                             Display display = removed.getDisplay();
