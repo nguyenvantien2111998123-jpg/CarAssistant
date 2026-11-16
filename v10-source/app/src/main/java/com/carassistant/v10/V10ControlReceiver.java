@@ -36,19 +36,11 @@ public final class V10ControlReceiver
                 // In State A the microphone foreground service survives the CarActivity.
                 // Deliver the request to that already-running service without requiring
                 // the projection Activity to remain in the foreground.
-                try {
-                    // Normally the system_server Gearhead hook has already warmed this
-                    // foreground service on the first NEXT down event. Calling the same
-                    // running service only delivers the gesture toggle; it does not create
-                    // a second microphone service.
-                    Intent voice = new Intent(context, CarAssistantVoiceService.class)
-                            .setAction(CarAssistantVoiceService.ACTION_TOGGLE);
-                    context.startService(voice);
-                } catch (RuntimeException error) {
-                    Log.w("CarAssistantSteering",
-                            "Voice service is not running; background microphone start is not allowed",
-                            error);
-                }
+                // Normally the system_server Gearhead hook has already warmed this
+                // foreground service on the first NEXT down event. Core only delivers
+                // the toggle to that running service; it never starts a new microphone
+                // foreground service from this background receiver.
+                CarAssistantCore.toggleVoice(context);
             }
             return;
         }
