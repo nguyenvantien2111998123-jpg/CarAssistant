@@ -953,6 +953,23 @@ public final class MediaSessionBridge extends NotificationListenerService {
             return true;
         }
 
+        // Ask the LSPosed hook inside Gearhead to invoke Android Auto's own car-app
+        // launcher. This presents CarAsistant on the vehicle display without opening
+        // the phone Activity or trying to start an Activity from the background.
+        try {
+            Bundle launch = getContentResolver().call(
+                    DockStateProvider.STATE_URI,
+                    DockStateProvider.METHOD_REQUEST_PROJECTION_LAUNCH,
+                    null, null);
+            if (launch != null) {
+                Log.i(TAG, "Automatic CarAsistant projection launch requested by AA connection");
+            } else {
+                Log.w(TAG, "Automatic projection launch request returned no provider result");
+            }
+        } catch (RuntimeException error) {
+            Log.w(TAG, "Could not request automatic CarAsistant projection launch", error);
+        }
+
         Intent restore = new Intent(this, MediaAutoRestoreService.class)
                 .setAction(MediaAutoRestoreService.ACTION_RESTORE);
         try {
