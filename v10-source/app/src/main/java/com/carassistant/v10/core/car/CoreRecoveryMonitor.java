@@ -115,6 +115,7 @@ public final class CoreRecoveryMonitor {
                 + ", projectionService=" + component("AA_PROJECTION_SERVICE")
                 + ", coordinator=" + component("SESSION_COORDINATOR")
                 + ", connectionMonitor=" + component("CONNECTION_MONITOR")
+                + ", coreConnectionMonitor=" + component("CORE_CONNECTION_MONITOR")
                 + ", displayBackend=" + component("DISPLAY_BACKEND");
     }
 
