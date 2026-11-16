@@ -52,18 +52,30 @@ public final class CoreRecoveryMonitor {
             recoveryCount++;
         }
 
+        String previousCoreState = preferences.getString(KEY_CORE_STATE, "UNKNOWN");
         preferences.edit()
                 .putString(KEY_PROCESS_ID, processInstanceId)
                 .putLong(KEY_BOOT_MARKER, bootMarker)
                 .putInt(KEY_RECOVERY_COUNT, recoveryCount)
                 .putString(KEY_RECOVERY_REASON, reason.name())
+                // Component health is process-local. Never trust READY flags from
+                // the previous process when deciding whether this process is healthy.
+                .putString("component_AA_PROJECTION_SERVICE", "NOT_READY")
+                .putString("component_SESSION_COORDINATOR", "NOT_READY")
+                .putString("component_CONNECTION_MONITOR", "NOT_READY")
+                .putString("component_DISPLAY_BACKEND", "NOT_READY")
+                .putString(KEY_AA_STATE, "UNKNOWN")
+                .putString(KEY_SESSION_ID, "")
+                .putString(KEY_CORE_STATE, "PARTIAL")
                 .putLong("last_bootstrap_at", System.currentTimeMillis())
                 .apply();
 
         event("CORE_BOOTSTRAP_STARTED", "entryPoint=" + safe(entryPoint));
         event("CORE_RECOVERY_CLASSIFIED", "reason=" + reason.name()
                 + ", recoveryCount=" + recoveryCount
+                + ", previousCoreState=" + previousCoreState
                 + ", processInstance=" + processInstanceId);
+        event("CORE_MONITOR_READY", "stale process health flags cleared");
         updateCoreState();
     }
 
