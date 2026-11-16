@@ -11,7 +11,6 @@ import android.os.Build;
 import android.os.IBinder;
 
 import com.carassistant.v10.voice.VoiceAssistantController;
-import com.carassistant.v10.voice.VoiceCommandRouter;
 
 /**
  * Owns the voice recognition lifecycle independently from V10CarActivity.
@@ -57,34 +56,13 @@ public final class CarAssistantVoiceService extends Service {
             startForeground(NOTIFICATION_ID, notification);
         }
 
-        VoiceCommandRouter router = new VoiceCommandRouter(new VoiceCommandRouter.Host() {
-            @Override
-            public String openApp(String spokenName) {
-                return V10ProjectionCoordinator.openApp(
-                        CarAssistantVoiceService.this, spokenName);
-            }
-
-            @Override
-            public String openVoiceTask(String category, String query, String explicitProvider) {
-                return V10ProjectionCoordinator.openVoiceTask(
-                        CarAssistantVoiceService.this, category, query, explicitProvider);
-            }
-
-            @Override
-            public void showAppPicker() {
-                V10ProjectionCoordinator.showAppPicker(CarAssistantVoiceService.this);
-            }
-
-            @Override
-            public void goHome() {
-                V10ProjectionCoordinator.goHome(CarAssistantVoiceService.this);
-            }
-        });
+        CarAssistantCommandExecutor commandExecutor =
+                new CarAssistantCommandExecutor(getApplicationContext());
 
         controller = new VoiceAssistantController(getApplicationContext(),
                 (listening, status, transcript, showTranscript) -> publishState(
                         listening, status, transcript, showTranscript),
-                router);
+                commandExecutor);
         publishState(false, "Trợ lý giọng nói sẵn sàng.", "", false);
     }
 
