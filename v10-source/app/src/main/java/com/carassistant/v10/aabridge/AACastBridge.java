@@ -7,6 +7,7 @@ import com.carassistant.v10.hook.DisplayHooks;
 import com.carassistant.v10.hook.GearheadAllow;
 import com.carassistant.v10.hook.GearheadDockPatcher;
 import com.carassistant.v10.hook.GearheadMediaSessionFilter;
+import com.carassistant.v10.hook.GearheadSteeringKeyHooks;
 import com.carassistant.v10.hook.InputHooks;
 import com.carassistant.v10.hook.OrientationHooks;
 import com.carassistant.v10.hook.SystemMediaKeyHooks;
@@ -54,6 +55,12 @@ public final class AACastBridge implements IXposedHookLoadPackage {
                 GearheadAllow.install(param.classLoader);
                 GearheadMediaSessionFilter.install();
                 GearheadDockPatcher.install();
+                // Android Auto routes projected media-button events through a receiver
+                // in its :projection process. Capture there as a fallback when no
+                // active media app/session exists to receive the steering keys.
+                if (param.processName != null && param.processName.endsWith(":projection")) {
+                    GearheadSteeringKeyHooks.install();
+                }
             }
 
             if (Build.VERSION.SDK_INT >= 30) {
