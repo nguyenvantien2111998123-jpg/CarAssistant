@@ -1,17 +1,14 @@
 package com.carassistant.v10;
 
-import com.carassistant.v10.voice.VoiceCommandRouter;
+import android.content.ComponentName;
 
 import java.lang.ref.WeakReference;
 
 /**
- * UI-boundary adapter for voice commands.
- *
- * The voice service and command router depend on VoiceCommandRouter.Host,
- * not on V10CarActivity. This adapter is owned by the Activity and only keeps
- * a weak reference, so the Core/service layer cannot retain the projection UI.
+ * Short-lived UI adapter. It exposes projection effects only; command parsing,
+ * app/provider resolution and task selection are owned by Core.
  */
-final class V10ActivityVoiceCommandHost implements VoiceCommandRouter.Host {
+final class V10ActivityVoiceCommandHost implements V10ProjectionCommandHost {
     private final WeakReference<V10CarActivity> activityRef;
 
     V10ActivityVoiceCommandHost(V10CarActivity activity) {
@@ -19,28 +16,33 @@ final class V10ActivityVoiceCommandHost implements VoiceCommandRouter.Host {
         activityRef = new WeakReference<>(activity);
     }
 
-    @Override
-    public String openApp(String spokenName) {
+    @Override public void launchApp(ComponentName component) {
         V10CarActivity activity = activityRef.get();
-        return activity == null ? null : activity.openApp(spokenName);
+        if (activity != null) activity.launchVoiceProjection(component);
     }
 
-    @Override
-    public String openVoiceTask(String category, String query, String explicitProvider) {
+    @Override public void launchViewIntent(ComponentName component, String uri) {
         V10CarActivity activity = activityRef.get();
-        return activity == null ? null
-                : activity.openVoiceTask(category, query, explicitProvider);
+        if (activity != null) activity.launchVoiceViewIntent(component, uri);
     }
 
-    @Override
-    public void showAppPicker() {
+    @Override public void launchSearchIntent(ComponentName component, String query) {
         V10CarActivity activity = activityRef.get();
-        if (activity != null) activity.showAppPickerFromVoice();
+        if (activity != null) activity.launchVoiceSearchIntent(component, query);
     }
 
-    @Override
-    public void goHome() {
+    @Override public void launchMediaSearch(ComponentName component, String uri, String query) {
         V10CarActivity activity = activityRef.get();
-        if (activity != null) activity.goHomeFromVoice();
+        if (activity != null) activity.launchVoiceMediaSearch(component, uri, query);
+    }
+
+    @Override public void showAppPicker() {
+        V10CarActivity activity = activityRef.get();
+        if (activity != null) activity.showAppsFromVoiceBoundary();
+    }
+
+    @Override public void goHome() {
+        V10CarActivity activity = activityRef.get();
+        if (activity != null) activity.goHomeFromVoiceBoundary();
     }
 }

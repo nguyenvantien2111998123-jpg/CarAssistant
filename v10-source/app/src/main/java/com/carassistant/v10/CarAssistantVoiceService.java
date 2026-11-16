@@ -17,8 +17,8 @@ import com.carassistant.v10.voice.VoiceAssistantController;
  *
  * The service is started while the Android Auto CarActivity is visible, so the
  * microphone foreground-service start is initiated from an allowed foreground
- * context. Projection commands are delegated dynamically to the current
- * CarActivity; the service never retains an Activity reference.
+ * context. Core owns command parsing and app/task resolution; a weak UI boundary
+ * is used only for operations requiring the live projection surface.
  */
 public final class CarAssistantVoiceService extends Service {
     public static final String ACTION_START =
