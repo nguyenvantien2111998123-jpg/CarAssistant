@@ -59,7 +59,15 @@ public final class AACastBridge implements IXposedHookLoadPackage {
 
             GearheadAllow.install(param.classLoader);
             GearheadMediaSessionFilter.install();
-            GearheadDockPatcher.install();
+
+            // AADisplay/AAPwned observe the real projection UI lifecycle in :projection.
+            // Installing the auto-open trigger in :car or the default process can miss
+            // gh_coolwalk_vertical_facet_bar and create false-positive readiness logs.
+            if (processName.endsWith(":projection")) {
+                GearheadDockPatcher.install(processName);
+            } else {
+                XposedBridge.log("[AACast] Projection auto-open hook skipped in " + processName);
+            }
 
             // Receiver ownership differs between AA releases. Keep system_server as
             // the primary key path; observe both candidate Gearhead processes as fallback.
