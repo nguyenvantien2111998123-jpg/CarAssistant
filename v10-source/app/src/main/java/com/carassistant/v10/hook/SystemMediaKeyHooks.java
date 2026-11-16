@@ -5,6 +5,9 @@ import android.content.Context;
 import android.content.Intent;
 import android.content.pm.PackageManager;
 import android.os.Build;
+import android.os.Handler;
+import android.os.Looper;
+import android.os.SystemClock;
 import android.media.session.MediaSession;
 import android.provider.Settings;
 import android.text.TextUtils;
@@ -36,6 +39,7 @@ public final class SystemMediaKeyHooks {
 
     private static final AtomicBoolean INSTALLED = new AtomicBoolean();
     private static final AtomicLong RAW_EVENT_COUNT = new AtomicLong();
+    private static final GearheadGestureRouter GEARHEAD_GESTURES = new GearheadGestureRouter();
 
     private SystemMediaKeyHooks() { }
 
@@ -71,21 +75,22 @@ public final class SystemMediaKeyHooks {
                                     service, "mContext");
                             boolean fromGearhead = isGearheadCaller(param.args);
                             if (fromGearhead) {
-                                // Keep Gearhead steering gestures on one classifier regardless
-                                // of whether CarAsistant currently owns an active MediaSession.
-                                // Transport callbacks such as onSkipToNext bypass the double-tap
-                                // classifier, so never route Gearhead directly to that session.
-                                // Warm the microphone service from system_server on the first
-                                // NEXT down; this does not start listening by itself.
+                                // Warm the microphone foreground service before a possible
+                                // double-NEXT gesture. Recognition itself starts only on double tap.
                                 if (event.getKeyCode() == NEXT
                                         && event.getAction() == KeyEvent.ACTION_DOWN
                                         && event.getRepeatCount() == 0) {
                                     ensureVoiceServiceStartedBySystem(context);
                                 }
-                                if (dispatchRawKeyToApp(context, event)) {
+
+                                // Gearhead KeyEvents are classified inside system_server.
+                                // Do not bounce DOWN/UP through a short-lived app BroadcastReceiver:
+                                // Android may reclaim that process before the 350 ms double-tap
+                                // window or the 500 ms long-press timer completes.
+                                if (GEARHEAD_GESTURES.dispatch(context, event)) {
                                     param.setResult(null);
-                                    XposedBridge.log(TAG + " forwarded Gearhead "
-                                            + describe(event) + " to shared raw gesture classifier");
+                                    XposedBridge.log(TAG + " classified Gearhead "
+                                            + describe(event) + " in system_server");
                                     return;
                                 }
                             }
@@ -93,19 +98,8 @@ public final class SystemMediaKeyHooks {
                                     ? findCarAsistantSessionToken(service) : null;
 
                             if (token == null) {
-                                // Android Auto can still deliver steering media keys while
-                                // CarAsistant has no active MediaSession record. Forward only
-                                // Gearhead-originated keys to the process-wide dispatcher.
-                                // The same gesture classifier is also used by MediaSession
-                                // callbacks, so single/double/hold timing remains unchanged.
-                                if (fromGearhead && dispatchRawKeyToApp(context, event)) {
-                                    param.setResult(null);
-                                    XposedBridge.log(TAG + " forwarded Gearhead "
-                                            + describe(event) + " to raw input gateway");
-                                } else {
-                                    XposedBridge.log(TAG + " no active CarAsistant MediaSession; "
-                                            + "allowing framework fallback");
-                                }
+                                XposedBridge.log(TAG + " no active CarAsistant MediaSession; "
+                                        + "allowing framework fallback");
                                 return;
                             }
 
@@ -115,10 +109,6 @@ public final class SystemMediaKeyHooks {
                                 param.setResult(null);
                                 XposedBridge.log(TAG + " routed " + describe(event)
                                         + " to CarAsistant MediaSession");
-                            } else if (fromGearhead && dispatchRawKeyToApp(context, event)) {
-                                param.setResult(null);
-                                XposedBridge.log(TAG + " direct session dispatch failed; "
-                                        + "forwarded Gearhead key to raw input gateway");
                             } else {
                                 XposedBridge.log(TAG + " direct session dispatch returned false; "
                                         + "allowing framework fallback");
@@ -181,17 +171,138 @@ public final class SystemMediaKeyHooks {
         }
     }
 
-    private static boolean dispatchRawKeyToApp(Context context, KeyEvent event) {
-        if (context == null || event == null) return false;
-        try {
-            Intent raw = new Intent("com.carassistant.v10.STEERING_RAW_KEY")
-                    .setPackage(SELF);
-            raw.putExtra(Intent.EXTRA_KEY_EVENT, new KeyEvent(event));
-            context.sendBroadcast(raw);
+    /**
+     * Gearhead sends the physical steering-wheel KeyEvents into system_server.
+     * Keep gesture timing here, where the input stream and its process lifetime
+     * are stable, then send only completed semantic actions to the app.
+     */
+    private static final class GearheadGestureRouter {
+        private static final long DOUBLE_CLICK_MS = 350L;
+        private static final long LONG_PRESS_MS = 500L;
+        private static final long SEEK_INTERVAL_MS = 1000L;
+
+        private final Handler handler = new Handler(Looper.getMainLooper());
+        private final Object lock = new Object();
+        private Context systemContext;
+        private int pressedKey = KeyEvent.KEYCODE_UNKNOWN;
+        private boolean longPressStarted;
+        private boolean nextClickPending;
+        private boolean secondNextTapCandidate;
+        private long lastNextClickUp;
+        private Runnable longPressRunnable;
+        private Runnable seekRepeatRunnable;
+
+        private final Runnable pendingNextSingle = new Runnable() {
+            @Override public void run() {
+                synchronized (lock) {
+                    if (!nextClickPending) return;
+                    nextClickPending = false;
+                }
+                sendAction("com.carassistant.v10.STEERING_MEDIA_NEXT", 0);
+            }
+        };
+
+        boolean dispatch(Context context, KeyEvent event) {
+            if (context == null || event == null || !isTargetKey(event)) return false;
+            systemContext = context;
+            final int key = normalizeKey(event.getKeyCode());
+            if (event.getAction() == KeyEvent.ACTION_DOWN) {
+                if (event.getRepeatCount() != 0) return true;
+                synchronized (lock) {
+                    if (pressedKey != KeyEvent.KEYCODE_UNKNOWN) return true;
+                    long now = SystemClock.uptimeMillis();
+                    secondNextTapCandidate = key == NEXT && nextClickPending
+                            && now - lastNextClickUp <= DOUBLE_CLICK_MS;
+                    if (secondNextTapCandidate) {
+                        handler.removeCallbacks(pendingNextSingle);
+                        nextClickPending = false;
+                    }
+                    pressedKey = key;
+                    longPressStarted = false;
+                    longPressRunnable = () -> startLongPress(key);
+                    handler.postDelayed(longPressRunnable, LONG_PRESS_MS);
+                }
+                return true;
+            }
+
+            if (event.getAction() != KeyEvent.ACTION_UP) return true;
+            boolean wasLongPress;
+            boolean invokeVoice = false;
+            boolean invokePrevious = false;
+            synchronized (lock) {
+                if (pressedKey != key) return true;
+                cancelLongPressLocked();
+                wasLongPress = longPressStarted;
+                pressedKey = KeyEvent.KEYCODE_UNKNOWN;
+                longPressStarted = false;
+
+                if (key == NEXT) {
+                    if (!wasLongPress && secondNextTapCandidate) {
+                        secondNextTapCandidate = false;
+                        invokeVoice = true;
+                    } else if (!wasLongPress) {
+                        nextClickPending = true;
+                        lastNextClickUp = SystemClock.uptimeMillis();
+                        handler.postDelayed(pendingNextSingle, DOUBLE_CLICK_MS);
+                    } else {
+                        secondNextTapCandidate = false;
+                    }
+                } else if (!wasLongPress) {
+                    invokePrevious = true;
+                }
+            }
+            if (invokeVoice) {
+                sendAction("com.carassistant.v10.STEERING_VOICE", 0);
+            } else if (invokePrevious) {
+                sendAction("com.carassistant.v10.STEERING_MEDIA_PREVIOUS", 0);
+            }
             return true;
-        } catch (Throwable error) {
-            XposedBridge.log(TAG + " raw input broadcast failed: " + error);
-            return false;
+        }
+
+        private void startLongPress(int key) {
+            synchronized (lock) {
+                if (pressedKey != key || longPressStarted) return;
+                longPressStarted = true;
+                seekRepeatRunnable = new Runnable() {
+                    @Override public void run() {
+                        synchronized (lock) {
+                            if (pressedKey != key || !longPressStarted) return;
+                            handler.postDelayed(this, SEEK_INTERVAL_MS);
+                        }
+                        sendSeek(key == NEXT ? 1 : -1);
+                    }
+                };
+                handler.postDelayed(seekRepeatRunnable, SEEK_INTERVAL_MS);
+            }
+            sendSeek(key == NEXT ? 1 : -1);
+        }
+
+        private void sendSeek(int direction) {
+            sendAction("com.carassistant.v10.STEERING_MEDIA_SEEK", direction);
+        }
+
+        private void sendAction(String action, int direction) {
+            Context context = systemContext;
+            if (context == null) return;
+            try {
+                Intent intent = new Intent(action).setPackage(SELF);
+                if (direction != 0) intent.putExtra("direction", direction);
+                context.sendBroadcast(intent);
+            } catch (Throwable error) {
+                XposedBridge.log(TAG + " semantic steering action failed (" + action + "): " + error);
+            }
+        }
+
+        private void cancelLongPressLocked() {
+            if (longPressRunnable != null) handler.removeCallbacks(longPressRunnable);
+            if (seekRepeatRunnable != null) handler.removeCallbacks(seekRepeatRunnable);
+            longPressRunnable = null;
+            seekRepeatRunnable = null;
+        }
+
+        private static int normalizeKey(int keyCode) {
+            return keyCode == KeyEvent.KEYCODE_MEDIA_FAST_FORWARD ? NEXT
+                    : keyCode == KeyEvent.KEYCODE_MEDIA_REWIND ? PREVIOUS : keyCode;
         }
     }
 
