@@ -28,17 +28,21 @@ public class CarSessionCoordinatorTest {
         assertEquals(1, backend.homeCount);
     }
 
-    @Test public void disconnectEndsSessionAndDetachesBackend() {
+    @Test public void disconnectSignalDoesNotEndLiveCarActivitySession() {
         FakeMonitor monitor = new FakeMonitor();
         FakeBackend backend = new FakeBackend();
         CarSessionCoordinator coordinator = new CarSessionCoordinator(monitor, backend);
         coordinator.start();
         assertTrue(coordinator.onCarSessionStarted());
         monitor.emit(CarConnectionState.DISCONNECTED);
+        assertTrue(coordinator.snapshot().sessionActive);
+        assertTrue(coordinator.snapshot().displayAttached);
+        assertEquals(0, backend.detachCount);
+        assertTrue(coordinator.showHome());
+        coordinator.onCarSessionStopped();
         assertFalse(coordinator.snapshot().sessionActive);
         assertFalse(coordinator.snapshot().displayAttached);
         assertEquals(1, backend.detachCount);
-        assertFalse(coordinator.launchApp("com.example.maps", "MainActivity"));
     }
 
     @Test public void unavailableBackendCanBeRetriedOnSessionStart() {
@@ -67,6 +71,15 @@ public class CarSessionCoordinatorTest {
         assertFalse(coordinator.snapshot().monitorStarted);
         assertFalse(coordinator.snapshot().sessionActive);
         assertEquals(1, backend.detachCount);
+    }
+
+    @Test public void backendCallsAreNotMadeWhenSessionIsInactive() {
+        FakeBackend backend = new FakeBackend();
+        CarSessionCoordinator coordinator = new CarSessionCoordinator(new FakeMonitor(), backend);
+        assertFalse(coordinator.launchApp("com.example.maps", "MainActivity"));
+        assertFalse(coordinator.showHome());
+        assertEquals(0, backend.launchCount);
+        assertEquals(0, backend.homeCount);
     }
 
     private static final class FakeMonitor implements CarConnectionMonitor {
