@@ -14,13 +14,14 @@ import java.lang.reflect.Method;
 import java.util.Collections;
 import java.util.HashSet;
 import java.util.Set;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 import de.robv.android.xposed.XC_MethodHook;
 import de.robv.android.xposed.XposedBridge;
 
 /**
- * Captures Android Auto's own media-button/projected-key receiver in the
- * :projection process. This is a fallback independent of an active media app
+ * Captures Android Auto's own media-button/projected-key receiver in either
+ * :car or :projection. This is a fallback independent of an active media app
  * or CarAsistant MediaSession.
  *
  * Based on the AADisplay/AAPwned receiver-hook approach: observe receivers
