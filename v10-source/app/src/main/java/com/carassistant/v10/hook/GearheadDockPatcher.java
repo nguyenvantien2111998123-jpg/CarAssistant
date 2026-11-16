@@ -159,6 +159,15 @@ public final class GearheadDockPatcher {
                                     patcher.roots.add(view);
                                     patcher.rootsDirty = true;
                                     patcher.attachContext(view.getContext());
+                                    // Current AA builds may use the horizontal GhFacetBar
+                                    // instead of inflating the vertical-rail resource. The
+                                    // dedicated display is an equally strong host-ready signal.
+                                    Display display = view.getDisplay();
+                                    if (display != null && "GhFacetBar".equals(display.getName())) {
+                                        patcher.main.postDelayed(
+                                                () -> patcher.onFacetBarInflated(view.getContext()),
+                                                1000L);
+                                    }
                                 });
                             }
                         }
@@ -339,7 +348,7 @@ public final class GearheadDockPatcher {
     private void onFacetBarInflated(Context inflaterContext) {
         attachContext(inflaterContext);
         facetBarReady = true;
-        log("Android Auto projection facet bar is ready; waiting for authenticated auto-launch request");
+        log("Android Auto projection UI is ready; waiting for authenticated auto-launch request");
         maybeAutoLaunchProjection();
     }
 
