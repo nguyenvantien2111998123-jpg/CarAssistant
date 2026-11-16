@@ -925,6 +925,11 @@ public final class MediaSessionBridge extends NotificationListenerService {
                 || message.contains("verbunden"));
         if (!connected) return false;
 
+        // Android Auto's explicit connected notification is the headless bootstrap
+        // signal. It starts process-scoped Core without opening phone UI or starting
+        // a microphone/media foreground service.
+        CarAssistantCore.startRecoveryMonitor(this, "MediaSessionBridge:AndroidAutoNotification");
+
         androidAutoConnected = true;
         mediaRestorePending = true;
         android.content.SharedPreferences prefs = getSharedPreferences(
