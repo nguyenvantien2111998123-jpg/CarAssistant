@@ -5,6 +5,7 @@ import android.content.Context;
 import android.content.Intent;
 import android.content.pm.PackageManager;
 import android.os.Build;
+import android.os.Binder;
 import android.os.Handler;
 import android.os.Looper;
 import android.os.SystemClock;
@@ -73,7 +74,7 @@ public final class SystemMediaKeyHooks {
 
                             Context context = (Context) XposedHelpers.getObjectField(
                                     service, "mContext");
-                            boolean fromGearhead = isGearheadCaller(param.args);
+                            boolean fromGearhead = isGearheadCaller(param.args, context);
                             if (fromGearhead) {
                                 // Warm the microphone foreground service before a possible
                                 // double-NEXT gesture. Recognition itself starts only on double tap.
@@ -135,10 +136,28 @@ public final class SystemMediaKeyHooks {
         }
     }
 
-    private static boolean isGearheadCaller(Object[] args) {
-        if (args == null) return false;
-        for (Object arg : args) {
-            if (GEARHEAD.equals(arg)) return true;
+    /**
+     * Android Auto 17.x can reach MediaSessionService through different internal
+     * wrappers. Prefer the explicit package argument, but verify the Binder UID
+     * as a fallback instead of silently losing the no-MediaSession gesture path.
+     */
+    private static boolean isGearheadCaller(Object[] args, Context context) {
+        if (args != null) {
+            for (Object arg : args) {
+                if (GEARHEAD.equals(arg)) return true;
+            }
+        }
+        if (context == null) return false;
+        try {
+            int callingUid = Binder.getCallingUid();
+            String[] packages = context.getPackageManager().getPackagesForUid(callingUid);
+            if (packages != null) {
+                for (String packageName : packages) {
+                    if (GEARHEAD.equals(packageName)) return true;
+                }
+            }
+        } catch (Throwable error) {
+            XposedBridge.log(TAG + " Gearhead Binder UID lookup failed: " + error);
         }
         return false;
     }
@@ -185,6 +204,7 @@ public final class SystemMediaKeyHooks {
         private final Object lock = new Object();
         private Context systemContext;
         private int pressedKey = KeyEvent.KEYCODE_UNKNOWN;
+        private long pressedDownTime;
         private boolean longPressStarted;
         private boolean nextClickPending;
         private boolean secondNextTapCandidate;
@@ -209,7 +229,20 @@ public final class SystemMediaKeyHooks {
             if (event.getAction() == KeyEvent.ACTION_DOWN) {
                 if (event.getRepeatCount() != 0) return true;
                 synchronized (lock) {
-                    if (pressedKey != KeyEvent.KEYCODE_UNKNOWN) return true;
+                    if (pressedKey != KeyEvent.KEYCODE_UNKNOWN) {
+                        // Recover if the head unit/AVRCP bridge dropped ACTION_UP.
+                        // A genuine held key repeats with the same downTime; a new
+                        // physical press has a different downTime and must not be
+                        // blocked forever by stale pressedKey state.
+                        if (key != pressedKey || event.getDownTime() == pressedDownTime) {
+                            return true;
+                        }
+                        cancelLongPressLocked();
+                        pressedKey = KeyEvent.KEYCODE_UNKNOWN;
+                        pressedDownTime = 0L;
+                        longPressStarted = false;
+                        secondNextTapCandidate = false;
+                    }
                     long now = SystemClock.uptimeMillis();
                     secondNextTapCandidate = key == NEXT && nextClickPending
                             && now - lastNextClickUp <= DOUBLE_CLICK_MS;
@@ -218,6 +251,7 @@ public final class SystemMediaKeyHooks {
                         nextClickPending = false;
                     }
                     pressedKey = key;
+                    pressedDownTime = event.getDownTime();
                     longPressStarted = false;
                     longPressRunnable = () -> startLongPress(key);
                     handler.postDelayed(longPressRunnable, LONG_PRESS_MS);
@@ -234,6 +268,7 @@ public final class SystemMediaKeyHooks {
                 cancelLongPressLocked();
                 wasLongPress = longPressStarted;
                 pressedKey = KeyEvent.KEYCODE_UNKNOWN;
+                pressedDownTime = 0L;
                 longPressStarted = false;
 
                 if (key == NEXT) {
@@ -441,6 +476,7 @@ public final class SystemMediaKeyHooks {
         long sequence = RAW_EVENT_COUNT.incrementAndGet();
         XposedBridge.log(TAG + " RAW#" + sequence
                 + " callerPkg=" + callerPackage
+                + " callerUid=" + Binder.getCallingUid()
                 + " asSystemService=" + asSystemService
                 + " key=" + KeyEvent.keyCodeToString(event.getKeyCode())
                 + " action=" + (event.getAction() == KeyEvent.ACTION_DOWN ? "DOWN" : "UP")
