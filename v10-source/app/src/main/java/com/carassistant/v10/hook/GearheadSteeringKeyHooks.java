@@ -12,8 +12,8 @@ import android.content.ContextWrapper;
 
 import java.lang.reflect.Method;
 import java.util.Collections;
+import java.util.HashSet;
 import java.util.Set;
-import java.util.WeakHashMap;
 
 import de.robv.android.xposed.XC_MethodHook;
 import de.robv.android.xposed.XposedBridge;
@@ -34,7 +34,7 @@ public final class GearheadSteeringKeyHooks {
     private static final String ACTION_PROJECTED_KEY = "android.intent.action.projected.KEY_EVENT";
 
     private static final Set<String> HOOKED_RECEIVER_METHODS =
-            Collections.newSetFromMap(new WeakHashMap<String, Boolean>());
+            Collections.synchronizedSet(new HashSet<String>());
     private static final GearheadGestureRouter GESTURES = new GearheadGestureRouter();
 
     private GearheadSteeringKeyHooks() { }
