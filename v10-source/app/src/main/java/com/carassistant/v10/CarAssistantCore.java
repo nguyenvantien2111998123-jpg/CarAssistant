@@ -16,6 +16,12 @@ public final class CarAssistantCore {
 
     private CarAssistantCore() { }
 
+    /** Create the process-independent command executor used by the voice service. */
+    public static CarAssistantCommandExecutor createCommandExecutor(Context context) {
+        if (context == null) throw new IllegalArgumentException("context is required");
+        return new CarAssistantCommandExecutor(context.getApplicationContext());
+    }
+
     /** Start/warm the voice foreground service from an allowed foreground context. */
     public static boolean ensureVoiceService(Context context) {
         if (context == null) return false;
