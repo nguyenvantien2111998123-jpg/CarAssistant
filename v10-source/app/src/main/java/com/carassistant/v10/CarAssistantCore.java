@@ -14,6 +14,23 @@ import android.util.Log;
 public final class CarAssistantCore {
     private static final String TAG = "CarAssistantCore";
 
+    /** Bootstrap Core from Android Auto's bound projection service, never from phone UI. */
+    public static void startRecoveryMonitor(Context context, String entryPoint) {
+        CarAssistantCoreRuntime.start(context, entryPoint);
+    }
+
+    public static void reportCoreComponent(String component, boolean ready, String detail) {
+        CarAssistantCoreRuntime.reportComponent(component, ready, detail);
+    }
+
+    public static void reportAndroidAutoConnection(boolean connected) {
+        CarAssistantCoreRuntime.reportAndroidAutoConnection(connected);
+    }
+
+    public static String getCoreDiagnostics() {
+        return CarAssistantCoreRuntime.getDiagnostics();
+    }
+
     private CarAssistantCore() { }
 
     /** Create the process-independent command executor used by the voice service. */
