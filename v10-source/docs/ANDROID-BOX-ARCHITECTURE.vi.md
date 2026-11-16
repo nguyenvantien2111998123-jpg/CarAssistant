@@ -25,7 +25,8 @@ ngay khi chỉ nhận được tín hiệu kết nối.
 CarConnectionState và CarActivity session là hai tín hiệu riêng. CONNECTED không
 đồng nghĩa với CarAsistant đang foreground trên màn hình xe. CarSessionCoordinator
 chỉ attach display backend sau callback onCarSessionStarted() từ adapter car UI.
-DISCONNECTED kết thúc session và detach surface.
+CONNECTED/DISCONNECTED chỉ cập nhật trạng thái quan sát. Chỉ lifecycle thật của V10CarActivity
+(onResume/onStop/onDestroy) mới bắt đầu/kết thúc car session và điều khiển backend.
 
 ## Quy tắc bảo toàn
 
@@ -38,8 +39,12 @@ DISCONNECTED kết thúc session và detach surface.
 ## Tiến độ
 
 1. Voice command execution đã được tách khỏi V10CarActivity.
-2. Bổ sung hợp đồng Core cho connection monitor và display backend, cùng state coordinator
-   độc lập và unit tests.
-3. Gắn adapter V10 vào coordinator sau khi kiểm chứng lifecycle đầy đủ.
-4. Shizuku VirtualDisplay là backend thử nghiệm riêng; không thay thế backend đang dùng
-   cho tới khi có kết quả build và test trên POCO F1 Android 12 + Android Auto thực.
+2. Bổ sung hợp đồng Core cho connection monitor và display backend, state coordinator,
+   adapter đọc cờ aa_connected từ MediaSessionBridge và unit tests.
+3. Đã gắn LegacyV10CarDisplayBackend vào lifecycle V10CarActivity: UI/surface hiện tại vẫn
+   được tạo bởi luồng V10 cũ; Core chỉ quản lý trạng thái session, gate lệnh launch/home.
+   Activity stop không đóng task đang chiếu; backend detach hiện là no-op có chủ đích.
+4. CI unit tests + assembleDebug là kiểm thử tự động; kiểm thử POCO F1/Android Auto thật
+   vẫn bắt buộc trước khi tuyên bố hoàn tất nghiệm thu thiết bị.
+5. Shizuku VirtualDisplay là backend thử nghiệm riêng; không thay thế backend đang dùng
+   cho tới khi có kết quả test trên POCO F1 Android 12 + Android Auto thực.
