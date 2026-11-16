@@ -89,6 +89,7 @@ public final class V10CarActivity
         }
     };
     private boolean voiceStateReceiverRegistered;
+    private com.carassistant.v10.core.car.CarSessionCoordinator carSessionCoordinator;
 
     private TextView floatingVoiceButton;
     private TextView voiceTranscriptView;
@@ -184,6 +185,11 @@ public final class V10CarActivity
         V10SessionStore
                 .setCurrentActivity(this);
         appManager = new V10AppManager(this);
+        carSessionCoordinator = new com.carassistant.v10.core.car.CarSessionCoordinator(
+                new com.carassistant.v10.core.car.SharedPreferencesCarConnectionMonitor(
+                        getApplicationContext()),
+                new LegacyV10CarDisplayBackend());
+        carSessionCoordinator.start();
 
         applyChrome();
 
@@ -201,6 +207,9 @@ public final class V10CarActivity
         if (root == null) {
             buildUi();
             attachProjection();
+        }
+        if (carSessionCoordinator != null) {
+            carSessionCoordinator.onCarSessionStarted();
         }
         MediaSessionBridge.addListener(mediaSessionListener);
         updateMediaCard(MediaSessionBridge.getSnapshot());
@@ -1681,7 +1690,10 @@ private void hideTaskSwitcher() {
         handler.removeCallbacks(
                 targetPoller);
 
-        /* Display Core V1: Activity stop is not task close. */
+        /* Activity stop ends this host-owned session, but does not close projected tasks. */
+        if (carSessionCoordinator != null) {
+            carSessionCoordinator.onCarSessionStopped();
+        }
         super.onStop();
     }
 
@@ -1707,6 +1719,10 @@ private void hideTaskSwitcher() {
         handler.removeCallbacks(
                 targetPoller);
 
+        if (carSessionCoordinator != null) {
+            carSessionCoordinator.stop();
+            carSessionCoordinator = null;
+        }
         if (session != null) { session.destroy(); session = null; }
         if (backgroundSession != null) { backgroundSession.destroy(); backgroundSession = null; }
 
@@ -1728,6 +1744,43 @@ private void hideTaskSwitcher() {
         dock = null;
 
         super.onDestroy();
+    }
+
+    /**
+     * Phase-1 adapter: keep the proven V10 projection implementation as the
+     * active backend while Core owns session gating and command routing.
+     * No new display is created and no existing projection task is restarted.
+     */
+    private final class LegacyV10CarDisplayBackend
+            implements com.carassistant.v10.core.car.CarDisplayBackend {
+        @Override public String getId() { return "legacy-v10"; }
+
+        @Override public boolean isAvailable() {
+            return root != null && textureView != null && appTextureView != null
+                    && backgroundSession != null && session != null;
+        }
+
+        @Override public boolean attach() {
+            // V10 surfaces are created by the existing Activity path before Core is notified.
+            return isAvailable();
+        }
+
+        @Override public void detach() {
+            // A host Activity stop is not a task close. V10 retains its existing
+            // surface/task teardown policy in onDestroy and projection callbacks.
+        }
+
+        @Override public boolean launchApp(String packageName, String activityName) {
+            if (!isAvailable() || packageName == null || activityName == null) return false;
+            launchProjection(new ComponentName(packageName, activityName));
+            return true;
+        }
+
+        @Override public boolean showHome() {
+            if (!isAvailable()) return false;
+            handleControlHome();
+            return true;
+        }
     }
 
     @Override

@@ -13,8 +13,44 @@ import android.util.Log;
  */
 public final class CarAssistantCore {
     private static final String TAG = "CarAssistantCore";
+    private static volatile com.carassistant.v10.core.car.CoreRecoveryMonitor recoveryMonitor;
 
     private CarAssistantCore() { }
+
+    /**
+     * Start process-level diagnostics from the Android Auto projection service.
+     * This observes lifecycle; it does not start microphone or media services.
+     */
+    public static void startRecoveryMonitor(Context context, String entryPoint) {
+        if (context == null) return;
+        com.carassistant.v10.core.car.CoreRecoveryMonitor monitor = recoveryMonitor;
+        if (monitor == null) {
+            synchronized (CarAssistantCore.class) {
+                monitor = recoveryMonitor;
+                if (monitor == null) {
+                    monitor = new com.carassistant.v10.core.car.CoreRecoveryMonitor(
+                            context.getApplicationContext());
+                    recoveryMonitor = monitor;
+                }
+            }
+        }
+        monitor.start(entryPoint);
+    }
+
+    public static void reportCoreComponent(String component, boolean ready, String detail) {
+        com.carassistant.v10.core.car.CoreRecoveryMonitor monitor = recoveryMonitor;
+        if (monitor != null) monitor.reportComponent(component, ready, detail);
+    }
+
+    public static void reportAndroidAutoConnection(boolean connected) {
+        com.carassistant.v10.core.car.CoreRecoveryMonitor monitor = recoveryMonitor;
+        if (monitor != null) monitor.reportAndroidAutoConnection(connected);
+    }
+
+    public static String getCoreDiagnostics() {
+        com.carassistant.v10.core.car.CoreRecoveryMonitor monitor = recoveryMonitor;
+        return monitor == null ? "CORE_MONITOR_NOT_STARTED" : monitor.getSnapshot();
+    }
 
     /** Create the process-independent command executor used by the voice service. */
     public static CarAssistantCommandExecutor createCommandExecutor(Context context) {
