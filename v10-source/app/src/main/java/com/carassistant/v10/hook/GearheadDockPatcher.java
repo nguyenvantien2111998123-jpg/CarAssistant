@@ -412,21 +412,27 @@ public final class GearheadDockPatcher {
         Context appContext = context;
         if (appContext == null) return;
         try {
-            Intent intent = new Intent();
-            intent.setComponent(new ComponentName(
-                    "com.carassistant.v10", "com.carassistant.v10.AaAutoOpenService"));
-            ComponentName started = appContext.startService(intent);
-            if (started == null) {
-                log("CarAsistant Car API bridge service was not started in " + processName
+            ClassLoader loader = appContext.getClassLoader();
+            Class<?> controller = XposedHelpers.findClassIfExists(
+                    "com.google.android.projection.gearhead.service.CarSystemUiControllerService",
+                    loader);
+            Method launcher = findCarAppLauncher(controller);
+            if (launcher == null) {
+                log("Gearhead Car App launcher not ready in " + processName
                         + "; retry scheduled");
                 scheduleAutoLaunchRetry();
                 return;
             }
+            launcher.setAccessible(true);
+            Intent intent = new Intent();
+            intent.setComponent(new ComponentName(
+                    "com.carassistant.v10", "com.carassistant.v10.AACastCarService"));
+            intent.putExtra("android.intent.extra.PACKAGE_NAME", "com.carassistant.v10");
+            launcher.invoke(null, intent);
             autoLaunchAttemptedForHost = true;
             autoLaunchRetryScheduled = false;
             lastAutoLaunchRequest = SystemClock.uptimeMillis();
-            log("Started CarAsistant Car API bridge from " + processName
-                    + "; service=" + started.flattenToShortString());
+            log("Opened CarAsistant through Gearhead Car App launcher in " + processName);
         } catch (Throwable error) {
             log("Automatic CarAsistant projection launch failed in " + processName
                     + "; retry scheduled: " + error);
