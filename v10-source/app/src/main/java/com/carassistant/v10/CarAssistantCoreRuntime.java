@@ -46,20 +46,22 @@ public final class CarAssistantCoreRuntime {
             Log.d(TAG, "Ignoring duplicate Core start from " + entryPoint);
             return;
         }
-        started = true;
-        recoveryMonitor.start(entryPoint);
-        recoveryMonitor.reportComponent("CORE_BOOTSTRAP", true,
-                "Android Auto bound the projection service");
         try {
+            recoveryMonitor.start(entryPoint);
+            recoveryMonitor.reportComponent("CORE_BOOTSTRAP", true,
+                    "Core bootstrapped from " + entryPoint);
             connectionMonitor.start(connected ->
                     recoveryMonitor.reportAndroidAutoConnection(
                             connected == com.carassistant.v10.core.car.CarConnectionState.CONNECTED));
             recoveryMonitor.reportComponent("CORE_CONNECTION_MONITOR", true,
                     "Core-owned monitor observes the existing Android Auto connection signal");
+            started = true;
             Log.i(TAG, "Core runtime ready; entryPoint=" + entryPoint);
         } catch (RuntimeException error) {
             recoveryMonitor.reportComponent("CORE_CONNECTION_MONITOR", false,
                     "Connection monitor failed: " + error.getClass().getSimpleName());
+            recoveryMonitor.reportComponent("CORE_BOOTSTRAP", false,
+                    "Core initialization failed: " + error.getClass().getSimpleName());
             Log.e(TAG, "Core runtime initialization failed", error);
         }
     }
