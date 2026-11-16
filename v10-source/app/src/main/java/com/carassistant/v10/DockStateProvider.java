@@ -6,7 +6,9 @@ import android.database.Cursor;
 import android.database.MatrixCursor;
 import android.net.Uri;
 import android.os.Binder;
+import android.os.Bundle;
 import android.os.Process;
+import android.os.SystemClock;
 
 /**
  * Kênh IPC một chiều: app ghi `visibleUntil`, gearhead đọc.
@@ -19,6 +21,9 @@ public final class DockStateProvider extends ContentProvider {
     public static final Uri STATE_URI = Uri.parse("content://" + AUTHORITY + "/state");
 
     private static final String GEARHEAD = "com.google.android.projection.gearhead";
+    private static final String PREFS = "carassistant_projection_bootstrap";
+    private static final String KEY_LAUNCH_REQUESTED_AT = "launch_requested_at";
+    public static final String METHOD_REQUEST_PROJECTION_LAUNCH = "request_projection_launch";
 
     /** Epoch SystemClock.uptimeMillis(); 0 = không có lease. */
     public static volatile long visibleUntil;
@@ -36,9 +41,29 @@ public final class DockStateProvider extends ContentProvider {
         if (!isCallerAllowed()) {
             throw new SecurityException("Only Android Auto may read launcher state");
         }
-        MatrixCursor cursor = new MatrixCursor(new String[]{"visible_until"});
-        cursor.addRow(new Object[]{visibleUntil});
+        long launchRequestedAt = getContext().getSharedPreferences(PREFS, 0)
+                .getLong(KEY_LAUNCH_REQUESTED_AT, 0L);
+        MatrixCursor cursor = new MatrixCursor(new String[]{
+                "visible_until", "projection_launch_requested_at"});
+        cursor.addRow(new Object[]{visibleUntil, launchRequestedAt});
         return cursor;
+    }
+
+    @Override
+    public Bundle call(String method, String arg, Bundle extras) {
+        if (!METHOD_REQUEST_PROJECTION_LAUNCH.equals(method)) {
+            return super.call(method, arg, extras);
+        }
+        // Only the app itself may request a launch. Gearhead is read-only.
+        if (Binder.getCallingUid() != Process.myUid()) {
+            throw new SecurityException("Only CarAsistant may request projection launch");
+        }
+        long requestedAt = SystemClock.uptimeMillis();
+        getContext().getSharedPreferences(PREFS, 0).edit()
+                .putLong(KEY_LAUNCH_REQUESTED_AT, requestedAt).apply();
+        Bundle result = new Bundle();
+        result.putLong(KEY_LAUNCH_REQUESTED_AT, requestedAt);
+        return result;
     }
 
     private boolean isCallerAllowed() {
