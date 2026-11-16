@@ -36,10 +36,18 @@ public final class GearheadSteeringKeyHooks {
     private static final Set<String> HOOKED_RECEIVER_METHODS =
             Collections.synchronizedSet(new HashSet<String>());
     private static final GearheadGestureRouter GESTURES = new GearheadGestureRouter();
+    private static final AtomicBoolean INSTALLED = new AtomicBoolean();
+    private static volatile String installedProcess = "unknown";
 
     private GearheadSteeringKeyHooks() { }
 
     public static void install() {
+        install("unknown");
+    }
+
+    public static void install(String processName) {
+        if (!INSTALLED.compareAndSet(false, true)) return;
+        installedProcess = processName == null ? "unknown" : processName;
         try {
             int count = XposedBridge.hookAllMethods(ContextWrapper.class, "registerReceiver",
                     new XC_MethodHook() {
@@ -58,9 +66,13 @@ public final class GearheadSteeringKeyHooks {
                             hookReceiver(receiver.getClass(), action);
                         }
                     }).size();
-            XposedBridge.log(TAG + " installed registerReceiver observer (" + count + ")");
+            if (count == 0) INSTALLED.set(false);
+            XposedBridge.log(TAG + " registerReceiver observer in "
+                    + installedProcess + " overloads=" + count);
         } catch (Throwable error) {
-            XposedBridge.log(TAG + " registerReceiver hook unavailable: " + error);
+            INSTALLED.set(false);
+            XposedBridge.log(TAG + " registerReceiver hook unavailable in "
+                    + installedProcess + ": " + error);
         }
     }
 
@@ -113,12 +125,12 @@ public final class GearheadSteeringKeyHooks {
                     // Android Auto receiver behavior remains unchanged.
                     GESTURES.dispatch((Context) param.args[0], event);
                     param.setResult(null);
-                    XposedBridge.log(TAG + " captured " + describe(event)
-                            + " from " + receiverClass.getName());
+                    XposedBridge.log(TAG + " captured in " + installedProcess + ": "
+                            + describe(event) + " from " + receiverClass.getName());
                 }
             });
-            XposedBridge.log(TAG + " hooked " + receiverClass.getName()
-                    + " for " + registeredAction);
+            XposedBridge.log(TAG + " hooked in " + installedProcess + ": "
+                    + receiverClass.getName() + " for " + registeredAction);
         } catch (Throwable error) {
             XposedBridge.log(TAG + " receiver hook failed for "
                     + receiverClass.getName() + ": " + error);
