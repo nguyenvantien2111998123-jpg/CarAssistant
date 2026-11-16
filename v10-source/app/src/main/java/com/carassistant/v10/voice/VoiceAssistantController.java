@@ -1,5 +1,7 @@
 package com.carassistant.v10.voice;
 
+import com.carassistant.v10.CarAssistantCommandExecutor;
+
 import android.Manifest;
 import android.content.Context;
 import android.content.Intent;
@@ -28,7 +30,7 @@ public final class VoiceAssistantController {
 
     private final Context context;
     private final Listener listener;
-    private final VoiceCommandRouter router;
+    private final CarAssistantCommandExecutor commandExecutor;
     private final Handler mainHandler = new Handler(Looper.getMainLooper());
     private SpeechRecognizer recognizer;
     private TextToSpeech textToSpeech;
@@ -92,11 +94,11 @@ public final class VoiceAssistantController {
         mainHandler.postDelayed(finalResultFallback, FINAL_RESULT_TIMEOUT_MS);
     }
 
-    public VoiceAssistantController(Context context, Listener listener, VoiceCommandRouter router) {
-        if (context == null || router == null) throw new IllegalArgumentException("context and router are required");
+    public VoiceAssistantController(Context context, Listener listener, CarAssistantCommandExecutor commandExecutor) {
+        if (context == null || commandExecutor == null) throw new IllegalArgumentException("context and commandExecutor are required");
         this.context = context;
         this.listener = listener;
-        this.router = router;
+        this.commandExecutor = commandExecutor;
         textToSpeech = new TextToSpeech(context.getApplicationContext(), status ->
                 mainHandler.post(() -> {
                     if (destroyed || textToSpeech == null) return;
@@ -305,7 +307,7 @@ public final class VoiceAssistantController {
         cancelSilenceWatchdog();
         mainHandler.removeCallbacks(noSpeechWatchdog);
         mainHandler.removeCallbacks(finalResultFallback);
-        VoiceCommandRouter.Result result = router.route(clean);
+        VoiceCommandRouter.Result result = commandExecutor.executeVoiceCommand(clean);
         notifyState(false, result.understood ? "Đã nhận: " + clean : "Chưa hiểu: " + clean, "", false);
         speak(result.response);
         lastTranscript = "";
