@@ -48,7 +48,7 @@ public final class CarAssistantCoreRuntime {
         }
         started = true;
         recoveryMonitor.start(entryPoint);
-        recoveryMonitor.reportComponent("AA_PROJECTION_SERVICE", true,
+        recoveryMonitor.reportComponent("CORE_BOOTSTRAP", true,
                 "Android Auto bound the projection service");
         try {
             connectionMonitor.start(connected ->
