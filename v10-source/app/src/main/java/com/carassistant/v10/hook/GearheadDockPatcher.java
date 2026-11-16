@@ -13,6 +13,7 @@ import android.os.Looper;
 import android.os.SystemClock;
 import android.util.Log;
 import android.view.Display;
+import android.view.LayoutInflater;
 import android.view.View;
 import android.view.ViewGroup;
 import android.widget.TextView;
@@ -76,6 +77,7 @@ public final class GearheadDockPatcher {
     private volatile Context context;
     private volatile long visibleUntil;
     private volatile long projectionLaunchRequestedAt;
+    private boolean facetBarReady;
     private long lastAutoLaunchRequest;
     private boolean leaseActive;
     private boolean rootsDirty = true;
@@ -95,6 +97,38 @@ public final class GearheadDockPatcher {
                         protected void afterHookedMethod(MethodHookParam param) {
                             Context appContext = (Context) param.args[0];
                             patcher.main.post(() -> patcher.attachContext(appContext));
+                        }
+                    });
+            // Match AADisplay's proven auto-open trigger: Android Auto inflates
+            // gh_coolwalk_vertical_facet_bar only after the projection UI is ready.
+            // Do not call Gearhead's internal launcher from Application.attach or
+            // from a blind polling loop before the host has initialized its car UI.
+            XposedHelpers.findAndHookMethod(
+                    LayoutInflater.class,
+                    "inflate",
+                    int.class,
+                    ViewGroup.class,
+                    boolean.class,
+                    new XC_MethodHook() {
+                        @Override
+                        protected void afterHookedMethod(MethodHookParam param) {
+                            try {
+                                LayoutInflater inflater = (LayoutInflater) param.thisObject;
+                                Context inflaterContext = inflater.getContext();
+                                int facetBarId = inflaterContext.getResources().getIdentifier(
+                                        "gh_coolwalk_vertical_facet_bar",
+                                        "layout",
+                                        inflaterContext.getPackageName());
+                                if (facetBarId == 0
+                                        || ((Integer) param.args[0]).intValue() != facetBarId) {
+                                    return;
+                                }
+                                patcher.main.postDelayed(
+                                        () -> patcher.onFacetBarInflated(inflaterContext),
+                                        1000L);
+                            } catch (Throwable error) {
+                                log("Could not observe Android Auto facet-bar inflation: " + error);
+                            }
                         }
                     });
             XposedHelpers.findAndHookMethod(
@@ -301,12 +335,23 @@ public final class GearheadDockPatcher {
         }
     }
 
+    /** Android Auto has finished constructing its projection UI. */
+    private void onFacetBarInflated(Context inflaterContext) {
+        attachContext(inflaterContext);
+        facetBarReady = true;
+        log("Android Auto projection facet bar is ready; waiting for authenticated auto-launch request");
+        maybeAutoLaunchProjection();
+    }
+
     /**
      * Android Auto's connected notification is converted by the app process into
-     * an authenticated provider request. Execute the same Gearhead car-app launcher
-     * used by the media-card click, but without opening the phone-side Activity.
+     * an authenticated provider request. Wait until Gearhead has inflated its real
+     * projection facet bar, then invoke the same static launcher used by AADisplay.
      */
     private void maybeAutoLaunchProjection() {
+        if (!facetBarReady) {
+            return;
+        }
         long requestedAt = projectionLaunchRequestedAt;
         long now = SystemClock.uptimeMillis();
         if (requestedAt <= 0L || requestedAt <= lastAutoLaunchRequest
