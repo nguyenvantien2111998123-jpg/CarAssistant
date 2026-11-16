@@ -75,6 +75,8 @@ public final class GearheadDockPatcher {
 
     private volatile Context context;
     private volatile long visibleUntil;
+    private volatile long projectionLaunchRequestedAt;
+    private long lastAutoLaunchRequest;
     private boolean leaseActive;
     private boolean rootsDirty = true;
     private boolean loggedNoDock;
@@ -277,9 +279,12 @@ public final class GearheadDockPatcher {
         try {
             ContentResolver resolver = context.getContentResolver();
             Uri uri = Uri.parse("content://" + DockStateProvider.AUTHORITY + "/state");
-            cursor = resolver.query(uri, new String[]{"visible_until"}, null, null, null);
+            cursor = resolver.query(uri, new String[]{
+                    "visible_until", "projection_launch_requested_at"}, null, null, null);
             if (cursor != null && cursor.moveToFirst()) {
                 value = cursor.getLong(0);
+                projectionLaunchRequestedAt = cursor.getColumnCount() > 1
+                        ? cursor.getLong(1) : 0L;
             }
         } catch (Exception e) {
             value = 0L;
@@ -292,6 +297,44 @@ public final class GearheadDockPatcher {
             }
             visibleUntil = value;
             readInFlight.set(false);
+            main.post(this::maybeAutoLaunchProjection);
+        }
+    }
+
+    /**
+     * Android Auto's connected notification is converted by the app process into
+     * an authenticated provider request. Execute the same Gearhead car-app launcher
+     * used by the media-card click, but without opening the phone-side Activity.
+     */
+    private void maybeAutoLaunchProjection() {
+        long requestedAt = projectionLaunchRequestedAt;
+        long now = SystemClock.uptimeMillis();
+        if (requestedAt <= 0L || requestedAt <= lastAutoLaunchRequest
+                || requestedAt > now || now - requestedAt > 30_000L) {
+            return;
+        }
+        Context appContext = context;
+        if (appContext == null) return;
+        try {
+            ClassLoader loader = appContext.getClassLoader();
+            Class<?> controller = XposedHelpers.findClassIfExists(
+                    "com.google.android.projection.gearhead.service.CarSystemUiControllerService",
+                    loader);
+            Method launcher = findCarAppLauncher(controller);
+            if (launcher == null) {
+                log("Auto-projection request is pending; Gearhead car-app launcher not ready");
+                return;
+            }
+            launcher.setAccessible(true);
+            Intent intent = new Intent();
+            intent.setComponent(new ComponentName(
+                    "com.carassistant.v10", "com.carassistant.v10.AACastCarService"));
+            intent.putExtra("android.intent.extra.PACKAGE_NAME", "com.carassistant.v10");
+            launcher.invoke(null, intent);
+            lastAutoLaunchRequest = requestedAt;
+            log("Automatically launched CarAsistant projection after Android Auto connected");
+        } catch (Throwable error) {
+            log("Automatic CarAsistant projection launch failed; will retry: " + error);
         }
     }
 
