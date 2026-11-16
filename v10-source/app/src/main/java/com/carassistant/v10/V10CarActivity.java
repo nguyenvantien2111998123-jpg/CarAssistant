@@ -1730,18 +1730,16 @@ public void goHomeFromVoice() {
     }
 
     private void ensureVoiceAssistantService() {
-        if (checkSelfPermission(Manifest.permission.RECORD_AUDIO)
-                == PackageManager.PERMISSION_GRANTED) {
-            startVoiceAssistantService(CarAssistantVoiceService.ACTION_START);
-        }
+        CarAssistantCore.ensureVoiceService(this);
     }
 
     private void startVoiceAssistantService(String action) {
-        Intent serviceIntent = new Intent(this, CarAssistantVoiceService.class).setAction(action);
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            startForegroundService(serviceIntent);
-        } else {
-            startService(serviceIntent);
+        if (CarAssistantVoiceService.ACTION_START.equals(action)) {
+            CarAssistantCore.ensureVoiceService(this);
+        } else if (CarAssistantVoiceService.ACTION_TOGGLE.equals(action)) {
+            CarAssistantCore.toggleVoice(this);
+        } else if (CarAssistantVoiceService.ACTION_CANCEL.equals(action)) {
+            CarAssistantCore.cancelVoice(this);
         }
     }
 
