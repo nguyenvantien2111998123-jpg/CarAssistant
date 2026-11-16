@@ -61,6 +61,7 @@ public final class CoreRecoveryMonitor {
                 // Component health is process-local. Never trust READY flags from
                 // the previous process when deciding whether this process is healthy.
                 .putString("component_AA_PROJECTION_SERVICE", "NOT_READY")
+                .putString("component_CORE_BOOTSTRAP", "NOT_READY")
                 .putString("component_SESSION_COORDINATOR", "NOT_READY")
                 .putString("component_CONNECTION_MONITOR", "NOT_READY")
                 .putString("component_CORE_CONNECTION_MONITOR", "NOT_READY")
@@ -112,6 +113,7 @@ public final class CoreRecoveryMonitor {
                 + ", processInstance=" + processInstanceId
                 + ", aaState=" + preferences.getString(KEY_AA_STATE, "UNKNOWN")
                 + ", sessionId=" + preferences.getString(KEY_SESSION_ID, "none")
+                + ", coreBootstrap=" + component("CORE_BOOTSTRAP")
                 + ", projectionService=" + component("AA_PROJECTION_SERVICE")
                 + ", coordinator=" + component("SESSION_COORDINATOR")
                 + ", connectionMonitor=" + component("CONNECTION_MONITOR")
@@ -125,7 +127,7 @@ public final class CoreRecoveryMonitor {
 
     private void updateCoreState() {
         boolean ready = CoreRecoveryPolicy.isCoreReady(
-                "READY".equals(component("AA_PROJECTION_SERVICE")),
+                "READY".equals(component("CORE_BOOTSTRAP")),
                 "READY".equals(component("CORE_CONNECTION_MONITOR")));
         String next = ready ? "READY" : "PARTIAL";
         String previous = preferences.getString(KEY_CORE_STATE, "UNKNOWN");
