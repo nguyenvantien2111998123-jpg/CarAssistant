@@ -234,7 +234,7 @@ public final class SystemMediaKeyHooks {
                         // A genuine held key repeats with the same downTime; a new
                         // physical press has a different downTime and must not be
                         // blocked forever by stale pressedKey state.
-                        if (key != pressedKey || event.getDownTime() == pressedDownTime) {
+                        if (key == pressedKey && event.getDownTime() == pressedDownTime) {
                             return true;
                         }
                         cancelLongPressLocked();
