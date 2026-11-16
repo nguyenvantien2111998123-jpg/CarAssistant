@@ -49,6 +49,7 @@ public final class GearheadDockPatcher {
     private static final String GEARHEAD = "com.google.android.projection.gearhead";
     private static final long LEASE_MS = 3000L;
     private static final long POLL_MS = 1000L;
+    private static final long AUTO_OPEN_RETRY_MS = 1000L;
 
     /** Tên resource-entry của dock/nav bar trong gearhead. */
     private static final String[] DOCK_NAMES = {
@@ -66,6 +67,7 @@ public final class GearheadDockPatcher {
     };
 
     private final Handler main = new Handler(Looper.getMainLooper());
+    private final String processName;
     private final Set<View> roots = Collections.newSetFromMap(new WeakHashMap<>());
     private final IdentityHashMap<View, ViewSnapshot> hidden = new IdentityHashMap<>();
     private final IdentityHashMap<ViewGroup, View> covered = new IdentityHashMap<>();
@@ -79,18 +81,28 @@ public final class GearheadDockPatcher {
     private volatile long projectionLaunchRequestedAt;
     private boolean facetBarReady;
     private boolean autoLaunchAttemptedForHost;
+    private boolean autoLaunchRetryScheduled;
     private long lastAutoLaunchRequest;
     private boolean leaseActive;
     private boolean rootsDirty = true;
     private boolean loggedNoDock;
     private boolean loggedRootFailure;
 
-    private GearheadDockPatcher() {
+    private GearheadDockPatcher(String processName) {
+        this.processName = processName == null ? "" : processName;
     }
 
-    /** Cài hook theo dõi root view + vòng lặp lease. */
+    /** Cài hook theo dõi root view + vòng lặp lease. Auto-open chỉ chạy trong :projection. */
     public static void install() {
-        GearheadDockPatcher patcher = new GearheadDockPatcher();
+        install("");
+    }
+
+    public static void install(String processName) {
+        if (processName == null || !processName.endsWith(":projection")) {
+            log("Dock/auto-open hooks skipped outside :projection; process=" + processName);
+            return;
+        }
+        GearheadDockPatcher patcher = new GearheadDockPatcher(processName);
         try {
             XposedHelpers.findAndHookMethod(Application.class, "attach", Context.class,
                     new XC_MethodHook() {
@@ -163,7 +175,9 @@ public final class GearheadDockPatcher {
                                 patcher.main.post(() -> {
                                     patcher.facetBarReady = false;
                                     patcher.autoLaunchAttemptedForHost = false;
-                                    log("Android Auto GhFacetBar removed; auto-open re-armed for next connection");
+                                    patcher.autoLaunchRetryScheduled = false;
+                                    log("Android Auto GhFacetBar removed in " + patcher.processName
+                                            + "; auto-open re-armed for next connection");
                                 });
                             }
                         }
@@ -194,7 +208,8 @@ public final class GearheadDockPatcher {
                         }
                     });
             patcher.main.post(patcher::refreshRoots);
-            log("Launcher dock hook v2 installed (GhFacetBar + embedded dock)");
+            log("Launcher dock hook installed in " + processName
+                    + " (GhFacetBar + embedded dock; AADisplay-compatible projection process)");
         } catch (Throwable t) {
             log("Dock hook unavailable: " + t);
         }
@@ -365,11 +380,21 @@ public final class GearheadDockPatcher {
         }
     }
 
+    private void scheduleAutoLaunchRetry() {
+        if (autoLaunchAttemptedForHost || autoLaunchRetryScheduled) return;
+        autoLaunchRetryScheduled = true;
+        main.postDelayed(() -> {
+            autoLaunchRetryScheduled = false;
+            maybeAutoLaunchProjection();
+        }, AUTO_OPEN_RETRY_MS);
+    }
+
     /** Android Auto has finished constructing its projection UI. */
     private void onFacetBarInflated(Context inflaterContext) {
         attachContext(inflaterContext);
         facetBarReady = true;
-        log("Android Auto projection UI is ready; waiting for authenticated auto-launch request");
+        log("Android Auto projection UI is ready in " + processName
+                + "; attempting CarAsistant auto-open");
         maybeAutoLaunchProjection();
     }
 
@@ -390,8 +415,10 @@ public final class GearheadDockPatcher {
                     "com.google.android.projection.gearhead.service.CarSystemUiControllerService",
                     loader);
             Method launcher = findCarAppLauncher(controller);
-            if (launcher == null) {
-                log("Auto-open waiting for Gearhead car-app launcher initialization");
+            if (controller == null || launcher == null) {
+                log("Auto-open launcher not ready in " + processName
+                        + "; class=" + (controller != null) + "; retry scheduled");
+                scheduleAutoLaunchRetry();
                 return;
             }
             launcher.setAccessible(true);
@@ -401,10 +428,14 @@ public final class GearheadDockPatcher {
             intent.putExtra("android.intent.extra.PACKAGE_NAME", "com.carassistant.v10");
             launcher.invoke(null, intent);
             autoLaunchAttemptedForHost = true;
+            autoLaunchRetryScheduled = false;
             lastAutoLaunchRequest = SystemClock.uptimeMillis();
-            log("Automatically opened CarAsistant after Android Auto projection UI became ready");
+            log("CarAsistant launch request accepted by Gearhead launcher in " + processName
+                    + "; component=" + intent.getComponent());
         } catch (Throwable error) {
-            log("Automatic CarAsistant projection launch failed; will retry: " + error);
+            log("Automatic CarAsistant projection launch failed in " + processName
+                    + "; retry scheduled: " + error);
+            scheduleAutoLaunchRetry();
         }
     }
 
