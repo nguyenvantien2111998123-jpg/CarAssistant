@@ -2,6 +2,7 @@ package com.carassistant.v10.core.car;
 
 import android.content.Context;
 import android.content.SharedPreferences;
+import android.provider.Settings;
 import android.os.SystemClock;
 import android.util.Log;
 
@@ -16,10 +17,10 @@ import java.util.UUID;
 public final class CoreRecoveryMonitor {
     private static final String TAG = "CarAsstCoreRecovery";
     private static final String PREFS = "carassistant_core_recovery";
-    private static final long BOOT_MARKER_TOLERANCE_MS = 120_000L;
 
     private static final String KEY_PROCESS_ID = "process_instance_id";
     private static final String KEY_BOOT_MARKER = "boot_marker";
+    private static final String KEY_BOOT_COUNT = "boot_count";
     private static final String KEY_RECOVERY_COUNT = "recovery_count";
     private static final String KEY_RECOVERY_REASON = "recovery_reason";
     private static final String KEY_CORE_STATE = "core_state";
@@ -27,13 +28,16 @@ public final class CoreRecoveryMonitor {
     private static final String KEY_SESSION_ID = "aa_session_id";
 
     private final SharedPreferences preferences;
+    private final android.content.ContentResolver resolver;
     private final String processInstanceId = UUID.randomUUID().toString();
     private boolean started;
 
     public CoreRecoveryMonitor(Context context) {
         if (context == null) throw new IllegalArgumentException("context is required");
-        preferences = context.getApplicationContext()
-                .getSharedPreferences(PREFS, Context.MODE_PRIVATE);
+        Context app = context.getApplicationContext();
+        Context safeContext = app != null ? app : context;
+        preferences = safeContext.getSharedPreferences(PREFS, Context.MODE_PRIVATE);
+        resolver = safeContext.getContentResolver();
     }
 
     public synchronized void start(String entryPoint) {
@@ -41,12 +45,15 @@ public final class CoreRecoveryMonitor {
         started = true;
 
         long bootMarker = System.currentTimeMillis() - SystemClock.elapsedRealtime();
+        int currentBootCount = readBootCount();
         String previousProcess = preferences.getString(KEY_PROCESS_ID, "");
         long previousBootMarker = preferences.getLong(KEY_BOOT_MARKER, 0L);
+        int previousBootCount = preferences.getInt(KEY_BOOT_COUNT, -1);
         boolean hasPreviousProcess = previousProcess != null && !previousProcess.isEmpty();
 
         CoreRecoveryPolicy.RecoveryReason reason = CoreRecoveryPolicy.classify(
-                hasPreviousProcess, previousBootMarker, bootMarker);
+                hasPreviousProcess, previousBootMarker, bootMarker,
+                previousBootCount, currentBootCount);
         int recoveryCount = preferences.getInt(KEY_RECOVERY_COUNT, 0);
         if (hasPreviousProcess && !processInstanceId.equals(previousProcess)) {
             recoveryCount++;
@@ -56,6 +63,7 @@ public final class CoreRecoveryMonitor {
         preferences.edit()
                 .putString(KEY_PROCESS_ID, processInstanceId)
                 .putLong(KEY_BOOT_MARKER, bootMarker)
+                .putInt(KEY_BOOT_COUNT, currentBootCount)
                 .putInt(KEY_RECOVERY_COUNT, recoveryCount)
                 .putString(KEY_RECOVERY_REASON, reason.name())
                 // Component health is process-local. Never trust READY flags from
@@ -83,9 +91,20 @@ public final class CoreRecoveryMonitor {
         event("CORE_RECOVERY_CLASSIFIED", "reason=" + reason.name()
                 + ", recoveryCount=" + recoveryCount
                 + ", previousCoreState=" + previousCoreState
+                + ", bootCount=" + currentBootCount
                 + ", processInstance=" + processInstanceId);
         event("CORE_MONITOR_READY", "stale process health flags cleared");
         updateCoreState();
+    }
+
+    private int readBootCount() {
+        try {
+            return Settings.Global.getInt(
+                    resolver, Settings.Global.BOOT_COUNT, -1);
+        } catch (RuntimeException error) {
+            Log.w(TAG, "BOOT_COUNT unavailable; falling back to boot-time marker", error);
+            return -1;
+        }
     }
 
     public void reportComponent(String component, boolean ready, String detail) {
