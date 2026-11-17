@@ -67,3 +67,12 @@ Neu tinh nang chua dat, khong merge.
 8. tinh-nang/canh-bao-wyn
 
 Danh sach tren la ke hoach. Chi tao va trien khai tung nhanh tiep theo khi tinh nang truoc da duoc tich hop va co moc kiem thu ro rang.
+
+## 8. Trang thai kiem soat hien tai
+
+- Workflow CI chi chay khi push vao tong-hop/android-box, khi co PR nham vao nhanh nay, hoac khi chay thu cong.
+- CI thuc hien testDebugUnitTest va assembleDebug; artifact APK kem SHA-256 va BUILD_INFO.
+- Tai thoi diem chot quy trinh, repository chua co ruleset nao. Vi vay GitHub chua tu dong chan merge khi CI that bai; nguoi tao PR phai doi CI xanh va review truoc khi merge.
+- Khong tu nhan nhanh tong hop da duoc bao ve bang branch protection. Can bat quy tac bao ve trong GitHub Settings khi tai khoan co quyen admin.
+- Build CI xanh chi xac nhan compile/unit test va tao APK; khong thay the kiem thu Android Auto tren POCO F1 va Honda BR-V.
+- Nhanh tinh-nang/tu-khoi-dong-core hien chi la nhanh cho, chua co code tu khoi dong. Khi bat dau tinh nang, cap nhat nhanh nay tu HEAD moi nhat cua nhanh tong hop.
