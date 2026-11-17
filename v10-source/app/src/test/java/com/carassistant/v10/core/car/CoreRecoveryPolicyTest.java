@@ -27,6 +27,24 @@ public class CoreRecoveryPolicyTest {
                 CoreRecoveryPolicy.classify(true, 0L, 1_700_000_000_000L));
     }
 
+    @Test public void bootCountDetectsRebootEvenWhenWallClockMarkerDoesNotChange() {
+        assertEquals(CoreRecoveryPolicy.RecoveryReason.DEVICE_REBOOT,
+                CoreRecoveryPolicy.classify(true, 1_700_000_000_000L,
+                        1_700_000_000_000L, 41, 42));
+    }
+
+    @Test public void bootCountIgnoresWallClockAdjustmentDuringSameBoot() {
+        assertEquals(CoreRecoveryPolicy.RecoveryReason.PROCESS_RESTART,
+                CoreRecoveryPolicy.classify(true, 1_700_000_000_000L,
+                        1_700_000_600_000L, 41, 41));
+    }
+
+    @Test public void unavailableBootCountUsesBootMarkerFallback() {
+        assertEquals(CoreRecoveryPolicy.RecoveryReason.DEVICE_REBOOT,
+                CoreRecoveryPolicy.classify(true, 1_700_000_000_000L,
+                        1_700_000_600_000L, -1, -1));
+    }
+
     @Test public void sameBootProcessRestartPreservesAaHostSession() {
         assertFalse(CoreRecoveryPolicy.shouldResetHostSession(
                 CoreRecoveryPolicy.RecoveryReason.PROCESS_RESTART));
