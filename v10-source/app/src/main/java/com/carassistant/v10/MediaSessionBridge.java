@@ -74,6 +74,37 @@ public final class MediaSessionBridge extends NotificationListenerService {
         }
     };
 
+    // Gearhead renders both media surfaces from this one mirror session. Keep its
+    // lifecycle independent from the source player's transient session callbacks.
+    private static final long MIRROR_WATCHDOG_INTERVAL_MS = 3000L;
+    private final Runnable mirrorSessionWatchdog = new Runnable() {
+        @Override public void run() {
+            try {
+                ensureMirrorSession();
+                MediaSession session = mirrorSession;
+                if (session == null || !session.isActive()) {
+                    updateMirrorSession(snapshot);
+                    Log.w(TAG, "Mirror session watchdog reactivated CarAsistant media session");
+                } else {
+                    // Touch the controller so a stale/released binder is detected here,
+                    // rather than waiting for Gearhead's next media-surface refresh.
+                    session.getController().getPlaybackState();
+                }
+            } catch (RuntimeException error) {
+                Log.w(TAG, "Mirror session watchdog rebuilding an unavailable session", error);
+                releaseMirrorSession();
+                try {
+                    ensureMirrorSession();
+                    updateMirrorSession(snapshot);
+                } catch (RuntimeException rebuildError) {
+                    Log.e(TAG, "Could not rebuild CarAsistant mirror session", rebuildError);
+                }
+            } finally {
+                MAIN.postDelayed(this, MIRROR_WATCHDOG_INTERVAL_MS);
+            }
+        }
+    };
+
     public interface Listener {
         void onMediaChanged(Snapshot snapshot);
     }
@@ -699,6 +730,8 @@ public final class MediaSessionBridge extends NotificationListenerService {
     public void onListenerConnected() {
         super.onListenerConnected();
         ensureMirrorSession();
+        MAIN.removeCallbacks(mirrorSessionWatchdog);
+        MAIN.postDelayed(mirrorSessionWatchdog, MIRROR_WATCHDOG_INTERVAL_MS);
         // Publish the CarAsistant controller before querying source sessions. This closes
         // the startup race in which Gearhead discovers a phone player before our mirror.
         updateMirrorSession(snapshot);
@@ -737,6 +770,9 @@ public final class MediaSessionBridge extends NotificationListenerService {
     @Override
     public void onListenerDisconnected() {
         MAIN.removeCallbacks(checkpointTask);
+        // Notification-listener rebinding must not suspend the CarAsistant media surface.
+        MAIN.removeCallbacks(mirrorSessionWatchdog);
+        MAIN.postDelayed(mirrorSessionWatchdog, MIRROR_WATCHDOG_INTERVAL_MS);
         if (manager != null && sessionsListener != null) {
             try { manager.removeOnActiveSessionsChangedListener(sessionsListener); }
             catch (RuntimeException ignored) { }
@@ -754,6 +790,7 @@ public final class MediaSessionBridge extends NotificationListenerService {
     @Override
     public void onDestroy() {
         MAIN.removeCallbacks(checkpointTask);
+        MAIN.removeCallbacks(mirrorSessionWatchdog);
         releaseMirrorSession();
         super.onDestroy();
     }
