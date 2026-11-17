@@ -66,11 +66,19 @@ public final class CoreRecoveryMonitor {
                 .putString("component_CONNECTION_MONITOR", "NOT_READY")
                 .putString("component_CORE_CONNECTION_MONITOR", "NOT_READY")
                 .putString("component_DISPLAY_BACKEND", "NOT_READY")
-                .putString(KEY_AA_STATE, "UNKNOWN")
-                .putString(KEY_SESSION_ID, "")
                 .putString(KEY_CORE_STATE, "PARTIAL")
                 .putLong("last_bootstrap_at", System.currentTimeMillis())
                 .apply();
+
+        // A process restart in the same device boot must not erase the Gearhead
+        // host state. A real reboot invalidates the old projection session.
+        if (reason == CoreRecoveryPolicy.RecoveryReason.DEVICE_REBOOT
+                || reason == CoreRecoveryPolicy.RecoveryReason.FIRST_START) {
+            preferences.edit()
+                    .putString(KEY_AA_STATE, "DISCONNECTED")
+                    .putString(KEY_SESSION_ID, "")
+                    .apply();
+        }
 
         event("CORE_BOOTSTRAP_STARTED", "entryPoint=" + safe(entryPoint));
         event("CORE_RECOVERY_CLASSIFIED", "reason=" + reason.name()
