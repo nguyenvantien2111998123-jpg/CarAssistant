@@ -11,9 +11,8 @@ import android.os.Process;
 import android.os.SystemClock;
 
 /**
- * Kênh IPC một chiều: app ghi `visibleUntil`, gearhead đọc.
- *
- * Chỉ đọc; caller phải là chính app hoặc Android Auto (gearhead).
+ * IPC between CarAsistant and the LSPosed hook running inside Gearhead.
+ * Gearhead can read dock state and report its actual projection-host lifecycle.
  */
 public final class DockStateProvider extends ContentProvider {
 
@@ -24,8 +23,9 @@ public final class DockStateProvider extends ContentProvider {
     private static final String PREFS = "carassistant_projection_bootstrap";
     private static final String KEY_LAUNCH_REQUESTED_AT = "launch_requested_at";
     public static final String METHOD_REQUEST_PROJECTION_LAUNCH = "request_projection_launch";
+    public static final String METHOD_REPORT_AA_HOST_STATE = "report_android_auto_host_state";
 
-    /** Epoch SystemClock.uptimeMillis(); 0 = không có lease. */
+    /** Epoch SystemClock.uptimeMillis(); 0 = no active dock lease. */
     public static volatile long visibleUntil;
 
     @Override
@@ -34,12 +34,11 @@ public final class DockStateProvider extends ContentProvider {
     }
 
     @Override
-    public Cursor query(Uri uri, String[] projection, String selection, String[] selectionArgs, String sortOrder) {
-        if (!"/state".equals(uri.getPath())) {
-            return null;
-        }
-        if (!isCallerAllowed()) {
-            throw new SecurityException("Only Android Auto may read launcher state");
+    public Cursor query(Uri uri, String[] projection, String selection,
+                        String[] selectionArgs, String sortOrder) {
+        if (!"/state".equals(uri.getPath())) return null;
+        if (!isGearheadOrSelf()) {
+            throw new SecurityException("Only CarAsistant and Android Auto may read launcher state");
         }
         long launchRequestedAt = getContext().getSharedPreferences(PREFS, 0)
                 .getLong(KEY_LAUNCH_REQUESTED_AT, 0L);
@@ -51,33 +50,48 @@ public final class DockStateProvider extends ContentProvider {
 
     @Override
     public Bundle call(String method, String arg, Bundle extras) {
-        if (!METHOD_REQUEST_PROJECTION_LAUNCH.equals(method)) {
-            return super.call(method, arg, extras);
+        if (METHOD_REQUEST_PROJECTION_LAUNCH.equals(method)) {
+            if (Binder.getCallingUid() != Process.myUid()) {
+                throw new SecurityException("Only CarAsistant may request a projection launch");
+            }
+            long requestedAt = SystemClock.uptimeMillis();
+            getContext().getSharedPreferences(PREFS, 0).edit()
+                    .putLong(KEY_LAUNCH_REQUESTED_AT, requestedAt).apply();
+            Bundle result = new Bundle();
+            result.putLong(KEY_LAUNCH_REQUESTED_AT, requestedAt);
+            return result;
         }
-        // Only the app itself may request a launch. Gearhead is read-only.
-        if (Binder.getCallingUid() != Process.myUid()) {
-            throw new SecurityException("Only CarAsistant may request projection launch");
+
+        if (METHOD_REPORT_AA_HOST_STATE.equals(method)) {
+            if (!isGearheadCaller()) {
+                throw new SecurityException("Only Android Auto Gearhead may report host state");
+            }
+            if (!"connected".equals(arg) && !"disconnected".equals(arg)) {
+                throw new IllegalArgumentException("Host state must be connected or disconnected");
+            }
+            boolean connected = "connected".equals(arg);
+            CarAssistantCore.startRecoveryMonitor(getContext().getApplicationContext(),
+                    "GearheadProjectionHost");
+            CarAssistantCore.reportAndroidAutoConnection(connected);
+            Bundle result = new Bundle();
+            result.putBoolean("accepted", true);
+            result.putBoolean("connected", connected);
+            return result;
         }
-        long requestedAt = SystemClock.uptimeMillis();
-        getContext().getSharedPreferences(PREFS, 0).edit()
-                .putLong(KEY_LAUNCH_REQUESTED_AT, requestedAt).apply();
-        Bundle result = new Bundle();
-        result.putLong(KEY_LAUNCH_REQUESTED_AT, requestedAt);
-        return result;
+
+        return super.call(method, arg, extras);
     }
 
-    private boolean isCallerAllowed() {
+    private boolean isGearheadOrSelf() {
+        return Binder.getCallingUid() == Process.myUid() || isGearheadCaller();
+    }
+
+    private boolean isGearheadCaller() {
         int callingUid = Binder.getCallingUid();
-        if (callingUid == Process.myUid()) {
-            return true;
-        }
         String[] packages = getContext().getPackageManager().getPackagesForUid(callingUid);
-        if (packages != null) {
-            for (String pkg : packages) {
-                if (GEARHEAD.equals(pkg)) {
-                    return true;
-                }
-            }
+        if (packages == null) return false;
+        for (String pkg : packages) {
+            if (GEARHEAD.equals(pkg)) return true;
         }
         return false;
     }
