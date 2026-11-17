@@ -24,12 +24,21 @@ public final class CoreRecoveryPolicy {
         return RecoveryReason.PROCESS_RESTART;
     }
 
-    /** Core readiness is independent from the Activity-owned display/session coordinator. */
-    public static boolean isCoreReady(boolean projectionServiceReady, boolean coreConnectionMonitorReady) {
+    /**
+     * Core coordinator readiness is independent from the optional AA projection
+     * session. A boot receiver can initialize Core before a car is connected.
+     */
+    public static boolean isCoreReady(boolean coreBootstrapReady) {
+        return coreBootstrapReady;
+    }
+
+    /** Compatibility overload retained for older callers/tests. */
+    public static boolean isCoreReady(boolean projectionServiceReady,
+                                      boolean coreConnectionMonitorReady) {
         return projectionServiceReady && coreConnectionMonitorReady;
     }
 
-    /** Legacy three-component overload retained for existing tests and callers. */
+    /** Legacy three-component overload retained for older callers/tests. */
     public static boolean isCoreReady(boolean projectionServiceReady,
                                       boolean coordinatorReady,
                                       boolean connectionMonitorReady) {
