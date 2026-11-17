@@ -2,6 +2,8 @@ package com.carassistant.v10;
 
 import android.accessibilityservice.AccessibilityService;
 import android.os.Build;
+import android.content.Intent;
+import android.view.KeyEvent;
 import android.os.Bundle;
 import android.view.accessibility.AccessibilityEvent;
 import android.view.accessibility.AccessibilityNodeInfo;
@@ -158,6 +160,33 @@ public final class MediaPlaybackAccessibilityService extends AccessibilityServic
             automationHandler.postDelayed(this, 400L);
         }
     };
+
+    /**
+     * Optional global media-key fallback. The system_server Gearhead hook remains
+     * the primary route; this path is used only when Android delivers the key to
+     * the enabled AccessibilityService instead.
+     */
+    @Override
+    protected boolean onKeyEvent(KeyEvent event) {
+        if (event == null) return false;
+        int keyCode = event.getKeyCode();
+        if (keyCode != KeyEvent.KEYCODE_MEDIA_NEXT
+                && keyCode != KeyEvent.KEYCODE_MEDIA_PREVIOUS
+                && keyCode != KeyEvent.KEYCODE_MEDIA_FAST_FORWARD
+                && keyCode != KeyEvent.KEYCODE_MEDIA_REWIND) {
+            return super.onKeyEvent(event);
+        }
+        Intent mediaButton = new Intent(Intent.ACTION_MEDIA_BUTTON);
+        mediaButton.putExtra(Intent.EXTRA_KEY_EVENT, event);
+        boolean handled = SteeringWheelInputDispatcher.dispatch(this, mediaButton);
+        if (handled) {
+            Log.i(TAG, "Filtered steering media key through AccessibilityService: "
+                    + KeyEvent.keyCodeToString(keyCode)
+                    + " action=" + event.getAction());
+            return true;
+        }
+        return super.onKeyEvent(event);
+    }
 
     @Override
     public void onAccessibilityEvent(AccessibilityEvent event) {
