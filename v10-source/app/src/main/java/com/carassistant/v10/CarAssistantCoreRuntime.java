@@ -6,11 +6,11 @@ import android.util.Log;
 import com.carassistant.v10.core.car.CoreRecoveryMonitor;
 
 /**
- * Process-scoped Core runtime.
+ * Process-scoped Core coordinator.
  *
- * Android Auto's bound CarActivityService is the authoritative lifecycle
- * signal. This runtime intentionally does not depend on Notification Access,
- * a phone Activity, or a permanently-running foreground service.
+ * Entry points are the boot receiver, the Gearhead host-state IPC callback,
+ * and the Android Auto projection service. This is intentionally not a daemon:
+ * Android may reclaim the process when no component is active.
  */
 public final class CarAssistantCoreRuntime {
     private static final String TAG = "CarAsstCoreRuntime";
@@ -21,7 +21,7 @@ public final class CarAssistantCoreRuntime {
 
     private CarAssistantCoreRuntime(Context context) {
         Context app = context.getApplicationContext();
-        recoveryMonitor = new CoreRecoveryMonitor(app);
+        recoveryMonitor = new CoreRecoveryMonitor(app != null ? app : context);
     }
 
     public static CarAssistantCoreRuntime start(Context context, String entryPoint) {
@@ -48,19 +48,13 @@ public final class CarAssistantCoreRuntime {
         try {
             recoveryMonitor.start(entryPoint);
             recoveryMonitor.reportComponent("CORE_BOOTSTRAP", true,
-                    "Core bootstrapped from " + entryPoint);
-            // The bound Android Auto projection service, not Notification Access,
-            // reports connection/disconnection through its own lifecycle callbacks.
-            recoveryMonitor.reportComponent("CORE_CONNECTION_MONITOR", true,
-                    "Android Auto CarActivityService lifecycle is the connection authority");
+                    "Core coordinator initialized from " + entryPoint);
             started = true;
-            Log.i(TAG, "Core runtime ready; entryPoint=" + entryPoint);
+            Log.i(TAG, "Core coordinator ready; entryPoint=" + entryPoint);
         } catch (RuntimeException error) {
-            recoveryMonitor.reportComponent("CORE_CONNECTION_MONITOR", false,
-                    "Core lifecycle initialization failed: " + error.getClass().getSimpleName());
             recoveryMonitor.reportComponent("CORE_BOOTSTRAP", false,
                     "Core initialization failed: " + error.getClass().getSimpleName());
-            Log.e(TAG, "Core runtime initialization failed", error);
+            Log.e(TAG, "Core initialization failed", error);
         }
     }
 
