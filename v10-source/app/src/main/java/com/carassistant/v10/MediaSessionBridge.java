@@ -785,6 +785,16 @@ public final class MediaSessionBridge extends NotificationListenerService {
         clearActiveController();
         updateMirrorSession(Snapshot.empty());
         super.onListenerDisconnected();
+        // NotificationListenerService is no longer bound after this callback.
+        // Android requires an explicit rebind request; without it the mirror
+        // MediaSession is released when this service is destroyed and Gearhead
+        // receives an empty CarAsistant-only session list on later connections.
+        try {
+            requestRebind(new ComponentName(this, MediaSessionBridge.class));
+            Log.i(TAG, "Requested NotificationListenerService rebind to restore CarAsistant media owner");
+        } catch (RuntimeException error) {
+            Log.e(TAG, "Could not request NotificationListenerService rebind", error);
+        }
     }
 
     @Override
