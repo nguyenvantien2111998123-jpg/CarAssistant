@@ -50,6 +50,7 @@ public final class GearheadDockPatcher {
     private static final long LEASE_MS = 3000L;
     private static final long POLL_MS = 1000L;
     private static final long AUTO_OPEN_RETRY_MS = 1000L;
+    private static final long HOST_DISCONNECT_DEBOUNCE_MS = 2000L;
 
     /** Tên resource-entry của dock/nav bar trong gearhead. */
     private static final String[] DOCK_NAMES = {
@@ -85,6 +86,13 @@ public final class GearheadDockPatcher {
     private final AtomicBoolean hostStateIpcInFlight = new AtomicBoolean();
     private boolean autoLaunchAttemptedForHost;
     private boolean autoLaunchRetryScheduled;
+    private final Runnable confirmHostDisconnected = () -> {
+        if (facetBarReady) return;
+        autoLaunchAttemptedForHost = false;
+        autoLaunchRetryScheduled = false;
+        reportAndroidAutoHostState(false);
+        log("Android Auto projection host disconnected; auto-open re-armed");
+    };
     private long lastAutoLaunchRequest;
     private boolean leaseActive;
     private boolean rootsDirty = true;
@@ -177,11 +185,9 @@ public final class GearheadDockPatcher {
                             if (display != null && "GhFacetBar".equals(display.getName())) {
                                 patcher.main.post(() -> {
                                     patcher.facetBarReady = false;
-                                    patcher.autoLaunchAttemptedForHost = false;
-                                    patcher.reportAndroidAutoHostState(false);
-                                    patcher.autoLaunchRetryScheduled = false;
-                                    log("Android Auto GhFacetBar removed in " + patcher.processName
-                                            + "; auto-open re-armed for next connection");
+                                    patcher.main.removeCallbacks(patcher.confirmHostDisconnected);
+                                    patcher.main.postDelayed(patcher.confirmHostDisconnected,
+                                            HOST_DISCONNECT_DEBOUNCE_MS);
                                 });
                             }
                         }
@@ -402,6 +408,7 @@ public final class GearheadDockPatcher {
     private void onFacetBarInflated(Context inflaterContext) {
         attachContext(inflaterContext);
         facetBarReady = true;
+        main.removeCallbacks(confirmHostDisconnected);
         reportAndroidAutoHostState(true);
         log("Android Auto projection UI is ready in " + processName
                 + "; attempting CarAsistant auto-open");
