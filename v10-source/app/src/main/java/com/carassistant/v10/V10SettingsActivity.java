@@ -206,6 +206,7 @@ public final class V10SettingsActivity extends Activity {
                     requestPermissions(new String[]{Manifest.permission.RECORD_AUDIO}, 4102));
             addButton(body, "MỞ QUYỀN TRỢ NĂNG MEDIA AUTO PLAY", this::openAccessibilitySettings);
             addButton(body, "MỞ QUYỀN TRUY CẬP THÔNG BÁO / MEDIA", this::openNotificationAccessSettings);
+            addButton(body, "CẤP WRITE_SECURE_SETTINGS BẰNG ROOT", this::grantWriteSecureSettings);
 
             TextView mediaHint = text(
                     "Để trợ lý tự chọn kết quả và bấm Phát trong YouTube/Zing MP3, mở Trợ năng và bật dịch vụ “CarAsistant Media Auto Play”. Android yêu cầu người dùng tự bật quyền này; ứng dụng không thể tự cấp.",
@@ -588,13 +589,48 @@ public final class V10SettingsActivity extends Activity {
                 : "KIỂM TRA HƯỚNG DẪN ROOT / LSPOSED");
     }
 
+    /**
+     * WRITE_SECURE_SETTINGS is not a runtime-dialog permission. Ask the already
+     * authorized root manager to grant it, then verify the package permission.
+     */
+    private void grantWriteSecureSettings() {
+        permissionStatus.setText("Đang yêu cầu quyền root để cấp WRITE_SECURE_SETTINGS…");
+        RootShellSession.EXEC.execute(() -> {
+            String failure = null;
+            try {
+                orientationShell.run(10, "pm grant " + getPackageName()
+                        + " android.permission.WRITE_SECURE_SETTINGS");
+            } catch (Throwable error) {
+                failure = error.getMessage();
+            }
+            final String result = failure;
+            runOnUiThread(() -> {
+                if (permissionStatus == null) return;
+                if (result == null
+                        && checkSelfPermission(android.Manifest.permission.WRITE_SECURE_SETTINGS)
+                        == PackageManager.PERMISSION_GRANTED) {
+                    permissionStatus.setText("WRITE_SECURE_SETTINGS: ĐÃ CẤP qua Root.");
+                } else {
+                    permissionStatus.setText("Không cấp được WRITE_SECURE_SETTINGS. "
+                            + "Kiểm tra Magisk/su và quyền ứng dụng; lỗi: "
+                            + (result == null ? "Android chưa xác nhận quyền" : result));
+                }
+                refreshStatus();
+            });
+        });
+    }
+
     private void refreshStatus() {
         if (permissionStatus == null) return;
         permissionStatus.setText(
                 "Micro: " + granted(Manifest.permission.RECORD_AUDIO)
                 + "\nThông báo/media: " + (MediaSessionBridge.hasAccess(this) ? "ĐÃ CẤP" : "CÒN THIẾU")
-                + "   •   Trợ năng: " + (hasMediaAccessibilityAccess() ? "ĐÃ CẤP" : "CÒN THIẾU")
-                + "\nRoot/LSPosed: kiểm tra riêng trong ứng dụng quản lý tương ứng.");
+                + "\nAccessibilityService: " + (hasMediaAccessibilityAccess() ? "ĐÃ BẬT" : "CHƯA BẬT")
+                + "\nWRITE_SECURE_SETTINGS: "
+                + granted(android.Manifest.permission.WRITE_SECURE_SETTINGS)
+                + "\nINJECT_EVENTS: do LSPosed hook trong system_server xử lý; "
+                + "không phải quyền app có thể tự xin."
+                + "\nRoot/LSPosed: cần cấp su và bật scope android + Gearhead.");
     }
 
     private String granted(String permission) {
