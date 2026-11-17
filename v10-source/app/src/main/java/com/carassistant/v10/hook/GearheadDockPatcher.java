@@ -80,7 +80,9 @@ public final class GearheadDockPatcher {
     private volatile long visibleUntil;
     private volatile long projectionLaunchRequestedAt;
     private boolean facetBarReady;
-    private boolean hostStateReported;
+    private volatile boolean hostStateReported;
+    private volatile boolean hostStateDesired;
+    private final AtomicBoolean hostStateIpcInFlight = new AtomicBoolean();
     private boolean autoLaunchAttemptedForHost;
     private boolean autoLaunchRetryScheduled;
     private long lastAutoLaunchRequest;
@@ -322,8 +324,8 @@ public final class GearheadDockPatcher {
     /** Vòng lặp lease: ẩn dock khi active, khôi phục khi hết hạn. */
     private void tick() {
         try {
-            if (facetBarReady && !hostStateReported) {
-                reportAndroidAutoHostState(true);
+            if (hostStateDesired != hostStateReported) {
+                reportAndroidAutoHostState(hostStateDesired);
             }
             long until = visibleUntil;
             long now = SystemClock.uptimeMillis();
@@ -411,26 +413,37 @@ public final class GearheadDockPatcher {
      * This is deliberately separate from AACastCarService's own bound lifecycle.
      */
     private void reportAndroidAutoHostState(boolean connected) {
-        if (hostStateReported == connected) return;
-        Context appContext = context;
-        if (appContext == null) return;
-        try {
-            android.os.Bundle result = appContext.getContentResolver().call(
-                    Uri.parse("content://com.carassistant.v10.launcher.dock/state"),
-                    "report_android_auto_host_state",
-                    connected ? "connected" : "disconnected",
-                    null);
-            if (result != null && result.getBoolean("accepted", false)) {
-                hostStateReported = connected;
-                log("Reported Android Auto projection host state="
-                        + (connected ? "CONNECTED" : "DISCONNECTED"));
-            } else {
-                log("Android Auto host-state IPC was not acknowledged");
-            }
-        } catch (Throwable error) {
-            log("Could not report Android Auto host state: " + error);
+        hostStateDesired = connected;
+        if (hostStateReported == connected
+                || !hostStateIpcInFlight.compareAndSet(false, true)) {
+            return;
         }
+        providerExecutor.execute(() -> {
+            boolean requestedState = hostStateDesired;
+            try {
+                android.os.Bundle result = context.getContentResolver().call(
+                        Uri.parse("content://com.carassistant.v10.launcher.dock/state"),
+                        "report_android_auto_host_state",
+                        requestedState ? "connected" : "disconnected",
+                        null);
+                if (result != null && result.getBoolean("accepted", false)) {
+                    hostStateReported = requestedState;
+                    log("Reported Android Auto projection host state="
+                            + (requestedState ? "CONNECTED" : "DISCONNECTED"));
+                } else {
+                    log("Android Auto host-state IPC was not acknowledged");
+                }
+            } catch (Throwable error) {
+                log("Could not report Android Auto host state: " + error);
+            } finally {
+                hostStateIpcInFlight.set(false);
+                if (hostStateDesired != hostStateReported) {
+                    main.post(() -> reportAndroidAutoHostState(hostStateDesired));
+                }
+            }
+        });
     }
+
 
     /**
      * AADisplay's AutoOpen implementation launches from the projection UI's
