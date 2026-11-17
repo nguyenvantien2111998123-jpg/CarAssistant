@@ -15,7 +15,24 @@ public final class CoreRecoveryPolicy {
     public static RecoveryReason classify(boolean hasPreviousProcess,
                                            long previousBootMarker,
                                            long currentBootMarker) {
+        return classify(hasPreviousProcess, previousBootMarker, currentBootMarker, -1, -1);
+    }
+
+    /**
+     * Prefer Android's monotonic BOOT_COUNT when available. The wall-clock-derived
+     * boot marker remains a migration/fallback path for devices that do not expose it.
+     */
+    public static RecoveryReason classify(boolean hasPreviousProcess,
+                                           long previousBootMarker,
+                                           long currentBootMarker,
+                                           int previousBootCount,
+                                           int currentBootCount) {
         if (!hasPreviousProcess) return RecoveryReason.FIRST_START;
+        if (previousBootCount >= 0 && currentBootCount >= 0) {
+            return previousBootCount == currentBootCount
+                    ? RecoveryReason.PROCESS_RESTART
+                    : RecoveryReason.DEVICE_REBOOT;
+        }
         if (previousBootMarker > 0L && currentBootMarker > 0L
                 && Math.abs(currentBootMarker - previousBootMarker)
                 > REBOOT_MARKER_THRESHOLD_MS) {
