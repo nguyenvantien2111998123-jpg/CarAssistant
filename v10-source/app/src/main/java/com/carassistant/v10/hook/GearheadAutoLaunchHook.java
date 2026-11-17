@@ -102,7 +102,7 @@ public final class GearheadAutoLaunchHook {
                                     + " tag=" + tag
                                     + " channel=" + safe(notification.getChannelId())
                                     + " category=" + safe(notification.category)
-                                    + " ongoing=" + notification.ongoing
+                                    + " ongoing=" + ((notification.flags & Notification.FLAG_ONGOING_EVENT) != 0)
                                     + " title=" + title
                                     + " text=" + text
                                     + " bigText=" + bigText
