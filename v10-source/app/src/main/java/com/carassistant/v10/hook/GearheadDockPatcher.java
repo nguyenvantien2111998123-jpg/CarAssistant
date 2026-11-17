@@ -80,6 +80,7 @@ public final class GearheadDockPatcher {
     private volatile long visibleUntil;
     private volatile long projectionLaunchRequestedAt;
     private boolean facetBarReady;
+    private boolean hostStateReported;
     private boolean autoLaunchAttemptedForHost;
     private boolean autoLaunchRetryScheduled;
     private long lastAutoLaunchRequest;
@@ -175,6 +176,7 @@ public final class GearheadDockPatcher {
                                 patcher.main.post(() -> {
                                     patcher.facetBarReady = false;
                                     patcher.autoLaunchAttemptedForHost = false;
+                                    patcher.reportAndroidAutoHostState(false);
                                     patcher.autoLaunchRetryScheduled = false;
                                     log("Android Auto GhFacetBar removed in " + patcher.processName
                                             + "; auto-open re-armed for next connection");
@@ -395,9 +397,36 @@ public final class GearheadDockPatcher {
     private void onFacetBarInflated(Context inflaterContext) {
         attachContext(inflaterContext);
         facetBarReady = true;
+        reportAndroidAutoHostState(true);
         log("Android Auto projection UI is ready in " + processName
                 + "; attempting CarAsistant auto-open");
         maybeAutoLaunchProjection();
+    }
+
+    /**
+     * Report the real Gearhead projection-host lifecycle to the app process.
+     * This is deliberately separate from AACastCarService's own bound lifecycle.
+     */
+    private void reportAndroidAutoHostState(boolean connected) {
+        if (hostStateReported == connected) return;
+        Context appContext = context;
+        if (appContext == null) return;
+        try {
+            android.os.Bundle result = appContext.getContentResolver().call(
+                    Uri.parse("content://com.carassistant.v10.launcher.dock/state"),
+                    "report_android_auto_host_state",
+                    connected ? "connected" : "disconnected",
+                    null);
+            if (result != null && result.getBoolean("accepted", false)) {
+                hostStateReported = connected;
+                log("Reported Android Auto projection host state="
+                        + (connected ? "CONNECTED" : "DISCONNECTED"));
+            } else {
+                log("Android Auto host-state IPC was not acknowledged");
+            }
+        } catch (Throwable error) {
+            log("Could not report Android Auto host state: " + error);
+        }
     }
 
     /**
