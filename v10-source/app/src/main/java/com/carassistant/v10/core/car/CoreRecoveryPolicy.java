@@ -24,6 +24,12 @@ public final class CoreRecoveryPolicy {
         return RecoveryReason.PROCESS_RESTART;
     }
 
+    /** Whether a persisted AA host session must be invalidated at bootstrap. */
+    public static boolean shouldResetHostSession(RecoveryReason reason) {
+        return reason == RecoveryReason.DEVICE_REBOOT
+                || reason == RecoveryReason.FIRST_START;
+    }
+
     /**
      * Core coordinator readiness is independent from the optional AA projection
      * session. A boot receiver can initialize Core before a car is connected.
