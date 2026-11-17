@@ -3,6 +3,7 @@ package com.carassistant.v10;
 import android.graphics.Bitmap;
 import android.media.MediaDescription;
 import android.media.browse.MediaBrowser;
+// Platform browser service API (the class is in android.service.media, not android.media.browse).
 import android.service.media.MediaBrowserService;
 import android.media.session.MediaSession;
 import android.media.session.PlaybackState;
