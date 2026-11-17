@@ -1,67 +1,118 @@
 package com.carassistant.v10.hook;
 
-import android.app.Application;
 import android.app.Notification;
 import android.app.NotificationManager;
-import android.content.ComponentName;
-import android.content.Context;
-import android.content.Intent;
 import android.os.Bundle;
-import android.os.Handler;
-import android.os.Looper;
-import android.os.SystemClock;
-import android.util.Log;
 
+import java.lang.reflect.Field;
 import java.lang.reflect.Method;
 import java.lang.reflect.Modifier;
 import java.util.Locale;
+import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import de.robv.android.xposed.XC_MethodHook;
 import de.robv.android.xposed.XposedBridge;
-import de.robv.android.xposed.XposedHelpers;
 
 /**
- * Starts the registered legacy CarActivity through Gearhead's own launcher
- * after Gearhead posts its explicit Android Auto connected notification.
+ * Diagnostic stage for Android Auto auto-launch.
  *
- * This deliberately does not call startService() on CarActivityService:
- * CarActivityService is a host-bound entry point, and Gearhead must own the
- * transition onto the car display.
+ * IMPORTANT:
+ * - The previous notification-text heuristic and reflective invocation of the
+ *   obfuscated CarSystemUiControllerService.a(Intent) method are intentionally
+ *   disabled until the exact Gearhead 17.9.664044 connection callback and
+ *   launcher contract have been verified from that APK/runtime.
+ * - This class observes Gearhead notification events and class loading only.
+ * - It never starts an Activity, Service, broadcast, or projection session.
  */
 public final class GearheadAutoLaunchHook {
-    private static final String TAG = "[AACast AutoLaunch]";
-    private static final String GEARHEAD =
-            "com.google.android.projection.gearhead";
-    private static final String SELF = "com.carassistant.v10";
-    private static final String LAUNCHER_CLASS =
-            "com.google.android.projection.gearhead.service.CarSystemUiControllerService";
-    private static final long LAUNCH_COOLDOWN_MS = 30_000L;
-    private static final long LAUNCH_SETTLE_MS = 1_200L;
+    private static final String TAG = "[AACast AutoLaunch Verify]";
+    private static final AtomicBoolean INSTALLED = new AtomicBoolean(false);
+    private static final AtomicInteger NOTIFICATION_LOG_COUNT = new AtomicInteger(0);
+    private static final int MAX_NOTIFICATION_LOGS = 160;
 
-    private static final Handler MAIN = new Handler(Looper.getMainLooper());
-    private static final AtomicBoolean INSTALLED = new AtomicBoolean();
-    private static volatile long lastLaunchAt;
-    private static volatile boolean launchPending;
+    private static final Set<String> LOGGED_CLASSES =
+            ConcurrentHashMap.newKeySet();
+
+    private static final String[] CLASS_NAME_MARKERS = {
+            "CarConnection",
+            "ConnectionState",
+            "CarSystemUiControllerService",
+            "CarActivity",
+            "Projection",
+            "Gearhead",
+            "Session"
+    };
 
     private GearheadAutoLaunchHook() { }
 
     public static void install(ClassLoader classLoader) {
         if (!INSTALLED.compareAndSet(false, true)) return;
+
         try {
-            XposedBridge.hookAllMethods(NotificationManager.class, "notify",
-                    new XC_MethodHook() {
-                        @Override protected void afterHookedMethod(MethodHookParam param) {
-                            Notification notification = findNotification(param.args);
-                            if (notification == null || !isConnectedNotification(notification)) return;
-                            scheduleCarActivityLaunch(classLoader);
-                        }
-                    });
-            XposedBridge.log(TAG + " installed: observing Gearhead connected notifications");
+            hookGearheadNotifications();
+            hookRelevantClassLoads();
+            inspectKnownLauncherCandidate(classLoader);
+
+            XposedBridge.log(TAG
+                    + " diagnostic hooks installed; auto-launch is deliberately disabled");
         } catch (Throwable error) {
             INSTALLED.set(false);
-            XposedBridge.log(TAG + " install failed open: " + error);
+            XposedBridge.log(TAG + " diagnostic install failed: " + error);
         }
+    }
+
+    private static void hookGearheadNotifications() {
+        XposedBridge.hookAllMethods(NotificationManager.class, "notify",
+                new XC_MethodHook() {
+                    @Override
+                    protected void afterHookedMethod(MethodHookParam param) {
+                        try {
+                            if (NOTIFICATION_LOG_COUNT.incrementAndGet()
+                                    > MAX_NOTIFICATION_LOGS) return;
+
+                            Notification notification = findNotification(param.args);
+                            if (notification == null) return;
+
+                            String tag = null;
+                            Integer id = null;
+                            if (param.args != null) {
+                                if (param.args.length == 3
+                                        && param.args[0] instanceof String
+                                        && param.args[1] instanceof Integer) {
+                                    tag = (String) param.args[0];
+                                    id = (Integer) param.args[1];
+                                } else if (param.args.length >= 2
+                                        && param.args[0] instanceof Integer) {
+                                    id = (Integer) param.args[0];
+                                }
+                            }
+
+                            Bundle extras = notification.extras;
+                            String title = read(extras, Notification.EXTRA_TITLE);
+                            String text = read(extras, Notification.EXTRA_TEXT);
+                            String bigText = read(extras, Notification.EXTRA_BIG_TEXT);
+                            String subText = read(extras, Notification.EXTRA_SUB_TEXT);
+                            String summary = read(extras, Notification.EXTRA_SUMMARY_TEXT);
+
+                            XposedBridge.log(TAG
+                                    + " NOTIFY id=" + id
+                                    + " tag=" + tag
+                                    + " channel=" + safe(notification.getChannelId())
+                                    + " category=" + safe(notification.category)
+                                    + " ongoing=" + notification.ongoing
+                                    + " title=" + title
+                                    + " text=" + text
+                                    + " bigText=" + bigText
+                                    + " subText=" + subText
+                                    + " summary=" + summary);
+                        } catch (Throwable error) {
+                            XposedBridge.log(TAG + " notification inspection error: " + error);
+                        }
+                    }
+                });
     }
 
     private static Notification findNotification(Object[] args) {
@@ -72,80 +123,95 @@ public final class GearheadAutoLaunchHook {
         return null;
     }
 
-    private static boolean isConnectedNotification(Notification notification) {
-        Bundle extras = notification.extras;
-        if (extras == null) return false;
-        StringBuilder text = new StringBuilder();
-        append(text, extras.getCharSequence(Notification.EXTRA_TITLE));
-        append(text, extras.getCharSequence(Notification.EXTRA_TEXT));
-        append(text, extras.getCharSequence(Notification.EXTRA_BIG_TEXT));
-        append(text, extras.getCharSequence(Notification.EXTRA_SUB_TEXT));
-        append(text, extras.getCharSequence(Notification.EXTRA_SUMMARY_TEXT));
-        String message = text.toString().toLowerCase(Locale.ROOT);
-        boolean disconnected = message.contains("disconnected")
-                || message.contains("not connected")
-                || message.contains("đã ngắt kết nối")
-                || message.contains("mất kết nối");
-        boolean connected = !disconnected && (message.contains("connected")
-                || message.contains("đã kết nối")
-                || message.contains("connecté")
-                || message.contains("verbunden"));
-        return connected;
+    private static String read(Bundle extras, String key) {
+        if (extras == null) return "";
+        CharSequence value = extras.getCharSequence(key);
+        return value == null ? "" : value.toString();
     }
 
-    private static void append(StringBuilder out, CharSequence value) {
-        if (value == null || value.length() == 0) return;
-        if (out.length() > 0) out.append(' ');
-        out.append(value);
+    private static String safe(String value) {
+        return value == null ? "" : value;
     }
 
-    private static void scheduleCarActivityLaunch(ClassLoader classLoader) {
-        long now = SystemClock.elapsedRealtime();
-        if (launchPending || (lastLaunchAt > 0L && now - lastLaunchAt < LAUNCH_COOLDOWN_MS)) {
-            return;
+    private static void hookRelevantClassLoads() {
+        XposedBridge.hookAllMethods(ClassLoader.class, "loadClass",
+                new XC_MethodHook() {
+                    @Override
+                    protected void afterHookedMethod(MethodHookParam param) {
+                        try {
+                            if (!(param.getResult() instanceof Class<?>)) return;
+                            Class<?> loaded = (Class<?>) param.getResult();
+                            String name = loaded.getName();
+                            if (!isRelevantClassName(name)) return;
+                            dumpClassOnce(loaded, "CLASS_LOAD");
+                        } catch (Throwable error) {
+                            XposedBridge.log(TAG + " class-load inspection error: " + error);
+                        }
+                    }
+                });
+    }
+
+    private static boolean isRelevantClassName(String name) {
+        if (name == null) return false;
+        for (String marker : CLASS_NAME_MARKERS) {
+            if (name.contains(marker)) return true;
         }
-        launchPending = true;
-        MAIN.postDelayed(() -> {
-            try {
-                invokeGearheadCarActivityLauncher(classLoader);
-                lastLaunchAt = SystemClock.elapsedRealtime();
-            } catch (Throwable error) {
-                XposedBridge.log(TAG + " launch failed; Gearhead remains in control: " + error);
-            } finally {
-                launchPending = false;
-            }
-        }, LAUNCH_SETTLE_MS);
+        return false;
     }
 
-    private static void invokeGearheadCarActivityLauncher(ClassLoader classLoader)
-            throws Exception {
-        Class<?> controller = XposedHelpers.findClassIfExists(LAUNCHER_CLASS, classLoader);
-        if (controller == null) throw new ClassNotFoundException(LAUNCHER_CLASS);
+    private static void inspectKnownLauncherCandidate(ClassLoader classLoader) {
+        // This is only an observation of the name used by the #821 prototype.
+        // It is NOT treated as a verified API and is never invoked.
+        try {
+            Class<?> candidate = Class.forName(
+                    "com.google.android.projection.gearhead.service.CarSystemUiControllerService",
+                    false, classLoader);
+            dumpClassOnce(candidate, "CANDIDATE_ONLY_NOT_VERIFIED");
+        } catch (Throwable error) {
+            XposedBridge.log(TAG
+                    + " candidate CarSystemUiControllerService not resolved: " + error);
+        }
+    }
 
-        Method launcher = null;
-        for (Class<?> type = controller; type != null && launcher == null;
-             type = type.getSuperclass()) {
+    private static void dumpClassOnce(Class<?> type, String source) {
+        String name = type.getName();
+        if (!LOGGED_CLASSES.add(name)) return;
+
+        StringBuilder out = new StringBuilder();
+        out.append(TAG).append(' ').append(source)
+                .append(" class=").append(name)
+                .append(" loader=").append(type.getClassLoader());
+
+        try {
             for (Method method : type.getDeclaredMethods()) {
-                if (Modifier.isStatic(method.getModifiers())
-                        && "a".equals(method.getName())
-                        && method.getParameterTypes().length == 1
-                        && Intent.class.equals(method.getParameterTypes()[0])) {
-                    launcher = method;
-                    break;
+                out.append("\n  METHOD ")
+                        .append(Modifier.toString(method.getModifiers())).append(' ')
+                        .append(method.getReturnType().getName()).append(' ')
+                        .append(method.getName()).append('(');
+                Class<?>[] parameters = method.getParameterTypes();
+                for (int i = 0; i < parameters.length; i++) {
+                    if (i > 0) out.append(", ");
+                    out.append(parameters[i].getName());
+                }
+                out.append(')');
+            }
+            for (Field field : type.getDeclaredFields()) {
+                out.append("\n  FIELD ")
+                        .append(Modifier.toString(field.getModifiers())).append(' ')
+                        .append(field.getType().getName()).append(' ')
+                        .append(field.getName());
+            }
+            if (type.isEnum()) {
+                Object[] constants = type.getEnumConstants();
+                out.append("\n  ENUM_CONSTANTS=");
+                if (constants != null) {
+                    for (Object constant : constants) out.append(constant).append(',');
                 }
             }
-        }
-        if (launcher == null) {
-            throw new NoSuchMethodException(
-                    "Gearhead CarSystemUiControllerService static launcher(Intent) not found");
+        } catch (Throwable error) {
+            out.append("\n  INSPECTION_ERROR=").append(error);
         }
 
-        launcher.setAccessible(true);
-        Intent carIntent = new Intent();
-        carIntent.setComponent(new ComponentName(
-                SELF, "com.carassistant.v10.AACastCarService"));
-        carIntent.putExtra("android.intent.extra.PACKAGE_NAME", SELF);
-        launcher.invoke(null, carIntent);
-        XposedBridge.log(TAG + " requested AACastCarService through Gearhead launcher");
+        XposedBridge.log(out.toString());
     }
 }
