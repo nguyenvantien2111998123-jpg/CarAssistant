@@ -27,6 +27,21 @@ public class CoreRecoveryPolicyTest {
                 CoreRecoveryPolicy.classify(true, 0L, 1_700_000_000_000L));
     }
 
+    @Test public void sameBootProcessRestartPreservesAaHostSession() {
+        assertFalse(CoreRecoveryPolicy.shouldResetHostSession(
+                CoreRecoveryPolicy.RecoveryReason.PROCESS_RESTART));
+    }
+
+    @Test public void deviceRebootInvalidatesAaHostSession() {
+        assertTrue(CoreRecoveryPolicy.shouldResetHostSession(
+                CoreRecoveryPolicy.RecoveryReason.DEVICE_REBOOT));
+    }
+
+    @Test public void firstStartHasNoPreviousAaHostSession() {
+        assertTrue(CoreRecoveryPolicy.shouldResetHostSession(
+                CoreRecoveryPolicy.RecoveryReason.FIRST_START));
+    }
+
     @Test public void bootBootstrapMakesCoreCoordinatorReadyWithoutCarSession() {
         assertTrue(CoreRecoveryPolicy.isCoreReady(true));
         assertFalse(CoreRecoveryPolicy.isCoreReady(false));
