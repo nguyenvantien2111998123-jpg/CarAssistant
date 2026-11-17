@@ -27,6 +27,11 @@ public class CoreRecoveryPolicyTest {
                 CoreRecoveryPolicy.classify(true, 0L, 1_700_000_000_000L));
     }
 
+    @Test public void bootBootstrapMakesCoreCoordinatorReadyWithoutCarSession() {
+        assertTrue(CoreRecoveryPolicy.isCoreReady(true));
+        assertFalse(CoreRecoveryPolicy.isCoreReady(false));
+    }
+
     @Test public void coreReadinessDoesNotDependOnPhoneOrCarActivity() {
         assertTrue(CoreRecoveryPolicy.isCoreReady(true, true));
         assertFalse(CoreRecoveryPolicy.isCoreReady(true, false));
