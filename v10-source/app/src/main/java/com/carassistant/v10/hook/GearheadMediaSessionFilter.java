@@ -13,25 +13,18 @@ import de.robv.android.xposed.XposedBridge;
 import de.robv.android.xposed.XposedHelpers;
 
 /**
- * Limits Android Auto's view of active media sessions while CarAsistant V10
- * owns the projected-display media experience.
- *
- * This runs only in the Gearhead process. It never deactivates or edits the
- * source application's MediaSession, so phone notifications and playback
- * controls remain untouched.
+ * Enforces a fail-closed media-session boundary inside Android Auto (Gearhead).
+ * Source-player sessions remain active on the phone; Gearhead receives only
+ * CarAsistant's mirrored session, or an empty list while that mirror is absent.
  */
 public final class GearheadMediaSessionFilter {
-
     private static final String TAG = "[AACast MediaPriority]";
     private static final String V10_PACKAGE = "com.carassistant.v10";
     private static final String GEARHEAD = "com.google.android.projection.gearhead";
     private static volatile boolean installed;
-    // Retain the last valid mirror controller across transient session-list gaps. The
-    // mirror is owned by MediaSessionBridge and remains active during listener rebinds.
     private static volatile MediaController lastV10Controller;
 
-    private GearheadMediaSessionFilter() {
-    }
+    private GearheadMediaSessionFilter() { }
 
     public static void install() {
         if (installed) return;
@@ -39,8 +32,7 @@ public final class GearheadMediaSessionFilter {
         try {
             XposedHelpers.findAndHookMethod(Application.class, "attach", Context.class,
                     new XC_MethodHook() {
-                        @Override
-                        protected void afterHookedMethod(MethodHookParam param) {
+                        @Override protected void afterHookedMethod(MethodHookParam param) {
                             Context context = (Context) param.args[0];
                             if (context != null && GEARHEAD.equals(context.getPackageName())) {
                                 installSessionHooks();
@@ -57,9 +49,8 @@ public final class GearheadMediaSessionFilter {
         try {
             XposedBridge.hookAllMethods(MediaSessionManager.class, "getActiveSessions",
                     new XC_MethodHook() {
-                        @Override
-                        protected void afterHookedMethod(MethodHookParam param) {
-                            param.setResult(filterIfV10OwnsProjection(param.getResult()));
+                        @Override protected void afterHookedMethod(MethodHookParam param) {
+                            param.setResult(filter(param.getResult(), "getActiveSessions"));
                         }
                     });
             XposedBridge.log(TAG + " hooked MediaSessionManager.getActiveSessions");
@@ -67,76 +58,74 @@ public final class GearheadMediaSessionFilter {
             XposedBridge.log(TAG + " getActiveSessions hook failed: " + error);
         }
 
-        // Active-session updates are delivered through this framework wrapper.
-        // Filter its list before it reaches Android Auto's registered listener.
         try {
             Class<?> wrapper = XposedHelpers.findClassIfExists(
                     "android.media.session.MediaSessionManager$SessionsChangedWrapper", null);
             if (wrapper != null) {
                 XposedBridge.hookAllMethods(wrapper, "onActiveSessionsChanged",
                         new XC_MethodHook() {
-                            @Override
-                            protected void beforeHookedMethod(MethodHookParam param) {
+                            @Override protected void beforeHookedMethod(MethodHookParam param) {
                                 if (param.args != null && param.args.length > 0
                                         && param.args[0] instanceof List) {
-                                    param.args[0] = filterIfV10OwnsProjection(param.args[0]);
+                                    param.args[0] = filter(param.args[0], "sessionsChanged");
                                 }
                             }
                         });
-                XposedBridge.log(TAG + " hooked active-session change callback");
+                XposedBridge.log(TAG + " hooked active-session callback");
             } else {
-                XposedBridge.log(TAG + " framework callback wrapper not found; "
-                        + "query filtering remains enabled");
+                XposedBridge.log(TAG + " SessionsChangedWrapper not found");
             }
         } catch (Throwable error) {
-            XposedBridge.log(TAG + " callback hook unavailable: " + error);
+            XposedBridge.log(TAG + " callback hook failed: " + error);
         }
     }
 
-    /**
-     * Whenever V10 publishes its mirrored session, make it the sole session
-     * visible to Android Auto. This covers phone-launched players and players
-     * launched through V10, regardless of whether a projection lease is active.
-     */
-    private static Object filterIfV10OwnsProjection(Object value) {
+    private static Object filter(Object value, String source) {
         if (!(value instanceof List)) return value;
-
         List<?> sessions = (List<?>) value;
-        ArrayList<MediaController> filtered = new ArrayList<>();
+        ArrayList<MediaController> owned = new ArrayList<>();
+        StringBuilder seen = new StringBuilder();
         for (Object item : sessions) {
-            if (item instanceof MediaController
-                    && V10_PACKAGE.equals(((MediaController) item).getPackageName())) {
-                MediaController controller = (MediaController) item;
+            if (!(item instanceof MediaController)) continue;
+            MediaController controller = (MediaController) item;
+            String pkg;
+            try {
+                pkg = controller.getPackageName();
+            } catch (Throwable ignored) {
+                continue;
+            }
+            if (seen.length() > 0) seen.append(',');
+            seen.append(pkg);
+            if (V10_PACKAGE.equals(pkg)) {
                 lastV10Controller = controller;
-                filtered.add(controller);
+                owned.add(controller);
             }
         }
+        if (!owned.isEmpty()) {
+            XposedBridge.log(TAG + " " + source + ": CarAsistant owns Gearhead media; "
+                    + sessions.size() + " -> " + owned.size() + "; seen=" + seen);
+            return owned;
+        }
 
-        if (filtered.isEmpty()) {
-            // Gearhead can emit a transient empty/non-V10 list while the framework is
-            // rebinding active-session listeners. Reuse only a controller previously
-            // observed from our own package; never manufacture or deactivate a source session.
-            MediaController cached = lastV10Controller;
-            if (cached != null) {
-                try {
-                    if (V10_PACKAGE.equals(cached.getPackageName())) {
-                        cached.getPlaybackState(); // Validate that the remote session is reachable.
-                        filtered.add(cached);
-                        XposedBridge.log(TAG + " retained cached V10 mirror during session-list gap; "
-                                + "suppressed " + sessions.size() + " competing sessions");
-                        return filtered;
-                    }
-                } catch (Throwable error) {
-                    lastV10Controller = null;
-                    XposedBridge.log(TAG + " cached V10 mirror is no longer reachable: " + error);
+        MediaController cached = lastV10Controller;
+        if (cached != null) {
+            try {
+                if (V10_PACKAGE.equals(cached.getPackageName())) {
+                    cached.getPlaybackState();
+                    owned.add(cached);
+                    XposedBridge.log(TAG + " " + source
+                            + ": retained reachable CarAsistant mirror; suppressed=" + seen);
+                    return owned;
                 }
+            } catch (Throwable error) {
+                lastV10Controller = null;
+                XposedBridge.log(TAG + " cached CarAsistant mirror unavailable: " + error);
             }
-            return value;
         }
 
-        XposedBridge.log(TAG + " V10 mirror active; filtered Gearhead session list "
-                + sessions.size() + " -> " + filtered.size());
-        return filtered;
+        // Never pass phone-player sessions through to Gearhead as a fallback.
+        XposedBridge.log(TAG + " " + source + ": no CarAsistant mirror; returning EMPTY; "
+                + "suppressed=" + seen);
+        return owned;
     }
-
 }
