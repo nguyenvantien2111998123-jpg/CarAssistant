@@ -131,10 +131,15 @@ public final class GearheadMediaSessionFilter {
                     XposedBridge.log(TAG + " cached V10 mirror is no longer reachable: " + error);
                 }
             }
-            return value;
+            // Never fall back to the phone player's sessions in Gearhead.
+            // Until CarAsistant's mirror is published, expose no media session rather
+            // than allowing YouTube/Zing/etc. to take ownership of the car media UI.
+            XposedBridge.log(TAG + " no reachable CarAsistant mirror; suppressing "
+                    + sessions.size() + " competing Gearhead media sessions");
+            return filtered;
         }
 
-        XposedBridge.log(TAG + " V10 mirror active; filtered Gearhead session list "
+        XposedBridge.log(TAG + " CarAsistant mirror owns Gearhead media UI; filtered "
                 + sessions.size() + " -> " + filtered.size());
         return filtered;
     }
