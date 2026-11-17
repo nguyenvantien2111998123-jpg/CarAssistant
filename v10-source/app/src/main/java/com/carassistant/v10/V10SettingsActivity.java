@@ -625,8 +625,12 @@ public final class V10SettingsActivity extends Activity {
         permissionStatus.setText(
                 "Micro: " + granted(Manifest.permission.RECORD_AUDIO)
                 + "\nThông báo/media: " + (MediaSessionBridge.hasAccess(this) ? "ĐÃ CẤP" : "CÒN THIẾU")
-                + "   •   Trợ năng: " + (hasMediaAccessibilityAccess() ? "ĐÃ CẤP" : "CÒN THIẾU")
-                + "\nRoot/LSPosed: kiểm tra riêng trong ứng dụng quản lý tương ứng.");
+                + "\nAccessibilityService: " + (hasMediaAccessibilityAccess() ? "ĐÃ BẬT" : "CHƯA BẬT")
+                + "\nWRITE_SECURE_SETTINGS: "
+                + granted(android.Manifest.permission.WRITE_SECURE_SETTINGS)
+                + "\nINJECT_EVENTS: do LSPosed hook trong system_server xử lý; "
+                + "không phải quyền app có thể tự xin."
+                + "\nRoot/LSPosed: cần cấp su và bật scope android + Gearhead.");
     }
 
     private String granted(String permission) {
