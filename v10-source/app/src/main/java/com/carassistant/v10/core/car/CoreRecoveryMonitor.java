@@ -72,8 +72,7 @@ public final class CoreRecoveryMonitor {
 
         // A process restart in the same device boot must not erase the Gearhead
         // host state. A real reboot invalidates the old projection session.
-        if (reason == CoreRecoveryPolicy.RecoveryReason.DEVICE_REBOOT
-                || reason == CoreRecoveryPolicy.RecoveryReason.FIRST_START) {
+        if (CoreRecoveryPolicy.shouldResetHostSession(reason)) {
             preferences.edit()
                     .putString(KEY_AA_STATE, "DISCONNECTED")
                     .putString(KEY_SESSION_ID, "")
