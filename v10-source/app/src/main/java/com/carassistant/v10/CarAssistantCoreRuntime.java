@@ -4,25 +4,24 @@ import android.content.Context;
 import android.util.Log;
 
 import com.carassistant.v10.core.car.CoreRecoveryMonitor;
-import com.carassistant.v10.core.car.SharedPreferencesCarConnectionMonitor;
 
 /**
- * Process-scoped Core runtime. It is bootstrapped by Android Auto's bound
- * projection service, not by a phone Activity. It deliberately does not own
- * microphone or media foreground services.
+ * Process-scoped Core runtime.
+ *
+ * Android Auto's bound CarActivityService is the authoritative lifecycle
+ * signal. This runtime intentionally does not depend on Notification Access,
+ * a phone Activity, or a permanently-running foreground service.
  */
 public final class CarAssistantCoreRuntime {
     private static final String TAG = "CarAsstCoreRuntime";
     private static volatile CarAssistantCoreRuntime instance;
 
     private final CoreRecoveryMonitor recoveryMonitor;
-    private final SharedPreferencesCarConnectionMonitor connectionMonitor;
     private boolean started;
 
     private CarAssistantCoreRuntime(Context context) {
         Context app = context.getApplicationContext();
         recoveryMonitor = new CoreRecoveryMonitor(app);
-        connectionMonitor = new SharedPreferencesCarConnectionMonitor(app);
     }
 
     public static CarAssistantCoreRuntime start(Context context, String entryPoint) {
@@ -50,16 +49,15 @@ public final class CarAssistantCoreRuntime {
             recoveryMonitor.start(entryPoint);
             recoveryMonitor.reportComponent("CORE_BOOTSTRAP", true,
                     "Core bootstrapped from " + entryPoint);
-            connectionMonitor.start(connected ->
-                    recoveryMonitor.reportAndroidAutoConnection(
-                            connected == com.carassistant.v10.core.car.CarConnectionState.CONNECTED));
+            // The bound Android Auto projection service, not Notification Access,
+            // reports connection/disconnection through its own lifecycle callbacks.
             recoveryMonitor.reportComponent("CORE_CONNECTION_MONITOR", true,
-                    "Core-owned monitor observes the existing Android Auto connection signal");
+                    "Android Auto CarActivityService lifecycle is the connection authority");
             started = true;
             Log.i(TAG, "Core runtime ready; entryPoint=" + entryPoint);
         } catch (RuntimeException error) {
             recoveryMonitor.reportComponent("CORE_CONNECTION_MONITOR", false,
-                    "Connection monitor failed: " + error.getClass().getSimpleName());
+                    "Core lifecycle initialization failed: " + error.getClass().getSimpleName());
             recoveryMonitor.reportComponent("CORE_BOOTSTRAP", false,
                     "Core initialization failed: " + error.getClass().getSimpleName());
             Log.e(TAG, "Core runtime initialization failed", error);
