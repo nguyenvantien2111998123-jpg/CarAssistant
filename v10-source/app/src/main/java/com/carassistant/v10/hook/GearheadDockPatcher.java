@@ -322,6 +322,9 @@ public final class GearheadDockPatcher {
     /** Vòng lặp lease: ẩn dock khi active, khôi phục khi hết hạn. */
     private void tick() {
         try {
+            if (facetBarReady && !hostStateReported) {
+                reportAndroidAutoHostState(true);
+            }
             long until = visibleUntil;
             long now = SystemClock.uptimeMillis();
             boolean active = until > now && until - now <= LEASE_MS;
