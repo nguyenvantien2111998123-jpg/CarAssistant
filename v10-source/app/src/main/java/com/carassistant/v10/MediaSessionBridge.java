@@ -1,6 +1,7 @@
 package com.carassistant.v10;
 
 import android.app.Notification;
+import android.app.PendingIntent;
 import android.app.NotificationManager;
 import android.content.ComponentName;
 import android.content.Context;
@@ -610,6 +611,12 @@ public final class MediaSessionBridge extends NotificationListenerService {
         mirrorSession = new MediaSession(this, "CarAsistant Media Controller");
         mirrorSession.setFlags(MediaSession.FLAG_HANDLES_MEDIA_BUTTONS
                 | MediaSession.FLAG_HANDLES_TRANSPORT_CONTROLS);
+        Intent mediaButtonIntent = new Intent(Intent.ACTION_MEDIA_BUTTON)
+                .setClass(this, MediaButtonReceiver.class);
+        PendingIntent mediaButtonPendingIntent = PendingIntent.getBroadcast(
+                this, 0, mediaButtonIntent,
+                PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
+        mirrorSession.setMediaButtonReceiver(mediaButtonPendingIntent);
         mirrorSession.setCallback(new MediaSession.Callback() {
             @Override public boolean onMediaButtonEvent(Intent mediaButtonIntent) {
                 if (SteeringWheelInputDispatcher.dispatch(
