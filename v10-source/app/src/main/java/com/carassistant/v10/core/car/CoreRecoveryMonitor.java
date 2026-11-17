@@ -127,8 +127,7 @@ public final class CoreRecoveryMonitor {
 
     private void updateCoreState() {
         boolean ready = CoreRecoveryPolicy.isCoreReady(
-                "READY".equals(component("CORE_BOOTSTRAP")),
-                "READY".equals(component("CORE_CONNECTION_MONITOR")));
+                "READY".equals(component("CORE_BOOTSTRAP")));
         String next = ready ? "READY" : "PARTIAL";
         String previous = preferences.getString(KEY_CORE_STATE, "UNKNOWN");
         if (!next.equals(previous)) {
