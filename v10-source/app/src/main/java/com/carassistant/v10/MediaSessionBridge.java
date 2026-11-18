@@ -276,7 +276,7 @@ public final class MediaSessionBridge extends NotificationListenerService {
      * stops when the phone loses power, extrapolation is capped to one checkpoint
      * interval; time spent with the phone powered off must never advance the track.
      */
-    private static long getAdjustedCheckpointPosition(Context context) {
+    public static long getAdjustedCheckpointPosition(Context context) {
         android.content.SharedPreferences prefs =
                 context.getSharedPreferences(RESUME_PREFS, Context.MODE_PRIVATE);
         long position = Math.max(0L, prefs.getLong(CHECKPOINT_POSITION, 0L));
