@@ -9,7 +9,7 @@ import android.content.pm.ResolveInfo;
 import android.net.Uri;
 import android.os.Bundle;
 import android.provider.Settings;
-import android.graphics.Color;
+import android.graphics.Color;\nimport android.graphics.drawable.GradientDrawable;
 import android.graphics.Typeface;
 import android.view.Gravity;
 import android.view.View;
@@ -235,7 +235,7 @@ public final class V10SettingsActivity extends Activity {
     private void addSection(String heading, String subtitle, SectionBuilder builder) {
         LinearLayout section = new LinearLayout(this);
         section.setOrientation(LinearLayout.VERTICAL);
-        section.setBackgroundColor(Color.rgb(17, 25, 34));
+        section.setBackground(rounded(Color.rgb(17, 25, 34), dp(15), Color.rgb(38, 57, 76)));
         LinearLayout.LayoutParams sectionParams = params(-1, -2);
         sectionParams.setMargins(0, dp(5), 0, dp(5));
         list.addView(section, sectionParams);
@@ -244,7 +244,7 @@ public final class V10SettingsActivity extends Activity {
         header.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
         header.setPadding(dp(14), dp(12), dp(12), dp(12));
         header.setGravity(Gravity.CENTER_VERTICAL);
-        header.setBackgroundColor(Color.rgb(27, 39, 51));
+        header.setBackground(rounded(Color.rgb(27, 43, 59), dp(13), Color.rgb(42, 68, 87)));
         section.addView(header, params(-1, -2));
 
         LinearLayout body = new LinearLayout(this);
@@ -382,7 +382,7 @@ public final class V10SettingsActivity extends Activity {
         TextView button = text(label, 14, Color.WHITE);
         button.setGravity(Gravity.CENTER_VERTICAL);
         button.setPadding(dp(12), 0, dp(10), 0);
-        button.setBackgroundColor(checked ? Color.rgb(35, 75, 85) : Color.rgb(29, 35, 42));
+        button.setBackground(rounded(checked ? Color.rgb(29, 76, 83) : Color.rgb(27, 38, 51), dp(11), checked ? Color.rgb(53, 190, 183) : Color.rgb(43, 62, 82)));
         LinearLayout.LayoutParams p = params(-1, dp(46));
         p.setMargins(0, dp(3), 0, dp(3));
         favoriteChoices.addView(button, p);
@@ -613,12 +613,51 @@ public final class V10SettingsActivity extends Activity {
         TextView button = text(label, 14, Color.WHITE);
         button.setGravity(Gravity.CENTER);
         button.setPadding(dp(8), dp(6), dp(8), dp(6));
-        button.setBackgroundColor(Color.rgb(29, 35, 42));
+        button.setBackground(rounded(Color.rgb(27, 38, 51), dp(12), Color.rgb(43, 62, 82)));
         button.setOnClickListener(v -> action.run());
         LinearLayout.LayoutParams p = params(-1, -2);
         p.height = dp(48);
         p.setMargins(0, dp(3), 0, dp(3));
         parent.addView(button, p);
+    }
+
+    private String sectionIcon(String heading) {
+        if (heading.contains("NỀN")) return "▣";
+        if (heading.contains("HƯỚNG")) return "↔";
+        if (heading.contains("ỨNG DỤNG HAY")) return "★";
+        if (heading.contains("MẶC ĐỊNH")) return "✦";
+        if (heading.contains("MEDIA")) return "♫";
+        return "⚙";
+    }
+
+    private int sectionAccent(String heading) {
+        if (heading.contains("NỀN")) return Color.rgb(91, 190, 255);
+        if (heading.contains("HƯỚNG")) return Color.rgb(57, 210, 220);
+        if (heading.contains("ỨNG DỤNG HAY")) return Color.rgb(255, 184, 92);
+        if (heading.contains("MẶC ĐỊNH")) return Color.rgb(174, 135, 255);
+        if (heading.contains("MEDIA")) return Color.rgb(69, 215, 166);
+        return Color.rgb(103, 196, 220);
+    }
+
+    private String buttonIcon(String label) {
+        String value = label.toUpperCase(java.util.Locale.ROOT);
+        if (value.contains("MIC") || value.contains("VOICE")) return "🎙";
+        if (value.contains("MEDIA") || value.contains("PHÁT")) return "♫";
+        if (value.contains("NGANG") || value.contains("HƯỚNG")) return "↔";
+        if (value.contains("HOME") || value.contains("NỀN")) return "▣";
+        if (value.contains("DẪN ĐƯỜNG")) return "➤";
+        if (value.contains("VIDEO") || value.contains("TV")) return "▶";
+        if (value.contains("QUYỀN") || value.contains("CÀI ĐẶT")) return "⚙";
+        if (value.contains("QUAY LẠI")) return "‹";
+        return "•";
+    }
+
+    private GradientDrawable rounded(int color, int radius, int stroke) {
+        GradientDrawable drawable = new GradientDrawable();
+        drawable.setColor(color);
+        drawable.setCornerRadius(radius);
+        drawable.setStroke(dp(1), stroke);
+        return drawable;
     }
 
     private TextView text(String value, float size, int color) {
