@@ -265,8 +265,9 @@ public final class V10SettingsActivity extends Activity {
     }
 
     private void updateSectionHeader(TextView header, String heading, String subtitle, boolean expanded) {
-        header.setText((expanded ? "▾  " : "▸  ") + heading + "\n"
-                + subtitle + (expanded ? "" : "\nChạm để xem chi tiết"));
+        header.setText(sectionIcon(heading) + "  " + (expanded ? "▾  " : "▸  ") + heading + "\n"
+                + "     " + subtitle + (expanded ? "" : "\n     Chạm để xem chi tiết"));
+        header.setTextColor(sectionAccent(heading));
     }
 
     private void loadAvailableApps() {
@@ -379,7 +380,7 @@ public final class V10SettingsActivity extends Activity {
     }
 
     private void addFavoriteChoiceButton(String label, ComponentName component, boolean checked) {
-        TextView button = text(label, 14, Color.WHITE);
+        TextView button = text(buttonIcon(label) + "  " + label, 14, Color.WHITE);
         button.setGravity(Gravity.CENTER_VERTICAL);
         button.setPadding(dp(12), 0, dp(10), 0);
         button.setBackground(rounded(checked ? Color.rgb(29, 76, 83) : Color.rgb(27, 38, 51), dp(11), checked ? Color.rgb(53, 190, 183) : Color.rgb(43, 62, 82)));
