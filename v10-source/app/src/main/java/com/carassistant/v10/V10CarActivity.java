@@ -33,6 +33,7 @@ import android.widget.ScrollView;
 import android.widget.TextView;
 import android.widget.Toast;
 
+import com.carassistant.v10.voice.MediaSearchUriBuilder;
 import com.carassistant.v10.voice.VoiceAssistantController;
 import com.carassistant.v10.voice.VoiceCommandRouter;
 import com.carassistant.v10.voice.VoiceCommandParser;
@@ -322,8 +323,8 @@ public final class V10CarActivity
                                 if (selected == null || session == null) return null;
                                 String mediaUri = null;
                                 if (query != null && !query.trim().isEmpty()) {
-                                    mediaUri = VoiceBackgroundTaskManager.buildSearchUri(
-                                            selected, query.trim(), category);
+                                    mediaUri = MediaSearchUriBuilder.build(
+                                            selected.getPackageName(), query.trim(), category);
                                     if (mediaUri == null) return null;
                                 }
 
