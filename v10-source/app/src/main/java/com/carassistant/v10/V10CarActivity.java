@@ -1104,14 +1104,24 @@ public final class V10CarActivity
         projectionLayer.addView(textureView, new FrameLayout.LayoutParams(-1, -1));
         backgroundSession = new V10ProjectionSession(this, 0);
         backgroundSession.attachTextureView(textureView);
-        textureView.setOnTouchListener(new V10InputController(backgroundSession).createListener());
+        View.OnTouchListener backgroundInputListener =
+                new V10InputController(backgroundSession).createListener();
+        textureView.setOnTouchListener((view, event) -> {
+            scheduleDrivingChromeAutoHide();
+            return backgroundInputListener.onTouch(view, event);
+        });
 
         // Layer 2: app chosen on the car-side APP CHỌN screen.
         appTextureView = new TextureView(this);
         appProjectionLayer.addView(appTextureView, new FrameLayout.LayoutParams(-1, -1));
         session = new V10ProjectionSession(this, 1);
         session.attachTextureView(appTextureView);
-        appTextureView.setOnTouchListener(new V10InputController(session).createListener());
+        View.OnTouchListener appInputListener =
+                new V10InputController(session).createListener();
+        appTextureView.setOnTouchListener((view, event) -> {
+            scheduleDrivingChromeAutoHide();
+            return appInputListener.onTouch(view, event);
+        });
         miniAccessEngine = new MiniAccessEngine(this, appTextureView, session);
 
         createFloatingTouchKey();
@@ -1150,6 +1160,7 @@ private void launchActiveMediaProjection(ComponentName component) {
 
 private void launchProjection(ComponentName component) {
 
+    scheduleDrivingChromeAutoHide();
     if (keyboardController != null) keyboardController.hide();
 
     if (component == null
@@ -1292,6 +1303,7 @@ private boolean isHomeScreen() {
 
 private void showApps() {
 
+    scheduleDrivingChromeAutoHide();
     if (keyboardController != null) keyboardController.hide();
 
     if (floatingVoiceButton != null) floatingVoiceButton.setVisibility(View.GONE);
@@ -1574,6 +1586,7 @@ private void rememberProjectedTask(ComponentName component) {
 }
 
 private void showTaskSwitcher() {
+    scheduleDrivingChromeAutoHide();
     if (root == null) return;
     if (taskSwitcherLayer != null) {
         root.removeView(taskSwitcherLayer);
@@ -1731,12 +1744,6 @@ private void hideTaskSwitcher() {
     public void handleControlApps() {
 
         showApps();
-    }
-
-    @Override
-    public void onUserInteraction() {
-        super.onUserInteraction();
-        scheduleDrivingChromeAutoHide();
     }
 
     @Override
