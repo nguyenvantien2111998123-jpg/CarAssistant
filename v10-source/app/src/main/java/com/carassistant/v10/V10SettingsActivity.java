@@ -203,9 +203,6 @@ public final class V10SettingsActivity extends Activity {
             permissionStatus.setBackgroundColor(Color.rgb(22, 27, 33));
             body.addView(permissionStatus, params(-1, -2));
 
-            addButton(body, "CẤP QUYỀN VỊ TRÍ", () -> requestPermissions(
-                    new String[]{Manifest.permission.ACCESS_FINE_LOCATION,
-                            Manifest.permission.ACCESS_COARSE_LOCATION}, 4101));
             addButton(body, "CẤP QUYỀN MICRO", () ->
                     requestPermissions(new String[]{Manifest.permission.RECORD_AUDIO}, 4102));
             addButton(body, "MỞ QUYỀN TRỢ NĂNG MEDIA AUTO PLAY", this::openAccessibilitySettings);
@@ -534,16 +531,13 @@ public final class V10SettingsActivity extends Activity {
     }
 
     private boolean hasRuntimePermissions() {
-        return checkSelfPermission(Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED
-                && checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED;
+        return checkSelfPermission(Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED;
     }
 
     private void requestRuntimePermissions() {
         ArrayList<String> missing = new ArrayList<>();
         if (checkSelfPermission(Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED)
             missing.add(Manifest.permission.RECORD_AUDIO);
-        if (checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION) != PackageManager.PERMISSION_GRANTED)
-            missing.add(Manifest.permission.ACCESS_FINE_LOCATION);
         if (!missing.isEmpty()) {
             permissionRequestInFlight = true;
             requestPermissions(missing.toArray(new String[0]), 4101);
@@ -591,11 +585,11 @@ public final class V10SettingsActivity extends Activity {
         boolean notification = MediaSessionBridge.hasAccess(this);
         boolean accessibility = hasMediaAccessibilityAccess();
         permissionGuideStatus.setText(
-                "Vị trí & micro: " + (runtime ? "ĐÃ CẤP" : "CẦN CẤP")
+                "Micro: " + (runtime ? "ĐÃ CẤP" : "CẦN CẤP")
                 + "\nTruy cập thông báo / Media Session: " + (notification ? "ĐÃ CẤP" : "CẦN BẬT")
                 + "\nTrợ năng Media Auto Play: " + (accessibility ? "ĐÃ BẬT" : "TÙY CHỌN – CẦN BẬT")
                 + "\nRoot / LSPosed: bật thủ công trong ứng dụng quản lý root và LSPosed.");
-        permissionGuideAction.setText(!runtime ? "CẤP QUYỀN VỊ TRÍ & MICRO"
+        permissionGuideAction.setText(!runtime ? "CẤP QUYỀN MICRO"
                 : !notification ? "MỞ CÀI ĐẶT TRUY CẬP MEDIA"
                 : !accessibility ? "MỞ CÀI ĐẶT TRỢ NĂNG"
                 : "KIỂM TRA HƯỚNG DẪN ROOT / LSPOSED");
@@ -604,8 +598,7 @@ public final class V10SettingsActivity extends Activity {
     private void refreshStatus() {
         if (permissionStatus == null) return;
         permissionStatus.setText(
-                "Vị trí: " + granted(Manifest.permission.ACCESS_FINE_LOCATION)
-                + "   •   Micro: " + granted(Manifest.permission.RECORD_AUDIO)
+                "Micro: " + granted(Manifest.permission.RECORD_AUDIO)
                 + "\nThông báo/media: " + (MediaSessionBridge.hasAccess(this) ? "ĐÃ CẤP" : "CÒN THIẾU")
                 + "   •   Trợ năng: " + (hasMediaAccessibilityAccess() ? "ĐÃ CẤP" : "CÒN THIẾU")
                 + "\nRoot/LSPosed: kiểm tra riêng trong ứng dụng quản lý tương ứng.");
