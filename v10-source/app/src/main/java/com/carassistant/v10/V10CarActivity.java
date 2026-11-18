@@ -196,6 +196,14 @@ public final class V10CarActivity
 
         super.onResume();
 
+        // Start the persistent CarAsistant media owner while the projection activity
+        // is foreground, before Gearhead requests its media-session list.
+        try {
+            MediaSessionOwnerService.start(this);
+        } catch (RuntimeException error) {
+            android.util.Log.e("CarAssistantMedia", "Could not start media owner service", error);
+        }
+
         resumed = true;
 
         applyChrome();
