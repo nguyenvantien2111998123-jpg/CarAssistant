@@ -17,7 +17,6 @@ import com.google.mlkit.vision.text.TextRecognition;
 import com.google.mlkit.vision.text.TextRecognizer;
 import com.google.mlkit.vision.text.latin.TextRecognizerOptions;
 
-import java.util.Locale;
 
 /**
  * CarAsistant-owned visual fallback for media selection on the projected display.
