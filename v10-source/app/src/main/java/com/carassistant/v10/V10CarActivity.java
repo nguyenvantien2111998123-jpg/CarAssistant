@@ -542,7 +542,7 @@ public final class V10CarActivity
         sidebarBg.setCornerRadius(dp(16));
         sidebarBg.setStroke(dp(1), Color.argb(70, 190, 215, 235));
         dashboardSidebar.setBackground(sidebarBg);
-        dashboardSidebar.setElevation(dp(16));
+        dashboardSidebar.setElevation(dp(26));
 
         TextView choose = sidebarButton("▦");
         choose.setTextSize(22);
@@ -1378,7 +1378,7 @@ private void hideApps() {
     bg.setColor(Color.rgb(25, 35, 45));
     bg.setStroke(dp(2), Color.rgb(80, 170, 230));
     floatingTouchKey.setBackground(bg);
-    floatingTouchKey.setElevation(dp(12));
+    floatingTouchKey.setElevation(dp(36));
     SharedPreferences prefs = getSharedPreferences("v10_floating_key", MODE_PRIVATE);
     FrameLayout.LayoutParams params = new FrameLayout.LayoutParams(dp(58), dp(58), Gravity.TOP | Gravity.END);
     int savedX = prefs.getInt("x", dp(18));
@@ -1495,7 +1495,7 @@ private void showFloatingMenu() {
         menuBg.setCornerRadius(dp(18));
         menuBg.setStroke(dp(1), Color.argb(90, 190, 215, 235));
         floatingMenu.setBackground(menuBg);
-        floatingMenu.setElevation(dp(18));
+        floatingMenu.setElevation(dp(28));
 
         addFloatingMenuButton("‹", "Back", () -> {
             handleControlBack();
@@ -1582,7 +1582,7 @@ private void showTaskSwitcher() {
 
     taskSwitcherLayer = new FrameLayout(this);
     taskSwitcherLayer.setBackgroundColor(Color.rgb(10, 14, 19));
-    taskSwitcherLayer.setElevation(dp(30));
+    taskSwitcherLayer.setElevation(dp(40));
 
     LinearLayout panel = new LinearLayout(this);
     panel.setOrientation(LinearLayout.VERTICAL);
