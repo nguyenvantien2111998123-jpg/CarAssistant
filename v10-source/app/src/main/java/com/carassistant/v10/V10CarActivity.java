@@ -1342,6 +1342,9 @@ private void showApps() {
     appPanel.setElevation(dp(24));
     appPanel.invalidate();
     launcherLayer.invalidate();
+    if (dashboardSidebar != null && dashboardSidebar.getVisibility() == View.VISIBLE) {
+        dashboardSidebar.bringToFront();
+    }
     if (floatingMenu != null) floatingMenu.bringToFront();
     if (floatingTouchKey != null) floatingTouchKey.bringToFront();
 
@@ -1545,7 +1548,7 @@ private void addFloatingMenuButton(String glyph, String label, Runnable action) 
     button.setTextSize(24);
     button.setGravity(Gravity.CENTER);
     GradientDrawable bg = new GradientDrawable();
-    bg.setColor(Color.rgb(28, 38, 48));
+    bg.setColor(Color.argb(92, 28, 38, 48));
     bg.setCornerRadius(dp(10));
     button.setBackground(bg);
     button.setPadding(dp(10), 0, dp(10), 0);
@@ -2010,10 +2013,14 @@ private void hideTaskSwitcher() {
     }
 
     private TextView sidebarButton(String value) {
-        TextView v=buttonText(value);
+        TextView v = buttonText(value);
         v.setTextSize(9);
         v.setGravity(Gravity.CENTER);
-        v.setPadding(dp(2),dp(2),dp(2),dp(2));
+        v.setPadding(dp(2), dp(2), dp(2), dp(2));
+        GradientDrawable bg = new GradientDrawable();
+        bg.setColor(Color.argb(82, 29, 35, 42));
+        bg.setCornerRadius(dp(12));
+        v.setBackground(bg);
         return v;
     }
 
