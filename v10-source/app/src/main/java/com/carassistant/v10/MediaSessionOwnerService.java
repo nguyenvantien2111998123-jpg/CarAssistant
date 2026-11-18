@@ -160,7 +160,7 @@ public final class MediaSessionOwnerService extends Service {
                 android.content.SharedPreferences prefs = getSharedPreferences(
                         "carassistant_media_resume", Context.MODE_PRIVATE);
                 long duration = Math.max(0L, prefs.getLong("checkpoint_duration", 0L));
-                long position = Math.max(0L, prefs.getLong("checkpoint_position", 0L));
+                long position = MediaSessionBridge.getAdjustedCheckpointPosition(this);
                 if (TextUtils.isEmpty(title)) {
                     title = "CarAsistant Media";
                     artist = "Trình điều khiển media";
