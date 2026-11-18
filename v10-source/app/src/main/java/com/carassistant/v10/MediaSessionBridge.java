@@ -1,7 +1,6 @@
 package com.carassistant.v10;
 
 import android.app.Notification;
-import android.app.NotificationManager;
 import android.content.ComponentName;
 import android.content.Context;
 import android.content.Intent;
