@@ -1734,13 +1734,9 @@ private void hideTaskSwitcher() {
     }
 
     @Override
-    public boolean dispatchTouchEvent(MotionEvent event) {
-        if (event != null && (event.getActionMasked() == MotionEvent.ACTION_DOWN
-                || event.getActionMasked() == MotionEvent.ACTION_MOVE
-                || event.getActionMasked() == MotionEvent.ACTION_UP)) {
-            scheduleDrivingChromeAutoHide();
-        }
-        return super.dispatchTouchEvent(event);
+    public void onUserInteraction() {
+        super.onUserInteraction();
+        scheduleDrivingChromeAutoHide();
     }
 
     @Override
