@@ -4,17 +4,12 @@ import android.app.Activity;
 import android.content.Intent;
 import android.os.Bundle;
 
-/**
- * Phone-side entry point.
- * The phone UI is intentionally limited to SETUPS; the dashboard and app
- * picker are not shown on the phone. App selection for projection remains
- * available on the car display through its existing independent flow.
- */
+/** Phone-side entry point. Projection activities keep their existing independent lifecycle. */
 public final class V10LauncherActivity extends Activity {
     @Override
     protected void onCreate(Bundle state) {
         super.onCreate(state);
-        startActivity(new Intent(this, V10SettingsActivity.class));
+        startActivity(new Intent(this, V10DashboardActivity.class));
         finish();
     }
 }
