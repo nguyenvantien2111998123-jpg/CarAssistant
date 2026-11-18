@@ -52,8 +52,6 @@ public final class CarAssistantKeyboardController {
 
     private boolean started;
 
-    private boolean lastShown;
-
     private final Runnable poller =
             new Runnable() {
 
@@ -65,8 +63,6 @@ public final class CarAssistantKeyboardController {
             }
 
             if (activeSession() == null) {
-
-                lastShown = false;
                 keyboard.hide();
 
                 handler.postDelayed(
@@ -110,11 +106,8 @@ public final class CarAssistantKeyboardController {
 
                 final boolean state =
                         shown;
-
-                lastShown = state;
-
                 // Reconcile the view on every poll. A lifecycle/menu hide must not
-                // leave lastShown=true and permanently prevent the keyboard returning.
+                // Keep the view synchronized with the IME on every poll.
                 handler.post(
                         () -> {
                     if (!started || activeSession() == null) {
@@ -175,9 +168,6 @@ public final class CarAssistantKeyboardController {
         }
 
         started = true;
-
-        lastShown = false;
-
         keyboard.hide();
 
         handler.removeCallbacks(
@@ -197,9 +187,6 @@ public final class CarAssistantKeyboardController {
     }
 
     public void hide() {
-
-        lastShown = false;
-
         keyboard.hide();
     }
 }
