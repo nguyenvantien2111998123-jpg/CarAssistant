@@ -618,16 +618,12 @@ public final class MediaSessionBridge extends NotificationListenerService {
         }
         manager = null;
         sessionsListener = null;
-        // Keep our own MediaSession alive across NotificationListener rebinds. Releasing it
-        // here creates a window where Gearhead falls back to the source app's generic card.
+        // The independent MediaSessionOwnerService retains the published session.
         saveCurrentCheckpoint();
         clearActiveController();
         updateMirrorSession(Snapshot.empty());
         super.onListenerDisconnected();
-        // NotificationListenerService is no longer bound after this callback.
-        // Android requires an explicit rebind request; without it the mirror
-        // MediaSession is released when this service is destroyed and Gearhead
-        // receives an empty CarAsistant-only session list on later connections.
+        // Ask Android to reconnect source-session monitoring; the owner service is independent.
         try {
             requestRebind(new ComponentName(this, MediaSessionBridge.class));
             Log.i(TAG, "Requested NotificationListenerService rebind to restore CarAsistant media owner");
@@ -640,19 +636,6 @@ public final class MediaSessionBridge extends NotificationListenerService {
     public void onDestroy() {
         MAIN.removeCallbacks(checkpointTask);
         super.onDestroy();
-    }
-
-    private void releaseMirrorSession() {
-        MediaSession session = mirrorSession;
-        mirrorSession = null;
-        if (session != null) {
-            try {
-                session.setActive(false);
-                session.release();
-            } catch (RuntimeException error) {
-                Log.w(TAG, "Could not release mirrored media session", error);
-            }
-        }
     }
 
     @Override
