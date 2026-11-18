@@ -71,8 +71,9 @@ public final class V10CarActivity
     private ImageView mediaArtwork;
     private TextView mediaTitle;
     private TextView mediaArtist;
-    private TextView mediaPlayPause;
     private LinearLayout mediaCard;
+    private LinearLayout dashboardSidebar;
+    private final Runnable drivingChromeAutoHide = this::hideDrivingChrome;
     private final MediaSessionBridge.Listener mediaSessionListener = this::updateMediaCard;
     private TextView floatingVoiceButton;
     private TextView voiceTranscriptView;
@@ -525,114 +526,113 @@ public final class V10CarActivity
 
 
     private void buildDashboard() {
-        dashboard=new LinearLayout(this);
+        dashboard = new LinearLayout(this);
         dashboard.setOrientation(LinearLayout.HORIZONTAL);
         dashboard.setGravity(Gravity.CENTER_VERTICAL);
         dashboard.setBackgroundColor(Color.TRANSPARENT);
-        launcherLayer.addView(dashboard,new LinearLayout.LayoutParams(-1,-1));
+        launcherLayer.addView(dashboard, new LinearLayout.LayoutParams(-1, -1));
 
-        LinearLayout sidebar=new LinearLayout(this);
-        sidebar.setOrientation(LinearLayout.VERTICAL);
-        sidebar.setGravity(Gravity.TOP|Gravity.CENTER_HORIZONTAL);
-        sidebar.setPadding(dp(3),dp(3),dp(3),dp(3));
-        dashboard.addView(sidebar,new LinearLayout.LayoutParams(dp(64),-1));
+        // Root overlay keeps the sidebar accessible above Display 2 projections.
+        dashboardSidebar = new LinearLayout(this);
+        dashboardSidebar.setOrientation(LinearLayout.VERTICAL);
+        dashboardSidebar.setGravity(Gravity.TOP | Gravity.CENTER_HORIZONTAL);
+        dashboardSidebar.setPadding(dp(3), dp(3), dp(3), dp(3));
+        GradientDrawable sidebarBg = new GradientDrawable();
+        sidebarBg.setColor(Color.argb(92, 8, 14, 20));
+        sidebarBg.setCornerRadius(dp(16));
+        sidebarBg.setStroke(dp(1), Color.argb(70, 190, 215, 235));
+        dashboardSidebar.setBackground(sidebarBg);
+        dashboardSidebar.setElevation(dp(16));
 
-        TextView choose=sidebarButton("APP CHỌN");
-        choose.setOnClickListener(v->showApps());
-        sidebar.addView(choose,sidebarButtonParams());
+        TextView choose = sidebarButton("▦");
+        choose.setTextSize(22);
+        choose.setContentDescription("Mở danh sách ứng dụng");
+        choose.setOnClickListener(v -> {
+            showApps();
+            scheduleDrivingChromeAutoHide();
+        });
+        dashboardSidebar.addView(choose, sidebarButtonParams());
 
-        dock=new LinearLayout(this);
+        dock = new LinearLayout(this);
         dock.setOrientation(LinearLayout.VERTICAL);
-        dock.setGravity(Gravity.TOP|Gravity.CENTER_HORIZONTAL);
-        sidebar.addView(dock,new LinearLayout.LayoutParams(-1,0,1f));
+        dock.setGravity(Gravity.TOP | Gravity.CENTER_HORIZONTAL);
+        dashboardSidebar.addView(dock, new LinearLayout.LayoutParams(-1, 0, 1f));
 
-        TextView voice=sidebarButton("🎙");
+        TextView voice = sidebarButton("🎙");
         voice.setTextSize(18);
         voice.setContentDescription("Kích hoạt trợ lý giọng nói");
-        voice.setOnClickListener(v -> activateVoiceAssistant());
+        voice.setOnClickListener(v -> {
+            activateVoiceAssistant();
+            scheduleDrivingChromeAutoHide();
+        });
         dashboardVoiceButton = voice;
-        sidebar.addView(voice,sidebarFixedButtonParams());
+        dashboardSidebar.addView(voice, sidebarFixedButtonParams());
 
-        TextView tasks=sidebarButton("TASKS");
+        TextView tasks = sidebarButton("▣");
+        tasks.setTextSize(22);
         tasks.setContentDescription("Các task đang hoạt động trên màn hình phụ");
-        tasks.setOnClickListener(v->showTaskSwitcher());
-        sidebar.addView(tasks,sidebarFixedButtonParams());
+        tasks.setOnClickListener(v -> {
+            showTaskSwitcher();
+            scheduleDrivingChromeAutoHide();
+        });
+        dashboardSidebar.addView(tasks, sidebarFixedButtonParams());
 
-        FrameLayout main=new FrameLayout(this);
-        dashboard.addView(main,new LinearLayout.LayoutParams(0,-1,1f));
+        FrameLayout.LayoutParams sidebarParams = new FrameLayout.LayoutParams(
+                dp(64), -1, Gravity.START | Gravity.CENTER_VERTICAL);
+        sidebarParams.setMargins(dp(8), dp(12), 0, dp(12));
+        root.addView(dashboardSidebar, sidebarParams);
+        dashboardSidebar.setVisibility(View.GONE);
 
-        LinearLayout bottom=new LinearLayout(this);
-        bottom.setGravity(Gravity.CENTER_VERTICAL);
-        bottom.setPadding(dp(8),dp(8),dp(8),dp(8));
-        main.addView(bottom,new FrameLayout.LayoutParams(-1,dp(88),Gravity.BOTTOM));
-
-        TextView wyn=circleButton("WYN");
-        wyn.setOnClickListener(v->{});
-        bottom.addView(wyn,new LinearLayout.LayoutParams(dp(78),dp(78)));
+        FrameLayout main = new FrameLayout(this);
+        dashboard.addView(main, new LinearLayout.LayoutParams(0, -1, 1f));
 
         mediaCard = card();
         mediaCard.setOrientation(LinearLayout.HORIZONTAL);
         mediaCard.setGravity(Gravity.CENTER_VERTICAL);
-        mediaCard.setPadding(dp(8),dp(5),dp(8),dp(5));
+        mediaCard.setPadding(dp(8), dp(5), dp(8), dp(5));
+        GradientDrawable mediaBg = new GradientDrawable();
+        mediaBg.setColor(Color.argb(142, 22, 27, 33));
+        mediaBg.setCornerRadius(dp(18));
+        mediaBg.setStroke(dp(1), Color.argb(95, 185, 205, 225));
+        mediaCard.setBackground(mediaBg);
+        mediaCard.setElevation(dp(8));
 
         mediaArtwork = new ImageView(this);
         mediaArtwork.setScaleType(ImageView.ScaleType.CENTER_CROP);
         mediaArtwork.setContentDescription("Ảnh bìa media");
-        mediaArtwork.setBackgroundColor(Color.rgb(34,42,50));
-        mediaCard.addView(mediaArtwork,new LinearLayout.LayoutParams(dp(54),dp(54)));
+        mediaArtwork.setBackgroundColor(Color.rgb(34, 42, 50));
+        mediaCard.addView(mediaArtwork, new LinearLayout.LayoutParams(dp(54), dp(54)));
 
         LinearLayout mediaInfo = new LinearLayout(this);
         mediaInfo.setOrientation(LinearLayout.VERTICAL);
         mediaInfo.setGravity(Gravity.CENTER_VERTICAL);
-        mediaInfo.setPadding(dp(10),0,dp(6),0);
-        LinearLayout.LayoutParams infoParams = new LinearLayout.LayoutParams(0,-1,1f);
-        mediaCard.addView(mediaInfo,infoParams);
+        mediaInfo.setPadding(dp(10), 0, dp(6), 0);
+        mediaCard.addView(mediaInfo, new LinearLayout.LayoutParams(dp(150), -1));
 
-        mediaTitle = text("Chưa có media đang phát",14,Color.WHITE);
+        mediaTitle = text("Chưa có media đang phát", 14, Color.WHITE);
         mediaTitle.setSingleLine(true);
         mediaTitle.setEllipsize(TextUtils.TruncateAt.END);
-        mediaInfo.addView(mediaTitle,new LinearLayout.LayoutParams(-1,dp(25)));
+        mediaInfo.addView(mediaTitle, new LinearLayout.LayoutParams(-1, dp(25)));
 
-        mediaArtist = text("Mở YouTube, Zing MP3 hoặc ứng dụng nghe nhạc",11,Color.LTGRAY);
+        mediaArtist = text("Mở YouTube, Zing MP3 hoặc ứng dụng nghe nhạc", 11, Color.LTGRAY);
         mediaArtist.setSingleLine(true);
         mediaArtist.setEllipsize(TextUtils.TruncateAt.END);
-        mediaInfo.addView(mediaArtist,new LinearLayout.LayoutParams(-1,dp(20)));
-
-        TextView previous = buttonText("⏮");
-        previous.setContentDescription("Bài trước");
-        mediaCard.addView(previous,new LinearLayout.LayoutParams(dp(34),dp(48)));
-        previous.setOnClickListener(v -> {
-            if (ensureMediaAccess()) MediaSessionBridge.skipPrevious();
-        });
+        mediaInfo.addView(mediaArtist, new LinearLayout.LayoutParams(-1, dp(20)));
 
         TextView rewind = buttonText("↶15");
         rewind.setTextSize(10);
         rewind.setContentDescription("Tua lùi 15 giây");
-        mediaCard.addView(rewind,new LinearLayout.LayoutParams(dp(36),dp(48)));
+        mediaCard.addView(rewind, new LinearLayout.LayoutParams(dp(40), dp(48)));
         rewind.setOnClickListener(v -> {
             if (ensureMediaAccess()) MediaSessionBridge.seekBy(-15000L);
-        });
-
-        mediaPlayPause = buttonText("▶");
-        mediaPlayPause.setContentDescription("Phát hoặc tạm dừng");
-        mediaCard.addView(mediaPlayPause,new LinearLayout.LayoutParams(dp(42),dp(48)));
-        mediaPlayPause.setOnClickListener(v -> {
-            if (ensureMediaAccess()) MediaSessionBridge.togglePlayPause();
         });
 
         TextView forward = buttonText("15↷");
         forward.setTextSize(10);
         forward.setContentDescription("Tua tới 15 giây");
-        mediaCard.addView(forward,new LinearLayout.LayoutParams(dp(36),dp(48)));
+        mediaCard.addView(forward, new LinearLayout.LayoutParams(dp(40), dp(48)));
         forward.setOnClickListener(v -> {
             if (ensureMediaAccess()) MediaSessionBridge.seekBy(15000L);
-        });
-
-        TextView next = buttonText("⏭");
-        next.setContentDescription("Bài tiếp");
-        mediaCard.addView(next,new LinearLayout.LayoutParams(dp(34),dp(48)));
-        next.setOnClickListener(v -> {
-            if (ensureMediaAccess()) MediaSessionBridge.skipNext();
         });
 
         View.OnClickListener openPlayer = v -> openActiveMediaOnProjection();
@@ -640,11 +640,14 @@ public final class V10CarActivity
         mediaTitle.setOnClickListener(openPlayer);
         mediaArtist.setOnClickListener(openPlayer);
         mediaCard.setOnClickListener(openPlayer);
-        LinearLayout.LayoutParams mp=new LinearLayout.LayoutParams(0,dp(78),1f);
-        mp.setMargins(dp(12),0,0,0);
-        bottom.addView(mediaCard,mp);
-    }
 
+        FrameLayout mediaBottomArea = new FrameLayout(this);
+        main.addView(mediaBottomArea, new FrameLayout.LayoutParams(-1, dp(88), Gravity.BOTTOM));
+        FrameLayout.LayoutParams mediaParams = new FrameLayout.LayoutParams(
+                -2, dp(78), Gravity.END | Gravity.BOTTOM);
+        mediaParams.setMargins(0, 0, dp(8), dp(4));
+        mediaBottomArea.addView(mediaCard, mediaParams);
+    }
 
     /** Called from the Android Auto media card and the steering-key bridge. */
     public void handleOpenActiveMediaOnProjection() {
@@ -808,24 +811,21 @@ public final class V10CarActivity
     }
 
     private void updateMediaCard(MediaSessionBridge.Snapshot state) {
-        if (mediaTitle == null || mediaArtist == null || mediaPlayPause == null) return;
+        if (mediaTitle == null || mediaArtist == null) return;
         if (!MediaSessionBridge.hasAccess(this)) {
             mediaTitle.setText("Bật quyền media");
             mediaArtist.setText("Chạm để cấp quyền đồng bộ trình phát");
-            mediaPlayPause.setText("⚙");
             if (mediaArtwork != null) mediaArtwork.setImageDrawable(null);
             return;
         }
         if (state == null || TextUtils.isEmpty(state.packageName)) {
             mediaTitle.setText("Chưa có media đang phát");
             mediaArtist.setText("Mở YouTube, Zing MP3 hoặc ứng dụng nghe nhạc");
-            mediaPlayPause.setText("▶");
             if (mediaArtwork != null) mediaArtwork.setImageDrawable(null);
             return;
         }
         mediaTitle.setText(TextUtils.isEmpty(state.title) ? "Đang phát media" : state.title);
         mediaArtist.setText(TextUtils.isEmpty(state.artist) ? state.packageName : state.artist);
-        mediaPlayPause.setText(state.playing ? "⏸" : "▶");
         if (mediaArtwork != null) {
             if (state.artwork != null) mediaArtwork.setImageBitmap(state.artwork);
             else mediaArtwork.setImageDrawable(null);
@@ -1438,7 +1438,7 @@ private void hideApps() {
                             long held = SystemClock.uptimeMillis() - floatingDownTime;
                             if (held >= ViewConfiguration.getLongPressTimeout()) {
                                 handleControlHome();
-                                hideFloatingMenu();
+                                hideDrivingChrome();
                             } else {
                                 showFloatingMenu();
                             }
@@ -1476,45 +1476,66 @@ private void hideApps() {
 }
 
 private void showFloatingMenu() {
-        if (floatingMenu != null) {
-            hideFloatingMenu();
-            return;
-        }
+    if (dashboardSidebar != null) {
+        dashboardSidebar.setVisibility(View.VISIBLE);
+        dashboardSidebar.bringToFront();
+    }
 
+    if (floatingMenu == null) {
         floatingMenu = new LinearLayout(this);
         floatingMenu.setOrientation(LinearLayout.HORIZONTAL);
-        floatingMenu.setPadding(dp(8), dp(8), dp(8), dp(8));
+        floatingMenu.setGravity(Gravity.CENTER);
+        floatingMenu.setPadding(dp(6), dp(6), dp(6), dp(6));
 
         GradientDrawable menuBg = new GradientDrawable();
-        menuBg.setColor(Color.rgb(15, 20, 26));
-        menuBg.setCornerRadius(dp(16));
-        menuBg.setStroke(dp(1), Color.rgb(65, 85, 105));
+        menuBg.setColor(Color.argb(112, 15, 20, 26));
+        menuBg.setCornerRadius(dp(18));
+        menuBg.setStroke(dp(1), Color.argb(90, 190, 215, 235));
         floatingMenu.setBackground(menuBg);
-        floatingMenu.setElevation(dp(14));
+        floatingMenu.setElevation(dp(18));
 
         addFloatingMenuButton("‹", "Back", () -> {
             handleControlBack();
             hideFloatingMenu();
+            scheduleDrivingChromeAutoHide();
         });
 
         addFloatingMenuButton("⌂", "Home", () -> {
             handleControlHome();
             hideFloatingMenu();
+            scheduleDrivingChromeAutoHide();
         });
 
-        addFloatingMenuButton("▣", "Task", () -> {
+        addFloatingMenuButton("▣", "Tasks", () -> {
             hideFloatingMenu();
             showTaskSwitcher();
+            scheduleDrivingChromeAutoHide();
         });
 
-        FrameLayout.LayoutParams params =
-                new FrameLayout.LayoutParams(-2, -2,
-                        Gravity.TOP | Gravity.END);
-        params.setMargins(0, dp(70), dp(18), 0);
+        FrameLayout.LayoutParams params = new FrameLayout.LayoutParams(
+                -2, -2, Gravity.BOTTOM | Gravity.CENTER_HORIZONTAL);
+        params.setMargins(dp(8), 0, dp(8), dp(14));
         root.addView(floatingMenu, params);
-        floatingMenu.bringToFront();
-        floatingTouchKey.bringToFront();
     }
+
+    floatingMenu.setVisibility(View.VISIBLE);
+    floatingMenu.bringToFront();
+    if (floatingTouchKey != null) floatingTouchKey.bringToFront();
+    scheduleDrivingChromeAutoHide();
+}
+
+private void scheduleDrivingChromeAutoHide() {
+    if ((dashboardSidebar == null || dashboardSidebar.getVisibility() != View.VISIBLE)
+            && floatingMenu == null) return;
+    handler.removeCallbacks(drivingChromeAutoHide);
+    handler.postDelayed(drivingChromeAutoHide, 5000L);
+}
+
+private void hideDrivingChrome() {
+    handler.removeCallbacks(drivingChromeAutoHide);
+    if (dashboardSidebar != null) dashboardSidebar.setVisibility(View.GONE);
+    hideFloatingMenu();
+}
 
 private void addFloatingMenuButton(String glyph, String label, Runnable action) {
     TextView button = new TextView(this);
@@ -1710,6 +1731,16 @@ private void hideTaskSwitcher() {
     }
 
     @Override
+    public boolean dispatchTouchEvent(MotionEvent event) {
+        if (event != null && (event.getActionMasked() == MotionEvent.ACTION_DOWN
+                || event.getActionMasked() == MotionEvent.ACTION_MOVE
+                || event.getActionMasked() == MotionEvent.ACTION_UP)) {
+            scheduleDrivingChromeAutoHide();
+        }
+        return super.dispatchTouchEvent(event);
+    }
+
+    @Override
     public void onBackPressed() {
 
         if (appPanel != null
@@ -1881,6 +1912,7 @@ private void hideTaskSwitcher() {
             miniAccessEngine.close();
             miniAccessEngine = null;
         }
+        handler.removeCallbacks(drivingChromeAutoHide);
         if (keyboardController != null) {
             keyboardController.stop();
             keyboardController = null;
@@ -1915,6 +1947,8 @@ private void hideTaskSwitcher() {
         dashboard = null;
         appPanel = null;
         dock = null;
+        dashboardSidebar = null;
+        floatingMenu = null;
 
         super.onDestroy();
     }
