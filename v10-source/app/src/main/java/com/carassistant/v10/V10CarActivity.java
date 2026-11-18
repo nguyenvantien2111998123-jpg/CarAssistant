@@ -14,7 +14,6 @@ import android.content.pm.ResolveInfo;
 import android.content.pm.ApplicationInfo;
 import android.content.pm.PackageManager;
 import android.graphics.Color;
-import android.graphics.Typeface;
 import android.graphics.drawable.GradientDrawable;
 import android.graphics.drawable.Drawable;
 import android.os.Bundle;
@@ -67,8 +66,6 @@ public final class V10CarActivity
     private TextureView appTextureView;
     private V10ProjectionSession backgroundSession;
     private ComponentName activeBackgroundTarget;
-    private ComponentName selectedAppTarget;
-    private TextView selectedAppLabel;
     private TextView dashboardVoiceButton;
     private ImageView mediaArtwork;
     private TextView mediaTitle;
@@ -1244,44 +1241,14 @@ private void dispatchMediaSearchOnProjection(ComponentName target, String uri, S
         }
     };
     handler.postDelayed(dispatch, 650L);
-}
-
-private boolean isMediaAutoPlayAccessibilityEnabled() {
-    String enabledServices = Settings.Secure.getString(
-            getContentResolver(), Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES);
-    if (TextUtils.isEmpty(enabledServices)) return false;
-
-    ComponentName expected = new ComponentName(
-            this, MediaPlaybackAccessibilityService.class);
-    TextUtils.SimpleStringSplitter splitter = new TextUtils.SimpleStringSplitter(':');
-    splitter.setString(enabledServices);
-    for (String entry : splitter) {
-        ComponentName enabled = ComponentName.unflattenFromString(entry);
-        if (expected.equals(enabled)) return true;
-    }
-    return false;
-}
-
-private void launchBackgroundProjection(ComponentName component) {
+}private void launchBackgroundProjection(ComponentName component) {
     if (component == null || backgroundSession == null) return;
     activeBackgroundTarget = component;
     V10SessionStore.setBackgroundTarget(this, component);
     // Layer 1 is a Home background, never shown over APP CHỌN or other screens.
     projectionLayer.setVisibility(isHomeScreen() ? View.VISIBLE : View.GONE);
     backgroundSession.setTarget(component);
-}
-
-private void stopAppPickerProjection() {
-    if (session != null) {
-        session.hideTask();
-        session.setTarget(null);
-    }
-    V10SessionStore.clearTarget(this);
-    activeTarget = null;
-    appProjectionLayer.setVisibility(View.GONE);
-}
-
-private void stopBackgroundProjection() {
+}private void stopBackgroundProjection() {
     if (backgroundSession != null) backgroundSession.setTarget(null);
     V10SessionStore.setBackgroundTarget(this, null);
     activeBackgroundTarget = null;
@@ -2070,39 +2037,7 @@ private void hideTaskSwitcher() {
         return box;
     }
 
-    private LinearLayout infoCard(
-            String title,
-            String value) {
-
-        LinearLayout box =
-                card();
-
-        box.addView(
-                text(
-                        title,
-                        11,
-                        Color.LTGRAY));
-
-        TextView valueView =
-                text(
-                        value,
-                        21,
-                        Color.WHITE);
-
-        valueView.setGravity(
-                Gravity.CENTER);
-
-        box.addView(
-                valueView,
-                new LinearLayout.LayoutParams(
-                        -1,
-                        0,
-                        1));
-
-        return box;
-    }
-
-    private TextView buttonText(
+        private TextView buttonText(
             String value) {
 
         TextView view =
@@ -2146,30 +2081,7 @@ private void hideTaskSwitcher() {
         return view;
     }
 
-    private LinearLayout.LayoutParams
-            weightParams() {
-
-        return new LinearLayout.LayoutParams(
-                0,
-                -1,
-                1f);
-    }
-
-    private String initial(
-            String value) {
-
-        if (value == null
-                || value.isEmpty()) {
-            return "?";
-        }
-
-        return value
-                .substring(0, 1)
-                .toUpperCase(
-                        Locale.getDefault());
-    }
-
-    private int dp(
+            private int dp(
             float value) {
 
         return Math.round(
