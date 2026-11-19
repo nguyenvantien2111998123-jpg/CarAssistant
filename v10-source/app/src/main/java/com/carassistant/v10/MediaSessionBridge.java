@@ -62,6 +62,7 @@ public final class MediaSessionBridge extends NotificationListenerService {
     private static volatile MediaController checkpointController;
     private static volatile long lastCheckpointPosition;
     private static volatile long lastCheckpointDuration;
+    private static volatile MediaSessionBridge bridgeInstance;
     private MediaSession mirrorSession;
     private SteeringWheelMediaKeyHandler steeringKeyHandler;
     private MediaSessionManager manager;
@@ -635,6 +636,15 @@ public final class MediaSessionBridge extends NotificationListenerService {
                 .getBoolean(AA_CONNECTED_PREF, false);
     }
 
+    /** Re-evaluate the legacy silent-player fallback after the separate feature is toggled. */
+    public static void refreshFallbackPolicy() {
+        MediaSessionBridge current = bridgeInstance;
+        if (current != null) {
+            MAIN.post(() -> current.syncFallbackPlayer(
+                    !TextUtils.isEmpty(snapshot.packageName)));
+        }
+    }
+
     /** Current AA connection state for the isolated phone-side fallback service. */
     public static boolean isAndroidAutoConnected(Context context) {
         return context != null && context.getSharedPreferences(RESUME_PREFS, Context.MODE_PRIVATE)
@@ -779,6 +789,7 @@ public final class MediaSessionBridge extends NotificationListenerService {
     @Override
     public void onListenerConnected() {
         super.onListenerConnected();
+        bridgeInstance = this;
         ensureMirrorSession();
         // Publish the CarAsistant controller before querying source sessions. This closes
         // the startup race in which Gearhead discovers a phone player before our mirror.
@@ -829,6 +840,7 @@ public final class MediaSessionBridge extends NotificationListenerService {
         saveCurrentCheckpoint();
         clearActiveController();
         updateMirrorSession(Snapshot.empty());
+        if (bridgeInstance == this) bridgeInstance = null;
         super.onListenerDisconnected();
     }
 
@@ -838,6 +850,7 @@ public final class MediaSessionBridge extends NotificationListenerService {
         MAIN.removeCallbacks(fallbackStartTask);
         stopFallbackPlayer();
         releaseMirrorSession();
+        if (bridgeInstance == this) bridgeInstance = null;
         super.onDestroy();
     }
 
