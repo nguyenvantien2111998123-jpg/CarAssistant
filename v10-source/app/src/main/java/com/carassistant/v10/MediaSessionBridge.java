@@ -653,6 +653,16 @@ public final class MediaSessionBridge extends NotificationListenerService {
             fallbackPlayer.stop();
             fallbackPlayer = null;
         }
+        // A disconnect during the 350 ms play window must not leave the mirror
+        // session advertising PLAYING after its silent player has been released.
+        if (activeController == null && mirrorSession != null) {
+            android.content.SharedPreferences prefs =
+                    getSharedPreferences(RESUME_PREFS, Context.MODE_PRIVATE);
+            long duration = Math.max(0L, prefs.getLong(CHECKPOINT_DURATION, 0L));
+            long position = getAdjustedCheckpointPosition(this);
+            mirrorSession.setPlaybackState(buildMirrorPlaybackState(false, position, duration));
+            mirrorSession.setActive(true);
+        }
     }
 
     /**
