@@ -152,6 +152,7 @@ public final class V10DashboardActivity extends Activity {
         addTitle("Trợ lý & Media", "Chọn ứng dụng ưu tiên và cách CarAsistant xử lý nội dung đang phát.");
         addFeature("🎙", "Ứng dụng mặc định", "Thiết lập app dẫn đường, nghe nhạc, video và TV.", PURPLE, this::openSettings);
         addFeature("♫", "Tự động khôi phục media", "Điều chỉnh hành vi khôi phục phiên media khi Android Auto kết nối.", CYAN, this::openSettings);
+        addFeature("◌", "Media Dự Phòng", "Quản lý một MediaSession riêng, chỉ hoạt động khi không còn phiên media hợp lệ từ ứng dụng khác.", GREEN, this::openMediaFallback);
         addFeature("◉", "Điều khiển media", "Kiểm tra quyền truy cập thông báo và MediaSession.", GREEN, () -> openNotificationSettings());
         addInfoCard("TƯƠNG THÍCH", "Thẻ/widget CarAsistant Media, điều khiển phát và phím vô lăng tiếp tục sử dụng logic hiện có.");
         addPrimaryButton("MỞ CẤU HÌNH TRỢ LÝ & MEDIA", this::openSettings, PURPLE);
@@ -280,6 +281,10 @@ public final class V10DashboardActivity extends Activity {
         TextView footer = text("CARASSISTANT  •  DRIVE SMARTER", 10, Color.rgb(91, 111, 135));
         footer.setGravity(Gravity.CENTER);
         content.addView(footer, bottom(10, dp(34)));
+    }
+
+    private void openMediaFallback() {
+        startActivity(new Intent(this, MediaFallbackSettingsActivity.class));
     }
 
     private void openSettings() {
