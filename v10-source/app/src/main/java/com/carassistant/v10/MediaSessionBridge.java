@@ -70,7 +70,8 @@ public final class MediaSessionBridge extends NotificationListenerService {
     private MediaFallbackPlayer fallbackPlayer;
     private static final long FALLBACK_START_GRACE_MS = 3500L;
     private final Runnable fallbackStartTask = () -> {
-        if (!isAndroidAutoConnected() || activeController != null || mirrorSession == null) return;
+        if (!isAndroidAutoConnected() || activeController != null || mirrorSession == null
+                || MediaFallbackSessionService.isEnabled(this)) return;
         if (fallbackPlayer == null) {
             fallbackPlayer = new MediaFallbackPlayer(this::publishFallbackPlaybackState);
         }
@@ -634,6 +635,12 @@ public final class MediaSessionBridge extends NotificationListenerService {
                 .getBoolean(AA_CONNECTED_PREF, false);
     }
 
+    /** Current AA connection state for the isolated phone-side fallback service. */
+    public static boolean isAndroidAutoConnected(Context context) {
+        return context != null && context.getSharedPreferences(RESUME_PREFS, Context.MODE_PRIVATE)
+                .getBoolean(AA_CONNECTED_PREF, false);
+    }
+
     /**
      * Start the silent video-only player only after Android Auto is connected and
      * no valid external source is mirrored. The player never writes metadata or
@@ -641,7 +648,8 @@ public final class MediaSessionBridge extends NotificationListenerService {
      */
     private void syncFallbackPlayer(boolean hasExternalSource) {
         MAIN.removeCallbacks(fallbackStartTask);
-        if (hasExternalSource || !isAndroidAutoConnected() || mirrorSession == null) {
+        if (hasExternalSource || !isAndroidAutoConnected() || mirrorSession == null
+                || MediaFallbackSessionService.isEnabled(this)) {
             stopFallbackPlayer();
             return;
         }
