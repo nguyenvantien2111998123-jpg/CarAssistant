@@ -1831,7 +1831,24 @@ private void hideTaskSwitcher() {
 
     /** Called by the LSPosed steering-key bridge when Next is double-pressed. */
     public void handleSteeringVoice() {
-        handler.post(this::activateVoiceAssistant);
+        handler.post(this::startVoiceAssistantFromSteering);
+    }
+
+    private void startVoiceAssistantFromSteering() {
+        if (voiceAssistantController == null) {
+            Toast.makeText(this, "Trợ lý giọng nói chưa sẵn sàng.", Toast.LENGTH_SHORT).show();
+            return;
+        }
+        if (checkSelfPermission(Manifest.permission.RECORD_AUDIO)
+                != PackageManager.PERMISSION_GRANTED) {
+            Intent permissionIntent = new Intent(this, V10SettingsActivity.class);
+            permissionIntent.putExtra(V10SettingsActivity.EXTRA_REQUEST_MICROPHONE, true);
+            permissionIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+            startActivity(permissionIntent);
+            return;
+        }
+        // Steering-wheel double-Next is a start command, never a toggle/cancel command.
+        voiceAssistantController.startListening();
     }
 
     private void activateVoiceAssistant() {
