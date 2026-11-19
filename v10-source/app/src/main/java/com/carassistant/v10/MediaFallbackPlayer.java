@@ -14,12 +14,21 @@ import java.io.IOException;
  * MediaSessionBridge remains the sole owner of the CarAsistant mirror session.
  */
 final class MediaFallbackPlayer {
+    interface PlaybackListener {
+        void onFallbackPlaybackStateChanged(boolean playing);
+    }
+
     private static final String TAG = "CarAssistantMedia";
     private static final long PLAY_WINDOW_MS = 350L;
 
     private final Handler main = new Handler(Looper.getMainLooper());
+    private final PlaybackListener listener;
     private MediaPlayer player;
     private Runnable pauseTask;
+
+    MediaFallbackPlayer(PlaybackListener listener) {
+        this.listener = listener;
+    }
 
     void start(Context context) {
         if (player != null) return;
@@ -42,11 +51,13 @@ final class MediaFallbackPlayer {
                 }
                 try {
                     prepared.start();
+                    if (listener != null) listener.onFallbackPlaybackStateChanged(true);
                     Log.i(TAG, "Silent fallback MP4 started");
                     pauseTask = () -> {
                         if (player != prepared) return;
                         try {
                             if (prepared.isPlaying()) prepared.pause();
+                            if (listener != null) listener.onFallbackPlaybackStateChanged(false);
                             Log.i(TAG, "Silent fallback MP4 paused; mirror metadata untouched");
                         } catch (IllegalStateException error) {
                             Log.w(TAG, "Could not pause fallback MP4", error);
@@ -56,6 +67,7 @@ final class MediaFallbackPlayer {
                     main.postDelayed(pauseTask, PLAY_WINDOW_MS);
                 } catch (IllegalStateException error) {
                     Log.w(TAG, "Could not start fallback MP4", error);
+                    if (listener != null) listener.onFallbackPlaybackStateChanged(false);
                     stop();
                 }
             });
