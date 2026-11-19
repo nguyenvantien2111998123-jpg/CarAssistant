@@ -71,7 +71,9 @@ public final class MediaSessionBridge extends NotificationListenerService {
     private static final long FALLBACK_START_GRACE_MS = 3500L;
     private final Runnable fallbackStartTask = () -> {
         if (!isAndroidAutoConnected() || activeController != null || mirrorSession == null) return;
-        if (fallbackPlayer == null) fallbackPlayer = new MediaFallbackPlayer();
+        if (fallbackPlayer == null) {
+            fallbackPlayer = new MediaFallbackPlayer(this::publishFallbackPlaybackState);
+        }
         fallbackPlayer.start(this);
     };
     private final Runnable checkpointTask = new Runnable() {
@@ -651,6 +653,21 @@ public final class MediaSessionBridge extends NotificationListenerService {
             fallbackPlayer.stop();
             fallbackPlayer = null;
         }
+    }
+
+    /**
+     * Reflect the short fallback playback transition through the one existing
+     * CarAsistant MediaSession, without changing its checkpoint metadata.
+     */
+    private void publishFallbackPlaybackState(boolean playing) {
+        MediaSession session = mirrorSession;
+        if (session == null || activeController != null || !isAndroidAutoConnected()) return;
+        android.content.SharedPreferences prefs =
+                getSharedPreferences(RESUME_PREFS, Context.MODE_PRIVATE);
+        long duration = Math.max(0L, prefs.getLong(CHECKPOINT_DURATION, 0L));
+        long position = getAdjustedCheckpointPosition(this);
+        session.setPlaybackState(buildMirrorPlaybackState(playing, position, duration));
+        session.setActive(true);
     }
 
     private void updateMirrorSession(Snapshot state) {
