@@ -306,10 +306,16 @@ public final class MediaAutoRestoreService extends Service {
 
         if (TextUtils.isEmpty(expectedPackage) || getPackageName().equals(expectedPackage)
                 || !expectedPackage.matches("[A-Za-z0-9_]+(\\.[A-Za-z0-9_]+)+")) {
-            Log.w(TAG, "No valid external media checkpoint package; phone recovery not started");
-            stopForeground(true);
-            stopSelf(startId);
-            return START_NOT_STICKY;
+            // No external media item has been checkpointed yet. Do not tear down the
+            // Android Auto media fallback lifecycle: MediaSessionBridge already owns
+            // CarAsistant's single paused MediaSession and keeps it active with no
+            // audio output. Keep this lightweight foreground coordinator alive until
+            // the exact Gearhead connected notification is removed.
+            Log.i(TAG, "No external media checkpoint; keeping paused CarAsistant fallback "
+                    + "available until Android Auto disconnects");
+            updateForegroundStatus("Media dự phòng đang tạm dừng");
+            handler.post(disconnectMonitor);
+            return START_STICKY;
         }
 
         getSharedPreferences("media_autoplay", MODE_PRIVATE).edit()
