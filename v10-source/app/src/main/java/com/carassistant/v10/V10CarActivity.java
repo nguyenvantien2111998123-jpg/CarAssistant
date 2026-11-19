@@ -1436,6 +1436,7 @@ private void hideApps() {
                                 fp.rightMargin = right;
                                 fp.topMargin = top;
                                 view.setLayoutParams(fp);
+                                positionFloatingMenuNearTouchKey();
                             }
                             return true;
 
@@ -1468,6 +1469,7 @@ private void hideApps() {
                             return true;
                     }
                 });;
+    floatingTouchKey.setVisibility(View.VISIBLE);
     floatingTouchKey.bringToFront();
 
     floatingVoiceButton = new TextView(this);
@@ -1528,15 +1530,41 @@ private void showFloatingMenu() {
         });
 
         FrameLayout.LayoutParams params = new FrameLayout.LayoutParams(
-                -2, -2, Gravity.BOTTOM | Gravity.CENTER_HORIZONTAL);
-        params.setMargins(dp(8), 0, dp(8), dp(14));
+                -2, -2, Gravity.TOP | Gravity.END);
         root.addView(floatingMenu, params);
     }
 
     floatingMenu.setVisibility(View.VISIBLE);
+    positionFloatingMenuNearTouchKey();
     floatingMenu.bringToFront();
     if (floatingTouchKey != null) floatingTouchKey.bringToFront();
     scheduleDrivingChromeAutoHide();
+}
+
+private void positionFloatingMenuNearTouchKey() {
+    if (root == null || floatingTouchKey == null || floatingMenu == null) return;
+    ViewGroup.LayoutParams keyRaw = floatingTouchKey.getLayoutParams();
+    ViewGroup.LayoutParams menuRaw = floatingMenu.getLayoutParams();
+    if (!(keyRaw instanceof FrameLayout.LayoutParams)
+            || !(menuRaw instanceof FrameLayout.LayoutParams)) return;
+
+    FrameLayout.LayoutParams key = (FrameLayout.LayoutParams) keyRaw;
+    FrameLayout.LayoutParams menu = (FrameLayout.LayoutParams) menuRaw;
+    floatingMenu.measure(
+            View.MeasureSpec.makeMeasureSpec(root.getWidth(), View.MeasureSpec.AT_MOST),
+            View.MeasureSpec.makeMeasureSpec(root.getHeight(), View.MeasureSpec.AT_MOST));
+    int menuWidth = floatingMenu.getMeasuredWidth();
+    int menuHeight = floatingMenu.getMeasuredHeight();
+    int keySize = dp(58);
+    int gap = dp(8);
+
+    // Keep the complete control group on the right side of the display.
+    // The menu sits immediately to the left of the touch key so it never
+    // clips beyond the right screen edge.
+    menu.rightMargin = key.rightMargin + keySize + gap;
+    menu.topMargin = key.topMargin + Math.max(0, (keySize - menuHeight) / 2);
+    menu.gravity = Gravity.TOP | Gravity.END;
+    floatingMenu.setLayoutParams(menu);
 }
 
 private void scheduleDrivingChromeAutoHide() {
@@ -1550,6 +1578,11 @@ private void hideDrivingChrome() {
     handler.removeCallbacks(drivingChromeAutoHide);
     if (dashboardSidebar != null) dashboardSidebar.setVisibility(View.GONE);
     hideFloatingMenu();
+    // The floating touch key is the persistent entry point and must never auto-hide.
+    if (floatingTouchKey != null) {
+        floatingTouchKey.setVisibility(View.VISIBLE);
+        floatingTouchKey.bringToFront();
+    }
 }
 
 private void addFloatingMenuButton(String glyph, String label, Runnable action) {
