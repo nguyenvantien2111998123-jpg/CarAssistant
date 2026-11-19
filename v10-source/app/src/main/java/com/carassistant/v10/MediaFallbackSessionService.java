@@ -42,8 +42,15 @@ public final class MediaFallbackSessionService extends NotificationListenerServi
     private boolean destroyed;
 
     private final Runnable startFallbackTask = this::startFallbackIfStillNeeded;
+    private final Runnable monitorTask = new Runnable() {
+        @Override public void run() {
+            reconcile();
+            if (!destroyed) main.postDelayed(this, 2000L);
+        }
+    };
     private final Runnable pausePulseTask = () -> {
-        if (destroyed || !isEnabled(this) || !fallbackActive || fallbackSession == null) return;
+        if (destroyed || !isEnabled(this) || !MediaSessionBridge.isAndroidAutoConnected(this)
+                || !fallbackActive || fallbackSession == null) return;
         if (hasValidExternalSession()) {
             deactivateFallback();
             return;
@@ -102,12 +109,14 @@ public final class MediaFallbackSessionService extends NotificationListenerServi
             }
         }
         Log.i(TAG, "Notification listener connected; enabled=" + isEnabled(this));
-        main.post(this::reconcile);
+        main.removeCallbacks(monitorTask);
+        main.post(monitorTask);
     }
 
     @Override
     public void onListenerDisconnected() {
         destroyed = true;
+        main.removeCallbacks(monitorTask);
         main.removeCallbacks(startFallbackTask);
         main.removeCallbacks(pausePulseTask);
         if (sessionManager != null && sessionsListener != null) {
@@ -126,9 +135,14 @@ public final class MediaFallbackSessionService extends NotificationListenerServi
     @Override
     public void onDestroy() {
         destroyed = true;
+        main.removeCallbacks(monitorTask);
         main.removeCallbacks(startFallbackTask);
         main.removeCallbacks(pausePulseTask);
         deactivateFallback();
+        if (fallbackSession != null) {
+            fallbackSession.release();
+            fallbackSession = null;
+        }
         if (instance == this) instance = null;
         super.onDestroy();
     }
@@ -143,6 +157,7 @@ public final class MediaFallbackSessionService extends NotificationListenerServi
                 Log.i(TAG, "Android requested Play on fallback session");
                 main.post(() -> {
                     if (isEnabled(MediaFallbackSessionService.this)
+                            && MediaSessionBridge.isAndroidAutoConnected(MediaFallbackSessionService.this)
                             && !hasValidExternalSession()) pulseFallback();
                 });
             }
@@ -179,7 +194,7 @@ public final class MediaFallbackSessionService extends NotificationListenerServi
 
     private void reconcile() {
         if (destroyed || fallbackSession == null) return;
-        if (!isEnabled(this)) {
+        if (!isEnabled(this) || !MediaSessionBridge.isAndroidAutoConnected(this)) {
             main.removeCallbacks(startFallbackTask);
             main.removeCallbacks(pausePulseTask);
             deactivateFallback();
@@ -200,7 +215,8 @@ public final class MediaFallbackSessionService extends NotificationListenerServi
     }
 
     private void startFallbackIfStillNeeded() {
-        if (destroyed || !isEnabled(this) || fallbackSession == null) return;
+        if (destroyed || !isEnabled(this) || !MediaSessionBridge.isAndroidAutoConnected(this)
+                || fallbackSession == null) return;
         if (hasValidExternalSession()) {
             deactivateFallback();
             return;
@@ -214,7 +230,8 @@ public final class MediaFallbackSessionService extends NotificationListenerServi
     }
 
     private void pulseFallback() {
-        if (destroyed || !isEnabled(this) || !fallbackActive || fallbackSession == null) return;
+        if (destroyed || !isEnabled(this) || !MediaSessionBridge.isAndroidAutoConnected(this)
+                || !fallbackActive || fallbackSession == null) return;
         main.removeCallbacks(pausePulseTask);
         if (hasValidExternalSession()) {
             deactivateFallback();
@@ -231,7 +248,7 @@ public final class MediaFallbackSessionService extends NotificationListenerServi
         try {
             controllers = sessionManager.getActiveSessions(
                     new ComponentName(this, MediaFallbackSessionService.class));
-        } catch (SecurityException | RuntimeException error) {
+        } catch (RuntimeException error) {
             Log.w(TAG, "Cannot inspect active sessions yet", error);
             return false;
         }
@@ -249,6 +266,19 @@ public final class MediaFallbackSessionService extends NotificationListenerServi
         return false;
     }
 
+    private boolean hasUsefulMetadata(MediaMetadata metadata) {
+        if (metadata == null) return false;
+        try {
+            return !TextUtils.isEmpty(metadata.getString(MediaMetadata.METADATA_KEY_TITLE))
+                    || !TextUtils.isEmpty(metadata.getString(MediaMetadata.METADATA_KEY_DISPLAY_TITLE))
+                    || !TextUtils.isEmpty(metadata.getString(MediaMetadata.METADATA_KEY_ARTIST))
+                    || !TextUtils.isEmpty(metadata.getString(MediaMetadata.METADATA_KEY_MEDIA_ID))
+                    || !TextUtils.isEmpty(metadata.getString(MediaMetadata.METADATA_KEY_MEDIA_URI));
+        } catch (RuntimeException error) {
+            return false;
+        }
+    }
+
     private boolean isValidExternalSession(MediaController controller) {
         PlaybackState state;
         MediaMetadata metadata;
@@ -259,7 +289,7 @@ public final class MediaFallbackSessionService extends NotificationListenerServi
             return false;
         }
         if (state == null) {
-            return metadata != null && metadata.size() > 0;
+            return hasUsefulMetadata(metadata);
         }
         int value = state.getState();
         if (value == PlaybackState.STATE_PLAYING
@@ -273,7 +303,7 @@ public final class MediaFallbackSessionService extends NotificationListenerServi
         }
         if (value == PlaybackState.STATE_PAUSED) {
             // A paused player with track metadata or transport actions is still a real session.
-            return (metadata != null && metadata.size() > 0) || state.getActions() != 0L;
+            return hasUsefulMetadata(metadata) || state.getActions() != 0L;
         }
         return false;
     }
