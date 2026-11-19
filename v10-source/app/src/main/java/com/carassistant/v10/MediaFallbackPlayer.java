@@ -78,6 +78,7 @@ final class MediaFallbackPlayer {
             });
             candidate.setOnErrorListener((failed, what, extra) -> {
                 Log.e(TAG, "Fallback MP4 playback error what=" + what + " extra=" + extra);
+                if (listener != null) listener.onFallbackPlaybackStateChanged(false);
                 stop();
                 return true;
             });
