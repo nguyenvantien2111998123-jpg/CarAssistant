@@ -67,6 +67,7 @@ public final class MediaFallbackSessionService extends NotificationListenerServi
     public static void setEnabled(Context context, boolean enabled) {
         context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
                 .edit().putBoolean(KEY_ENABLED, enabled).apply();
+        MediaSessionBridge.refreshFallbackPolicy();
         MediaFallbackSessionService current = instance;
         if (current != null) {
             current.main.post(current::reconcile);
