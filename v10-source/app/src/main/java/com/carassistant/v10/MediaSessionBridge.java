@@ -891,13 +891,43 @@ public final class MediaSessionBridge extends NotificationListenerService {
         }
     }
 
+    private static boolean hasMediaIdentity(MediaMetadata metadata) {
+        if (metadata == null) return false;
+        return !TextUtils.isEmpty(safeMetadataString(metadata, MediaMetadata.METADATA_KEY_TITLE))
+                || !TextUtils.isEmpty(safeMetadataString(metadata, MediaMetadata.METADATA_KEY_DISPLAY_TITLE))
+                || !TextUtils.isEmpty(safeMetadataString(metadata, MediaMetadata.METADATA_KEY_MEDIA_ID))
+                || !TextUtils.isEmpty(safeMetadataString(metadata, MediaMetadata.METADATA_KEY_MEDIA_URI));
+    }
+
+    private static boolean isUsableExternalSession(MediaController controller) {
+        if (controller == null) return false;
+        try {
+            PlaybackState state = controller.getPlaybackState();
+            if (state == null || !hasMediaIdentity(controller.getMetadata())) return false;
+            int value = state.getState();
+            // PAUSED is deliberately valid: a paused YouTube/Zing item must keep
+            // receiving the existing media controls. Empty/idle/stopped sessions
+            // are not real media and must not mask CarAsistant's paused fallback.
+            return value == PlaybackState.STATE_PLAYING
+                    || value == PlaybackState.STATE_PAUSED
+                    || value == PlaybackState.STATE_BUFFERING
+                    || value == PlaybackState.STATE_CONNECTING
+                    || value == PlaybackState.STATE_FAST_FORWARDING
+                    || value == PlaybackState.STATE_REWINDING
+                    || value == PlaybackState.STATE_SKIPPING_TO_PREVIOUS
+                    || value == PlaybackState.STATE_SKIPPING_TO_NEXT;
+        } catch (RuntimeException error) {
+            Log.w(TAG, "Could not inspect external media session", error);
+            return false;
+        }
+    }
+
     private void refreshControllers(List<MediaController> controllers) {
         MediaController chosen = null;
         MediaController savedCandidate = null;
         MediaController checkpointCandidate = null;
         MediaController playingCandidate = null;
         MediaController activeMetadataCandidate = null;
-        MediaController metadataCandidate = null;
         String checkpointPackage = getCheckpointPackage(this);
         if (checkpointPackage == null) checkpointPackage = getLastKnownPackage(this);
         String lastPackage = getLastKnownPackage(this);
@@ -907,28 +937,23 @@ public final class MediaSessionBridge extends NotificationListenerService {
                 if (checkpointPackage != null && checkpointPackage.equals(candidate.getPackageName())) {
                     checkpointCandidate = candidate;
                 }
+                if (!isUsableExternalSession(candidate)) continue;
                 PlaybackState state = candidate.getPlaybackState();
                 if (savedCandidate == null && lastPackage != null
                         && lastPackage.equals(candidate.getPackageName())) savedCandidate = candidate;
-                if (playingCandidate == null && state != null
-                        && state.getState() == PlaybackState.STATE_PLAYING) playingCandidate = candidate;
-                if (activeMetadataCandidate == null && state != null
-                        && state.getState() != PlaybackState.STATE_NONE
-                        && state.getState() != PlaybackState.STATE_STOPPED
-                        && candidate.getMetadata() != null) activeMetadataCandidate = candidate;
-                if (metadataCandidate == null && candidate.getMetadata() != null) {
-                    metadataCandidate = candidate;
+                if (playingCandidate == null && state.getState() == PlaybackState.STATE_PLAYING) {
+                    playingCandidate = candidate;
                 }
+                if (activeMetadataCandidate == null) activeMetadataCandidate = candidate;
             }
         }
-        // Prefer the actual playing source. If nothing is playing, prefer the first
-        // active session with real metadata (including PAUSED), then fall back to
-        // the checkpoint package while transient empty sessions settle after reboot.
+        // Only a session with both meaningful item identity and a live playback state
+        // may become the command target. Keep checkpointCandidate separately so the
+        // exact saved item can still be verified/restored when its session reappears.
+        // This prevents an idle YouTube process/session from swallowing Next/Prev routing.
         if (playingCandidate != null) chosen = playingCandidate;
         else if (activeMetadataCandidate != null) chosen = activeMetadataCandidate;
-        else if (checkpointCandidate != null) chosen = checkpointCandidate;
         else if (savedCandidate != null) chosen = savedCandidate;
-        else chosen = metadataCandidate;
 
         MediaController previous = activeController;
         if (previous != chosen) {
