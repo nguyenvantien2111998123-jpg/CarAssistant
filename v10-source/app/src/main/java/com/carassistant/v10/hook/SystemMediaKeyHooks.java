@@ -2,7 +2,11 @@ package com.carassistant.v10.hook;
 
 import android.content.ComponentName;
 import android.content.Context;
+import android.content.Intent;
 import android.media.session.MediaSession;
+import android.os.Handler;
+import android.os.Looper;
+import android.os.SystemClock;
 import android.provider.Settings;
 import android.text.TextUtils;
 import android.view.KeyEvent;
