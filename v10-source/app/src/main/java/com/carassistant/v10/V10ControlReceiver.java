@@ -13,6 +13,34 @@ public final class V10ControlReceiver
     public static final String EXTRA_COMMAND =
             "command";
 
+    private static final String ACTION_STEERING_RAW_MEDIA_KEY =
+            "com.carassistant.v10.STEERING_RAW_MEDIA_KEY";
+    private static volatile SteeringWheelMediaKeyHandler rawKeyObserver;
+
+    private static SteeringWheelMediaKeyHandler getRawKeyObserver(Context context) {
+        SteeringWheelMediaKeyHandler current = rawKeyObserver;
+        if (current != null) return current;
+        synchronized (V10ControlReceiver.class) {
+            if (rawKeyObserver == null) {
+                Context app = context.getApplicationContext();
+                rawKeyObserver = new SteeringWheelMediaKeyHandler(
+                        new SteeringWheelMediaKeyHandler.Actions() {
+                            // The observer must not duplicate normal framework media routing.
+                            @Override public void onNext() { }
+                            @Override public void onPrevious() { }
+                            @Override public void onSeekForward() { }
+                            @Override public void onSeekBackward() { }
+                            @Override public void onVoiceAssistant() {
+                                Intent voice = new Intent("com.carassistant.v10.STEERING_VOICE")
+                                        .setPackage(app.getPackageName());
+                                app.sendBroadcast(voice);
+                            }
+                        });
+            }
+            return rawKeyObserver;
+        }
+    }
+
     @Override
     public void onReceive(
             Context context,
@@ -23,6 +51,11 @@ public final class V10ControlReceiver
         }
 
         String action = intent.getAction();
+        if (ACTION_STEERING_RAW_MEDIA_KEY.equals(action)) {
+            Log.d("CarAssistantSteering", "Observed raw fallback media key");
+            getRawKeyObserver(context).handle(intent);
+            return;
+        }
         if ("com.carassistant.v10.STEERING_VOICE".equals(action)) {
             Log.i("CarAssistantSteering", "Receiver got STEERING_VOICE");
             V10CarActivity activity = V10SessionStore.getCurrentActivity();
