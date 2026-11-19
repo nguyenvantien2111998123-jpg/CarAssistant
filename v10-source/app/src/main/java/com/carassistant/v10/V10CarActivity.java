@@ -1390,7 +1390,7 @@ private void hideApps() {
     bg.setColor(Color.rgb(25, 35, 45));
     bg.setStroke(dp(2), Color.rgb(80, 170, 230));
     floatingTouchKey.setBackground(bg);
-    floatingTouchKey.setElevation(dp(36));
+    floatingTouchKey.setElevation(dp(60));
     SharedPreferences prefs = getSharedPreferences("v10_floating_key", MODE_PRIVATE);
     FrameLayout.LayoutParams params = new FrameLayout.LayoutParams(dp(58), dp(58), Gravity.TOP | Gravity.END);
     int savedX = prefs.getInt("x", dp(18));
