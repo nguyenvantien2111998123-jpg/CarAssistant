@@ -67,15 +67,6 @@ public final class MediaSessionBridge extends NotificationListenerService {
     private MediaSessionManager manager;
     private MediaSessionManager.OnActiveSessionsChangedListener sessionsListener;
     private MediaController.Callback controllerCallback;
-    private MediaFallbackPlayer fallbackPlayer;
-    private static final long FALLBACK_START_GRACE_MS = 3500L;
-    private final Runnable fallbackStartTask = () -> {
-        if (!isAndroidAutoConnected() || activeController != null || mirrorSession == null) return;
-        if (fallbackPlayer == null) {
-            fallbackPlayer = new MediaFallbackPlayer(this::publishFallbackPlaybackState);
-        }
-        fallbackPlayer.start(this);
-    };
     private final Runnable checkpointTask = new Runnable() {
         @Override public void run() {
             saveCurrentCheckpoint();
@@ -343,17 +334,41 @@ public final class MediaSessionBridge extends NotificationListenerService {
     public static boolean isCheckpointMediaReady(Context context, String expectedPackage) {
         if (context == null || TextUtils.isEmpty(expectedPackage)) return false;
         MediaController controller = checkpointController;
-        if (controller == null || !expectedPackage.equals(controller.getPackageName())) {
-            controller = activeController;
-        }
+        if (controller == null || !expectedPackage.equals(controller.getPackageName())) controller = activeController;
         if (controller == null || !expectedPackage.equals(controller.getPackageName())) return false;
-        android.content.SharedPreferences prefs =
-                context.getSharedPreferences(RESUME_PREFS, Context.MODE_PRIVATE);
         try {
-            return matchesSavedMediaIdentity(prefs, controller.getMetadata());
+            android.content.SharedPreferences prefs = context.getSharedPreferences(RESUME_PREFS, Context.MODE_PRIVATE);
+            if (!matchesSavedMediaIdentity(prefs, controller.getMetadata())) return false;
+            PlaybackState state = controller.getPlaybackState();
+            if (state == null) return false;
+            int value = state.getState();
+            return value == PlaybackState.STATE_PLAYING
+                    || value == PlaybackState.STATE_PAUSED
+                    || value == PlaybackState.STATE_BUFFERING
+                    || value == PlaybackState.STATE_CONNECTING
+                    || value == PlaybackState.STATE_FAST_FORWARDING
+                    || value == PlaybackState.STATE_REWINDING
+                    || value == PlaybackState.STATE_SKIPPING_TO_PREVIOUS
+                    || value == PlaybackState.STATE_SKIPPING_TO_NEXT;
         } catch (RuntimeException error) {
-            Log.w(TAG, "Could not verify checkpoint media identity", error);
+            Log.w(TAG, "Could not verify checkpoint MediaSession health", error);
             return false;
+        }
+    }
+
+    /** Pause the exact source after recovery PLAY was verified by applyCheckpoint(). */
+    public static void pauseCheckpointMedia(Context context, String expectedPackage) {
+        if (context == null || TextUtils.isEmpty(expectedPackage)) return;
+        MediaController controller = checkpointController;
+        if (controller == null || !expectedPackage.equals(controller.getPackageName())) controller = activeController;
+        if (controller == null || !expectedPackage.equals(controller.getPackageName())) return;
+        try {
+            android.content.SharedPreferences prefs = context.getSharedPreferences(RESUME_PREFS, Context.MODE_PRIVATE);
+            if (!matchesSavedMediaIdentity(prefs, controller.getMetadata())) return;
+            controller.getTransportControls().pause();
+            Log.i(TAG, "Pause requested for verified checkpoint source " + expectedPackage);
+        } catch (RuntimeException error) {
+            Log.w(TAG, "Could not pause recovered checkpoint source", error);
         }
     }
 
@@ -629,63 +644,11 @@ public final class MediaSessionBridge extends NotificationListenerService {
         }, MAIN);
     }
 
-    private boolean isAndroidAutoConnected() {
-        return getSharedPreferences(RESUME_PREFS, Context.MODE_PRIVATE)
-                .getBoolean(AA_CONNECTED_PREF, false);
-    }
-
-    /**
-     * Start the silent video-only player only after Android Auto is connected and
-     * no valid external source is mirrored. The player never writes metadata or
-     * checkpoint preferences and never creates a MediaSession.
-     */
-    private void syncFallbackPlayer(boolean hasExternalSource) {
-        MAIN.removeCallbacks(fallbackStartTask);
-        if (hasExternalSource || !isAndroidAutoConnected() || mirrorSession == null) {
-            stopFallbackPlayer();
-            return;
-        }
-        MAIN.postDelayed(fallbackStartTask, FALLBACK_START_GRACE_MS);
-    }
-
-    private void stopFallbackPlayer() {
-        if (fallbackPlayer != null) {
-            fallbackPlayer.stop();
-            fallbackPlayer = null;
-        }
-        // A disconnect during the 350 ms play window must not leave the mirror
-        // session advertising PLAYING after its silent player has been released.
-        if (activeController == null && mirrorSession != null) {
-            android.content.SharedPreferences prefs =
-                    getSharedPreferences(RESUME_PREFS, Context.MODE_PRIVATE);
-            long duration = Math.max(0L, prefs.getLong(CHECKPOINT_DURATION, 0L));
-            long position = getAdjustedCheckpointPosition(this);
-            mirrorSession.setPlaybackState(buildMirrorPlaybackState(false, position, duration));
-            mirrorSession.setActive(true);
-        }
-    }
-
-    /**
-     * Reflect the short fallback playback transition through the one existing
-     * CarAsistant MediaSession, without changing its checkpoint metadata.
-     */
-    private void publishFallbackPlaybackState(boolean playing) {
-        MediaSession session = mirrorSession;
-        if (session == null || activeController != null || !isAndroidAutoConnected()) return;
-        android.content.SharedPreferences prefs =
-                getSharedPreferences(RESUME_PREFS, Context.MODE_PRIVATE);
-        long duration = Math.max(0L, prefs.getLong(CHECKPOINT_DURATION, 0L));
-        long position = getAdjustedCheckpointPosition(this);
-        session.setPlaybackState(buildMirrorPlaybackState(playing, position, duration));
-        session.setActive(true);
-    }
-
     private void updateMirrorSession(Snapshot state) {
         MediaSession session = mirrorSession;
         if (session == null) return;
         boolean hasPlayer = state != null && !TextUtils.isEmpty(state.packageName);
-        syncFallbackPlayer(hasPlayer);
-        if (!hasPlayer) {
+if (!hasPlayer) {
             // After a phone reboot the source app has no MediaSession yet. Publish the
             // durable checkpoint so Android Auto still sees CarAsistant and the last item.
             String savedTitle = getCheckpointTitle(this);
@@ -827,9 +790,7 @@ public final class MediaSessionBridge extends NotificationListenerService {
     @Override
     public void onDestroy() {
         MAIN.removeCallbacks(checkpointTask);
-        MAIN.removeCallbacks(fallbackStartTask);
-        stopFallbackPlayer();
-        releaseMirrorSession();
+releaseMirrorSession();
         super.onDestroy();
     }
 
@@ -891,8 +852,7 @@ public final class MediaSessionBridge extends NotificationListenerService {
                 .putInt(AA_NOTIFICATION_ID_PREF, sbn.getId())
                 .putString(AA_NOTIFICATION_TAG_PREF, sbn.getTag() == null ? "" : sbn.getTag())
                 .apply();
-        syncFallbackPlayer(!TextUtils.isEmpty(snapshot.packageName));
-        long now = System.currentTimeMillis();
+long now = System.currentTimeMillis();
         long nowElapsed = android.os.SystemClock.elapsedRealtime();
         long previous = prefs.getLong(AA_TRIGGER_PREF, 0L);
         long previousElapsed = prefs.getLong(AA_TRIGGER_ELAPSED_PREF, 0L);
@@ -939,8 +899,7 @@ public final class MediaSessionBridge extends NotificationListenerService {
                         .remove(AA_NOTIFICATION_ID_PREF)
                         .remove(AA_NOTIFICATION_TAG_PREF)
                         .apply();
-                syncFallbackPlayer(false);
-                Log.i(TAG, "Android Auto connection notification removed; headless restore stop requested");
+Log.i(TAG, "Android Auto connection notification removed; headless restore stop requested");
             }
         }
         refreshFromManager();
