@@ -84,14 +84,18 @@ public final class SystemMediaKeyHooks {
                             }
 
                             if (dispatchToSession(service, event, token)) {
-                                // dispatchMediaKeyEvent is void on Android 12.
-                                // Consume only after the framework confirms the target accepted it.
+                                // Consume only after the target session confirms receipt.
                                 param.setResult(null);
                                 XposedBridge.log(TAG + " routed " + describe(event)
                                         + " to CarAsistant MediaSession");
                             } else {
+                                // The direct target rejected this event. Keep Android's normal
+                                // routing for any real player, but independently observe the raw
+                                // sequence so double-Next still works when the silent fallback
+                                // is not selected as the system media-button session.
+                                observeFallbackGesture(context, event);
                                 XposedBridge.log(TAG + " direct session dispatch returned false; "
-                                        + "allowing framework fallback");
+                                        + "observed gesture and allowing framework fallback");
                             }
                         } catch (Throwable error) {
                             // Fail open: never disable the steering controls of other players.
