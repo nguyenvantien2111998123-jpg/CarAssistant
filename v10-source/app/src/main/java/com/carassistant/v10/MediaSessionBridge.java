@@ -117,10 +117,8 @@ public final class MediaSessionBridge extends NotificationListenerService {
     private static final long FALLBACK_START_GRACE_MS = 3500L;
     private final Runnable fallbackStartTask = () -> {
         fallbackStartScheduled = false;
-        boolean testMode = isPhoneTestModeEnabled(this);
-        if ((!testMode && !isAndroidAutoConnected())
-                || usableExternalSessionCount > 0 || mirrorSession == null
-                || (!testMode && MediaFallbackSessionService.isEnabled(this))) return;
+        if (!isAndroidAutoConnected()
+                || usableExternalSessionCount > 0 || mirrorSession == null) return;
         if (fallbackPlayer == null) {
             fallbackPlayer = new MediaFallbackPlayer(new MediaFallbackPlayer.PlaybackListener() {
                 @Override public void onFallbackPlaybackStateChanged(boolean playing) {
@@ -131,7 +129,7 @@ public final class MediaSessionBridge extends NotificationListenerService {
                 }
             });
         }
-        fallbackPlayer.start(this, testMode, testMode ? getPhoneTestVideoUri(this) : null);
+        fallbackPlayer.start(this);
     };
     // Active-session callbacks are occasionally missed while an app tears down or
     // recreates its player. Re-query the complete session list to settle source state.
@@ -714,22 +712,21 @@ public final class MediaSessionBridge extends NotificationListenerService {
     }
 
     /**
-     * Start the silent video-only player only after Android Auto is connected and
-     * no valid external source is mirrored. The player never writes metadata or
-     * checkpoint preferences and never creates a MediaSession.
+     * Start the bundled, muted MP4 only after Android Auto is connected and no
+     * valid external source is present. Playback is owned by this bridge while
+     * the existing CarAsistant MediaSession remains the sole published session.
+     * The player never writes metadata/checkpoint preferences or creates a session.
      */
     private void syncFallbackPlayer(boolean hasExternalSource) {
-        boolean testMode = isPhoneTestModeEnabled(this);
         boolean sourceExists = hasExternalSource || usableExternalSessionCount > 0;
-        if (sourceExists || (!testMode && !isAndroidAutoConnected()) || mirrorSession == null
-                || (!testMode && MediaFallbackSessionService.isEnabled(this))) {
+        if (sourceExists || !isAndroidAutoConnected() || mirrorSession == null) {
             MAIN.removeCallbacks(fallbackStartTask);
             fallbackStartScheduled = false;
             stopFallbackPlayer();
             return;
         }
         // Repeated source scans must not restart the grace timer indefinitely.
-        if (fallbackPlayer == null && !fallbackStartScheduled) {
+        if ((fallbackPlayer == null || !fallbackPlayer.isActive()) && !fallbackStartScheduled) {
             fallbackStartScheduled = true;
             MAIN.postDelayed(fallbackStartTask, FALLBACK_START_GRACE_MS);
         }
@@ -744,8 +741,8 @@ public final class MediaSessionBridge extends NotificationListenerService {
             fallbackPlayer.stop();
             fallbackPlayer = null;
         }
-        // A disconnect during the 350 ms play window must not leave the mirror
-        // session advertising PLAYING after its silent player has been released.
+        // Keep the single CarAsistant mirror session active and paused when the
+        // fallback is released and no external controller currently owns playback.
         if (activeController == null && mirrorSession != null) {
             android.content.SharedPreferences prefs =
                     getSharedPreferences(RESUME_PREFS, Context.MODE_PRIVATE);
@@ -757,8 +754,8 @@ public final class MediaSessionBridge extends NotificationListenerService {
     }
 
     /**
-     * Reflect the short fallback playback transition through the one existing
-     * CarAsistant MediaSession, without changing its checkpoint metadata.
+     * Reflect the looping silent fallback through the one existing CarAsistant
+     * MediaSession, without replacing its current metadata or checkpoint.
      */
     private void publishFallbackPlaybackState(boolean playing) {
         fallbackMp4Playing = playing;
@@ -886,6 +883,12 @@ public final class MediaSessionBridge extends NotificationListenerService {
         super.onListenerConnected();
         bridgeInstance = this;
         ensureMirrorSession();
+        // The integrated CarAsistant MediaSession is the only fallback session.
+        // Turn off the legacy second-session experiment to prevent Android Auto
+        // from choosing a competing CarAsistant card/widget.
+        MediaFallbackSessionService.setEnabled(this, false);
+        getSharedPreferences(RESUME_PREFS, Context.MODE_PRIVATE).edit()
+                .putBoolean(PHONE_TEST_MODE, false).apply();
         // Publish the CarAsistant controller before querying source sessions. This closes
         // the startup race in which Gearhead discovers a phone player before our mirror.
         updateMirrorSession(snapshot);
