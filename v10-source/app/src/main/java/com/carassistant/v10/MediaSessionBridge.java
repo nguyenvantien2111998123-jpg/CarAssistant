@@ -98,7 +98,7 @@ public final class MediaSessionBridge extends NotificationListenerService {
     private final Runnable fallbackStartTask = () -> {
         fallbackStartScheduled = false;
         if ((!isPhoneTestModeEnabled(this) && !isAndroidAutoConnected())
-                || usableExternalSessionCount > 0 || activeController != null || mirrorSession == null
+                || usableExternalSessionCount > 0 || mirrorSession == null
                 || MediaFallbackSessionService.isEnabled(this)) return;
         if (fallbackPlayer == null) {
             fallbackPlayer = new MediaFallbackPlayer(this::publishFallbackPlaybackState);
@@ -675,8 +675,7 @@ public final class MediaSessionBridge extends NotificationListenerService {
     public static void refreshFallbackPolicy() {
         MediaSessionBridge current = bridgeInstance;
         if (current != null) {
-            MAIN.post(() -> current.syncFallbackPlayer(
-                    !TextUtils.isEmpty(snapshot.packageName)));
+            MAIN.post(() -> current.syncFallbackPlayer(usableExternalSessionCount > 0));
         }
     }
 
@@ -738,7 +737,7 @@ public final class MediaSessionBridge extends NotificationListenerService {
         fallbackMp4LastEvent = playing ? "MP4 bắt đầu phát" : "MP4 đã tạm dừng";
         if (playing) fallbackMp4LastStartedAt = System.currentTimeMillis();
         MediaSession session = mirrorSession;
-        if (session == null || activeController != null || (!isPhoneTestModeEnabled(this) && !isAndroidAutoConnected())) return;
+        if (session == null || (activeController != null && usableExternalSessionCount > 0) || (!isPhoneTestModeEnabled(this) && !isAndroidAutoConnected())) return;
         android.content.SharedPreferences prefs =
                 getSharedPreferences(RESUME_PREFS, Context.MODE_PRIVATE);
         long duration = Math.max(0L, prefs.getLong(CHECKPOINT_DURATION, 0L));
