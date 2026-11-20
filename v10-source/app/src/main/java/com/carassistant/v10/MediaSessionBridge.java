@@ -68,13 +68,23 @@ public final class MediaSessionBridge extends NotificationListenerService {
     private MediaSessionManager.OnActiveSessionsChangedListener sessionsListener;
     private MediaController.Callback controllerCallback;
     private MediaFallbackPlayer fallbackPlayer;
+    private boolean fallbackStartScheduled;
     private static final long FALLBACK_START_GRACE_MS = 3500L;
     private final Runnable fallbackStartTask = () -> {
+        fallbackStartScheduled = false;
         if (!isAndroidAutoConnected() || activeController != null || mirrorSession == null) return;
         if (fallbackPlayer == null) {
             fallbackPlayer = new MediaFallbackPlayer(this::publishFallbackPlaybackState);
         }
         fallbackPlayer.start(this);
+    };
+    // Re-query active sessions periodically because some media apps do not reliably
+    // deliver the session-destroyed callback when their playback task is closed.
+    private final Runnable sessionMonitorTask = new Runnable() {
+        @Override public void run() {
+            refreshFromManager();
+            if (manager != null) MAIN.postDelayed(this, 1500L);
+        }
     };
     private final Runnable checkpointTask = new Runnable() {
         @Override public void run() {
@@ -640,12 +650,18 @@ public final class MediaSessionBridge extends NotificationListenerService {
      * checkpoint preferences and never creates a MediaSession.
      */
     private void syncFallbackPlayer(boolean hasExternalSource) {
-        MAIN.removeCallbacks(fallbackStartTask);
-        if (hasExternalSource || !isAndroidAutoConnected() || mirrorSession == null) {
+        if (hasExternalSource || activeController != null
+                || !isAndroidAutoConnected() || mirrorSession == null) {
+            MAIN.removeCallbacks(fallbackStartTask);
+            fallbackStartScheduled = false;
             stopFallbackPlayer();
             return;
         }
-        MAIN.postDelayed(fallbackStartTask, FALLBACK_START_GRACE_MS);
+        // Do not reset the grace period on every 1.5-second session scan.
+        if ((fallbackPlayer == null || !fallbackPlayer.isActive()) && !fallbackStartScheduled) {
+            fallbackStartScheduled = true;
+            MAIN.postDelayed(fallbackStartTask, FALLBACK_START_GRACE_MS);
+        }
     }
 
     private void stopFallbackPlayer() {
@@ -784,6 +800,8 @@ public final class MediaSessionBridge extends NotificationListenerService {
             refreshControllers(manager.getActiveSessions(
                     new ComponentName(this, MediaSessionBridge.class)));
             updateMirrorSession(snapshot);
+            MAIN.removeCallbacks(sessionMonitorTask);
+            MAIN.postDelayed(sessionMonitorTask, 1500L);
             // NotificationListenerService is rebound by Android after reboot.
             // If AA's connected notification is already present, process it once.
             try {
@@ -810,6 +828,7 @@ public final class MediaSessionBridge extends NotificationListenerService {
     @Override
     public void onListenerDisconnected() {
         MAIN.removeCallbacks(checkpointTask);
+        MAIN.removeCallbacks(sessionMonitorTask);
         if (manager != null && sessionsListener != null) {
             try { manager.removeOnActiveSessionsChangedListener(sessionsListener); }
             catch (RuntimeException ignored) { }
@@ -827,6 +846,7 @@ public final class MediaSessionBridge extends NotificationListenerService {
     @Override
     public void onDestroy() {
         MAIN.removeCallbacks(checkpointTask);
+        MAIN.removeCallbacks(sessionMonitorTask);
         MAIN.removeCallbacks(fallbackStartTask);
         stopFallbackPlayer();
         releaseMirrorSession();
