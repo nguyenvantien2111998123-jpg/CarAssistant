@@ -101,6 +101,17 @@ public final class MediaAutoRestoreService extends Service {
             if (!connectionStabilized || !getSharedPreferences(
                     "carassistant_media_resume", MODE_PRIVATE).getBoolean("aa_connected", false)) return;
             if (completed) {
+                // A deliberate switch to another media app updates the rolling checkpoint.
+                // Follow that newest source instead of resurrecting the previous app.
+                String newestPackage = MediaSessionBridge.getCheckpointPackage(
+                        MediaAutoRestoreService.this);
+                if (!TextUtils.isEmpty(newestPackage)
+                        && !newestPackage.equals(expectedPackage)) {
+                    Log.i(TAG, "Checkpoint source changed while AA stayed connected: "
+                            + expectedPackage + " -> " + newestPackage);
+                    expectedPackage = newestPackage;
+                    missingSessionSince = 0L;
+                }
                 boolean usable = MediaSessionBridge.isCheckpointMediaReady(
                         MediaAutoRestoreService.this, expectedPackage);
                 long now = SystemClock.elapsedRealtime();
