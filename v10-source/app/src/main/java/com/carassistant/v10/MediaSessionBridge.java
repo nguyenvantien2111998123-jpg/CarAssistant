@@ -72,7 +72,8 @@ public final class MediaSessionBridge extends NotificationListenerService {
     private static final long FALLBACK_START_GRACE_MS = 3500L;
     private final Runnable fallbackStartTask = () -> {
         fallbackStartScheduled = false;
-        if (!isAndroidAutoConnected() || activeController != null || mirrorSession == null) return;
+        if (manager == null || !isAndroidAutoConnected()
+                || activeController != null || mirrorSession == null) return;
         if (fallbackPlayer == null) {
             fallbackPlayer = new MediaFallbackPlayer(this::publishFallbackPlaybackState);
         }
@@ -650,7 +651,7 @@ public final class MediaSessionBridge extends NotificationListenerService {
      * checkpoint preferences and never creates a MediaSession.
      */
     private void syncFallbackPlayer(boolean hasExternalSource) {
-        if (hasExternalSource || activeController != null
+        if (hasExternalSource || activeController != null || manager == null
                 || !isAndroidAutoConnected() || mirrorSession == null) {
             MAIN.removeCallbacks(fallbackStartTask);
             fallbackStartScheduled = false;
