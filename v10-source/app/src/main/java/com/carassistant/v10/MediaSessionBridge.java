@@ -58,6 +58,13 @@ public final class MediaSessionBridge extends NotificationListenerService {
     private static final CopyOnWriteArrayList<Listener> LISTENERS = new CopyOnWriteArrayList<>();
 
     private static volatile Snapshot snapshot = Snapshot.empty();
+    private static volatile boolean fallbackMp4Playing;
+    private static volatile long fallbackMp4LastStartedAt;
+    private static volatile String fallbackMp4LastEvent = "Chưa phát MP4 trong phiên chạy này";
+    public static boolean isFallbackMp4Playing() { return fallbackMp4Playing; }
+    public static long getFallbackMp4LastStartedAt() { return fallbackMp4LastStartedAt; }
+    public static String getFallbackMp4LastEvent() { return fallbackMp4LastEvent; }
+
     private static volatile MediaController activeController;
     private static volatile MediaController checkpointController;
     private static volatile long lastCheckpointPosition;
@@ -687,6 +694,8 @@ public final class MediaSessionBridge extends NotificationListenerService {
     }
 
     private void stopFallbackPlayer() {
+        fallbackMp4Playing = false;
+        if (fallbackPlayer != null) fallbackMp4LastEvent = "MP4 đã dừng / giải phóng";
         MAIN.removeCallbacks(fallbackStartTask);
         fallbackStartScheduled = false;
         if (fallbackPlayer != null) {
@@ -710,6 +719,9 @@ public final class MediaSessionBridge extends NotificationListenerService {
      * CarAsistant MediaSession, without changing its checkpoint metadata.
      */
     private void publishFallbackPlaybackState(boolean playing) {
+        fallbackMp4Playing = playing;
+        fallbackMp4LastEvent = playing ? "MP4 bắt đầu phát" : "MP4 đã tạm dừng";
+        if (playing) fallbackMp4LastStartedAt = System.currentTimeMillis();
         MediaSession session = mirrorSession;
         if (session == null || activeController != null || !isAndroidAutoConnected()) return;
         android.content.SharedPreferences prefs =
