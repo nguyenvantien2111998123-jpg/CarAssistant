@@ -722,14 +722,20 @@ public final class MediaSessionBridge extends NotificationListenerService {
                         .putLong(MediaMetadata.METADATA_KEY_DURATION, savedDuration)
                         .build());
                 // Show the saved item as paused until its source session is verified.
-                session.setPlaybackState(buildMirrorPlaybackState(false, savedPosition, savedDuration));
+                // The silent fallback MP4 is the actual playback source while no external
+                // media session is available. Do not let the 1.5-second session scan
+                // overwrite its PLAYING state with PAUSED.
+                boolean fallbackPlaying = fallbackPlayer != null && fallbackPlayer.isPlaying();
+                session.setPlaybackState(buildMirrorPlaybackState(
+                        fallbackPlaying, savedPosition, savedDuration));
             } else {
                 session.setMetadata(new MediaMetadata.Builder()
                         .putString(MediaMetadata.METADATA_KEY_TITLE, "CarAsistant Media")
                         .putString(MediaMetadata.METADATA_KEY_ARTIST, "Trình điều khiển media")
                         .putString(MediaMetadata.METADATA_KEY_ALBUM, "CarAsistant")
                         .build());
-                session.setPlaybackState(buildMirrorPlaybackState(false, 0L, 0L));
+                boolean fallbackPlaying = fallbackPlayer != null && fallbackPlayer.isPlaying();
+                session.setPlaybackState(buildMirrorPlaybackState(fallbackPlaying, 0L, 0L));
             }
             session.setActive(true);
             return;
