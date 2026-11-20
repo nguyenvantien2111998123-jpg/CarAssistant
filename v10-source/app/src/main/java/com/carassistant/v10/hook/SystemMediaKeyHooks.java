@@ -166,6 +166,8 @@ public final class SystemMediaKeyHooks {
         if (getActive == null) return null;
 
         List<?> records;
+        MediaSession.Token untaggedFallback = null;
+        boolean foundTaggedCarAsistantSession = false;
         synchronized (lock) {
             Object result = getActive.invoke(service, userId);
             if (!(result instanceof List)) return null;
@@ -177,12 +179,40 @@ public final class SystemMediaKeyHooks {
                 Object active = XposedHelpers.callMethod(record, "isActive");
                 if (!(active instanceof Boolean) || !((Boolean) active)) continue;
                 Object token = XposedHelpers.callMethod(record, "getSessionToken");
-                if (token instanceof MediaSession.Token) {
+                if (!(token instanceof MediaSession.Token)) continue;
+
+                // CarAsistant can temporarily expose an older/optional session as well.
+                // Always route steering keys to the main session that owns
+                // SteeringWheelMediaKeyHandler, never to a second session in our package.
+                String tag = readSessionTag(record);
+                if ("CarAsistant Media Controller".equals(tag)) {
                     return (MediaSession.Token) token;
+                }
+                if (!TextUtils.isEmpty(tag)) {
+                    foundTaggedCarAsistantSession = true;
+                } else if (untaggedFallback == null) {
+                    untaggedFallback = (MediaSession.Token) token;
                 }
             }
         }
-        return null;
+        // Older Android builds may not expose a record tag. In that case preserve
+        // the previous single-session behavior; if tagged sessions exist but the
+        // primary one does not, fail open instead of routing to the wrong session.
+        return foundTaggedCarAsistantSession ? null : untaggedFallback;
+    }
+
+    private static String readSessionTag(Object record) {
+        try {
+            Object value = XposedHelpers.callMethod(record, "getTag");
+            return value instanceof String ? (String) value : null;
+        } catch (Throwable ignored) {
+            try {
+                Object value = XposedHelpers.getObjectField(record, "mTag");
+                return value instanceof String ? (String) value : null;
+            } catch (Throwable ignoredAgain) {
+                return null;
+            }
+        }
     }
 
     private static boolean dispatchToSession(Object service, KeyEvent event,
