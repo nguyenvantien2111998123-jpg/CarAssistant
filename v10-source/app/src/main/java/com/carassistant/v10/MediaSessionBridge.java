@@ -63,6 +63,11 @@ public final class MediaSessionBridge extends NotificationListenerService {
     private static volatile long lastCheckpointPosition;
     private static volatile long lastCheckpointDuration;
     private static volatile MediaSessionBridge bridgeInstance;
+    // Keep the last source artwork in-process when a player temporarily clears its
+    // MediaMetadata during task teardown or a page reload. It is never checkpointed.
+    private static volatile Bitmap lastKnownArtwork;
+    private static volatile String lastArtworkPackage = "";
+    private static volatile String lastArtworkTitle = "";
     private MediaSession mirrorSession;
     private SteeringWheelMediaKeyHandler steeringKeyHandler;
     private MediaSessionManager manager;
@@ -77,6 +82,14 @@ public final class MediaSessionBridge extends NotificationListenerService {
             fallbackPlayer = new MediaFallbackPlayer(this::publishFallbackPlaybackState);
         }
         fallbackPlayer.start(this);
+    };
+    // Active-session callbacks are occasionally missed while an app tears down or
+    // recreates its player. Re-query the complete session list to settle source state.
+    private final Runnable sessionMonitorTask = new Runnable() {
+        @Override public void run() {
+            refreshFromManager();
+            if (manager != null) MAIN.postDelayed(this, 1500L);
+        }
     };
     private final Runnable checkpointTask = new Runnable() {
         @Override public void run() {
@@ -714,14 +727,18 @@ public final class MediaSessionBridge extends NotificationListenerService {
             long savedDuration = Math.max(0L, prefs.getLong(CHECKPOINT_DURATION, 0L));
             long savedPosition = getAdjustedCheckpointPosition(this);
             if (!TextUtils.isEmpty(savedTitle)) {
-                session.setMetadata(new MediaMetadata.Builder()
+                MediaMetadata.Builder savedMetadata = new MediaMetadata.Builder()
                         .putString(MediaMetadata.METADATA_KEY_TITLE, savedTitle)
                         .putString(MediaMetadata.METADATA_KEY_ARTIST,
                                 TextUtils.isEmpty(savedArtist) ? savedPackage : savedArtist)
                         .putString(MediaMetadata.METADATA_KEY_ALBUM,
                                 TextUtils.isEmpty(savedPackage) ? "CarAsistant" : savedPackage)
-                        .putLong(MediaMetadata.METADATA_KEY_DURATION, savedDuration)
-                        .build());
+                        .putLong(MediaMetadata.METADATA_KEY_DURATION, savedDuration);
+                Bitmap retainedArtwork = getRetainedArtwork(savedPackage, savedTitle);
+                if (retainedArtwork != null) {
+                    savedMetadata.putBitmap(MediaMetadata.METADATA_KEY_ALBUM_ART, retainedArtwork);
+                }
+                session.setMetadata(savedMetadata.build());
                 // Show the saved item as paused until its source session is verified.
                 session.setPlaybackState(buildMirrorPlaybackState(false, savedPosition, savedDuration));
             } else {
@@ -744,6 +761,13 @@ public final class MediaSessionBridge extends NotificationListenerService {
                 .putString(MediaMetadata.METADATA_KEY_ALBUM, state.packageName)
                 .putLong(MediaMetadata.METADATA_KEY_DURATION, Math.max(0L, state.duration));
         Bitmap artwork = safeMirrorArtwork(state.artwork);
+        if (artwork != null) {
+            lastKnownArtwork = artwork;
+            lastArtworkPackage = state.packageName == null ? "" : state.packageName;
+            lastArtworkTitle = state.title == null ? "" : state.title;
+        } else {
+            artwork = getRetainedArtwork(state.packageName, state.title);
+        }
         if (artwork != null) metadata.putBitmap(MediaMetadata.METADATA_KEY_ALBUM_ART, artwork);
         session.setMetadata(metadata.build());
 
@@ -751,6 +775,14 @@ public final class MediaSessionBridge extends NotificationListenerService {
                 state.playing, Math.max(0L, state.position), Math.max(0L, state.duration)));
         // Keep CarAsistant active while the source is paused or temporarily disappears.
         session.setActive(true);
+    }
+
+    private static Bitmap getRetainedArtwork(String packageName, String title) {
+        Bitmap artwork = lastKnownArtwork;
+        if (artwork == null || artwork.isRecycled()) return null;
+        if (!TextUtils.equals(lastArtworkPackage, packageName)
+                || !TextUtils.equals(lastArtworkTitle, title)) return null;
+        return artwork;
     }
 
     private PlaybackState buildMirrorPlaybackState(boolean playing, long position, long duration) {
@@ -815,6 +847,8 @@ public final class MediaSessionBridge extends NotificationListenerService {
             } catch (RuntimeException error) {
                 Log.w(TAG, "Could not inspect active Android Auto notifications", error);
             }
+            MAIN.removeCallbacks(sessionMonitorTask);
+            MAIN.postDelayed(sessionMonitorTask, 1500L);
             MAIN.removeCallbacks(checkpointTask);
             saveCurrentCheckpoint();
             MAIN.postDelayed(checkpointTask, CHECKPOINT_INTERVAL_MS);
@@ -829,6 +863,7 @@ public final class MediaSessionBridge extends NotificationListenerService {
     @Override
     public void onListenerDisconnected() {
         MAIN.removeCallbacks(checkpointTask);
+        MAIN.removeCallbacks(sessionMonitorTask);
         if (manager != null && sessionsListener != null) {
             try { manager.removeOnActiveSessionsChangedListener(sessionsListener); }
             catch (RuntimeException ignored) { }
@@ -847,6 +882,7 @@ public final class MediaSessionBridge extends NotificationListenerService {
     @Override
     public void onDestroy() {
         MAIN.removeCallbacks(checkpointTask);
+        MAIN.removeCallbacks(sessionMonitorTask);
         MAIN.removeCallbacks(fallbackStartTask);
         stopFallbackPlayer();
         releaseMirrorSession();
@@ -1010,6 +1046,8 @@ public final class MediaSessionBridge extends NotificationListenerService {
 
     private void refreshControllers(List<MediaController> controllers) {
         MediaController chosen = null;
+        int externalSessionCount = 0;
+        int usableExternalSessionCount = 0;
         MediaController savedCandidate = null;
         MediaController checkpointCandidate = null;
         MediaController playingCandidate = null;
@@ -1020,6 +1058,8 @@ public final class MediaSessionBridge extends NotificationListenerService {
         if (controllers != null) {
             for (MediaController candidate : controllers) {
                 if (candidate == null || getPackageName().equals(candidate.getPackageName())) continue;
+                externalSessionCount++;
+                if (isUsableExternalSession(candidate)) usableExternalSessionCount++;
                 if (checkpointPackage != null && checkpointPackage.equals(candidate.getPackageName())) {
                     checkpointCandidate = candidate;
                 }
@@ -1074,6 +1114,9 @@ public final class MediaSessionBridge extends NotificationListenerService {
             }
         }
         checkpointController = checkpointCandidate;
+        Log.i(TAG, "SOURCE_MONITOR sessions=" + externalSessionCount
+                + " usable=" + usableExternalSessionCount
+                + " selected=" + (chosen == null ? "none" : chosen.getPackageName()));
         publish(chosen);
         MediaAutoRestoreService.notifyMediaSessionsChanged();
     }
