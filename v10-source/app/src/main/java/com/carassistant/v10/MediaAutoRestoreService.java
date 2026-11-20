@@ -36,6 +36,9 @@ public final class MediaAutoRestoreService extends Service {
     private static final long AA_CONNECTION_POLL_MS = 1000L;
     private static final long SESSION_RETRY_MS = 1500L;
     private static final long VERIFY_WINDOW_MS = 120000L;
+    private static final long SESSION_MONITOR_INTERVAL_MS = 3000L;
+    private static final long SESSION_LOSS_CONFIRM_MS = 6000L;
+    private static final long RECOVERY_COOLDOWN_MS = 20000L;
     private static final int MAX_LAUNCH_ATTEMPTS = 3;
 
     private static volatile MediaAutoRestoreService instance;
@@ -51,6 +54,9 @@ public final class MediaAutoRestoreService extends Service {
     private boolean launchAccepted;
     private boolean completed;
     private boolean connectionStabilized;
+    private boolean recoveryAfterSessionLoss;
+    private long missingSessionSince;
+    private long lastSessionRecoveryAt;
 
     private final Runnable disconnectMonitor = new Runnable() {
         @Override public void run() {
@@ -89,6 +95,41 @@ public final class MediaAutoRestoreService extends Service {
         }
     };
 
+    // Starts only after the original AA-connect restore has completed.
+    private final Runnable sessionMonitor = new Runnable() {
+        @Override public void run() {
+            if (!connectionStabilized || !getSharedPreferences(
+                    "carassistant_media_resume", MODE_PRIVATE).getBoolean("aa_connected", false)) return;
+            if (completed) {
+                boolean usable = MediaSessionBridge.isCheckpointMediaReady(
+                        MediaAutoRestoreService.this, expectedPackage);
+                long now = SystemClock.elapsedRealtime();
+                if (usable) {
+                    missingSessionSince = 0L;
+                } else if (missingSessionSince == 0L) {
+                    missingSessionSince = now;
+                    Log.i(TAG, "Checkpoint MediaSession missing; starting loss debounce");
+                } else if (now - missingSessionSince >= SESSION_LOSS_CONFIRM_MS
+                        && now - lastSessionRecoveryAt >= RECOVERY_COOLDOWN_MS) {
+                    lastSessionRecoveryAt = now;
+                    missingSessionSince = 0L;
+                    completed = false;
+                    recoveryAfterSessionLoss = true;
+                    launchAccepted = false;
+                    launchInFlight = false;
+                    launchAttempts = 0;
+                    verifyStartedAt = 0L;
+                    Log.w(TAG, "Confirmed source MediaSession loss; restoring checkpoint "
+                            + expectedPackage);
+                    handler.removeCallbacks(restoreAttempt);
+                    handler.post(restoreAttempt);
+                }
+            }
+            handler.removeCallbacks(this);
+            handler.postDelayed(this, SESSION_MONITOR_INTERVAL_MS);
+        }
+    };
+
     private final Runnable restoreAttempt = new Runnable() {
         @Override public void run() {
             if (completed || !connectionStabilized || TextUtils.isEmpty(expectedPackage)) return;
@@ -105,10 +146,18 @@ public final class MediaAutoRestoreService extends Service {
 
             if (MediaSessionBridge.isCheckpointMediaReady(
                     MediaAutoRestoreService.this, expectedPackage)) {
-                boolean autoplay = getSharedPreferences("media_autoplay", MODE_PRIVATE)
-                        .getBoolean("enabled", true);
+                boolean autoplay = recoveryAfterSessionLoss
+                        || getSharedPreferences("media_autoplay", MODE_PRIVATE)
+                                .getBoolean("enabled", true);
                 if (MediaSessionBridge.applyCheckpoint(
                         MediaAutoRestoreService.this, expectedPackage, autoplay)) {
+                    if (recoveryAfterSessionLoss) {
+                        MediaSessionBridge.pauseCheckpointMedia(
+                                MediaAutoRestoreService.this, expectedPackage);
+                        Log.i(TAG, "SESSION_RECOVERY_PLAY_VERIFIED_THEN_PAUSE source="
+                                + expectedPackage);
+                        recoveryAfterSessionLoss = false;
+                    }
                     completed = true;
                     getSharedPreferences("media_autoplay", MODE_PRIVATE).edit()
                             .putString("phase", "verified_phone_background_restore")
@@ -132,6 +181,9 @@ public final class MediaAutoRestoreService extends Service {
                             + ", requestedState=" + (autoplay ? "PLAY" : "PAUSE")
                             + ", backgroundRequested=" + sentToBackground);
                     handler.removeCallbacks(restoreAttempt);
+                    missingSessionSince = 0L;
+                    handler.removeCallbacks(sessionMonitor);
+                    handler.postDelayed(sessionMonitor, SESSION_MONITOR_INTERVAL_MS);
                     return;
                 }
             }
@@ -282,6 +334,7 @@ public final class MediaAutoRestoreService extends Service {
             handler.removeCallbacks(restoreAttempt);
             handler.removeCallbacks(disconnectMonitor);
             handler.removeCallbacks(connectionStabilizer);
+            handler.removeCallbacks(sessionMonitor);
             HeadlessProjectionHost.releaseIfHeadless(this);
             stopForeground(true);
             stopSelf(startId);
@@ -291,7 +344,10 @@ public final class MediaAutoRestoreService extends Service {
         handler.removeCallbacks(restoreAttempt);
         handler.removeCallbacks(disconnectMonitor);
         handler.removeCallbacks(connectionStabilizer);
+        handler.removeCallbacks(sessionMonitor);
         completed = false;
+        recoveryAfterSessionLoss = false;
+        missingSessionSince = 0L;
         connectionStabilized = false;
         launchInFlight = false;
         launchAccepted = false;
@@ -342,6 +398,7 @@ public final class MediaAutoRestoreService extends Service {
         handler.removeCallbacks(restoreAttempt);
         handler.removeCallbacks(disconnectMonitor);
         handler.removeCallbacks(connectionStabilizer);
+        handler.removeCallbacks(sessionMonitor);
         launchShell.destroy();
         if (instance == this) instance = null;
         super.onDestroy();
