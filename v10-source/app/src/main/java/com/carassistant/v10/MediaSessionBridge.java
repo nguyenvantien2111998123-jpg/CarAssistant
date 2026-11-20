@@ -750,7 +750,7 @@ public final class MediaSessionBridge extends NotificationListenerService {
         MediaSession session = mirrorSession;
         if (session == null) return;
         boolean hasPlayer = state != null && !TextUtils.isEmpty(state.packageName);
-        syncFallbackPlayer(hasPlayer);
+        syncFallbackPlayer(usableExternalSessionCount > 0);
         if (!hasPlayer) {
             // After a phone reboot the source app has no MediaSession yet. Publish the
             // durable checkpoint so Android Auto still sees CarAsistant and the last item.
@@ -983,7 +983,7 @@ public final class MediaSessionBridge extends NotificationListenerService {
                 .putInt(AA_NOTIFICATION_ID_PREF, sbn.getId())
                 .putString(AA_NOTIFICATION_TAG_PREF, sbn.getTag() == null ? "" : sbn.getTag())
                 .apply();
-        syncFallbackPlayer(!TextUtils.isEmpty(snapshot.packageName));
+        syncFallbackPlayer(usableExternalSessionCount > 0);
         long now = System.currentTimeMillis();
         long nowElapsed = android.os.SystemClock.elapsedRealtime();
         long previous = prefs.getLong(AA_TRIGGER_PREF, 0L);
