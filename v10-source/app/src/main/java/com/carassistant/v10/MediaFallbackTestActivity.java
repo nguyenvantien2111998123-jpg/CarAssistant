@@ -15,14 +15,14 @@ import java.text.SimpleDateFormat;
 import java.util.Date;
 import java.util.Locale;
 
-/** Live phone-side diagnostic screen for the silent MP4 fallback flow. */
+/** Standalone phone-only test. MediaSessionBridge keeps monitoring while this screen is backgrounded. */
 public final class MediaFallbackTestActivity extends Activity {
     private static final int BG=Color.rgb(8,13,22), SURFACE=Color.rgb(19,28,42);
     private static final int TEXT=Color.rgb(242,247,255), MUTED=Color.rgb(155,172,192);
     private static final int CYAN=Color.rgb(48,205,220), GREEN=Color.rgb(55,210,151), ORANGE=Color.rgb(255,174,77);
     private final Handler handler=new Handler(Looper.getMainLooper());
     private final SimpleDateFormat clock=new SimpleDateFormat("HH:mm:ss",Locale.getDefault());
-    private TextView connection,source,playback,mp4,mp4Time,log;
+    private TextView permission,mode,source,playback,mp4,mp4Time,log;
     private final StringBuilder events=new StringBuilder();
     private final Runnable refresh=new Runnable(){@Override public void run(){updateLiveStatus();handler.postDelayed(this,800L);}};
 
@@ -30,53 +30,57 @@ public final class MediaFallbackTestActivity extends Activity {
         super.onCreate(state);getWindow().setStatusBarColor(BG);getWindow().setNavigationBarColor(BG);
         ScrollView scroll=new ScrollView(this);scroll.setFillViewport(true);scroll.setBackgroundColor(BG);
         LinearLayout root=new LinearLayout(this);root.setOrientation(LinearLayout.VERTICAL);root.setPadding(dp(18),dp(22),dp(18),dp(24));scroll.addView(root);setContentView(scroll);
-        addText(root,"CARASSISTANT  •  LIVE DIAGNOSTICS",11,CYAN,true);
+        addText(root,"CARASSISTANT  •  PHONE-ONLY TEST",11,CYAN,true);
         addText(root,"Kiểm tra Media dự phòng",25,TEXT,true);
-        addText(root,"Mở màn hình này trước khi thao tác với YouTube, Zing hoặc ứng dụng media khác. Trạng thái tự cập nhật mỗi 0,8 giây.",13,MUTED,false);
-        connection=addCard(root,"ANDROID AUTO");source=addCard(root,"NGUỒN MEDIA BÊN NGOÀI");
-        playback=addCard(root,"TRẠNG THÁI NGUỒN");mp4=addCard(root,"MP4 DỰ PHÒNG");
+        addText(root,"Không cần Android Auto. Bật test rồi chuyển sang YouTube; MediaSessionBridge tiếp tục giám sát khi màn hình này ở nền.",13,MUTED,false);
+        permission=addCard(root,"QUYỀN TRUY CẬP MEDIA");
+        mode=addCard(root,"CHẾ ĐỘ TEST ĐỘC LẬP");
+        source=addCard(root,"DANH SÁCH MEDIASESSION NGOÀI");
+        playback=addCard(root,"KẾT LUẬN NGUỒN HỢP LỆ");
+        mp4=addCard(root,"MP4 DỰ PHÒNG");
         mp4Time=addCard(root,"THỜI ĐIỂM MP4 BẮT ĐẦU");
-        addText(root,"ĐÁNH DẤU CÁC BƯỚC TEST",11,CYAN,true);
-        addButton(root,"1  •  ĐANG PHÁT MEDIA",()->mark("Media đang phát"));
-        addButton(root,"2  •  ĐANG TẠM DỪNG MEDIA",()->mark("Media đang tạm dừng"));
-        addButton(root,"3  •  ĐÃ TẮT NỘI DUNG / GIỮ APP",()->mark("Đã tắt nội dung nhưng giữ app media"));
-        addButton(root,"4  •  ĐÃ LOAD LẠI TRANG",()->mark("Đã tải lại trang trong app media"));
-        addButton(root,"5  •  ĐÃ ĐÓNG TASK APP MEDIA",()->mark("Đã đóng task app media"));
+        addButton(root,"BẬT TEST / BẮT ĐẦU GIÁM SÁT",()->{
+            if(!MediaSessionBridge.hasAccess(this)){MediaSessionBridge.requestAccess(this);return;}
+            MediaSessionBridge.setPhoneTestMode(this,true);
+            mark("Đã bật chế độ test độc lập");
+        });
+        addButton(root,"TẮT TEST / DỪNG MP4",()->{
+            MediaSessionBridge.setPhoneTestMode(this,false);
+            mark("Đã tắt chế độ test độc lập");
+        });
+        addText(root,"QUY TRÌNH TRÊN POCO F1",11,CYAN,true);
+        addText(root,"1. Mở YouTube và phát video: MP4 không chạy.\n2. Tạm dừng: MP4 vẫn không chạy.\n3. Đóng nội dung nhưng giữ YouTube: kiểm tra session còn tồn tại.\n4. Tải lại trang: MP4 chỉ chạy nếu không còn nguồn hợp lệ.\n5. Đóng hẳn YouTube: nếu session biến mất, MP4 chạy sau 3,5 giây và có tiếng báo.",13,TEXT,false);
         addText(root,"NHẬT KÝ TEST",11,CYAN,true);log=addCard(root,"SỰ KIỆN");
         events.append("Mở màn hình: ").append(now()).append('\n');updateLiveStatus();
     }
     @Override protected void onResume(){super.onResume();handler.removeCallbacks(refresh);handler.post(refresh);}
     @Override protected void onPause(){handler.removeCallbacks(refresh);super.onPause();}
+    @Override protected void onDestroy(){handler.removeCallbacks(refresh);super.onDestroy();}
     private void updateLiveStatus(){
-        boolean aa=MediaSessionBridge.isAndroidAutoConnected(this);
-        MediaSessionBridge.Snapshot s=MediaSessionBridge.getSnapshot();
-        boolean has=s!=null&&s.packageName!=null&&!s.packageName.isEmpty();
-        connection.setText("Android Auto: "+(aa?"ĐÃ KẾT NỐI":"CHƯA KẾT NỐI"));connection.setTextColor(aa?GREEN:ORANGE);
-        source.setText(has?"Nguồn: "+s.packageName+"\nNội dung: "+safe(s.title):"Không thấy nguồn media ngoài đang được CarAsistant chọn.");
-        source.setTextColor(has?GREEN:ORANGE);
-        playback.setText(has?(s.playing?"PLAYING • nguồn đang phát":"PAUSED • session nguồn vẫn còn"):"NO SOURCE • snapshot hiện tại không có nguồn");
-        playback.setTextColor(has?CYAN:ORANGE);
-        boolean legacyServiceEnabled=MediaFallbackSessionService.isEnabled(this);
+        boolean access=MediaSessionBridge.hasAccess(this);
+        permission.setText(access?"Notification Access: ĐÃ CẤP":"Notification Access: CHƯA CẤP — nhấn BẬT TEST để mở cài đặt");
+        permission.setTextColor(access?GREEN:ORANGE);
+        boolean enabled=MediaSessionBridge.isPhoneTestModeEnabled(this);
+        mode.setText(enabled?"ĐANG BẬT • Không phụ thuộc Android Auto":"ĐANG TẮT • Không ảnh hưởng chế độ trên xe");
+        mode.setTextColor(enabled?GREEN:MUTED);
+        source.setText(MediaSessionBridge.getActiveSessionsDiagnostic());
+        source.setTextColor(MediaSessionBridge.getUsableExternalSessionCount()>0?GREEN:ORANGE);
+        int count=MediaSessionBridge.getUsableExternalSessionCount();
+        playback.setText(count>0?"CÒN "+count+" SESSION NGUỒN HỢP LỆ — MP4 phải dừng":"KHÔNG CÒN SESSION NGUỒN HỢP LỆ");
+        playback.setTextColor(count>0?GREEN:ORANGE);
         boolean playing=MediaSessionBridge.isFallbackMp4Playing();
-        if (legacyServiceEnabled) {
-            mp4.setText("BỊ CHẶN: tùy chọn Media Dự Phòng kiểu cũ đang bật; hãy tắt nó để kiểm tra MP4 tích hợp trong MediaSession chính.");
-            mp4.setTextColor(ORANGE);
-        } else {
-            mp4.setText(playing?"ĐANG PHÁT (cửa sổ dự kiến khoảng 350 ms)":MediaSessionBridge.getFallbackMp4LastEvent());
-            mp4.setTextColor(playing?GREEN:MUTED);
-        }
+        mp4.setText(playing?"ĐANG PHÁT • có tiếng báo test":MediaSessionBridge.getFallbackMp4LastEvent());
+        mp4.setTextColor(playing?GREEN:MUTED);
         long started=MediaSessionBridge.getFallbackMp4LastStartedAt();
         mp4Time.setText(started>0?clock.format(new Date(started)):"Chưa ghi nhận MP4 bắt đầu phát");
     }
     private void mark(String message){
-        MediaSessionBridge.Snapshot s=MediaSessionBridge.getSnapshot();
-        events.append(now()).append("  ").append(message).append('\n').append("    Nguồn: ");
-        events.append(s==null||s.packageName==null||s.packageName.isEmpty()?"NO SOURCE":s.packageName+(s.playing?" / PLAYING":" / PAUSED"));
-        events.append("; MP4=").append(MediaSessionBridge.isFallbackMp4Playing()?"PLAYING":"PAUSED/STOPPED").append('\n');
+        events.append(now()).append("  ").append(message).append('\n')
+                .append("    session hợp lệ=").append(MediaSessionBridge.getUsableExternalSessionCount())
+                .append("; MP4=").append(MediaSessionBridge.isFallbackMp4Playing()?"PLAYING":"STOPPED/PAUSED").append('\n');
         log.setText(events.toString());updateLiveStatus();
     }
     private String now(){return clock.format(new Date());}
-    private String safe(String v){return v==null||v.isEmpty()?"(không có metadata)":v;}
     private TextView addCard(LinearLayout root,String heading){
         LinearLayout card=new LinearLayout(this);card.setOrientation(LinearLayout.VERTICAL);card.setPadding(dp(14),dp(12),dp(14),dp(12));
         GradientDrawable bg=new GradientDrawable();bg.setColor(SURFACE);bg.setCornerRadius(dp(14));bg.setStroke(dp(1),Color.rgb(35,51,70));card.setBackground(bg);
