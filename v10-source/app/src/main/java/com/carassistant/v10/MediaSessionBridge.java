@@ -61,6 +61,18 @@ public final class MediaSessionBridge extends NotificationListenerService {
     private static volatile boolean fallbackMp4Playing;
     private static volatile long fallbackMp4LastStartedAt;
     private static volatile String fallbackMp4LastEvent = "Chưa phát MP4 trong phiên chạy này";
+    private static final String PHONE_TEST_MODE = "phone_fallback_test_mode";
+    private static volatile int usableExternalSessionCount;
+    private static volatile String activeSessionsDiagnostic = "Chưa có dữ liệu MediaSession";
+    public static String getActiveSessionsDiagnostic() { return activeSessionsDiagnostic; }
+    public static int getUsableExternalSessionCount() { return usableExternalSessionCount; }
+    public static boolean isPhoneTestModeEnabled(Context c) { return c != null && c.getSharedPreferences(RESUME_PREFS, Context.MODE_PRIVATE).getBoolean(PHONE_TEST_MODE, false); }
+    public static void setPhoneTestMode(Context c, boolean enabled) {
+        if (c == null) return;
+        c.getSharedPreferences(RESUME_PREFS, Context.MODE_PRIVATE).edit().putBoolean(PHONE_TEST_MODE, enabled).apply();
+        MediaSessionBridge current = bridgeInstance;
+        if (current != null) MAIN.post(() -> current.syncFallbackPlayer(usableExternalSessionCount > 0));
+    }
     public static boolean isFallbackMp4Playing() { return fallbackMp4Playing; }
     public static long getFallbackMp4LastStartedAt() { return fallbackMp4LastStartedAt; }
     public static String getFallbackMp4LastEvent() { return fallbackMp4LastEvent; }
@@ -85,12 +97,13 @@ public final class MediaSessionBridge extends NotificationListenerService {
     private static final long FALLBACK_START_GRACE_MS = 3500L;
     private final Runnable fallbackStartTask = () -> {
         fallbackStartScheduled = false;
-        if (!isAndroidAutoConnected() || activeController != null || mirrorSession == null
+        if ((!isPhoneTestModeEnabled(this) && !isAndroidAutoConnected())
+                || usableExternalSessionCount > 0 || activeController != null || mirrorSession == null
                 || MediaFallbackSessionService.isEnabled(this)) return;
         if (fallbackPlayer == null) {
             fallbackPlayer = new MediaFallbackPlayer(this::publishFallbackPlaybackState);
         }
-        fallbackPlayer.start(this);
+        fallbackPlayer.start(this, isPhoneTestModeEnabled(this));
     };
     // Active-session callbacks are occasionally missed while an app tears down or
     // recreates its player. Re-query the complete session list to settle source state.
@@ -679,7 +692,9 @@ public final class MediaSessionBridge extends NotificationListenerService {
      * checkpoint preferences and never creates a MediaSession.
      */
     private void syncFallbackPlayer(boolean hasExternalSource) {
-        if (hasExternalSource || !isAndroidAutoConnected() || mirrorSession == null
+        boolean testMode = isPhoneTestModeEnabled(this);
+        boolean sourceExists = hasExternalSource || usableExternalSessionCount > 0;
+        if (sourceExists || (!testMode && !isAndroidAutoConnected()) || mirrorSession == null
                 || MediaFallbackSessionService.isEnabled(this)) {
             MAIN.removeCallbacks(fallbackStartTask);
             fallbackStartScheduled = false;
@@ -723,7 +738,7 @@ public final class MediaSessionBridge extends NotificationListenerService {
         fallbackMp4LastEvent = playing ? "MP4 bắt đầu phát" : "MP4 đã tạm dừng";
         if (playing) fallbackMp4LastStartedAt = System.currentTimeMillis();
         MediaSession session = mirrorSession;
-        if (session == null || activeController != null || !isAndroidAutoConnected()) return;
+        if (session == null || activeController != null || (!isPhoneTestModeEnabled(this) && !isAndroidAutoConnected())) return;
         android.content.SharedPreferences prefs =
                 getSharedPreferences(RESUME_PREFS, Context.MODE_PRIVATE);
         long duration = Math.max(0L, prefs.getLong(CHECKPOINT_DURATION, 0L));
@@ -1068,7 +1083,8 @@ public final class MediaSessionBridge extends NotificationListenerService {
     private void refreshControllers(List<MediaController> controllers) {
         MediaController chosen = null;
         int externalSessionCount = 0;
-        int usableExternalSessionCount = 0;
+        int usableCount = 0;
+        StringBuilder diagnostic = new StringBuilder();
         MediaController savedCandidate = null;
         MediaController checkpointCandidate = null;
         MediaController playingCandidate = null;
@@ -1080,7 +1096,15 @@ public final class MediaSessionBridge extends NotificationListenerService {
             for (MediaController candidate : controllers) {
                 if (candidate == null || getPackageName().equals(candidate.getPackageName())) continue;
                 externalSessionCount++;
-                if (isUsableExternalSession(candidate)) usableExternalSessionCount++;
+                boolean usable = isUsableExternalSession(candidate);
+                if (usable) usableCount++;
+                PlaybackState ds = candidate.getPlaybackState();
+                MediaMetadata dm = candidate.getMetadata();
+                if (diagnostic.length() > 0) diagnostic.append("\n");
+                diagnostic.append(candidate.getPackageName()).append(" • ")
+                        .append(usable ? "HỢP LỆ" : "KHÔNG HỢP LỆ")
+                        .append(" • state=").append(ds == null ? "null" : ds.getState())
+                        .append(" • title=").append(safeMetadataString(dm, MediaMetadata.METADATA_KEY_TITLE));
                 if (checkpointPackage != null && checkpointPackage.equals(candidate.getPackageName())) {
                     checkpointCandidate = candidate;
                 }
@@ -1135,8 +1159,10 @@ public final class MediaSessionBridge extends NotificationListenerService {
             }
         }
         checkpointController = checkpointCandidate;
+        usableExternalSessionCount = usableCount;
+        activeSessionsDiagnostic = diagnostic.length() == 0 ? "Không có MediaSession ngoài" : diagnostic.toString();
         Log.i(TAG, "SOURCE_MONITOR sessions=" + externalSessionCount
-                + " usable=" + usableExternalSessionCount
+                + " usable=" + usableCount
                 + " selected=" + (chosen == null ? "none" : chosen.getPackageName()));
         publish(chosen);
         MediaAutoRestoreService.notifyMediaSessionsChanged();
