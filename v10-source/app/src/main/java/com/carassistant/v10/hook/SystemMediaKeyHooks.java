@@ -90,13 +90,30 @@ public final class SystemMediaKeyHooks {
                                 XposedBridge.log(TAG + " routed " + describe(event)
                                         + " to CarAsistant MediaSession");
                             } else {
+                                // A token can be present in the active-session list while its
+                                // MediaSessionRecord is no longer dispatchable. In that case
+                                // the framework fallback may select another player (or none),
+                                // so mirror the complete raw event into our gesture observer.
+                                // This is the same observer used when the token is absent; it
+                                // recognizes double-Next without issuing duplicate media actions.
+                                observeFallbackGesture(context, event);
                                 XposedBridge.log(TAG + " direct session dispatch returned false; "
-                                        + "allowing framework fallback");
+                                        + "observing gesture in CarAsistant and allowing framework fallback");
                             }
                         } catch (Throwable error) {
                             // Fail open: never disable the steering controls of other players.
+                            // If routing failed before CarAsistant accepted the event, preserve
+                            // the double-Next voice gesture through the raw observer.
                             XposedBridge.log(TAG + " route failed; allowing framework fallback: "
                                     + error);
+                            try {
+                                Context context = (Context) XposedHelpers.getObjectField(
+                                        getOuterService(param.thisObject), "mContext");
+                                observeFallbackGesture(context, event);
+                            } catch (Throwable fallbackError) {
+                                XposedBridge.log(TAG + " gesture fallback after route failure failed: "
+                                        + fallbackError);
+                            }
                         }
                     }
                 });
