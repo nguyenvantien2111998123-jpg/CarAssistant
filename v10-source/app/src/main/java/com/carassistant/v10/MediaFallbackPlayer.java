@@ -3,6 +3,8 @@ package com.carassistant.v10;
 import android.content.Context;
 import android.content.res.AssetFileDescriptor;
 import android.media.MediaPlayer;
+import android.media.ToneGenerator;
+import android.media.AudioManager;
 import android.os.Handler;
 import android.os.Looper;
 import android.util.Log;
@@ -24,13 +26,16 @@ final class MediaFallbackPlayer {
     private final Handler main = new Handler(Looper.getMainLooper());
     private final PlaybackListener listener;
     private MediaPlayer player;
+    private ToneGenerator testTone;
     private Runnable pauseTask;
 
     MediaFallbackPlayer(PlaybackListener listener) {
         this.listener = listener;
     }
 
-    void start(Context context) {
+    void start(Context context) { start(context, false); }
+
+    void start(Context context, boolean audibleTest) {
         if (player != null) return;
 
         MediaPlayer candidate = new MediaPlayer();
@@ -51,8 +56,16 @@ final class MediaFallbackPlayer {
                 }
                 try {
                     prepared.start();
+                    if (audibleTest) {
+                        try {
+                            testTone = new ToneGenerator(AudioManager.STREAM_MUSIC, 85);
+                            testTone.startTone(ToneGenerator.TONE_PROP_BEEP, 450);
+                        } catch (RuntimeException toneError) {
+                            Log.w(TAG, "Could not play audible test marker", toneError);
+                        }
+                    }
                     if (listener != null) listener.onFallbackPlaybackStateChanged(true);
-                    Log.i(TAG, "Silent fallback MP4 started");
+                    Log.i(TAG, audibleTest ? "Phone test MP4 started with audible marker" : "Silent fallback MP4 started");
                     pauseTask = () -> {
                         if (player != prepared) return;
                         try {
@@ -94,6 +107,10 @@ final class MediaFallbackPlayer {
         if (pauseTask != null) {
             main.removeCallbacks(pauseTask);
             pauseTask = null;
+        }
+        if (testTone != null) {
+            try { testTone.release(); } catch (RuntimeException ignored) { }
+            testTone = null;
         }
         MediaPlayer current = player;
         player = null;
