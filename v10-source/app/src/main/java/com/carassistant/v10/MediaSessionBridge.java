@@ -4,6 +4,7 @@ import android.app.Notification;
 import android.content.ComponentName;
 import android.content.Context;
 import android.content.Intent;
+import android.net.Uri;
 import android.media.MediaMetadata;
 import android.media.session.MediaController;
 import android.media.session.MediaSession;
@@ -62,6 +63,20 @@ public final class MediaSessionBridge extends NotificationListenerService {
     private static volatile long fallbackMp4LastStartedAt;
     private static volatile String fallbackMp4LastEvent = "Chưa phát MP4 trong phiên chạy này";
     private static final String PHONE_TEST_MODE = "phone_fallback_test_mode";
+    private static final String PHONE_TEST_VIDEO_URI = "phone_fallback_test_video_uri";
+    public static Uri getPhoneTestVideoUri(Context c) {
+        if (c == null) return null;
+        String value = c.getSharedPreferences(RESUME_PREFS, Context.MODE_PRIVATE).getString(PHONE_TEST_VIDEO_URI, "");
+        if (TextUtils.isEmpty(value)) return null;
+        try { return Uri.parse(value); } catch (RuntimeException error) { return null; }
+    }
+    public static void setPhoneTestVideoUri(Context c, Uri uri) {
+        if (c == null) return;
+        c.getSharedPreferences(RESUME_PREFS, Context.MODE_PRIVATE).edit()
+                .putString(PHONE_TEST_VIDEO_URI, uri == null ? "" : uri.toString()).apply();
+        MediaSessionBridge current = bridgeInstance;
+        if (current != null) MAIN.post(() -> current.syncFallbackPlayer(usableExternalSessionCount > 0));
+    }
     private static volatile int usableExternalSessionCount;
     private static volatile String activeSessionsDiagnostic = "Chưa có dữ liệu MediaSession";
     public static String getActiveSessionsDiagnostic() { return activeSessionsDiagnostic; }
@@ -76,6 +91,11 @@ public final class MediaSessionBridge extends NotificationListenerService {
     public static boolean isFallbackMp4Playing() { return fallbackMp4Playing; }
     public static long getFallbackMp4LastStartedAt() { return fallbackMp4LastStartedAt; }
     public static String getFallbackMp4LastEvent() { return fallbackMp4LastEvent; }
+    private void onFallbackPlayerError(String message) {
+        fallbackMp4LastEvent = message;
+        fallbackMp4Playing = false;
+        Log.e(TAG, message);
+    }
 
     private static volatile MediaController activeController;
     private static volatile MediaController checkpointController;
@@ -97,13 +117,21 @@ public final class MediaSessionBridge extends NotificationListenerService {
     private static final long FALLBACK_START_GRACE_MS = 3500L;
     private final Runnable fallbackStartTask = () -> {
         fallbackStartScheduled = false;
-        if ((!isPhoneTestModeEnabled(this) && !isAndroidAutoConnected())
+        boolean testMode = isPhoneTestModeEnabled(this);
+        if ((!testMode && !isAndroidAutoConnected())
                 || usableExternalSessionCount > 0 || mirrorSession == null
-                || MediaFallbackSessionService.isEnabled(this)) return;
+                || (!testMode && MediaFallbackSessionService.isEnabled(this))) return;
         if (fallbackPlayer == null) {
-            fallbackPlayer = new MediaFallbackPlayer(this::publishFallbackPlaybackState);
+            fallbackPlayer = new MediaFallbackPlayer(new MediaFallbackPlayer.PlaybackListener() {
+                @Override public void onFallbackPlaybackStateChanged(boolean playing) {
+                    publishFallbackPlaybackState(playing);
+                }
+                @Override public void onFallbackError(String message) {
+                    onFallbackPlayerError(message);
+                }
+            });
         }
-        fallbackPlayer.start(this, isPhoneTestModeEnabled(this));
+        fallbackPlayer.start(this, testMode, testMode ? getPhoneTestVideoUri(this) : null);
     };
     // Active-session callbacks are occasionally missed while an app tears down or
     // recreates its player. Re-query the complete session list to settle source state.
@@ -694,7 +722,7 @@ public final class MediaSessionBridge extends NotificationListenerService {
         boolean testMode = isPhoneTestModeEnabled(this);
         boolean sourceExists = hasExternalSource || usableExternalSessionCount > 0;
         if (sourceExists || (!testMode && !isAndroidAutoConnected()) || mirrorSession == null
-                || MediaFallbackSessionService.isEnabled(this)) {
+                || (!testMode && MediaFallbackSessionService.isEnabled(this))) {
             MAIN.removeCallbacks(fallbackStartTask);
             fallbackStartScheduled = false;
             stopFallbackPlayer();
