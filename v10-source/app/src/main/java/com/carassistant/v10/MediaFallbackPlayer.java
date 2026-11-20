@@ -32,6 +32,17 @@ final class MediaFallbackPlayer {
         return player != null;
     }
 
+    /** True only after prepare completed and MediaPlayer is actually running. */
+    boolean isPlaying() {
+        MediaPlayer current = player;
+        if (current == null) return false;
+        try {
+            return current.isPlaying();
+        } catch (IllegalStateException error) {
+            return false;
+        }
+    }
+
     void start(Context context) {
         if (player != null) return;
 
