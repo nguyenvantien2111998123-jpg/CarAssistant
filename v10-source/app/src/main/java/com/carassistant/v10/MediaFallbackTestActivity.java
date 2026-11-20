@@ -56,9 +56,15 @@ public final class MediaFallbackTestActivity extends Activity {
         source.setTextColor(has?GREEN:ORANGE);
         playback.setText(has?(s.playing?"PLAYING • nguồn đang phát":"PAUSED • session nguồn vẫn còn"):"NO SOURCE • snapshot hiện tại không có nguồn");
         playback.setTextColor(has?CYAN:ORANGE);
+        boolean legacyServiceEnabled=MediaFallbackSessionService.isEnabled(this);
         boolean playing=MediaSessionBridge.isFallbackMp4Playing();
-        mp4.setText(playing?"ĐANG PHÁT (cửa sổ dự kiến khoảng 350 ms)":MediaSessionBridge.getFallbackMp4LastEvent());
-        mp4.setTextColor(playing?GREEN:MUTED);
+        if (legacyServiceEnabled) {
+            mp4.setText("BỊ CHẶN: tùy chọn Media Dự Phòng kiểu cũ đang bật; hãy tắt nó để kiểm tra MP4 tích hợp trong MediaSession chính.");
+            mp4.setTextColor(ORANGE);
+        } else {
+            mp4.setText(playing?"ĐANG PHÁT (cửa sổ dự kiến khoảng 350 ms)":MediaSessionBridge.getFallbackMp4LastEvent());
+            mp4.setTextColor(playing?GREEN:MUTED);
+        }
         long started=MediaSessionBridge.getFallbackMp4LastStartedAt();
         mp4Time.setText(started>0?clock.format(new Date(started)):"Chưa ghi nhận MP4 bắt đầu phát");
     }
