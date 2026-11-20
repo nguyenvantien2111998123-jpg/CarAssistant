@@ -4,6 +4,9 @@ import android.app.Activity;
 import android.graphics.Color;
 import android.graphics.Typeface;
 import android.graphics.drawable.GradientDrawable;
+import android.content.Intent;
+import android.net.Uri;
+import android.widget.Toast;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
@@ -22,7 +25,8 @@ public final class MediaFallbackTestActivity extends Activity {
     private static final int CYAN=Color.rgb(48,205,220), GREEN=Color.rgb(55,210,151), ORANGE=Color.rgb(255,174,77);
     private final Handler handler=new Handler(Looper.getMainLooper());
     private final SimpleDateFormat clock=new SimpleDateFormat("HH:mm:ss",Locale.getDefault());
-    private TextView permission,mode,source,playback,mp4,mp4Time,log;
+    private TextView permission,mode,source,playback,selectedVideo,mp4,mp4Time,log;
+    private static final int REQUEST_TEST_VIDEO = 7104;
     private final StringBuilder events=new StringBuilder();
     private final Runnable refresh=new Runnable(){@Override public void run(){updateLiveStatus();handler.postDelayed(this,800L);}};
 
@@ -37,10 +41,13 @@ public final class MediaFallbackTestActivity extends Activity {
         mode=addCard(root,"CHẾ ĐỘ TEST ĐỘC LẬP");
         source=addCard(root,"DANH SÁCH MEDIASESSION NGOÀI");
         playback=addCard(root,"KẾT LUẬN NGUỒN HỢP LỆ");
+        selectedVideo=addCard(root,"VIDEO TEST ĐƯỢC CHỌN");
+        addButton(root,"CHỌN VIDEO TEST (1000003919.mp4)",this::chooseTestVideo);
         mp4=addCard(root,"MP4 DỰ PHÒNG");
         mp4Time=addCard(root,"THỜI ĐIỂM MP4 BẮT ĐẦU");
         addButton(root,"BẬT TEST / BẮT ĐẦU GIÁM SÁT",()->{
             if(!MediaSessionBridge.hasAccess(this)){MediaSessionBridge.requestAccess(this);return;}
+            if(MediaSessionBridge.getPhoneTestVideoUri(this)==null){Toast.makeText(this,"Chọn video test MP4 trước",Toast.LENGTH_LONG).show();chooseTestVideo();return;}
             MediaSessionBridge.setPhoneTestMode(this,true);
             mark("Đã bật chế độ test độc lập");
         });
@@ -49,7 +56,7 @@ public final class MediaFallbackTestActivity extends Activity {
             mark("Đã tắt chế độ test độc lập");
         });
         addText(root,"QUY TRÌNH TRÊN POCO F1",11,CYAN,true);
-        addText(root,"1. Mở YouTube và phát video: MP4 không chạy.\n2. Tạm dừng: MP4 vẫn không chạy.\n3. Đóng nội dung nhưng giữ YouTube: kiểm tra session còn tồn tại.\n4. Tải lại trang: MP4 chỉ chạy nếu không còn nguồn hợp lệ.\n5. Đóng hẳn YouTube: nếu session biến mất, MP4 chạy sau 3,5 giây và có tiếng báo.",13,TEXT,false);
+        addText(root,"1. Mở YouTube và phát video: MP4 không chạy.\n2. Tạm dừng: MP4 vẫn không chạy.\n3. Đóng nội dung nhưng giữ YouTube: kiểm tra session còn tồn tại.\n4. Tải lại trang: MP4 chỉ chạy nếu không còn nguồn hợp lệ.\n5. Đóng hẳn YouTube: nếu session biến mất, video test chạy sau 3,5 giây, phát lặp và có tiếng báo; khi session nguồn xuất hiện lại, video dừng.",13,TEXT,false);
         addText(root,"NHẬT KÝ TEST",11,CYAN,true);log=addCard(root,"SỰ KIỆN");
         events.append("Mở màn hình: ").append(now()).append('\n');updateLiveStatus();
     }
@@ -68,6 +75,9 @@ public final class MediaFallbackTestActivity extends Activity {
         int count=MediaSessionBridge.getUsableExternalSessionCount();
         playback.setText(count>0?"CÒN "+count+" SESSION NGUỒN HỢP LỆ — MP4 phải dừng":"KHÔNG CÒN SESSION NGUỒN HỢP LỆ");
         playback.setTextColor(count>0?GREEN:ORANGE);
+        Uri video=MediaSessionBridge.getPhoneTestVideoUri(this);
+        selectedVideo.setText(video==null?"CHƯA CHỌN — hãy chọn tệp 1000003919.mp4":video.getLastPathSegment()+"\\n"+video);
+        selectedVideo.setTextColor(video==null?ORANGE:GREEN);
         boolean playing=MediaSessionBridge.isFallbackMp4Playing();
         mp4.setText(playing?"ĐANG PHÁT • có tiếng báo test":MediaSessionBridge.getFallbackMp4LastEvent());
         mp4.setTextColor(playing?GREEN:MUTED);
@@ -79,6 +89,25 @@ public final class MediaFallbackTestActivity extends Activity {
                 .append("    session hợp lệ=").append(MediaSessionBridge.getUsableExternalSessionCount())
                 .append("; MP4=").append(MediaSessionBridge.isFallbackMp4Playing()?"PLAYING":"STOPPED/PAUSED").append('\n');
         log.setText(events.toString());updateLiveStatus();
+    }
+    private void chooseTestVideo(){
+        Intent intent=new Intent(Intent.ACTION_OPEN_DOCUMENT);
+        intent.addCategory(Intent.CATEGORY_OPENABLE);
+        intent.setType("video/*");
+        try{startActivityForResult(intent,REQUEST_TEST_VIDEO);}catch(RuntimeException error){
+            Toast.makeText(this,"Không mở được trình chọn video: "+error.getMessage(),Toast.LENGTH_LONG).show();
+        }
+    }
+    @Override protected void onActivityResult(int requestCode,int resultCode,Intent data){
+        super.onActivityResult(requestCode,resultCode,data);
+        if(requestCode!=REQUEST_TEST_VIDEO||resultCode!=RESULT_OK||data==null||data.getData()==null)return;
+        Uri uri=data.getData();
+        try{
+            int flags=data.getFlags()&(Intent.FLAG_GRANT_READ_URI_PERMISSION|Intent.FLAG_GRANT_WRITE_URI_PERMISSION);
+            getContentResolver().takePersistableUriPermission(uri,flags&Intent.FLAG_GRANT_READ_URI_PERMISSION);
+        }catch(RuntimeException ignored){}
+        MediaSessionBridge.setPhoneTestVideoUri(this,uri);
+        mark("Đã chọn video test: "+uri.getLastPathSegment());
     }
     private String now(){return clock.format(new Date());}
     private TextView addCard(LinearLayout root,String heading){
