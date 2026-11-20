@@ -74,8 +74,10 @@ public final class MediaSessionBridge extends NotificationListenerService {
     private MediaSessionManager.OnActiveSessionsChangedListener sessionsListener;
     private MediaController.Callback controllerCallback;
     private MediaFallbackPlayer fallbackPlayer;
+    private boolean fallbackStartScheduled;
     private static final long FALLBACK_START_GRACE_MS = 3500L;
     private final Runnable fallbackStartTask = () -> {
+        fallbackStartScheduled = false;
         if (!isAndroidAutoConnected() || activeController != null || mirrorSession == null
                 || MediaFallbackSessionService.isEnabled(this)) return;
         if (fallbackPlayer == null) {
@@ -670,16 +672,23 @@ public final class MediaSessionBridge extends NotificationListenerService {
      * checkpoint preferences and never creates a MediaSession.
      */
     private void syncFallbackPlayer(boolean hasExternalSource) {
-        MAIN.removeCallbacks(fallbackStartTask);
         if (hasExternalSource || !isAndroidAutoConnected() || mirrorSession == null
                 || MediaFallbackSessionService.isEnabled(this)) {
+            MAIN.removeCallbacks(fallbackStartTask);
+            fallbackStartScheduled = false;
             stopFallbackPlayer();
             return;
         }
-        MAIN.postDelayed(fallbackStartTask, FALLBACK_START_GRACE_MS);
+        // Repeated source scans must not restart the grace timer indefinitely.
+        if (fallbackPlayer == null && !fallbackStartScheduled) {
+            fallbackStartScheduled = true;
+            MAIN.postDelayed(fallbackStartTask, FALLBACK_START_GRACE_MS);
+        }
     }
 
     private void stopFallbackPlayer() {
+        MAIN.removeCallbacks(fallbackStartTask);
+        fallbackStartScheduled = false;
         if (fallbackPlayer != null) {
             fallbackPlayer.stop();
             fallbackPlayer = null;
