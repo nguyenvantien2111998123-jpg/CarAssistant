@@ -1169,10 +1169,10 @@ private void launchActiveMediaProjection(ComponentName component) {
 }
 
 private void launchProjection(ComponentName component) {
-    launchProjection(component, false);
+    launchProjection(component, -1);
 }
 
-private void launchProjection(ComponentName component, boolean moveExistingTask) {
+private void launchProjection(ComponentName component, int sourceDisplayId) {
 
     scheduleDrivingChromeAutoHide();
     if (keyboardController != null) keyboardController.hide();
@@ -1216,8 +1216,8 @@ private void launchProjection(ComponentName component, boolean moveExistingTask)
      * Start the existing proven V10 projection
      * engine.
      */
-    if (moveExistingTask) {
-        session.moveExistingTaskToDisplay(component);
+    if (sourceDisplayId > 0) {
+        session.moveExistingTaskToDisplay(component, sourceDisplayId);
     } else {
         session.setTarget(component);
     }
@@ -1398,6 +1398,7 @@ private boolean isHomeScreen() {
     private void movePaneAppToFullscreen(boolean leftPane, ComponentName component) {
         if (component == null || session == null) return;
         V10ProjectionSession source = leftPane ? backgroundSession : splitRightSession;
+        int sourceDisplayId = source != null ? source.getDisplayId() : -1;
         if (source != null) {
             source.hideTask();
             source.markTaskMovedAway(component);
@@ -1409,7 +1410,7 @@ private boolean isHomeScreen() {
             V10SessionStore.setSplitRightTarget(this, null);
             activeSplitRightTarget = null;
         }
-        launchProjection(component, true);
+        launchProjection(component, sourceDisplayId);
     }
 
 private void showApps() {
