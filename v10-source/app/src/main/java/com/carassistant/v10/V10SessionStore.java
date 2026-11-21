@@ -70,7 +70,7 @@ public final class V10SessionStore {
         if (components != null) {
             for (ComponentName component : components) {
                 if (component == null) continue;
-                if (value.length() > 0) value.append("\\n");
+                if (value.length() > 0) value.append("\n");
                 value.append(component.flattenToString());
             }
         }
@@ -81,7 +81,7 @@ public final class V10SessionStore {
         String value = prefs(context).getString(LEFT_PANE_ALLOWED_APPS, "");
         ArrayList<ComponentName> result = new ArrayList<>();
         if (value == null || value.isEmpty()) return result;
-        for (String item : value.split("\\\\n")) {
+        for (String item : value.split("\\n")) {
             ComponentName stored = ComponentName.unflattenFromString(item);
             if (stored == null) continue;
             Intent launch = context.getPackageManager().getLaunchIntentForPackage(stored.getPackageName());

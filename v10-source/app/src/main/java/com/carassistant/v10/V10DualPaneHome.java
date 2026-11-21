@@ -99,6 +99,12 @@ public final class V10DualPaneHome extends FrameLayout {
         right.closePicker();
     }
 
+    public void setPaneTarget(boolean leftPane, ComponentName component, String label) {
+        Pane pane = leftPane ? left : right;
+        pane.target = component;
+        pane.setTargetLabel(label);
+    }
+
     public void setLeftTargetLabel(String label) { left.setTargetLabel(label); }
     public void setRightTargetLabel(String label) { right.setTargetLabel(label); }
 

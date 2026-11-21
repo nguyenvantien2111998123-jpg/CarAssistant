@@ -149,6 +149,16 @@ public final class V10DisplayController {
         surface = null;
     }
 
+    /** Resize this pane's VirtualDisplay after its TextureView bounds change. */
+    public synchronized void resizeDisplay(int width, int height) {
+        if (destroyed || virtualDisplay == null || width < 1 || height < 1) return;
+        try {
+            virtualDisplay.resize(width, height, 160);
+        } catch (RuntimeException error) {
+            Log.w(TAG, "Virtual display resize failed for pane " + displayIndex, error);
+        }
+    }
+
     public synchronized int getDisplayId() {
         return display == null ? -1 : display.getDisplayId();
     }

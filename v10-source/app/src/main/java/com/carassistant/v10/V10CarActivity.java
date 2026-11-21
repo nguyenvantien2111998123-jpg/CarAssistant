@@ -56,16 +56,20 @@ public final class V10CarActivity
 
     private FrameLayout root;
     private FrameLayout projectionLayer;
+    private V10DualPaneHome dualPaneHome;
     private LinearLayout launcherLayer;
     private LinearLayout dashboard;
     private LinearLayout appPanel;
     private LinearLayout dock;
     private TextureView textureView;
+    private TextureView rightTextureView;
     private V10ProjectionSession session;
     private CarAssistantKeyboardController keyboardController;
     private FrameLayout appProjectionLayer;
     private TextureView appTextureView;
     private V10ProjectionSession backgroundSession;
+    private V10ProjectionSession rightPaneSession;
+    private ComponentName activeRightPaneTarget;
     private ComponentName activeBackgroundTarget;
     private TextView dashboardVoiceButton;
     private ImageView mediaArtwork;
@@ -133,6 +137,13 @@ public final class V10CarActivity
                         launchBackgroundProjection(backgroundTarget);
                     } else if (backgroundTarget == null && activeBackgroundTarget != null) {
                         stopBackgroundProjection();
+                    }
+
+                    ComponentName rightPaneTarget = V10SessionStore.getRightPaneTarget(V10CarActivity.this);
+                    if (rightPaneTarget != null && !rightPaneTarget.equals(activeRightPaneTarget)) {
+                        launchRightPaneProjection(rightPaneTarget);
+                    } else if (rightPaneTarget == null && activeRightPaneTarget != null) {
+                        stopRightPaneProjection();
                     }
 
                     handler.postDelayed(
@@ -405,6 +416,7 @@ public final class V10CarActivity
         }
 
         loadApps();
+        refreshPaneAppChoices();
         rebuildDock();
 
         handler.removeCallbacks(
@@ -418,6 +430,8 @@ public final class V10CarActivity
 
         ComponentName backgroundTarget = V10SessionStore.getBackgroundTarget(this);
         if (backgroundTarget != null) launchBackgroundProjection(backgroundTarget);
+        ComponentName rightPaneTarget = V10SessionStore.getRightPaneTarget(this);
+        if (rightPaneTarget != null) launchRightPaneProjection(rightPaneTarget);
 
         android.content.SharedPreferences restorePrefs =
                 getSharedPreferences("media_autoplay", MODE_PRIVATE);
@@ -476,9 +490,25 @@ public final class V10CarActivity
         // Independent app projection is the bottom layer.
         // The existing dashboard is added after it and remains above it.
         projectionLayer=new FrameLayout(this);
-        // Layer 1 is shown only on Home and only when a default app is configured.
-        projectionLayer.setVisibility(View.GONE);
+        // Home contains two independent app surfaces: Display 1 (30%) and Display 1.1 (70%).
+        projectionLayer.setVisibility(View.VISIBLE);
         root.addView(projectionLayer, new FrameLayout.LayoutParams(-1,-1));
+        float initialPaneRatio = getSharedPreferences("v10_session", MODE_PRIVATE)
+                .getFloat("home_pane_ratio", 0.30f);
+        dualPaneHome = new V10DualPaneHome(this, new V10DualPaneHome.Listener() {
+            @Override public void onAppSelected(boolean leftPane, ComponentName component) {
+                if (leftPane) launchBackgroundProjection(component);
+                else launchRightPaneProjection(component);
+            }
+            @Override public void onExpandRequested(boolean leftPane, ComponentName component) {
+                expandPaneToFullscreen(leftPane, component);
+            }
+            @Override public void onRatioChanged(float ratio) {
+                getSharedPreferences("v10_session", MODE_PRIVATE).edit()
+                        .putFloat("home_pane_ratio", ratio).apply();
+            }
+        }, initialPaneRatio);
+        projectionLayer.addView(dualPaneHome, new FrameLayout.LayoutParams(-1, -1));
 
         // Independent second projection surface, controlled only by APP CHỌN.
         appProjectionLayer = new FrameLayout(this);
@@ -1004,7 +1034,6 @@ public final class V10CarActivity
             for (int i = 0; i < appPanel.getChildCount(); i++) {
                 View child = appPanel.getChildAt(i);
                 if (!(child instanceof ScrollView)) continue;
-
                 View inside = ((ScrollView) child).getChildAt(0);
                 if (inside instanceof GridLayout) {
                     rebuildAppGrid((GridLayout) inside);
@@ -1012,6 +1041,26 @@ public final class V10CarActivity
                 }
             }
         }
+    }
+
+    private void refreshPaneAppChoices() {
+        if (dualPaneHome == null) return;
+        ArrayList<V10DualPaneHome.PaneApp> all = new ArrayList<>();
+        for (AppInfo app : apps) {
+            all.add(new V10DualPaneHome.PaneApp(
+                    app.component, app.name, getRealAppIcon(app.component.getPackageName())));
+        }
+        ArrayList<V10DualPaneHome.PaneApp> allowed = new ArrayList<>();
+        for (ComponentName selected : V10SessionStore.getLeftPaneAllowedApps(this)) {
+            for (V10DualPaneHome.PaneApp app : all) {
+                if (selected.getPackageName().equals(app.component.getPackageName())) {
+                    allowed.add(app);
+                    break;
+                }
+            }
+        }
+        dualPaneHome.setLeftApps(allowed);
+        dualPaneHome.setRightApps(all);
     }
 
 
@@ -1098,20 +1147,30 @@ public final class V10CarActivity
 
 
     private void attachProjection() {
+        if (dualPaneHome == null) return;
 
-        // Layer 1: the fixed app chosen in phone SETUPS.
-        textureView = new TextureView(this);
-        projectionLayer.addView(textureView, new FrameLayout.LayoutParams(-1, -1));
+        // Display 1: narrow 30% pane. Display 1.1: independent 70% pane.
+        textureView = dualPaneHome.getLeftTextureView();
         backgroundSession = new V10ProjectionSession(this, 0);
         backgroundSession.attachTextureView(textureView);
-        View.OnTouchListener backgroundInputListener =
+        View.OnTouchListener leftInputListener =
                 new V10InputController(backgroundSession).createListener();
         textureView.setOnTouchListener((view, event) -> {
             scheduleDrivingChromeAutoHide();
-            return backgroundInputListener.onTouch(view, event);
+            return leftInputListener.onTouch(view, event);
         });
 
-        // Layer 2: app chosen on the car-side APP CHỌN screen.
+        rightTextureView = dualPaneHome.getRightTextureView();
+        rightPaneSession = new V10ProjectionSession(this, 2);
+        rightPaneSession.attachTextureView(rightTextureView);
+        View.OnTouchListener rightInputListener =
+                new V10InputController(rightPaneSession).createListener();
+        rightTextureView.setOnTouchListener((view, event) -> {
+            scheduleDrivingChromeAutoHide();
+            return rightInputListener.onTouch(view, event);
+        });
+
+        // Display 2 remains the dedicated fullscreen surface and headless media-resume target.
         appTextureView = new TextureView(this);
         appProjectionLayer.addView(appTextureView, new FrameLayout.LayoutParams(-1, -1));
         session = new V10ProjectionSession(this, 1);
@@ -1125,9 +1184,7 @@ public final class V10CarActivity
         miniAccessEngine = new MiniAccessEngine(this, appTextureView, session);
 
         createFloatingTouchKey();
-
-        keyboardController = new CarAssistantKeyboardController(
-                root, backgroundSession, session);
+        keyboardController = new CarAssistantKeyboardController(root, backgroundSession, session);
         keyboardController.start();
     }
 
@@ -1257,14 +1314,62 @@ private void dispatchMediaSearchOnProjection(ComponentName target, String uri, S
     if (component == null || backgroundSession == null) return;
     activeBackgroundTarget = component;
     V10SessionStore.setBackgroundTarget(this, component);
-    // Layer 1 is a Home background, never shown over APP CHỌN or other screens.
     projectionLayer.setVisibility(isHomeScreen() ? View.VISIBLE : View.GONE);
+    if (dualPaneHome != null) {
+        dualPaneHome.setPaneTarget(true, component, appLabelForComponent(component));
+    }
     backgroundSession.setTarget(component);
-}private void stopBackgroundProjection() {
+}
+private void stopBackgroundProjection() {
     if (backgroundSession != null) backgroundSession.setTarget(null);
     V10SessionStore.setBackgroundTarget(this, null);
     activeBackgroundTarget = null;
+    if (dualPaneHome != null) dualPaneHome.setPaneTarget(true, null, "MÀN HÌNH PHỤ 1");
+}
+private void launchRightPaneProjection(ComponentName component) {
+    if (component == null || rightPaneSession == null) return;
+    activeRightPaneTarget = component;
+    V10SessionStore.setRightPaneTarget(this, component);
+    projectionLayer.setVisibility(isHomeScreen() ? View.VISIBLE : View.GONE);
+    if (dualPaneHome != null) {
+        dualPaneHome.setPaneTarget(false, component, appLabelForComponent(component));
+    }
+    rightPaneSession.setTarget(component);
+}
+private void stopRightPaneProjection() {
+    if (rightPaneSession != null) rightPaneSession.setTarget(null);
+    V10SessionStore.setRightPaneTarget(this, null);
+    activeRightPaneTarget = null;
+    if (dualPaneHome != null) dualPaneHome.setPaneTarget(false, null, "MÀN HÌNH PHỤ 1.1");
+}
+private void expandPaneToFullscreen(boolean leftPane, ComponentName component) {
+    if (component == null || session == null) return;
+    if (keyboardController != null) keyboardController.hide();
+
+    // Move the existing pane task to Display 2; do not create a duplicate app task.
+    activeTarget = component;
+    V10SessionStore.setTarget(this, component);
     projectionLayer.setVisibility(View.GONE);
+    appProjectionLayer.setVisibility(View.VISIBLE);
+    launcherLayer.setVisibility(View.GONE);
+    if (floatingVoiceButton != null) {
+        floatingVoiceButton.setVisibility(View.VISIBLE);
+        floatingVoiceButton.bringToFront();
+    }
+    session.restoreMediaTask(component);
+
+    if (leftPane) {
+        if (backgroundSession != null) backgroundSession.setTarget(null);
+        V10SessionStore.setBackgroundTarget(this, null);
+        activeBackgroundTarget = null;
+        if (dualPaneHome != null) dualPaneHome.setPaneTarget(true, null, "MÀN HÌNH PHỤ 1");
+    } else {
+        if (rightPaneSession != null) rightPaneSession.setTarget(null);
+        V10SessionStore.setRightPaneTarget(this, null);
+        activeRightPaneTarget = null;
+        if (dualPaneHome != null) dualPaneHome.setPaneTarget(false, null, "MÀN HÌNH PHỤ 1.1");
+    }
+    rememberProjectedTask(component);
 }
 
 private boolean isHomeScreen() {
@@ -1295,9 +1400,8 @@ private boolean isHomeScreen() {
         appPanel.setVisibility(View.GONE);
         if (floatingVoiceButton != null) floatingVoiceButton.setVisibility(View.GONE);
 
-        projectionLayer.setVisibility(
-                V10SessionStore.getBackgroundTarget(this) != null
-                        ? View.VISIBLE : View.GONE);
+        if (dualPaneHome != null) dualPaneHome.closePickers();
+        projectionLayer.setVisibility(View.VISIBLE);
     }
 
 
@@ -1341,6 +1445,7 @@ private void showApps() {
      */
     // Both projection surfaces must stay behind the selector. TextureView content can
     // otherwise visually compete with the transparent launcher hierarchy on some devices.
+    if (dualPaneHome != null) dualPaneHome.closePickers();
     projectionLayer.setVisibility(View.GONE);
     appProjectionLayer.setVisibility(View.GONE);
 
@@ -2015,6 +2120,7 @@ private void hideTaskSwitcher() {
 
         if (session != null) { session.destroy(); session = null; }
         if (backgroundSession != null) { backgroundSession.destroy(); backgroundSession = null; }
+        if (rightPaneSession != null) { rightPaneSession.destroy(); rightPaneSession = null; }
 
         V10SessionStore
                 .clearCurrentActivity(
@@ -2022,7 +2128,9 @@ private void hideTaskSwitcher() {
 
         root = null;
         textureView = null;
+        rightTextureView = null;
         appTextureView = null;
+        dualPaneHome = null;
         appProjectionLayer = null;
         projectionLayer = null;
         launcherLayer = null;

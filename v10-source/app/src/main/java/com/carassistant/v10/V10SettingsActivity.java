@@ -32,7 +32,9 @@ public final class V10SettingsActivity extends Activity {
     private boolean returnAfterMicPermission;
     private LinearLayout list;
     private LinearLayout favoriteChoices;
-    private LinearLayout backgroundChoices;\n    private LinearLayout splitLeftChoices;\n    private TextView splitLeftStatus;
+    private LinearLayout backgroundChoices;
+    private LinearLayout splitLeftChoices;
+    private TextView splitLeftStatus;
     private TextView favoriteStatus;
     private TextView selectedBackground;
     private TextView permissionStatus;
@@ -73,6 +75,7 @@ public final class V10SettingsActivity extends Activity {
         refreshPermissionGuide();
         rebuildFavoriteAppChoices();
         rebuildBackgroundAppChoices();
+        rebuildSplitLeftChoices();
         refreshOrientationStatus();
     }
 

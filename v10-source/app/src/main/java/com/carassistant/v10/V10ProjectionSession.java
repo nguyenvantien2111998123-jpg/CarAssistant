@@ -5,6 +5,8 @@ import android.content.Context;
 import android.graphics.SurfaceTexture;
 import android.util.Log;
 import android.view.TextureView;
+import android.os.Handler;
+import android.os.Looper;
 
 public final class V10ProjectionSession implements TextureView.SurfaceTextureListener {
     private static final String TAG = "CarAssistantV10Projection";
@@ -21,6 +23,8 @@ public final class V10ProjectionSession implements TextureView.SurfaceTextureLis
     private boolean restoreMediaTaskOnAttach;
     private int contentWidth;
     private int contentHeight;
+    private final Handler resizeHandler = new Handler(Looper.getMainLooper());
+    private Runnable pendingResize;
 
     public V10ProjectionSession(Context context) {
         this(context, 0);
@@ -257,6 +261,10 @@ public final class V10ProjectionSession implements TextureView.SurfaceTextureLis
     public void destroy() {
         if (destroyed) return;
         destroyed = true;
+        if (pendingResize != null) {
+            resizeHandler.removeCallbacks(pendingResize);
+            pendingResize = null;
+        }
         surfaceManager.detach();
         restoreHeadlessStandbyIfConnected();
         rootShell.destroy();
@@ -304,9 +312,20 @@ public final class V10ProjectionSession implements TextureView.SurfaceTextureLis
     @Override public void onSurfaceTextureSizeChanged(SurfaceTexture surface, int width, int height) {
         contentWidth = width;
         contentHeight = height;
+        if (width < 1 || height < 1 || destroyed) return;
+        if (pendingResize != null) resizeHandler.removeCallbacks(pendingResize);
+        pendingResize = () -> {
+            pendingResize = null;
+            if (!destroyed) displayController.resizeDisplay(width, height);
+        };
+        resizeHandler.postDelayed(pendingResize, 120L);
     }
 
     @Override public boolean onSurfaceTextureDestroyed(SurfaceTexture surface) {
+        if (pendingResize != null) {
+            resizeHandler.removeCallbacks(pendingResize);
+            pendingResize = null;
+        }
         taskSession.hidden();
         surfaceManager.detach();
         restoreHeadlessStandbyIfConnected();
