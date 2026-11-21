@@ -58,33 +58,23 @@ public final class V10DashboardActivity extends Activity {
     private void renderDashboard() {
         content.removeAllViews();
         addEyebrow("CARASSISTANT  •  SMART DRIVE");
-        addTitle("CarAsistant", "Quản lý nhanh các tính năng trên điện thoại.");
+        addTitle("CarAsistant", "Chọn một mục để cấu hình riêng.");
 
-        LinearLayout status = card(Color.rgb(17, 61, 78), dp(20));
-        status.setBackground(gradient(new int[]{Color.rgb(18, 82, 101), Color.rgb(29, 48, 91)}, dp(20)));
-        addText(status, "TRẠNG THÁI QUYỀN", 11, Color.rgb(164, 235, 241), true);
-        addPermissionRow(status, "Micro", checkSelfPermission(Manifest.permission.RECORD_AUDIO)
-                == PackageManager.PERMISSION_GRANTED, "Cấp quyền micro");
-        addPermissionRow(status, "Media Session", MediaSessionBridge.hasAccess(this),
-                "Bật quyền truy cập thông báo / Media");
-        addPermissionRow(status, "Trợ năng Media Auto Play", hasMediaAccessibilityAccess(),
-                "Bật dịch vụ Trợ năng nếu cần");
-        content.addView(status, bottom(18));
-
-        addSectionTitle("CẤU HÌNH", "Chọn đúng nhóm cần thay đổi");
-        addFeature("▣", "Chiếu màn hình", "Ứng dụng vùng 3/10, ứng dụng hay dùng và hướng màn hình.",
-                BLUE, () -> openSettings("CHIẾU MÀN HÌNH"));
-        addFeature("🎙", "Trợ lý giọng nói", "Ứng dụng mặc định cho dẫn đường, nhạc, video và TV.",
-                PURPLE, () -> openSettings("TRỢ LÝ GIỌNG NÓI"));
-        addFeature("♫", "Tự động phát Media", "Khôi phục ứng dụng và trạng thái phát khi Android Auto kết nối.",
-                CYAN, () -> openSettings("TỰ ĐỘNG PHÁT MEDIA"));
-        addFeature("⚙", "Quyền & tích hợp", "Micro, Media Session, Trợ năng, Root và LSPosed.",
-                GREEN, () -> openSettings("QUYỀN & TÍCH HỢP"));
+        addSectionTitle("CÀI ĐẶT", "Mỗi mục mở danh sách thiết lập tương ứng");
+        addFeature("⚙", "Cấp quyền", "Micro, Media Session, Trợ năng, Root và LSPosed.",
+                GREEN, () -> openSettings("CẤP QUYỀN"));
+        addFeature("↔", "Ép ngang ứng dụng", "Bật hoặc tắt ép ngang cho các ứng dụng đang chiếu.",
+                CYAN, () -> openSettings("ÉP NGANG ỨNG DỤNG"));
+        addFeature("★", "Ứng dụng hay dùng", "Chọn tối đa 3 ứng dụng để mở toàn màn hình phụ 2.",
+                ORANGE, () -> openSettings("ỨNG DỤNG HAY DÙNG"));
+        addFeature("▦", "Menu app vùng tỉ lệ 3", "Chọn không giới hạn ứng dụng được phép chiếu ở vùng 3/10.",
+                BLUE, () -> openSettings("APP VÙNG 3"));
+        addFeature("🎙", "Trợ lý mặc định", "Chọn ứng dụng riêng cho Dẫn đường, Nghe nhạc, Video và TV.",
+                PURPLE, () -> openSettings("TRỢ LÝ MẶC ĐỊNH"));
 
         LinearLayout projection = card(SURFACE_ALT, dp(16));
         addText(projection, "BỐ CỤC MÀN HÌNH XE", 10, CYAN, true);
-        addText(projection, "Màn hình phụ 1 chia đôi 3/7; có thể kéo thanh chia. "
-                + "Ứng dụng từ một vùng có thể chuyển sang màn hình phụ 2 toàn màn hình.",
+        addText(projection, "Màn hình phụ 1 chia hai vùng tỉ lệ 3/7. Mỗi vùng có menu chọn ứng dụng riêng; từ menu có thể chuyển ứng dụng đang chọn sang chiếu toàn màn hình phụ 2.",
                 12, MUTED, false);
         content.addView(projection, bottom(12));
 
