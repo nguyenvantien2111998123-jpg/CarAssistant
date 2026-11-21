@@ -24,21 +24,30 @@ public final class CarAssistantKeyboardController {
 
     private final V10ProjectionSession appSession;
 
+    private final V10ProjectionSession splitRightSession;
+
+    private V10ProjectionSession preferredSession;
+
     private final CarAssistantInputBridge backgroundBridge;
 
     private final CarAssistantInputBridge appBridge;
+
+    private final CarAssistantInputBridge splitRightBridge;
 
     private final CarAssistantKeyboard keyboard;
 
     private V10ProjectionSession activeSession() {
         if (appSession != null && appSession.isActive()) return appSession;
+        if (preferredSession != null && preferredSession.isActive()) return preferredSession;
         if (backgroundSession != null && backgroundSession.isActive()) return backgroundSession;
+        if (splitRightSession != null && splitRightSession.isActive()) return splitRightSession;
         return null;
     }
 
     private CarAssistantInputBridge activeBridge() {
         V10ProjectionSession active = activeSession();
         if (active == appSession && appBridge != null) return appBridge;
+        if (active == splitRightSession && splitRightBridge != null) return splitRightBridge;
         if (active == backgroundSession && backgroundBridge != null) return backgroundBridge;
         return null;
     }
@@ -131,12 +140,15 @@ public final class CarAssistantKeyboardController {
     public CarAssistantKeyboardController(
             FrameLayout host,
             V10ProjectionSession backgroundSession,
-            V10ProjectionSession appSession) {
+            V10ProjectionSession appSession,
+            V10ProjectionSession splitRightSession) {
 
         this.backgroundSession = backgroundSession;
         this.appSession = appSession;
+        this.splitRightSession = splitRightSession;
         backgroundBridge = backgroundSession == null ? null : new CarAssistantInputBridge(backgroundSession);
         appBridge = appSession == null ? null : new CarAssistantInputBridge(appSession);
+        splitRightBridge = splitRightSession == null ? null : new CarAssistantInputBridge(splitRightSession);
 
         keyboard =
                 new CarAssistantKeyboard(
@@ -159,6 +171,11 @@ public final class CarAssistantKeyboardController {
                         if (bridge != null) bridge.key(keyCode);
                     }
                 });
+    }
+
+    /** Prefer the pane most recently touched when routing keyboard input. */
+    public void setPreferredSession(V10ProjectionSession session) {
+        preferredSession = session;
     }
 
     public void start() {
