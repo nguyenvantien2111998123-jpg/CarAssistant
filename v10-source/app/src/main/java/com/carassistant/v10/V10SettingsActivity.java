@@ -32,7 +32,7 @@ public final class V10SettingsActivity extends Activity {
     private boolean returnAfterMicPermission;
     private LinearLayout list;
     private LinearLayout favoriteChoices;
-    private LinearLayout backgroundChoices;
+    private LinearLayout backgroundChoices;\n    private LinearLayout splitLeftChoices;\n    private TextView splitLeftStatus;
     private TextView favoriteStatus;
     private TextView selectedBackground;
     private TextView permissionStatus;
@@ -115,6 +115,25 @@ public final class V10SettingsActivity extends Activity {
                 rebuildBackgroundAppChoices();
             });
             rebuildBackgroundAppChoices();
+        });
+
+        addSection("ỨNG DỤNG MÀN HÌNH PHỤ 1", "Chọn các ứng dụng xuất hiện trong menu vùng 30%", body -> {
+            TextView hint = text(
+                    "Chọn nhiều ứng dụng. Các ứng dụng đã chọn sẽ xuất hiện khi mở menu ở màn hình phụ 1 (vùng 3 phần).",
+                    13, Color.LTGRAY);
+            hint.setPadding(dp(4), dp(2), dp(4), dp(8));
+            body.addView(hint, params(-1, -2));
+            splitLeftStatus = text("", 14, Color.WHITE);
+            splitLeftStatus.setPadding(dp(4), dp(4), dp(4), dp(8));
+            body.addView(splitLeftStatus, params(-1, -2));
+            splitLeftChoices = new LinearLayout(this);
+            splitLeftChoices.setOrientation(LinearLayout.VERTICAL);
+            body.addView(splitLeftChoices, params(-1, -2));
+            addButton(body, "BỎ CHỌN TẤT CẢ ỨNG DỤNG", () -> {
+                V10SessionStore.setLeftPaneAllowedApps(this, new ArrayList<>());
+                rebuildSplitLeftChoices();
+            });
+            rebuildSplitLeftChoices();
         });
 
         addSection("HƯỚNG MÀN HÌNH CHIẾU", "Tùy chọn ép ứng dụng trên màn hình phụ sang ngang", body -> {
@@ -357,6 +376,48 @@ public final class V10SettingsActivity extends Activity {
         selectedBackground.setText(current == null
                 ? "Chưa chọn ứng dụng chiếu nền"
                 : "Đang chọn: " + current.getPackageName());
+    }
+
+    private void rebuildSplitLeftChoices() {
+        if (splitLeftChoices == null || splitLeftStatus == null) return;
+        splitLeftChoices.removeAllViews();
+        ArrayList<ComponentName> selected = V10SessionStore.getLeftPaneAllowedApps(this);
+        splitLeftStatus.setText("Đã chọn " + selected.size() + " ứng dụng cho vùng 30%");
+        for (ResolveInfo info : availableApps) {
+            if (info.activityInfo == null) continue;
+            ComponentName component = new ComponentName(info.activityInfo.packageName, info.activityInfo.name);
+            boolean checked = false;
+            for (ComponentName item : selected) {
+                if (item.getPackageName().equals(component.getPackageName())) {
+                    checked = true;
+                    break;
+                }
+            }
+            final boolean wasChecked = checked;
+            String label = String.valueOf(info.loadLabel(getPackageManager()));
+            TextView button = text((checked ? "✓  " : "＋  ") + label, 14, Color.WHITE);
+            button.setGravity(Gravity.CENTER_VERTICAL);
+            button.setPadding(dp(12), 0, dp(10), 0);
+            button.setBackground(rounded(checked ? Color.rgb(29, 76, 83) : Color.rgb(27, 38, 51),
+                    dp(11), checked ? Color.rgb(53, 190, 183) : Color.rgb(43, 62, 82)));
+            LinearLayout.LayoutParams p = params(-1, dp(46));
+            p.setMargins(0, dp(3), 0, dp(3));
+            splitLeftChoices.addView(button, p);
+            button.setOnClickListener(v -> {
+                ArrayList<ComponentName> current = V10SessionStore.getLeftPaneAllowedApps(this);
+                int found = -1;
+                for (int i = 0; i < current.size(); i++) {
+                    if (current.get(i).getPackageName().equals(component.getPackageName())) {
+                        found = i;
+                        break;
+                    }
+                }
+                if (found >= 0) current.remove(found);
+                else current.add(component);
+                V10SessionStore.setLeftPaneAllowedApps(this, current);
+                rebuildSplitLeftChoices();
+            });
+        }
     }
 
     private void rebuildFavoriteAppChoices() {

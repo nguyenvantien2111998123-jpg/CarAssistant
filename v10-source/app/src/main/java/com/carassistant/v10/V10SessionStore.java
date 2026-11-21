@@ -12,6 +12,8 @@ public final class V10SessionStore {
     private static final String PREFS = "v10_session";
     private static final String TARGET = "target_component";
     private static final String BACKGROUND_TARGET = "background_target_component";
+    private static final String RIGHT_PANE_TARGET = "right_pane_target_component";
+    private static final String LEFT_PANE_ALLOWED_APPS = "split_left_allowed_apps";
     private static final String QUICK_APPS = "home_quick_apps";
     private static final String DEFAULT_NAVIGATION = "voice_default_navigation";
     private static final String DEFAULT_MUSIC = "voice_default_music";
@@ -48,6 +50,53 @@ public final class V10SessionStore {
     public static ComponentName getBackgroundTarget(Context context) {
         String value = prefs(context).getString(BACKGROUND_TARGET, null);
         return value == null || value.isEmpty() ? null : ComponentName.unflattenFromString(value);
+    }
+
+    public static void setRightPaneTarget(Context context, ComponentName component) {
+        SharedPreferences.Editor editor = prefs(context).edit();
+        if (component == null) editor.remove(RIGHT_PANE_TARGET);
+        else editor.putString(RIGHT_PANE_TARGET, component.flattenToString());
+        editor.apply();
+    }
+
+    public static ComponentName getRightPaneTarget(Context context) {
+        String value = prefs(context).getString(RIGHT_PANE_TARGET, null);
+        return value == null || value.isEmpty() ? null : ComponentName.unflattenFromString(value);
+    }
+
+    /** Multi-select allow-list for the narrow 30% Home pane. */
+    public static void setLeftPaneAllowedApps(Context context, List<ComponentName> components) {
+        StringBuilder value = new StringBuilder();
+        if (components != null) {
+            for (ComponentName component : components) {
+                if (component == null) continue;
+                if (value.length() > 0) value.append("\\n");
+                value.append(component.flattenToString());
+            }
+        }
+        prefs(context).edit().putString(LEFT_PANE_ALLOWED_APPS, value.toString()).apply();
+    }
+
+    public static ArrayList<ComponentName> getLeftPaneAllowedApps(Context context) {
+        String value = prefs(context).getString(LEFT_PANE_ALLOWED_APPS, "");
+        ArrayList<ComponentName> result = new ArrayList<>();
+        if (value == null || value.isEmpty()) return result;
+        for (String item : value.split("\\\\n")) {
+            ComponentName stored = ComponentName.unflattenFromString(item);
+            if (stored == null) continue;
+            Intent launch = context.getPackageManager().getLaunchIntentForPackage(stored.getPackageName());
+            if (launch == null) continue;
+            ComponentName usable = launch.getComponent() != null ? launch.getComponent() : stored;
+            boolean duplicate = false;
+            for (ComponentName existing : result) {
+                if (existing.getPackageName().equals(usable.getPackageName())) {
+                    duplicate = true;
+                    break;
+                }
+            }
+            if (!duplicate) result.add(usable);
+        }
+        return result;
     }
 
     /** Exactly three configurable app shortcuts for the Android Auto Home sidebar. */
