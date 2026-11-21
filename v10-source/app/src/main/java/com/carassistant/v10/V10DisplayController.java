@@ -341,9 +341,6 @@ public final class V10DisplayController {
         final int userId = UserHandle.getUserId(Process.myUid());
         final String packageName = component.getPackageName();
         final String className = component.getClassName();
-        final String shortClassName = className.startsWith(packageName)
-                ? "." + className.substring(packageName.length()) : className;
-
         RootShellSession.EXEC.execute(() -> {
             try {
                 if (!isCurrentTarget(component)) return;
@@ -378,6 +375,7 @@ public final class V10DisplayController {
                         throw new IllegalStateException(
                                 "Package task exists but selected ActivityRecord was not found; refusing duplicate");
                     } else {
+                        if (!isCurrentTarget(component)) return;
                         String launchCommand = "/system/bin/am start --user " + userId
                                 + " --display " + displayId
                                 + " --windowingMode 1"
@@ -435,7 +433,9 @@ public final class V10DisplayController {
 
     private ActivityRecordTaskParser.Snapshot readActivitySnapshot(
             String packageName, String className) {
-        String dump = rootShell.run(12, "/system/bin/dumpsys activity activities", 2_000_000);
+        String command = "/system/bin/dumpsys activity activities 2>/dev/null"
+                + " | /system/bin/grep -E 'Display #[0-9]+|Task[{]|ActivityRecord'";
+        String dump = rootShell.run(12, command, 4_000_000);
         return ActivityRecordTaskParser.parse(dump, packageName, className);
     }
 
