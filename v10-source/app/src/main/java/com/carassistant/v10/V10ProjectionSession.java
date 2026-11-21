@@ -4,6 +4,8 @@ import android.content.ComponentName;
 import android.content.Context;
 import android.graphics.SurfaceTexture;
 import android.util.Log;
+import android.os.Handler;
+import android.os.Looper;
 import android.view.TextureView;
 
 public final class V10ProjectionSession implements TextureView.SurfaceTextureListener {
@@ -15,6 +17,17 @@ public final class V10ProjectionSession implements TextureView.SurfaceTextureLis
     private final V10SurfaceManager surfaceManager;
     private final V10TaskSession taskSession = new V10TaskSession();
     private final RootShellSession rootShell = new RootShellSession();
+    private final Handler resizeHandler = new Handler(Looper.getMainLooper());
+    private final Runnable resizeDisplayRunnable = () -> {
+        if (destroyed || textureView == null || !textureView.isAvailable()) return;
+        int width = textureView.getWidth();
+        int height = textureView.getHeight();
+        if (width > 0 && height > 0) {
+            SurfaceTexture current = textureView.getSurfaceTexture();
+            if (current != null) current.setDefaultBufferSize(width, height);
+            displayController.resizeDisplay(width, height);
+        }
+    };
     private TextureView textureView;
     private ComponentName target;
     private boolean destroyed;
@@ -308,6 +321,7 @@ public final class V10ProjectionSession implements TextureView.SurfaceTextureLis
     public void destroy() {
         if (destroyed) return;
         destroyed = true;
+        resizeHandler.removeCallbacks(resizeDisplayRunnable);
         surfaceManager.detach();
         restoreHeadlessStandbyIfConnected();
         rootShell.destroy();
@@ -355,9 +369,15 @@ public final class V10ProjectionSession implements TextureView.SurfaceTextureLis
     @Override public void onSurfaceTextureSizeChanged(SurfaceTexture surface, int width, int height) {
         contentWidth = width;
         contentHeight = height;
+        // Divider drags can produce many size callbacks. Coalesce them so each pane
+        // resizes its own VirtualDisplay once the user pauses, as in the pane lifecycle
+        // model used by AACast, without blocking the Android Auto UI thread.
+        resizeHandler.removeCallbacks(resizeDisplayRunnable);
+        resizeHandler.postDelayed(resizeDisplayRunnable, 120L);
     }
 
     @Override public boolean onSurfaceTextureDestroyed(SurfaceTexture surface) {
+        resizeHandler.removeCallbacks(resizeDisplayRunnable);
         taskSession.hidden();
         surfaceManager.detach();
         restoreHeadlessStandbyIfConnected();
