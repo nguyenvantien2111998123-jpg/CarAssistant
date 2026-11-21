@@ -117,6 +117,9 @@ public final class V10SettingsActivity extends Activity {
         else addButton(list, "‹  QUAY LẠI TỔNG QUAN", this::finish);
 
         addSection("CẤP QUYỀN", "Chọn riêng quyền cần cấp hoặc bật", body -> {
+            permissionStatus = text("", 13, Color.LTGRAY);
+            permissionStatus.setPadding(dp(4), dp(2), dp(4), dp(10));
+            body.addView(permissionStatus, params(-1, -2));
             addButton(body, "MICROPHONE · CẤP QUYỀN GHI ÂM", () -> {
                 if (checkSelfPermission(Manifest.permission.RECORD_AUDIO)
                         != PackageManager.PERMISSION_GRANTED) {
