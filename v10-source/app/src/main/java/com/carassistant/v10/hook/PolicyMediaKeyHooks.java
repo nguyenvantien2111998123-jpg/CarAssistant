@@ -120,11 +120,9 @@ public final class PolicyMediaKeyHooks {
             context = (Context) XposedHelpers.getObjectField(policy, "mContext");
         } catch (Throwable error) {
             XposedBridge.log(TAG + " cannot read PhoneWindowManager.mContext: " + error);
-            copy.recycle();
             return;
         }
         if (context == null) {
-            copy.recycle();
             XposedBridge.log(TAG + " PhoneWindowManager.mContext is null");
             return;
         }
@@ -142,11 +140,9 @@ public final class PolicyMediaKeyHooks {
                 } catch (Throwable error) {
                     XposedBridge.log(TAG + " relay failed: " + error);
                 } finally {
-                    copy.recycle();
-                }
+                        }
             });
         } catch (Throwable error) {
-            copy.recycle();
             XposedBridge.log(TAG + " relay queue rejected event: " + error);
         }
     }
