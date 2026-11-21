@@ -44,7 +44,6 @@ public final class V10DualPaneHome extends FrameLayout {
     private final View divider;
     private float ratio = 0.30f;
     private boolean draggingDivider;
-    private float downRawX;
 
     public V10DualPaneHome(Context context, Listener listener, float initialRatio) {
         super(context);
@@ -70,7 +69,6 @@ public final class V10DualPaneHome extends FrameLayout {
             switch (event.getActionMasked()) {
                 case MotionEvent.ACTION_DOWN:
                     draggingDivider = true;
-                    downRawX = event.getRawX();
                     return true;
                 case MotionEvent.ACTION_MOVE:
                     if (draggingDivider) updateRatioFromRawX(event.getRawX());

@@ -1157,6 +1157,9 @@ public final class V10CarActivity
                 new V10InputController(backgroundSession).createListener();
         textureView.setOnTouchListener((view, event) -> {
             scheduleDrivingChromeAutoHide();
+            if (event.getActionMasked() == MotionEvent.ACTION_DOWN && keyboardController != null) {
+                keyboardController.setPreferredSession(backgroundSession);
+            }
             return leftInputListener.onTouch(view, event);
         });
 
@@ -1167,6 +1170,9 @@ public final class V10CarActivity
                 new V10InputController(rightPaneSession).createListener();
         rightTextureView.setOnTouchListener((view, event) -> {
             scheduleDrivingChromeAutoHide();
+            if (event.getActionMasked() == MotionEvent.ACTION_DOWN && keyboardController != null) {
+                keyboardController.setPreferredSession(rightPaneSession);
+            }
             return rightInputListener.onTouch(view, event);
         });
 
@@ -1179,12 +1185,15 @@ public final class V10CarActivity
                 new V10InputController(session).createListener();
         appTextureView.setOnTouchListener((view, event) -> {
             scheduleDrivingChromeAutoHide();
+            if (event.getActionMasked() == MotionEvent.ACTION_DOWN && keyboardController != null) {
+                keyboardController.setPreferredSession(session);
+            }
             return appInputListener.onTouch(view, event);
         });
         miniAccessEngine = new MiniAccessEngine(this, appTextureView, session);
 
         createFloatingTouchKey();
-        keyboardController = new CarAssistantKeyboardController(root, backgroundSession, session);
+        keyboardController = new CarAssistantKeyboardController(root, backgroundSession, rightPaneSession, session);
         keyboardController.start();
     }
 
@@ -1199,6 +1208,7 @@ private void launchActiveMediaProjection(ComponentName component) {
 
     activeTarget = component;
     V10SessionStore.setTarget(this, component);
+    if (keyboardController != null) keyboardController.setPreferredSession(session);
 
     if (floatingVoiceButton != null) {
         floatingVoiceButton.setVisibility(View.VISIBLE);
@@ -1242,6 +1252,7 @@ private void launchProjection(ComponentName component) {
 
     activeTarget = component;
     V10SessionStore.setTarget(this, component);
+    if (keyboardController != null) keyboardController.setPreferredSession(session);
 
     if (floatingVoiceButton != null) {
         floatingVoiceButton.setVisibility(View.VISIBLE);
@@ -1350,6 +1361,7 @@ private void expandPaneToFullscreen(boolean leftPane, ComponentName component) {
     // Move the existing pane task to Display 2; do not create a duplicate app task.
     activeTarget = component;
     V10SessionStore.setTarget(this, component);
+    if (keyboardController != null) keyboardController.setPreferredSession(session);
     projectionLayer.setVisibility(View.GONE);
     appProjectionLayer.setVisibility(View.VISIBLE);
     launcherLayer.setVisibility(View.GONE);

@@ -22,16 +22,24 @@ public final class CarAssistantKeyboardController {
 
     private final V10ProjectionSession backgroundSession;
 
+    private final V10ProjectionSession rightPaneSession;
+
     private final V10ProjectionSession appSession;
 
+    private V10ProjectionSession preferredSession;
+
     private final CarAssistantInputBridge backgroundBridge;
+
+    private final CarAssistantInputBridge rightPaneBridge;
 
     private final CarAssistantInputBridge appBridge;
 
     private final CarAssistantKeyboard keyboard;
 
     private V10ProjectionSession activeSession() {
+        if (preferredSession != null && preferredSession.isActive()) return preferredSession;
         if (appSession != null && appSession.isActive()) return appSession;
+        if (rightPaneSession != null && rightPaneSession.isActive()) return rightPaneSession;
         if (backgroundSession != null && backgroundSession.isActive()) return backgroundSession;
         return null;
     }
@@ -39,6 +47,7 @@ public final class CarAssistantKeyboardController {
     private CarAssistantInputBridge activeBridge() {
         V10ProjectionSession active = activeSession();
         if (active == appSession && appBridge != null) return appBridge;
+        if (active == rightPaneSession && rightPaneBridge != null) return rightPaneBridge;
         if (active == backgroundSession && backgroundBridge != null) return backgroundBridge;
         return null;
     }
@@ -131,11 +140,14 @@ public final class CarAssistantKeyboardController {
     public CarAssistantKeyboardController(
             FrameLayout host,
             V10ProjectionSession backgroundSession,
+            V10ProjectionSession rightPaneSession,
             V10ProjectionSession appSession) {
 
         this.backgroundSession = backgroundSession;
+        this.rightPaneSession = rightPaneSession;
         this.appSession = appSession;
         backgroundBridge = backgroundSession == null ? null : new CarAssistantInputBridge(backgroundSession);
+        rightPaneBridge = rightPaneSession == null ? null : new CarAssistantInputBridge(rightPaneSession);
         appBridge = appSession == null ? null : new CarAssistantInputBridge(appSession);
 
         keyboard =
@@ -184,6 +196,11 @@ public final class CarAssistantKeyboardController {
                 poller);
 
         keyboard.hide();
+    }
+
+    /** Prefer the pane most recently touched when forwarding keyboard input. */
+    public void setPreferredSession(V10ProjectionSession session) {
+        preferredSession = session;
     }
 
     public void hide() {
