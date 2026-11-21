@@ -1400,7 +1400,7 @@ private boolean isHomeScreen() {
         V10ProjectionSession source = leftPane ? backgroundSession : splitRightSession;
         if (source != null) {
             source.hideTask();
-            source.setTarget(null);
+            source.markTaskMovedAway(component);
         }
         if (leftPane) {
             V10SessionStore.setBackgroundTarget(this, null);
