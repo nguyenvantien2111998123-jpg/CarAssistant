@@ -88,6 +88,10 @@ public final class RootShellSession {
                 }
                 if (line.startsWith(marker)) {
                     int code = Integer.parseInt(line.substring(marker.length()).trim());
+                    if (out.length() >= outputLimit) {
+                        throw new IllegalStateException(
+                                "Root command output exceeded the configured limit; refusing partial result");
+                    }
                     String text = out.toString().trim();
                     String lower = text.toLowerCase(Locale.ROOT);
                     boolean looksFailed = lower.contains("error:")
