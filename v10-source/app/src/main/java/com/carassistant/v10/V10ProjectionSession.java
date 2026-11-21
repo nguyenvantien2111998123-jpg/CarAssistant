@@ -17,6 +17,9 @@ public final class V10ProjectionSession implements TextureView.SurfaceTextureLis
     private final V10SurfaceManager surfaceManager;
     private final V10TaskSession taskSession = new V10TaskSession();
     private final RootShellSession rootShell = new RootShellSession();
+    private TextureView textureView;
+    private ComponentName target;
+    private boolean destroyed;
     private final Handler resizeHandler = new Handler(Looper.getMainLooper());
     private final Runnable resizeDisplayRunnable = () -> {
         if (destroyed || textureView == null || !textureView.isAvailable()) return;
@@ -28,9 +31,6 @@ public final class V10ProjectionSession implements TextureView.SurfaceTextureLis
             displayController.resizeDisplay(width, height);
         }
     };
-    private TextureView textureView;
-    private ComponentName target;
-    private boolean destroyed;
     private boolean restoreMediaTaskOnAttach;
     private int pendingMoveSourceDisplayId = -1;
     private int lastLaunchSourceDisplayId = -1;
