@@ -6,7 +6,6 @@ import android.graphics.SurfaceTexture;
 import android.hardware.display.DisplayManager;
 import android.os.Process;
 import android.os.SystemClock;
-import android.os.UserHandle;
 import android.util.Log;
 import android.view.Display;
 import android.view.Surface;
@@ -338,7 +337,7 @@ public final class V10DisplayController {
         lastLaunchAttemptAt = SystemClock.uptimeMillis();
 
         final int displayId = display.getDisplayId();
-        final int userId = UserHandle.getUserId(Process.myUid());
+        final int userId = Process.myUid() / 100000;
         final String packageName = component.getPackageName();
         final String className = component.getClassName();
         RootShellSession.EXEC.execute(() -> {
