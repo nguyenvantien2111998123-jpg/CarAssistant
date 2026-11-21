@@ -73,13 +73,13 @@ public final class V10DashboardActivity extends Activity {
 
         addSectionTitle("CẤU HÌNH", "Chọn đúng nhóm cần thay đổi");
         addFeature("▣", "Chiếu màn hình", "Ứng dụng vùng 3/10, ứng dụng hay dùng và hướng màn hình.",
-                BLUE, () -> openSettings("ỨNG DỤNG MẶC ĐỊNH VÙNG 3/10"));
+                BLUE, () -> openSettings("CHIẾU MÀN HÌNH"));
         addFeature("🎙", "Trợ lý giọng nói", "Ứng dụng mặc định cho dẫn đường, nhạc, video và TV.",
-                PURPLE, () -> openSettings("ỨNG DỤNG MẶC ĐỊNH CHO TRỢ LÝ"));
+                PURPLE, () -> openSettings("TRỢ LÝ GIỌNG NÓI"));
         addFeature("♫", "Tự động phát Media", "Khôi phục ứng dụng và trạng thái phát khi Android Auto kết nối.",
                 CYAN, () -> openSettings("TỰ ĐỘNG PHÁT MEDIA"));
         addFeature("⚙", "Quyền & tích hợp", "Micro, Media Session, Trợ năng, Root và LSPosed.",
-                GREEN, () -> openSettings("QUYỀN & CHẨN ĐOÁN"));
+                GREEN, () -> openSettings("QUYỀN & TÍCH HỢP"));
 
         LinearLayout projection = card(SURFACE_ALT, dp(16));
         addText(projection, "BỐ CỤC MÀN HÌNH XE", 10, CYAN, true);
