@@ -74,6 +74,16 @@ public final class V10ProjectionSession implements TextureView.SurfaceTextureLis
         }
     }
 
+    /** Move an already-running app task from another display onto this projection display. */
+    public void moveExistingTaskToDisplay(ComponentName component) {
+        if (destroyed || component == null) return;
+        target = component;
+        taskSession.setTarget(component);
+        restoreMediaTaskOnAttach = false;
+        displayController.launchMediaTaskOnDisplay(component);
+        attachCurrentSurface();
+    }
+
     /** Restore the saved player task to this projection without force-stopping its package. */
     public void restoreMediaTask(ComponentName component) {
         if (destroyed || component == null) return;
