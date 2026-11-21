@@ -21,16 +21,7 @@ public final class V10ProjectionSession implements TextureView.SurfaceTextureLis
     private ComponentName target;
     private boolean destroyed;
     private final Handler resizeHandler = new Handler(Looper.getMainLooper());
-    private final Runnable resizeDisplayRunnable = () -> {
-        if (destroyed || textureView == null || !textureView.isAvailable()) return;
-        int width = textureView.getWidth();
-        int height = textureView.getHeight();
-        if (width > 0 && height > 0) {
-            SurfaceTexture current = textureView.getSurfaceTexture();
-            if (current != null) current.setDefaultBufferSize(width, height);
-            displayController.resizeDisplay(width, height);
-        }
-    };
+    private final Runnable resizeDisplayRunnable;
     private boolean restoreMediaTaskOnAttach;
     private int pendingMoveSourceDisplayId = -1;
     private int lastLaunchSourceDisplayId = -1;
@@ -47,6 +38,16 @@ public final class V10ProjectionSession implements TextureView.SurfaceTextureLis
         this.displayIndex = Math.max(0, displayIndex);
         displayController = V10DisplayController.get(app, this.displayIndex);
         surfaceManager = new V10SurfaceManager(displayController);
+        resizeDisplayRunnable = () -> {
+            if (destroyed || textureView == null || !textureView.isAvailable()) return;
+            int width = textureView.getWidth();
+            int height = textureView.getHeight();
+            if (width > 0 && height > 0) {
+                SurfaceTexture current = textureView.getSurfaceTexture();
+                if (current != null) current.setDefaultBufferSize(width, height);
+                displayController.resizeDisplay(width, height);
+            }
+        };
     }
 
     public void attachTextureView(TextureView view) {
