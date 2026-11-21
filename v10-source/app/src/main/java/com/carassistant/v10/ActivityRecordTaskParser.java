@@ -46,9 +46,10 @@ final class ActivityRecordTaskParser {
             int taskHeader = line.indexOf("Task{");
             if (taskHeader >= 0) {
                 int taskId = extractTaskId(line.substring(taskHeader));
+                final int taskDisplay = currentDisplay;
                 currentTask = taskId < 0 ? null : tasks.computeIfAbsent(
-                        currentDisplay + ":" + taskId,
-                        ignored -> new TaskRecord(currentDisplay, taskId));
+                        taskDisplay + ":" + taskId,
+                        ignored -> new TaskRecord(taskDisplay, taskId));
                 continue;
             }
 
