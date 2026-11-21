@@ -86,6 +86,18 @@ public final class V10ProjectionSession implements TextureView.SurfaceTextureLis
         attachCurrentSurface();
     }
 
+    /** Clear the source controller's launch bookkeeping after its task is moved elsewhere. */
+    public void markTaskMovedAway(ComponentName component) {
+        if (component == null) return;
+        if (component.equals(displayController.getTarget())) {
+            displayController.markNotLaunched();
+        }
+        if (component.equals(target)) {
+            target = null;
+            taskSession.clear();
+        }
+    }
+
     /** Restore the saved player task to this projection without force-stopping its package. */
     public void restoreMediaTask(ComponentName component) {
         if (destroyed || component == null) return;
