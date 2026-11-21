@@ -128,7 +128,7 @@ public final class V10SessionStore {
                     }
                 }
                 if (duplicate) continue;
-                if (value.length() > 0) value.append("\\n");
+                if (value.length() > 0) value.append("\n");
                 value.append(component.flattenToString());
             }
         }
