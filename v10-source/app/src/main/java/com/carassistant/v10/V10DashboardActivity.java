@@ -67,7 +67,7 @@ public final class V10DashboardActivity extends Activity {
                 CYAN, () -> openSettings("ÉP NGANG ỨNG DỤNG"));
         addFeature("★", "Ứng dụng hay dùng", "Chọn tối đa 3 ứng dụng để mở toàn màn hình phụ 2.",
                 ORANGE, () -> openSettings("ỨNG DỤNG HAY DÙNG"));
-        addFeature("▦", "Menu app vùng tỉ lệ 3", "Chọn không giới hạn ứng dụng được phép chiếu ở vùng 3/10.",
+        addFeature("▦", "Menu app vùng tỉ lệ 3/7", "Chọn không giới hạn ứng dụng được phép chiếu ở vùng 3 (30%).",
                 BLUE, () -> openSettings("APP VÙNG 3"));
         addFeature("🎙", "Trợ lý mặc định", "Chọn ứng dụng riêng cho Dẫn đường, Nghe nhạc, Video và TV.",
                 PURPLE, () -> openSettings("TRỢ LÝ MẶC ĐỊNH"));
