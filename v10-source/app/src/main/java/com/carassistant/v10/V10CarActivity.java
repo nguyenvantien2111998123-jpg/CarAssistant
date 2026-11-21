@@ -202,11 +202,13 @@ public final class V10CarActivity
         boolean openActiveMedia = intent.getBooleanExtra(
                 "com.carassistant.v10.OPEN_ACTIVE_MEDIA", false);
         if (openActiveMedia && resumed) {
-            // If the Activity is stopped, keep the extra for onResume() to consume.
-            // Removing it before resume would silently drop the media-card action.
-            intent.removeExtra("com.carassistant.v10.OPEN_ACTIVE_MEDIA");
+            // Consume the one-shot extra only when the posted action can actually run.
+            // If the Activity pauses before this callback, onResume() will consume it.
             handler.post(() -> {
-                if (root != null && resumed) openActiveMediaOnProjection();
+                if (root != null && resumed) {
+                    intent.removeExtra("com.carassistant.v10.OPEN_ACTIVE_MEDIA");
+                    openActiveMediaOnProjection();
+                }
             });
         }
     }
