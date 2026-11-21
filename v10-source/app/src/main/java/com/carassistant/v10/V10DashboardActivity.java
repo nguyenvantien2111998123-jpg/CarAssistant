@@ -140,10 +140,11 @@ public final class V10DashboardActivity extends Activity {
     private void renderProjection() {
         addEyebrow("DISPLAY EXPERIENCE");
         addTitle("Chiếu màn hình", "Thiết lập trải nghiệm ứng dụng trên màn hình xe.");
-        addFeature("▣", "Ứng dụng nền Home", "Chọn ứng dụng hiển thị ở lớp nền khi chưa mở ứng dụng khác.", BLUE, this::openSettings);
-        addFeature("★", "Ứng dụng hay dùng", "Quản lý tối đa 3 ứng dụng trên thanh truy cập nhanh.", ORANGE, this::openSettings);
-        addFeature("↔", "Hướng màn hình", "Bật hoặc tắt ép ứng dụng chiếu sang ngang.", CYAN, this::openSettings);
-        addInfoCard("LƯU Ý", "Các lựa chọn chiếu màn hình vẫn dùng cơ chế lưu cấu hình hiện tại. Giao diện mới không thay đổi luồng Android Auto hoặc phiên chiếu.");
+        addFeature("▣", "Màn hình phụ 1 chia đôi 3/7", "Chiếu đồng thời hai ứng dụng; kéo thanh giữa để thay đổi kích thước từng vùng.", BLUE, this::openSettings);
+        addFeature("★", "Ứng dụng hay dùng", "Chọn tối đa 3 ứng dụng cho menu nhanh của vùng 3/10.", ORANGE, this::openSettings);
+        addFeature("⛶", "Màn hình phụ 2 toàn màn hình", "Đưa ứng dụng ở một trong hai vùng sang màn hình phụ 2.", CYAN, this::openSettings);
+        addFeature("↔", "Hướng màn hình", "Bật hoặc tắt ép ứng dụng chiếu sang ngang.", PURPLE, this::openSettings);
+        addInfoCard("TƯƠNG THÍCH", "Màn hình phụ 1 sử dụng hai phiên chiếu độc lập. Thẻ media, điều khiển media, trợ lý giọng nói và phím vô lăng vẫn giữ luồng hiện có.");
         addPrimaryButton("MỞ CẤU HÌNH CHIẾU MÀN HÌNH", this::openSettings, BLUE);
     }
 
