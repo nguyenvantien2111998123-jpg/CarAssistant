@@ -1,6 +1,5 @@
 package com.carassistant.v10;
 
-import android.app.Activity;
 import android.content.Context;
 import android.graphics.Color;
 import android.graphics.drawable.GradientDrawable;
@@ -18,7 +17,7 @@ public final class V10SplitProjectionLayout {
         void onOpenPaneMenu(boolean leftPane);
     }
 
-    private final Activity activity;
+    private final Context activity;
     private final FrameLayout host;
     private final V10ProjectionSession leftSession;
     private final V10ProjectionSession rightSession;
@@ -32,7 +31,7 @@ public final class V10SplitProjectionLayout {
     private View divider;
     private float ratio;
 
-    public V10SplitProjectionLayout(Activity activity, FrameLayout host,
+    public V10SplitProjectionLayout(Context activity, FrameLayout host,
             V10ProjectionSession leftSession, V10ProjectionSession rightSession,
             PaneMenuListener menuListener, Runnable interactionListener) {
         this.activity = activity;
