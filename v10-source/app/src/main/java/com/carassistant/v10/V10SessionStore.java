@@ -15,6 +15,7 @@ public final class V10SessionStore {
     private static final String SPLIT_RIGHT_TARGET = "split_right_target_component";
     private static final String SPLIT_RATIO = "split_display1_ratio";
     private static final String QUICK_APPS = "home_quick_apps";
+    private static final String SPLIT_LEFT_ALLOWED_APPS = "split_left_allowed_apps";
     private static final String DEFAULT_NAVIGATION = "voice_default_navigation";
     private static final String DEFAULT_MUSIC = "voice_default_music";
     private static final String DEFAULT_VIDEO = "voice_default_video";
@@ -100,6 +101,50 @@ public final class V10SessionStore {
             if (launch == null) continue;
             ComponentName launchComponent = launch.getComponent();
             ComponentName usable = launchComponent != null ? launchComponent : stored;
+            boolean duplicate = false;
+            for (ComponentName existing : result) {
+                if (existing.getPackageName().equals(usable.getPackageName())) {
+                    duplicate = true;
+                    break;
+                }
+            }
+            if (!duplicate) result.add(usable);
+        }
+        return result;
+    }
+
+    /** Unlimited allow-list for apps that may be launched in the left 30% split pane. */
+    public static void setSplitLeftAllowedApps(Context context, List<ComponentName> components) {
+        StringBuilder value = new StringBuilder();
+        if (components != null) {
+            for (ComponentName component : components) {
+                if (component == null) continue;
+                boolean duplicate = false;
+                for (String saved : value.toString().split("\\n")) {
+                    ComponentName existing = ComponentName.unflattenFromString(saved);
+                    if (existing != null && existing.getPackageName().equals(component.getPackageName())) {
+                        duplicate = true;
+                        break;
+                    }
+                }
+                if (duplicate) continue;
+                if (value.length() > 0) value.append("\\n");
+                value.append(component.flattenToString());
+            }
+        }
+        prefs(context).edit().putString(SPLIT_LEFT_ALLOWED_APPS, value.toString()).apply();
+    }
+
+    public static ArrayList<ComponentName> getSplitLeftAllowedApps(Context context) {
+        String value = prefs(context).getString(SPLIT_LEFT_ALLOWED_APPS, "");
+        ArrayList<ComponentName> result = new ArrayList<>();
+        if (value == null || value.isEmpty()) return result;
+        for (String item : value.split("\\n")) {
+            ComponentName stored = ComponentName.unflattenFromString(item);
+            if (stored == null) continue;
+            Intent launch = context.getPackageManager().getLaunchIntentForPackage(stored.getPackageName());
+            if (launch == null) continue;
+            ComponentName usable = launch.getComponent() != null ? launch.getComponent() : stored;
             boolean duplicate = false;
             for (ComponentName existing : result) {
                 if (existing.getPackageName().equals(usable.getPackageName())) {
