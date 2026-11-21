@@ -12,6 +12,8 @@ public final class V10SessionStore {
     private static final String PREFS = "v10_session";
     private static final String TARGET = "target_component";
     private static final String BACKGROUND_TARGET = "background_target_component";
+    private static final String SPLIT_RIGHT_TARGET = "split_right_target_component";
+    private static final String SPLIT_RATIO = "split_display1_ratio";
     private static final String QUICK_APPS = "home_quick_apps";
     private static final String DEFAULT_NAVIGATION = "voice_default_navigation";
     private static final String DEFAULT_MUSIC = "voice_default_music";
@@ -48,6 +50,28 @@ public final class V10SessionStore {
     public static ComponentName getBackgroundTarget(Context context) {
         String value = prefs(context).getString(BACKGROUND_TARGET, null);
         return value == null || value.isEmpty() ? null : ComponentName.unflattenFromString(value);
+    }
+
+    /** App assigned to the right (70%) pane of Android Auto Display 1. */
+    public static void setSplitRightTarget(Context context, ComponentName component) {
+        SharedPreferences.Editor editor = prefs(context).edit();
+        if (component == null) editor.remove(SPLIT_RIGHT_TARGET);
+        else editor.putString(SPLIT_RIGHT_TARGET, component.flattenToString());
+        editor.apply();
+    }
+
+    public static ComponentName getSplitRightTarget(Context context) {
+        String value = prefs(context).getString(SPLIT_RIGHT_TARGET, null);
+        return value == null || value.isEmpty() ? null : ComponentName.unflattenFromString(value);
+    }
+
+    /** Split ratio is the left pane fraction, clamped to keep both panes usable. */
+    public static void setSplitRatio(Context context, float ratio) {
+        prefs(context).edit().putFloat(SPLIT_RATIO, Math.max(0.15f, Math.min(0.85f, ratio))).apply();
+    }
+
+    public static float getSplitRatio(Context context) {
+        return Math.max(0.15f, Math.min(0.85f, prefs(context).getFloat(SPLIT_RATIO, 0.30f)));
     }
 
     /** Exactly three configurable app shortcuts for the Android Auto Home sidebar. */
