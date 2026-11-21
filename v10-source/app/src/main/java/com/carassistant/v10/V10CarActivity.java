@@ -2,6 +2,7 @@
 package com.carassistant.v10;
 
 import android.Manifest;
+import android.app.AlertDialog;
 import android.content.ComponentName;
 import android.content.SharedPreferences;
 import android.os.SystemClock;
@@ -66,7 +67,10 @@ public final class V10CarActivity
     private FrameLayout appProjectionLayer;
     private TextureView appTextureView;
     private V10ProjectionSession backgroundSession;
+    private V10ProjectionSession splitRightSession;
+    private V10SplitProjectionLayout splitProjectionLayout;
     private ComponentName activeBackgroundTarget;
+    private ComponentName activeSplitRightTarget;
     private TextView dashboardVoiceButton;
     private ImageView mediaArtwork;
     private TextView mediaTitle;
@@ -133,6 +137,13 @@ public final class V10CarActivity
                         launchBackgroundProjection(backgroundTarget);
                     } else if (backgroundTarget == null && activeBackgroundTarget != null) {
                         stopBackgroundProjection();
+                    }
+
+                    ComponentName rightPaneTarget = V10SessionStore.getSplitRightTarget(V10CarActivity.this);
+                    if (rightPaneTarget != null && !rightPaneTarget.equals(activeSplitRightTarget)) {
+                        launchSplitRightProjection(rightPaneTarget);
+                    } else if (rightPaneTarget == null && activeSplitRightTarget != null) {
+                        stopSplitRightProjection();
                     }
 
                     handler.postDelayed(
@@ -1099,19 +1110,17 @@ public final class V10CarActivity
 
     private void attachProjection() {
 
-        // Layer 1: the fixed app chosen in phone SETUPS.
-        textureView = new TextureView(this);
-        projectionLayer.addView(textureView, new FrameLayout.LayoutParams(-1, -1));
+        // Display 1 is split into independently rendered 30% and 70% panes.
         backgroundSession = new V10ProjectionSession(this, 0);
-        backgroundSession.attachTextureView(textureView);
-        View.OnTouchListener backgroundInputListener =
-                new V10InputController(backgroundSession).createListener();
-        textureView.setOnTouchListener((view, event) -> {
-            scheduleDrivingChromeAutoHide();
-            return backgroundInputListener.onTouch(view, event);
-        });
+        splitRightSession = new V10ProjectionSession(this, 2);
+        splitProjectionLayout = new V10SplitProjectionLayout(
+                this, projectionLayer, backgroundSession, splitRightSession,
+                this::showSplitPaneMenu, this::scheduleDrivingChromeAutoHide);
+        splitProjectionLayout.attach();
+        textureView = splitProjectionLayout.getLeftTextureView();
+        projectionLayer.setVisibility(View.VISIBLE);
 
-        // Layer 2: app chosen on the car-side APP CHỌN screen.
+        // Display 2 remains a separate full-screen projection surface.
         appTextureView = new TextureView(this);
         appProjectionLayer.addView(appTextureView, new FrameLayout.LayoutParams(-1, -1));
         session = new V10ProjectionSession(this, 1);
@@ -1159,6 +1168,10 @@ private void launchActiveMediaProjection(ComponentName component) {
 }
 
 private void launchProjection(ComponentName component) {
+    launchProjection(component, false);
+}
+
+private void launchProjection(ComponentName component, boolean moveExistingTask) {
 
     scheduleDrivingChromeAutoHide();
     if (keyboardController != null) keyboardController.hide();
@@ -1202,7 +1215,11 @@ private void launchProjection(ComponentName component) {
      * Start the existing proven V10 projection
      * engine.
      */
-    session.setTarget(component);
+    if (moveExistingTask) {
+        session.moveExistingTaskToDisplay(component);
+    } else {
+        session.setTarget(component);
+    }
     rememberProjectedTask(component);
 }
 
@@ -1257,14 +1274,36 @@ private void dispatchMediaSearchOnProjection(ComponentName target, String uri, S
     if (component == null || backgroundSession == null) return;
     activeBackgroundTarget = component;
     V10SessionStore.setBackgroundTarget(this, component);
-    // Layer 1 is a Home background, never shown over APP CHỌN or other screens.
     projectionLayer.setVisibility(isHomeScreen() ? View.VISIBLE : View.GONE);
     backgroundSession.setTarget(component);
-}private void stopBackgroundProjection() {
-    if (backgroundSession != null) backgroundSession.setTarget(null);
+}
+
+private void stopBackgroundProjection() {
+    if (backgroundSession != null) {
+        backgroundSession.hideTask();
+        backgroundSession.setTarget(null);
+    }
     V10SessionStore.setBackgroundTarget(this, null);
     activeBackgroundTarget = null;
-    projectionLayer.setVisibility(View.GONE);
+    projectionLayer.setVisibility(isHomeScreen() ? View.VISIBLE : View.GONE);
+}
+
+private void launchSplitRightProjection(ComponentName component) {
+    if (component == null || splitRightSession == null) return;
+    activeSplitRightTarget = component;
+    V10SessionStore.setSplitRightTarget(this, component);
+    projectionLayer.setVisibility(isHomeScreen() ? View.VISIBLE : View.GONE);
+    splitRightSession.setTarget(component);
+}
+
+private void stopSplitRightProjection() {
+    if (splitRightSession != null) {
+        splitRightSession.hideTask();
+        splitRightSession.setTarget(null);
+    }
+    V10SessionStore.setSplitRightTarget(this, null);
+    activeSplitRightTarget = null;
+    projectionLayer.setVisibility(isHomeScreen() ? View.VISIBLE : View.GONE);
 }
 
 private boolean isHomeScreen() {
@@ -1295,11 +1334,80 @@ private boolean isHomeScreen() {
         appPanel.setVisibility(View.GONE);
         if (floatingVoiceButton != null) floatingVoiceButton.setVisibility(View.GONE);
 
-        projectionLayer.setVisibility(
-                V10SessionStore.getBackgroundTarget(this) != null
-                        ? View.VISIBLE : View.GONE);
+        // Display 1's split layout and pane selectors remain available on Home,
+        // even before either pane has an app assigned.
+        projectionLayer.setVisibility(View.VISIBLE);
     }
 
+
+    private void showSplitPaneMenu(boolean leftPane) {
+        loadApps();
+        ArrayList<AppInfo> choices = leftPane
+                ? getQuickLaunchApps()
+                : new ArrayList<>(apps);
+        ComponentName current = leftPane
+                ? V10SessionStore.getBackgroundTarget(this)
+                : V10SessionStore.getSplitRightTarget(this);
+        String[] labels = new String[choices.size()];
+        for (int i = 0; i < choices.size(); i++) labels[i] = choices.get(i).name;
+
+        AlertDialog.Builder builder = new AlertDialog.Builder(this)
+                .setTitle(leftPane ? "ỨNG DỤNG HAY DÙNG · VÙNG 3/10"
+                        : "CHỌN ỨNG DỤNG · VÙNG 7/10")
+                .setNegativeButton("ĐÓNG", null)
+                .setNeutralButton("⛶ TOÀN MÀN HÌNH", (dialog, which) -> {
+                    if (current != null) movePaneAppToFullscreen(leftPane, current);
+                });
+        if (choices.isEmpty()) {
+            builder.setMessage(leftPane
+                    ? "Chưa chọn ứng dụng hay dùng. Hãy chọn tối đa 3 ứng dụng trong Cài đặt CarAsistant trên điện thoại."
+                    : "Không tìm thấy ứng dụng có thể khởi chạy.");
+        } else {
+            builder.setItems(labels, (dialog, which) ->
+                    setSplitPaneTarget(leftPane, choices.get(which).component));
+        }
+        AlertDialog dialog = builder.create();
+        dialog.setOnShowListener(ignored -> {
+            android.widget.Button full = dialog.getButton(AlertDialog.BUTTON_NEUTRAL);
+            if (full != null) full.setEnabled(current != null);
+        });
+        dialog.show();
+        android.widget.Button full = dialog.getButton(AlertDialog.BUTTON_NEUTRAL);
+        if (full != null) full.setEnabled(current != null);
+    }
+
+    private void setSplitPaneTarget(boolean leftPane, ComponentName component) {
+        if (component == null) return;
+        if (leftPane) {
+            activeBackgroundTarget = component;
+            V10SessionStore.setBackgroundTarget(this, component);
+            if (backgroundSession != null) backgroundSession.setTarget(component);
+        } else {
+            activeSplitRightTarget = component;
+            V10SessionStore.setSplitRightTarget(this, component);
+            if (splitRightSession != null) splitRightSession.setTarget(component);
+        }
+        projectionLayer.setVisibility(View.VISIBLE);
+        Toast.makeText(this, "Đã chiếu ứng dụng vào vùng " + (leftPane ? "3/10" : "7/10"),
+                Toast.LENGTH_SHORT).show();
+    }
+
+    private void movePaneAppToFullscreen(boolean leftPane, ComponentName component) {
+        if (component == null || session == null) return;
+        V10ProjectionSession source = leftPane ? backgroundSession : splitRightSession;
+        if (source != null) {
+            source.hideTask();
+            source.setTarget(null);
+        }
+        if (leftPane) {
+            V10SessionStore.setBackgroundTarget(this, null);
+            activeBackgroundTarget = null;
+        } else {
+            V10SessionStore.setSplitRightTarget(this, null);
+            activeSplitRightTarget = null;
+        }
+        launchProjection(component, true);
+    }
 
 private void showApps() {
 
@@ -2015,6 +2123,8 @@ private void hideTaskSwitcher() {
 
         if (session != null) { session.destroy(); session = null; }
         if (backgroundSession != null) { backgroundSession.destroy(); backgroundSession = null; }
+        if (splitRightSession != null) { splitRightSession.destroy(); splitRightSession = null; }
+        splitProjectionLayout = null;
 
         V10SessionStore
                 .clearCurrentActivity(
