@@ -130,11 +130,18 @@ public final class V10CarActivity
                     }
 
                     ComponentName target = V10SessionStore.getTarget(V10CarActivity.this);
-                    if (target != null && !target.equals(activeTarget)) launchProjection(target);
+                    if (target != null && !target.equals(activeTarget)) {
+                        launchProjection(target);
+                    } else if (target != null && session != null && !session.isTaskLaunched()) {
+                        session.retryPendingTaskLaunch();
+                    }
 
                     ComponentName backgroundTarget = V10SessionStore.getBackgroundTarget(V10CarActivity.this);
                     if (backgroundTarget != null && !backgroundTarget.equals(activeBackgroundTarget)) {
                         launchBackgroundProjection(backgroundTarget);
+                    } else if (backgroundTarget != null && backgroundSession != null
+                            && !backgroundSession.isTaskLaunched()) {
+                        backgroundSession.retryPendingTaskLaunch();
                     } else if (backgroundTarget == null && activeBackgroundTarget != null) {
                         stopBackgroundProjection();
                     }
@@ -142,6 +149,9 @@ public final class V10CarActivity
                     ComponentName rightPaneTarget = V10SessionStore.getSplitRightTarget(V10CarActivity.this);
                     if (rightPaneTarget != null && !rightPaneTarget.equals(activeSplitRightTarget)) {
                         launchSplitRightProjection(rightPaneTarget);
+                    } else if (rightPaneTarget != null && splitRightSession != null
+                            && !splitRightSession.isTaskLaunched()) {
+                        splitRightSession.retryPendingTaskLaunch();
                     } else if (rightPaneTarget == null && activeSplitRightTarget != null) {
                         stopSplitRightProjection();
                     }
@@ -191,13 +201,13 @@ public final class V10CarActivity
         if (intent == null) return;
         boolean openActiveMedia = intent.getBooleanExtra(
                 "com.carassistant.v10.OPEN_ACTIVE_MEDIA", false);
-        if (openActiveMedia) {
+        if (openActiveMedia && resumed) {
+            // If the Activity is stopped, keep the extra for onResume() to consume.
+            // Removing it before resume would silently drop the media-card action.
             intent.removeExtra("com.carassistant.v10.OPEN_ACTIVE_MEDIA");
-            if (resumed) {
-                handler.post(() -> {
-                    if (root != null) openActiveMediaOnProjection();
-                });
-            }
+            handler.post(() -> {
+                if (root != null && resumed) openActiveMediaOnProjection();
+            });
         }
     }
 
