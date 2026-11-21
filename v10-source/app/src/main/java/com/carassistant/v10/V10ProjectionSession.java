@@ -19,6 +19,7 @@ public final class V10ProjectionSession implements TextureView.SurfaceTextureLis
     private ComponentName target;
     private boolean destroyed;
     private boolean restoreMediaTaskOnAttach;
+    private int pendingMoveSourceDisplayId = -1;
     private int contentWidth;
     private int contentHeight;
 
@@ -68,19 +69,23 @@ public final class V10ProjectionSession implements TextureView.SurfaceTextureLis
     private void launchTargetTask() {
         if (restoreMediaTaskOnAttach) {
             restoreMediaTaskOnAttach = false;
-            displayController.launchMediaTaskOnDisplay(target);
+            int sourceDisplayId = pendingMoveSourceDisplayId;
+            pendingMoveSourceDisplayId = -1;
+            displayController.launchMediaTaskOnDisplay(target, sourceDisplayId);
         } else {
             displayController.launchNewTask(target);
         }
     }
 
     /** Move an already-running app task from another display onto this projection display. */
-    public void moveExistingTaskToDisplay(ComponentName component) {
-        if (destroyed || component == null) return;
+    public void moveExistingTaskToDisplay(ComponentName component, int sourceDisplayId) {
+        if (destroyed || component == null || sourceDisplayId <= 0) return;
         target = component;
         taskSession.setTarget(component);
-        // Force the next attach through launchTargetTask(), whose restore flag
-        // routes to the existing-task mover instead of starting a duplicate app.
+        // Keep the source display identity with the move request. The destination
+        // controller must never choose an arbitrary task from the same package
+        // (for example, a phone-side browser task instead of the pane task).
+        pendingMoveSourceDisplayId = sourceDisplayId;
         if (displayController.isLaunched()) displayController.markNotLaunched();
         restoreMediaTaskOnAttach = true;
         attachCurrentSurface();
