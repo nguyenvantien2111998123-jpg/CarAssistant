@@ -1403,15 +1403,15 @@ private boolean isHomeScreen() {
         for (int i = 0; i < choices.size(); i++) labels[i] = choices.get(i).name;
 
         AlertDialog.Builder builder = new AlertDialog.Builder(this)
-                .setTitle(leftPane ? "APP ĐƯỢC PHÉP · VÙNG 3/10"
-                        : "CHỌN ỨNG DỤNG · VÙNG 7/10")
+                .setTitle(leftPane ? "APP ĐƯỢC PHÉP · VÙNG 3 (30%)"
+                        : "CHỌN ỨNG DỤNG · VÙNG 7 (70%)")
                 .setNegativeButton("ĐÓNG", null)
                 .setNeutralButton("⛶ FULL → MÀN 2", (dialog, which) -> {
                     if (current != null) movePaneAppToFullscreen(leftPane, current);
                 });
         if (choices.isEmpty()) {
             builder.setMessage(leftPane
-                    ? "Chưa có ứng dụng được cho phép ở vùng 3/10. Hãy tick ứng dụng trong mục Menu app vùng tỉ lệ 3 trên điện thoại."
+                    ? "Chưa có ứng dụng được cho phép ở vùng 3 (30%). Hãy tick ứng dụng trong mục Menu app vùng tỉ lệ 3 trên điện thoại."
                     : "Không tìm thấy ứng dụng có thể khởi chạy.");
         } else {
             builder.setItems(labels, (dialog, which) ->
