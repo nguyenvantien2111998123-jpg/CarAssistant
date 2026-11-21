@@ -63,6 +63,18 @@ public class ActivityRecordTaskParserTest {
         assertTrue(snapshot.allMatchingTaskIds().isEmpty());
     }
 
+
+    @Test public void detectsPackageTaskEvenWhenActivityHistoryIsOmitted() {
+        String dump = "Display #0 (activities from top to bottom):\\n"
+                + "  * Task{abc #601 A=com.example.player/.MainActivity type=standard}\\n";
+
+        ActivityRecordTaskParser.Snapshot snapshot =
+                ActivityRecordTaskParser.parse(dump, PKG, ACTIVITY);
+
+        assertTrue(snapshot.hasPackageTask());
+        assertTrue(snapshot.allMatchingTaskIds().isEmpty());
+    }
+
     @Test public void doesNotMatchClassNamePrefixes() {
         String dump = "Display #0 (activities from top to bottom):\n"
                 + "  * Task{abc #501 type=standard}\n"
