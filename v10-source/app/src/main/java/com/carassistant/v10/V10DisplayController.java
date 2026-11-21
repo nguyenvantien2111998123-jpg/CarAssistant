@@ -116,6 +116,16 @@ public final class V10DisplayController {
         return bindSurface(new Surface(texture));
     }
 
+    /** Resize the pane's VirtualDisplay when its TextureView bounds change. */
+    public synchronized void resizeDisplay(int width, int height) {
+        if (destroyed || virtualDisplay == null || width < 1 || height < 1) return;
+        try {
+            virtualDisplay.resize(width, height, 160);
+        } catch (RuntimeException error) {
+            Log.w(TAG, "Virtual display resize deferred for pane " + displayIndex, error);
+        }
+    }
+
     public synchronized void detachSurface() {
         if (virtualDisplay != null) {
             try { virtualDisplay.setSurface(null); }
