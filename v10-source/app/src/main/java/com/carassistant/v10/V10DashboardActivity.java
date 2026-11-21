@@ -69,6 +69,8 @@ public final class V10DashboardActivity extends Activity {
                 ORANGE, () -> openSettings("ỨNG DỤNG HAY DÙNG"));
         addFeature("▦", "Menu app vùng tỉ lệ 3/7", "Chọn không giới hạn ứng dụng được phép chiếu ở vùng 3 (30%).",
                 BLUE, () -> openSettings("APP VÙNG 3"));
+        addFeature("♫", "Tự động phát Media", "Bật hoặc tắt phát tự động khi khôi phục Media.",
+                GREEN, () -> openSettings("TỰ ĐỘNG PHÁT MEDIA"));
         addFeature("🎙", "Trợ lý mặc định", "Chọn ứng dụng riêng cho Dẫn đường, Nghe nhạc, Video và TV.",
                 PURPLE, () -> openSettings("TRỢ LÝ MẶC ĐỊNH"));
 
