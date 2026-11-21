@@ -27,8 +27,9 @@ final class ActivityRecordTaskParser {
             return new Snapshot(new ArrayList<>(), false);
         }
 
+        // ComponentName's full class already has the leading dot suffix after the package.
         String shortClassName = className.startsWith(packageName)
-                ? "." + className.substring(packageName.length()) : className;
+                ? className.substring(packageName.length()) : className;
         Map<String, TaskRecord> tasks = new LinkedHashMap<>();
         int currentDisplay = -1;
         TaskRecord currentTask = null;
