@@ -37,6 +37,10 @@ final class ActivityRecordTaskParser {
 
         String[] lines = dump.split("\\r?\\n");
         for (String line : lines) {
+            // Task headers can carry the base component even if a truncated or
+            // vendor-specific dump omits its ActivityRecord history lines.
+            if (line.contains(packageName + "/")) packageTaskExists = true;
+
             Matcher displayMatcher = DISPLAY_HEADER.matcher(line);
             if (displayMatcher.find()) {
                 currentDisplay = parseInt(displayMatcher.group(1), -1);
