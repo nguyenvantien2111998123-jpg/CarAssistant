@@ -161,22 +161,11 @@ public final class V10DisplayController {
     public synchronized ComponentName getTarget() { return target; }
 
     public synchronized void launchNewTask(ComponentName component) {
-        if (!isReady() || component == null) return;
-        managedPackages.add(component.getPackageName());
-        target = component;
-        launched = true;
-        final int displayId = display.getDisplayId();
-        final int userId = Process.myUid() / 100000;
-        final String flat = component.flattenToString().replace("'", "'\"'\"'");
-        final String command = "/system/bin/am start"
-                + " --user " + userId
-                + " --display " + displayId
-                + " --windowingMode 1"
-                + " -a android.intent.action.MAIN"
-                + " -c android.intent.category.LAUNCHER"
-                + " -f 0x10000000"
-                + " -n '" + flat + "'";
-        execute(command, "Launch failed");
+        // Reuse an existing task when possible. This is essential for apps whose
+        // launcher Activity is singleTask/singleInstance: a second am start can
+        // simply route to the phone-side instance instead of creating a task on
+        // the requested virtual display.
+        launchMediaTaskOnDisplay(component, -1);
     }
 
     /** Starts a VIEW URI inside this exact virtual display, never the phone display. */
@@ -364,9 +353,10 @@ public final class V10DisplayController {
                     + " | /system/bin/head -n 1); ";
         }
 
-        final String command = "STATUS=0; ACTIVITIES=$(/system/bin/dumpsys activity activities 2>/dev/null); "
+        final String command = "SOURCE_DISPLAY_ID=" + sourceDisplayId
+                + "; STATUS=0; ACTIVITIES=$(/system/bin/dumpsys activity activities 2>/dev/null); "
                 + sourceLookup
-                + "if printf '%s\\n' \"$ACTIVITIES\" | /system/bin/awk "
+                + "if [ \"$SOURCE_DISPLAY_ID\" -lt 0 ] && printf '%s\\n' \"$ACTIVITIES\" | /system/bin/awk "
                 + "-v wanted=" + packageTask + " -v display=" + displayHeader + " "
                 + "'/^Display #/ { active = index($0, display) > 0 }"
                 + " active && index($0, wanted) { found=1 }"
@@ -389,11 +379,19 @@ public final class V10DisplayController {
                 + "VERIFIED=0; if [ \"$STATUS\" -eq 0 ]; then "
                 + "ATTEMPT=0; while [ \"$ATTEMPT\" -lt 10 ]; do "
                 + "ACTIVITIES=$(/system/bin/dumpsys activity activities 2>/dev/null); "
-                + "if printf '%s\\n' \"$ACTIVITIES\" | /system/bin/awk "
+                + "if [ -n \"$ROOT_TASK_ID\" ]; then "
+                + "printf '%s\\n' \"$ACTIVITIES\" | /system/bin/awk "
+                + "-v wanted=" + packageTask + " -v display=" + displayHeader + " -v task=\"$ROOT_TASK_ID\" "
+                + "'/^Display #/ { active = index($0, display) > 0 } "
+                + "active && /Task\\{/ && index($0, wanted) && match($0, /#[0-9]+/) "
+                + "{ id=substr($0,RSTART+1,RLENGTH-1); if (id == task) found=1 } "
+                + "END { exit(found ? 0 : 1) }' "
+                + "else printf '%s\\n' \"$ACTIVITIES\" | /system/bin/awk "
                 + "-v wanted=" + packageTask + " -v display=" + displayHeader + " "
                 + "'/^Display #/ { active = index($0, display) > 0 }"
-                + " active && index($0, wanted) { found=1 }"
-                + " END { exit(found ? 0 : 1) }'; then VERIFIED=1; break; fi; "
+                + " active && index($0, wanted) { found=1 } "
+                + "END { exit(found ? 0 : 1) }'; fi "
+                + "if [ \"$?\" -eq 0 ]; then VERIFIED=1; break; fi; "
                 + "/system/bin/sleep 0.5; ATTEMPT=$((ATTEMPT + 1)); done; fi; "
                 + "if [ \"$VERIFIED\" -eq 1 ]; then "
                 + "echo 'CarAsistant: verified media task on projection display'; "
