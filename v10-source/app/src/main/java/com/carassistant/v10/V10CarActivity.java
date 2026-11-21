@@ -1345,6 +1345,7 @@ private void stopRightPaneProjection() {
 private void expandPaneToFullscreen(boolean leftPane, ComponentName component) {
     if (component == null || session == null) return;
     if (keyboardController != null) keyboardController.hide();
+    if (activeTarget != null && !activeTarget.equals(component)) session.release();
 
     // Move the existing pane task to Display 2; do not create a duplicate app task.
     activeTarget = component;
