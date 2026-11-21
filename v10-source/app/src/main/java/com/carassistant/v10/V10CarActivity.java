@@ -68,7 +68,7 @@ public final class V10CarActivity
     private TextureView appTextureView;
     private V10ProjectionSession backgroundSession;
     private V10ProjectionSession splitRightSession;
-    private V10SplitProjectionLayout splitProjectionLayout;
+    private V10PaneContainer splitProjectionLayout;
     private ComponentName activeBackgroundTarget;
     private ComponentName activeSplitRightTarget;
     private TextView dashboardVoiceButton;
@@ -1161,7 +1161,7 @@ public final class V10CarActivity
         // Display 1 is split into independently rendered 30% and 70% panes.
         backgroundSession = new V10ProjectionSession(this, 0);
         splitRightSession = new V10ProjectionSession(this, 2);
-        splitProjectionLayout = new V10SplitProjectionLayout(
+        splitProjectionLayout = new V10PaneContainer(
                 this, projectionLayer, backgroundSession, splitRightSession,
                 this::showSplitPaneMenu, this::onSplitPaneTouched,
                 this::scheduleDrivingChromeAutoHide);
