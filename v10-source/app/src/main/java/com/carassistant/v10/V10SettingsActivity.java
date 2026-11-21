@@ -91,20 +91,24 @@ public final class V10SettingsActivity extends Activity {
         scroll.addView(list);
         setContentView(scroll);
 
-        TextView title = text("CarAsistant", 27, Color.WHITE);
+        boolean detailMode = requestedSection != null && !requestedSection.trim().isEmpty();
+        TextView title = text(detailMode ? requestedSection : "CarAsistant", 24, Color.WHITE);
         title.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
         list.addView(title, params(-1, dp(42)));
-        TextView eyebrow = text("TRUNG TÂM ĐIỀU KHIỂN & CÀI ĐẶT", 11, Color.rgb(91, 190, 207));
+        TextView eyebrow = text(detailMode ? "CẤU HÌNH CHI TIẾT" : "TRUNG TÂM ĐIỀU KHIỂN & CÀI ĐẶT",
+                11, Color.rgb(91, 190, 207));
         eyebrow.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
         list.addView(eyebrow, params(-1, dp(24)));
 
-        TextView intro = text(
-                "Quản lý quyền, ứng dụng mặc định và cấu hình màn hình chiếu tại một nơi.",
+        TextView intro = text(detailMode
+                        ? "Chỉ hiển thị các thiết lập thuộc mục này."
+                        : "Quản lý quyền, ứng dụng mặc định và cấu hình màn hình chiếu tại một nơi.",
                 14, Color.rgb(183, 194, 207));
         intro.setPadding(0, 0, 0, dp(12));
         list.addView(intro, params(-1, -2));
 
-        addPermissionGuideCard();
+        if (!detailMode) addPermissionGuideCard();
+        else addButton(list, "‹  QUAY LẠI TỔNG QUAN", this::finish);
 
         addSection("ỨNG DỤNG MẶC ĐỊNH VÙNG 3/10", "Chọn ứng dụng khởi tạo cho khung trái trên màn hình phụ 1", body -> {
             selectedBackground = text("", 14, Color.LTGRAY);
@@ -235,12 +239,34 @@ public final class V10SettingsActivity extends Activity {
             body.addView(note, params(-1, -2));
         });
 
-        addButton(list, "QUAY LẠI", this::finish);
+        if (!detailMode) addButton(list, "QUAY LẠI", this::finish);
         refreshStatus();
+    }
+
+    private boolean shouldShowSection(String heading) {
+        if (requestedSection == null || requestedSection.trim().isEmpty()) return true;
+        if ("CHIẾU MÀN HÌNH".equals(requestedSection)) {
+            return heading.equals("ỨNG DỤNG MẶC ĐỊNH VÙNG 3/10")
+                    || heading.equals("HƯỚNG MÀN HÌNH CHIẾU")
+                    || heading.equals("ỨNG DỤNG HAY DÙNG")
+                    || heading.equals("TỰ KHỞI CHẠY KHI KẾT NỐI XE");
+        }
+        if ("TRỢ LÝ GIỌNG NÓI".equals(requestedSection)) {
+            return heading.equals("ỨNG DỤNG MẶC ĐỊNH CHO TRỢ LÝ");
+        }
+        if ("TỰ ĐỘNG PHÁT MEDIA".equals(requestedSection)) {
+            return heading.equals("TỰ ĐỘNG PHÁT MEDIA");
+        }
+        if ("QUYỀN & TÍCH HỢP".equals(requestedSection)) {
+            return heading.equals("QUYỀN & CHẨN ĐOÁN");
+        }
+        // Preserve compatibility with callers that still request a legacy section title.
+        return heading.equals(requestedSection);
     }
 
     /** Every setup section starts collapsed and toggles when its header is tapped. */
     private void addSection(String heading, String subtitle, SectionBuilder builder) {
+        if (!shouldShowSection(heading)) return;
         LinearLayout section = new LinearLayout(this);
         section.setOrientation(LinearLayout.VERTICAL);
         section.setBackground(rounded(Color.rgb(17, 25, 34), dp(15), Color.rgb(38, 57, 76)));
