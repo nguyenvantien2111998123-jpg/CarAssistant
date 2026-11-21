@@ -317,9 +317,8 @@ public final class V10DisplayController {
     }
 
     /**
-     * Reuses the exact ActivityRecord task requested by the caller. Package-only
-     * matching is unsafe: one package can own multiple independent tasks on the
-     * same or different displays (browser tabs, document tasks, singleTask roots).
+     * Match the selected ActivityRecord inside a task, not just its package.
+     * A package can own several independent tasks on the same or different displays.
      */
     public synchronized void launchMediaTaskOnDisplay(ComponentName component, int sourceDisplayId) {
         if (!isReady() || component == null) return;
@@ -336,62 +335,70 @@ public final class V10DisplayController {
         final String packageArg = shellQuote(packageName);
         final String classArg = shellQuote(className);
         final String shortClassArg = shellQuote(shortClassName);
-        final String displayArg = shellQuote("Display #" + displayId);
-        final String activityLookup = "function scan_task_records() { "
-                + "printf '%s\\\\n' \\"$ACTIVITIES\\" | /system/bin/awk "
-                + "-v pkg=" + packageArg + " -v cls=" + classArg
-                + " -v shortcls=" + shortClassArg + " -v wanted_display=\\"$LOOKUP_DISPLAY\\" "
-                + "'function finish_task() { "
-                + "if (task_id != \\"\\" && task_match && (wanted_display == \\"-1\\" || task_display == wanted_display)) "
-                + "{ count++; selected=task_id } } "
-                + "/^Display #[0-9]+/ { finish_task(); task_id=\\"\\"; task_match=0; "
-                + "task_display=$0; sub(/^Display #/, \\"\\", task_display); next } "
-                + "/Task\\\\{/ { finish_task(); task_id=\\"\\"; task_match=0; "
-                + "if (match($0, /rootTaskId=[0-9]+/)) { task_id=substr($0,RSTART,RLENGTH); "
-                + "sub(/rootTaskId=/, \\"\\", task_id) } "
-                + "else if (match($0, /#[0-9]+/)) { task_id=substr($0,RSTART+1,RLENGTH-1) } "
-                + "next } "
-                + "/ActivityRecord/ && task_id != \\"\\" { "
-                + "if (index($0, pkg \\"/\\" cls) || index($0, pkg \\"/\\" shortcls)) task_match=1 } "
-                + "END { finish_task(); if (count == 1) print selected; "
-                + "else if (count > 1) print \\"AMBIGUOUS\\" }'; }; ";
+        final String dq = String.valueOf((char) 34);
 
-        final String command = "STATUS=0; SKIP_MOVE=0; ROOT_TASK_ID=; "
+        final String awkProgram = "function finish_task() { "
+                + "if (length(task_id)>0 && task_match && (wanted_display == " + dq + "-1" + dq
+                + " || task_display == wanted_display)) { count++; selected=task_id } } "
+                + "/^Display #[0-9]+/ { finish_task(); task_id=" + dq + dq
+                + "; task_match=0; task_display=$0; sub(/^Display #/, " + dq + dq
+                + ", task_display); next } "
+                + "/Task\\{/ { finish_task(); task_id=" + dq + dq + "; task_match=0; "
+                + "if (match($0, /rootTaskId=[0-9]+/)) { task_id=substr($0,RSTART,RLENGTH); "
+                + "sub(/rootTaskId=/, " + dq + dq + ", task_id) } "
+                + "else if (match($0, /#[0-9]+/)) task_id=substr($0,RSTART+1,RLENGTH-1); next } "
+                + "/ActivityRecord/ && length(task_id)>0 { "
+                + "if (index($0, pkg " + dq + "/" + dq + " cls) "
+                + "|| index($0, pkg " + dq + "/" + dq + " shortcls)) task_match=1 } "
+                + "END { finish_task(); if (count==1) print selected; "
+                + "else if (count>1) print " + dq + "AMBIGUOUS" + dq + " }";
+
+        final String activityLookup = "function scan_task_records() { ROOT_TASK_ID=$(printf '%s\\n' "
+                + dq + "$ACTIVITIES" + dq + " | /system/bin/awk "
+                + "-v pkg=" + packageArg + " -v cls=" + classArg
+                + " -v shortcls=" + shortClassArg + " -v wanted_display=" + dq
+                + "$LOOKUP_DISPLAY" + dq + " '" + awkProgram + "'); }; ";
+
+        final String command = "STATUS=0; SKIP_MOVE=0; ROOT_TASK_ID=" + dq + dq + "; "
                 + "ACTIVITIES=$(/system/bin/dumpsys activity activities 2>/dev/null); "
                 + activityLookup
-                + "LOOKUP_DISPLAY=" + displayId + "; scan_task_records; DEST_TASK_ID=\\"$ROOT_TASK_ID\\"; "
-                + "MOVE_TASK_ID=; "
-                + "if [ \\"$DEST_TASK_ID\\" = \\"AMBIGUOUS\\" ]; then "
-                + "echo 'CarAsistant: multiple exact ActivityRecord tasks already exist on destination'; STATUS=1; "
-                + "elif [ -n \\"$DEST_TASK_ID\\" ]; then "
-                + "ROOT_TASK_ID=\\"$DEST_TASK_ID\\"; MOVE_TASK_ID=\\"$DEST_TASK_ID\\"; SKIP_MOVE=1; "
-                + "else "
-                + "LOOKUP_DISPLAY=" + sourceDisplayId + "; scan_task_records; "
-                + "if [ \\"$ROOT_TASK_ID\\" = \\"AMBIGUOUS\\" ]; then "
-                + "echo 'CarAsistant: multiple exact ActivityRecord tasks match; refusing ambiguous move'; STATUS=1; "
-                + "elif [ -n \\"$ROOT_TASK_ID\\" ]; then MOVE_TASK_ID=\\"$ROOT_TASK_ID\\"; "
-                + "else "
-                + "if printf '%s\\\\n' \\"$ACTIVITIES\\" | /system/bin/grep -F " + packageArg + " >/dev/null; then "
-                + "echo 'CarAsistant: package has tasks but no exact matching ActivityRecord; refusing duplicate'; STATUS=1; "
-                + "else "
-                + "/system/bin/am start --user " + userId
+                + "LOOKUP_DISPLAY=" + displayId + "; scan_task_records; DEST_TASK_ID="
+                + dq + "$ROOT_TASK_ID" + dq + "; MOVE_TASK_ID=" + dq + dq + "; "
+                + "if [ " + dq + "$DEST_TASK_ID" + dq + " = " + dq + "AMBIGUOUS" + dq + " ]; then "
+                + "echo 'CarAsistant: multiple matching ActivityRecord tasks on destination'; STATUS=1; "
+                + "elif [ -n " + dq + "$DEST_TASK_ID" + dq + " ]; then "
+                + "ROOT_TASK_ID=" + dq + "$DEST_TASK_ID" + dq + "; "
+                + "MOVE_TASK_ID=" + dq + "$DEST_TASK_ID" + dq + "; SKIP_MOVE=1; "
+                + "else LOOKUP_DISPLAY=" + sourceDisplayId + "; scan_task_records; "
+                + "if [ " + dq + "$ROOT_TASK_ID" + dq + " = " + dq + "AMBIGUOUS" + dq + " ]; then "
+                + "echo 'CarAsistant: ambiguous ActivityRecord task; refusing move'; STATUS=1; "
+                + "elif [ -n " + dq + "$ROOT_TASK_ID" + dq + " ]; then "
+                + "MOVE_TASK_ID=" + dq + "$ROOT_TASK_ID" + dq + "; "
+                + "else if printf '%s\\n' " + dq + "$ACTIVITIES" + dq
+                + " | /system/bin/grep -F " + packageArg + " >/dev/null; then "
+                + "echo 'CarAsistant: package task exists but selected ActivityRecord was not found'; STATUS=1; "
+                + "else /system/bin/am start --user " + userId
                 + " --display " + displayId + " --windowingMode 1"
                 + " -a android.intent.action.MAIN -c android.intent.category.LAUNCHER"
                 + " -f 0x10000000 -n '" + component.flattenToString().replace("'", "'\\\"'\\\"'") + "' || STATUS=1; "
-                + "fi; fi; fi; "
-                + "if [ \\"$STATUS\\" -eq 0 ] && [ \\"$SKIP_MOVE\\" -eq 0 ] && [ -n \\"$ROOT_TASK_ID\\" ]; then "
-                + "/system/bin/am display move-stack \\"$ROOT_TASK_ID\\" " + displayId + " || STATUS=1; fi; "
-                + "VERIFIED=0; if [ \\"$STATUS\\" -eq 0 ]; then "
-                + "ATTEMPT=0; while [ \\"$ATTEMPT\\" -lt 10 ]; do "
+                + "fi; fi; "
+                + "if [ " + dq + "$STATUS" + dq + " -eq 0 ] && [ " + dq + "$SKIP_MOVE" + dq
+                + " -eq 0 ] && [ -n " + dq + "$ROOT_TASK_ID" + dq + " ]; then "
+                + "/system/bin/am display move-stack " + dq + "$ROOT_TASK_ID" + dq
+                + " " + displayId + " || STATUS=1; fi; "
+                + "VERIFIED=0; if [ " + dq + "$STATUS" + dq + " -eq 0 ]; then "
+                + "ATTEMPT=0; while [ " + dq + "$ATTEMPT" + dq + " -lt 10 ]; do "
                 + "ACTIVITIES=$(/system/bin/dumpsys activity activities 2>/dev/null); "
                 + "LOOKUP_DISPLAY=" + displayId + "; scan_task_records; "
-                + "if [ \\"$ROOT_TASK_ID\\" != \\"AMBIGUOUS\\" ] && [ -n \\"$ROOT_TASK_ID\\" ] "
-                + "&& { [ -z \\"$MOVE_TASK_ID\\" ] || [ \\"$ROOT_TASK_ID\\" = \\"$MOVE_TASK_ID\\" ]; }; "
-                + "then VERIFIED=1; break; fi; "
+                + "if [ " + dq + "$ROOT_TASK_ID" + dq + " != " + dq + "AMBIGUOUS" + dq
+                + " ] && [ -n " + dq + "$ROOT_TASK_ID" + dq + " ] && { [ -z "
+                + dq + "$MOVE_TASK_ID" + dq + " ] || [ " + dq + "$ROOT_TASK_ID" + dq
+                + " = " + dq + "$MOVE_TASK_ID" + dq + " ]; }; then VERIFIED=1; break; fi; "
                 + "/system/bin/sleep 0.5; ATTEMPT=$((ATTEMPT + 1)); done; fi; "
-                + "if [ \\"$VERIFIED\\" -eq 1 ]; then "
-                + "echo 'CarAsistant: exact ActivityRecord verified on projection display'; "
-                + "else echo 'CarAsistant: exact ActivityRecord not verified on projection display'; false; fi";
+                + "if [ " + dq + "$VERIFIED" + dq + " -eq 1 ]; then "
+                + "echo 'CarAsistant: exact ActivityRecord verified on destination'; "
+                + "else echo 'CarAsistant: ActivityRecord verification failed'; false; fi";
+
         RootShellSession.EXEC.execute(() -> {
             try {
                 rootShell.run(12, command);
@@ -402,8 +409,7 @@ public final class V10DisplayController {
                 synchronized (V10DisplayController.this) {
                     if (component.equals(target)) launched = false;
                 }
-                Log.w(TAG, "Exact ActivityRecord task was not verified on projection display",
-                        error);
+                Log.w(TAG, "Exact ActivityRecord task was not verified on projection display", error);
             }
         });
     }
