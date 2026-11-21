@@ -51,6 +51,9 @@ public final class V10ProjectionSession implements TextureView.SurfaceTextureLis
         boolean changed = target == null || !component.equals(target);
         target = component;
         if (changed) {
+            // A newer selection supersedes any not-yet-attached move request.
+            pendingMoveSourceDisplayId = -1;
+            restoreMediaTaskOnAttach = false;
             taskSession.setTarget(component);
             // If the headless AA-connect restore already launched this exact component
             // on display 1, attaching V10 must reuse that task instead of marking it
@@ -110,6 +113,7 @@ public final class V10ProjectionSession implements TextureView.SurfaceTextureLis
                 && displayController.isLaunched()
                 && component.equals(displayController.getTarget());
         target = component;
+        pendingMoveSourceDisplayId = -1;
         taskSession.setTarget(component);
         if (sameHeadlessTask) {
             // Android Auto opened V10 after the background restore. Keep the exact
