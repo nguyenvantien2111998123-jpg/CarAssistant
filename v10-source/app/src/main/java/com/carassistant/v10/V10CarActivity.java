@@ -1406,7 +1406,7 @@ private boolean isHomeScreen() {
                 .setTitle(leftPane ? "APP ĐƯỢC PHÉP · VÙNG 3/10"
                         : "CHỌN ỨNG DỤNG · VÙNG 7/10")
                 .setNegativeButton("ĐÓNG", null)
-                .setNeutralButton("⛶ CHIẾU FULL MÀN HÌNH PHỤ 2", (dialog, which) -> {
+                .setNeutralButton("⛶ FULL → MÀN 2", (dialog, which) -> {
                     if (current != null) movePaneAppToFullscreen(leftPane, current);
                 });
         if (choices.isEmpty()) {
