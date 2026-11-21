@@ -77,8 +77,7 @@ public final class PolicyMediaKeyHooks {
                                     + " result=0x" + Integer.toHexString(result)
                                     + " route=" + (passToUser ? "PASS_TO_USER" : "MEDIA_SESSION"));
 
-                            // This is the missing branch: the original event is passed
-                            // to the foreground window, not MediaSessionService.
+                            // Mirror the branch routed to the foreground window.
                             if (passToUser) relayWithoutBlocking(param.thisObject, event);
                         } catch (Throwable error) {
                             XposedBridge.log(TAG + " after-hook failed open: " + error);
@@ -139,6 +138,7 @@ public final class PolicyMediaKeyHooks {
                             + actionName(copy) + " to CarAsistant observer");
                 } catch (Throwable error) {
                     XposedBridge.log(TAG + " relay failed: " + error);
+                }
             });
         } catch (Throwable error) {
             XposedBridge.log(TAG + " relay queue rejected event: " + error);
