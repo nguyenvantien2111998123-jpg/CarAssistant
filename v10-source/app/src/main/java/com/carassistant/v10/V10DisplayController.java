@@ -341,8 +341,8 @@ public final class V10DisplayController {
                 + "if (length(task_id)>0 && task_match && (wanted_display == " + dq + "-1" + dq
                 + " || task_display == wanted_display)) { count++; selected=task_id } } "
                 + "/^Display #[0-9]+/ { finish_task(); task_id=" + dq + dq
-                + "; task_match=0; task_display=$0; sub(/^Display #/, " + dq + dq
-                + ", task_display); next } "
+                + "; task_match=0; if (match($0, /Display #[0-9]+/)) "
+                + "task_display=substr($0,RSTART+9,RLENGTH-9); next } "
                 + "/Task\\{/ { finish_task(); task_id=" + dq + dq + "; task_match=0; "
                 + "if (match($0, /rootTaskId=[0-9]+/)) { task_id=substr($0,RSTART,RLENGTH); "
                 + "sub(/rootTaskId=/, " + dq + dq + ", task_id) } "
