@@ -1280,10 +1280,8 @@ private void dispatchMediaSearchOnProjection(ComponentName target, String uri, S
 }
 
 private void stopBackgroundProjection() {
-    if (backgroundSession != null) {
-        backgroundSession.hideTask();
-        backgroundSession.setTarget(null);
-    }
+    // Preserve the existing Display 1/headless media standby lifecycle.
+    if (backgroundSession != null) backgroundSession.setTarget(null);
     V10SessionStore.setBackgroundTarget(this, null);
     activeBackgroundTarget = null;
     projectionLayer.setVisibility(isHomeScreen() ? View.VISIBLE : View.GONE);
