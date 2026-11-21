@@ -110,8 +110,8 @@ public final class V10SplitProjectionLayout {
         handle.setTextSize(9);
         handle.setGravity(Gravity.CENTER);
         handle.setContentDescription(left
-                ? "Mở app hay dùng cho vùng 30 phần trăm"
-                : "Chọn ứng dụng cho vùng 70 phần trăm");
+                ? "Mở menu ứng dụng được phép cho vùng tỉ lệ 3"
+                : "Mở menu chọn ứng dụng cho vùng tỉ lệ 7");
         GradientDrawable background = new GradientDrawable();
         background.setColor(Color.argb(30, 255, 255, 255));
         background.setCornerRadius(dp(14));
