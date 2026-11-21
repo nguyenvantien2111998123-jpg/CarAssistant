@@ -29,6 +29,9 @@ import java.util.List;
 /** Phone-side setup screen with tap-to-expand sections. */
 public final class V10SettingsActivity extends Activity {
     public static final String EXTRA_REQUEST_MICROPHONE = "request_microphone_permission";
+    public static final String EXTRA_OPEN_SECTION = "open_settings_section";
+    private String requestedSection;
+    private ScrollView settingsScroll;
     private boolean returnAfterMicPermission;
     private LinearLayout list;
     private LinearLayout favoriteChoices;
@@ -53,6 +56,7 @@ public final class V10SettingsActivity extends Activity {
     @Override protected void onCreate(Bundle state) {
         super.onCreate(state);
         returnAfterMicPermission = getIntent().getBooleanExtra(EXTRA_REQUEST_MICROPHONE, false);
+        requestedSection = getIntent().getStringExtra(EXTRA_OPEN_SECTION);
         loadAvailableApps();
         buildUi();
         if (!returnAfterMicPermission) getWindow().getDecorView().post(this::startFirstLaunchPermissionFlow);
@@ -206,12 +210,7 @@ public final class V10SettingsActivity extends Activity {
             body.addView(autoplayHint, params(-1, -2));
         });
 
-        addSection("QUYỀN & CHẨN ĐOÁN", "Theo dõi quyền hệ thống và trạng thái tích hợp", body -> {
-            permissionStatus = text("", 14, Color.WHITE);
-            permissionStatus.setPadding(dp(12), dp(10), dp(12), dp(10));
-            permissionStatus.setBackgroundColor(Color.rgb(22, 27, 33));
-            body.addView(permissionStatus, params(-1, -2));
-
+        addSection("QUYỀN & CHẨN ĐOÁN", "Cấp quyền Android và xem hướng dẫn tích hợp", body -> {
             addButton(body, "CẤP QUYỀN MICRO", () ->
                     requestPermissions(new String[]{Manifest.permission.RECORD_AUDIO}, 4102));
             addButton(body, "MỞ QUYỀN TRỢ NĂNG MEDIA AUTO PLAY", this::openAccessibilitySettings);
@@ -270,7 +269,14 @@ public final class V10SettingsActivity extends Activity {
             body.setVisibility(expanded ? View.GONE : View.VISIBLE);
             updateSectionHeader(header, heading, subtitle, !expanded);
         });
-        updateSectionHeader(header, heading, subtitle, false);
+        boolean open = heading.equals(requestedSection);
+        header.setTag(open);
+        body.setVisibility(open ? View.VISIBLE : View.GONE);
+        updateSectionHeader(header, heading, subtitle, open);
+        if (open && settingsScroll != null) {
+            settingsScroll.post(() -> settingsScroll.smoothScrollTo(0, section.getTop()));
+            requestedSection = null;
+        }
     }
 
     private void updateSectionHeader(TextView header, String heading, String subtitle, boolean expanded) {
