@@ -1115,7 +1115,8 @@ public final class V10CarActivity
         splitRightSession = new V10ProjectionSession(this, 2);
         splitProjectionLayout = new V10SplitProjectionLayout(
                 this, projectionLayer, backgroundSession, splitRightSession,
-                this::showSplitPaneMenu, this::scheduleDrivingChromeAutoHide);
+                this::showSplitPaneMenu, this::onSplitPaneTouched,
+                this::scheduleDrivingChromeAutoHide);
         splitProjectionLayout.attach();
         textureView = splitProjectionLayout.getLeftTextureView();
         projectionLayer.setVisibility(View.VISIBLE);
@@ -1136,7 +1137,7 @@ public final class V10CarActivity
         createFloatingTouchKey();
 
         keyboardController = new CarAssistantKeyboardController(
-                root, backgroundSession, session);
+                root, backgroundSession, session, splitRightSession);
         keyboardController.start();
     }
 
@@ -1339,6 +1340,10 @@ private boolean isHomeScreen() {
         projectionLayer.setVisibility(View.VISIBLE);
     }
 
+
+    private void onSplitPaneTouched(V10ProjectionSession touchedSession) {
+        if (keyboardController != null) keyboardController.setPreferredSession(touchedSession);
+    }
 
     private void showSplitPaneMenu(boolean leftPane) {
         loadApps();
