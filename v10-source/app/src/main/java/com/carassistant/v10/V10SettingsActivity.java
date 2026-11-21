@@ -169,10 +169,10 @@ public final class V10SettingsActivity extends Activity {
             rebuildFavoriteAppChoices();
         });
 
-        addSection("ỨNG DỤNG ĐƯỢC PHÉP Ở VÙNG 3/10",
-                "Chọn không giới hạn ứng dụng được phép xuất hiện trong menu vùng tỉ lệ 3", body -> {
+        addSection("ỨNG DỤNG ĐƯỢC PHÉP Ở VÙNG 3 (30%)",
+                "Chọn không giới hạn ứng dụng được phép xuất hiện trong menu vùng tỉ lệ 3/7", body -> {
             TextView hint = text(
-                    "Chỉ các ứng dụng được đánh dấu mới xuất hiện trong menu ở phía vùng 3/10 trên màn hình xe. Danh sách này không giới hạn số lượng và độc lập với 3 ứng dụng hay dùng để chiếu toàn màn hình phụ 2.",
+                    "Chỉ các ứng dụng được đánh dấu mới xuất hiện trong menu ở phía vùng 3 (30%) trên màn hình xe. Danh sách này không giới hạn số lượng và độc lập với 3 ứng dụng hay dùng để chiếu toàn màn hình phụ 2.",
                     13, Color.LTGRAY);
             hint.setPadding(dp(4), dp(2), dp(4), dp(8));
             body.addView(hint, params(-1, -2));
@@ -237,7 +237,7 @@ public final class V10SettingsActivity extends Activity {
             return heading.equals("ỨNG DỤNG HAY DÙNG");
         }
         if ("APP VÙNG 3".equals(requestedSection)) {
-            return heading.equals("ỨNG DỤNG ĐƯỢC PHÉP Ở VÙNG 3/10");
+            return heading.equals("ỨNG DỤNG ĐƯỢC PHÉP Ở VÙNG 3 (30%)");
         }
         if ("TRỢ LÝ MẶC ĐỊNH".equals(requestedSection) || "TRỢ LÝ GIỌNG NÓI".equals(requestedSection)) {
             return heading.equals("ỨNG DỤNG MẶC ĐỊNH CHO TRỢ LÝ");
@@ -245,7 +245,7 @@ public final class V10SettingsActivity extends Activity {
         if ("CHIẾU MÀN HÌNH".equals(requestedSection)) {
             return heading.equals("HƯỚNG MÀN HÌNH CHIẾU")
                     || heading.equals("ỨNG DỤNG HAY DÙNG")
-                    || heading.equals("ỨNG DỤNG ĐƯỢC PHÉP Ở VÙNG 3/10");
+                    || heading.equals("ỨNG DỤNG ĐƯỢC PHÉP Ở VÙNG 3 (30%)");
         }
         // Preserve compatibility with callers that still request a legacy section title.
         return heading.equals(requestedSection);
@@ -391,8 +391,8 @@ public final class V10SettingsActivity extends Activity {
         if (selectedBackground == null) return;
         ComponentName current = V10SessionStore.getBackgroundTarget(this);
         selectedBackground.setText(current == null
-                ? "Chưa chọn ứng dụng mặc định vùng 3/10"
-                : "Ứng dụng khởi tạo vùng 3/10: " + current.getPackageName());
+                ? "Chưa chọn ứng dụng mặc định vùng 3 (30%)"
+                : "Ứng dụng khởi tạo vùng 3 (30%): " + current.getPackageName());
     }
 
     private void rebuildFavoriteAppChoices() {
@@ -413,7 +413,7 @@ public final class V10SettingsActivity extends Activity {
         if (splitLeftAllowedChoices == null || splitLeftAllowedStatus == null) return;
         splitLeftAllowedChoices.removeAllViews();
         ArrayList<ComponentName> selected = V10SessionStore.getSplitLeftAllowedApps(this);
-        splitLeftAllowedStatus.setText("Đã cho phép " + selected.size() + " ứng dụng ở vùng 3/10");
+        splitLeftAllowedStatus.setText("Đã cho phép " + selected.size() + " ứng dụng ở vùng 3 (30%)");
         for (ResolveInfo info : availableApps) {
             if (info.activityInfo == null) continue;
             ComponentName component = new ComponentName(info.activityInfo.packageName, info.activityInfo.name);
