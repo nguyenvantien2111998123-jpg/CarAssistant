@@ -324,6 +324,15 @@ public final class V10DisplayController {
      * leaves the original phone-side UI visible and creates a second task.
      */
     public synchronized void launchMediaTaskOnDisplay(ComponentName component) {
+        launchMediaTaskOnDisplay(component, -1);
+    }
+
+    /**
+     * Reuses an existing task, preferring the exact source display when the caller
+     * is moving an app from one of the split panes. This avoids selecting another
+     * task belonging to the same package on the phone or a different projection.
+     */
+    public synchronized void launchMediaTaskOnDisplay(ComponentName component, int sourceDisplayId) {
         if (!isReady() || component == null) return;
         managedPackages.add(component.getPackageName());
         target = component;
@@ -332,15 +341,31 @@ public final class V10DisplayController {
         final int userId = Process.myUid() / 100000;
         final String packageName = component.getPackageName();
         final String flat = component.flattenToString().replace("'", "'\\\"'\\\"'");
+
         final String packageTask = shellQuote("A=" + packageName);
         final String displayHeader = shellQuote("Display #" + displayId);
+        final String sourceLookup;
+        if (sourceDisplayId > 0) {
+            final String sourceHeader = shellQuote("Display #" + sourceDisplayId);
+            sourceLookup = "ROOT_TASK_ID=$(printf '%s\\n' \"$ACTIVITIES\" | /system/bin/awk "
+                    + "-v source=" + sourceHeader + " -v wanted=" + packageTask + " "
+                    + "'/^Display #[0-9]+/ { active = (index($0, source) == 1); next } "
+                    + "active && /Task\\{/ && index($0, wanted) { "
+                    + "if (match($0, /rootTaskId=[0-9]+/)) { id=substr($0,RSTART,RLENGTH); "
+                    + "sub(/rootTaskId=/,\"\",id); print id; exit } "
+                    + "if (match($0, /Task\\{[^#]*#[0-9]+/)) { id=substr($0,RSTART,RLENGTH); "
+                    + "sub(/.*#/, \"\", id); print id; exit } }'); ";
+        } else {
+            sourceLookup = "ROOT_TASK_ID=$(printf '%s\\n' \"$ACTIVITIES\""
+                    + " | /system/bin/grep 'Task{'"
+                    + " | /system/bin/grep -F " + packageTask
+                    + " | /system/bin/sed -n -e 's/.*rootTaskId=\\([0-9][0-9]*\\).*/\\1/p'"
+                    + " -e 's/.*Task{[^#]*#\\([0-9][0-9]*\\).*/\\1/p'"
+                    + " | /system/bin/head -n 1); ";
+        }
+
         final String command = "STATUS=0; ACTIVITIES=$(/system/bin/dumpsys activity activities 2>/dev/null); "
-                + "ROOT_TASK_ID=$(printf '%s\\n' \"$ACTIVITIES\""
-                + " | /system/bin/grep 'Task{'"
-                + " | /system/bin/grep -F " + packageTask
-                + " | /system/bin/sed -n -e 's/.*rootTaskId=\\([0-9][0-9]*\\).*/\\1/p'"
-                + " -e 's/.*Task{[^#]*#\\([0-9][0-9]*\\).*/\\1/p'"
-                + " | /system/bin/head -n 1); "
+                + sourceLookup
                 + "if printf '%s\\n' \"$ACTIVITIES\" | /system/bin/awk "
                 + "-v wanted=" + packageTask + " -v display=" + displayHeader + " "
                 + "'/^Display #/ { active = index($0, display) > 0 }"
@@ -351,7 +376,7 @@ public final class V10DisplayController {
                 + "/system/bin/am display move-stack \"$ROOT_TASK_ID\" " + displayId + " || STATUS=1; "
                 + "else "
                 + "if printf '%s\\n' \"$ACTIVITIES\" | /system/bin/grep -F " + packageTask + " >/dev/null; then "
-                + "echo 'CarAsistant: existing media task found but its root ID could not be resolved'; STATUS=1; "
+                + "echo 'CarAsistant: existing media task found but not on the requested source display'; STATUS=1; "
                 + "else "
                 + "/system/bin/am start --user " + userId
                 + " --display " + displayId
