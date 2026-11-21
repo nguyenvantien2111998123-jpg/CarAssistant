@@ -17,11 +17,16 @@ public final class V10SplitProjectionLayout {
         void onOpenPaneMenu(boolean leftPane);
     }
 
+    public interface PaneFocusListener {
+        void onPaneTouched(V10ProjectionSession session);
+    }
+
     private final Context activity;
     private final FrameLayout host;
     private final V10ProjectionSession leftSession;
     private final V10ProjectionSession rightSession;
     private final PaneMenuListener menuListener;
+    private final PaneFocusListener focusListener;
     private final Runnable interactionListener;
     private LinearLayout row;
     private FrameLayout leftPane;
@@ -33,12 +38,14 @@ public final class V10SplitProjectionLayout {
 
     public V10SplitProjectionLayout(Context activity, FrameLayout host,
             V10ProjectionSession leftSession, V10ProjectionSession rightSession,
-            PaneMenuListener menuListener, Runnable interactionListener) {
+            PaneMenuListener menuListener, PaneFocusListener focusListener,
+            Runnable interactionListener) {
         this.activity = activity;
         this.host = host;
         this.leftSession = leftSession;
         this.rightSession = rightSession;
         this.menuListener = menuListener;
+        this.focusListener = focusListener;
         this.interactionListener = interactionListener;
         ratio = V10SessionStore.getSplitRatio(activity);
     }
@@ -63,10 +70,16 @@ public final class V10SplitProjectionLayout {
         View.OnTouchListener leftInput = new V10InputController(leftSession).createListener();
         View.OnTouchListener rightInput = new V10InputController(rightSession).createListener();
         leftTexture.setOnTouchListener((view, event) -> {
+            if (event.getActionMasked() == MotionEvent.ACTION_DOWN && focusListener != null) {
+                focusListener.onPaneTouched(leftSession);
+            }
             if (interactionListener != null) interactionListener.run();
             return leftInput.onTouch(view, event);
         });
         rightTexture.setOnTouchListener((view, event) -> {
+            if (event.getActionMasked() == MotionEvent.ACTION_DOWN && focusListener != null) {
+                focusListener.onPaneTouched(rightSession);
+            }
             if (interactionListener != null) interactionListener.run();
             return rightInput.onTouch(view, event);
         });
