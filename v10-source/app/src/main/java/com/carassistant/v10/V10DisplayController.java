@@ -317,88 +317,82 @@ public final class V10DisplayController {
     }
 
     /**
-     * Reuses an existing task, preferring the exact source display when the caller
-     * is moving an app from one of the split panes. This avoids selecting another
-     * task belonging to the same package on the phone or a different projection.
+     * Reuses the exact ActivityRecord task requested by the caller. Package-only
+     * matching is unsafe: one package can own multiple independent tasks on the
+     * same or different displays (browser tabs, document tasks, singleTask roots).
      */
     public synchronized void launchMediaTaskOnDisplay(ComponentName component, int sourceDisplayId) {
         if (!isReady() || component == null) return;
         managedPackages.add(component.getPackageName());
         target = component;
         launched = false;
+
         final int displayId = display.getDisplayId();
         final int userId = Process.myUid() / 100000;
         final String packageName = component.getPackageName();
-        final String flat = component.flattenToString().replace("'", "'\\\"'\\\"'");
+        final String className = component.getClassName();
+        final String shortClassName = className.startsWith(packageName)
+                ? "." + className.substring(packageName.length()) : className;
+        final String packageArg = shellQuote(packageName);
+        final String classArg = shellQuote(className);
+        final String shortClassArg = shellQuote(shortClassName);
+        final String displayArg = shellQuote("Display #" + displayId);
+        final String activityLookup = "function scan_task_records() { "
+                + "printf '%s\\\\n' \\"$ACTIVITIES\\" | /system/bin/awk "
+                + "-v pkg=" + packageArg + " -v cls=" + classArg
+                + " -v shortcls=" + shortClassArg + " -v wanted_display=\\"$LOOKUP_DISPLAY\\" "
+                + "'function finish_task() { "
+                + "if (task_id != \\"\\" && task_match && (wanted_display == \\"-1\\" || task_display == wanted_display)) "
+                + "{ count++; selected=task_id } } "
+                + "/^Display #[0-9]+/ { finish_task(); task_id=\\"\\"; task_match=0; "
+                + "task_display=$0; sub(/^Display #/, \\"\\", task_display); next } "
+                + "/Task\\\\{/ { finish_task(); task_id=\\"\\"; task_match=0; "
+                + "if (match($0, /rootTaskId=[0-9]+/)) { task_id=substr($0,RSTART,RLENGTH); "
+                + "sub(/rootTaskId=/, \\"\\", task_id) } "
+                + "else if (match($0, /#[0-9]+/)) { task_id=substr($0,RSTART+1,RLENGTH-1) } "
+                + "next } "
+                + "/ActivityRecord/ && task_id != \\"\\" { "
+                + "if (index($0, pkg \\"/\\" cls) || index($0, pkg \\"/\\" shortcls)) task_match=1 } "
+                + "END { finish_task(); if (count == 1) print selected; "
+                + "else if (count > 1) print \\"AMBIGUOUS\\" }'; }; ";
 
-        final String packageTask = shellQuote("A=" + packageName);
-        final String displayHeader = shellQuote("Display #" + displayId);
-        final String sourceLookup;
-        if (sourceDisplayId > 0) {
-            final String sourceHeader = shellQuote("Display #" + sourceDisplayId);
-            sourceLookup = "ROOT_TASK_ID=$(printf '%s\\n' \"$ACTIVITIES\" | /system/bin/awk "
-                    + "-v source=" + sourceHeader + " -v wanted=" + packageTask + " "
-                    + "'/^Display #[0-9]+/ { active = (index($0, source) == 1); next } "
-                    + "active && /Task\\{/ && index($0, wanted) { "
-                    + "if (match($0, /rootTaskId=[0-9]+/)) { id=substr($0,RSTART,RLENGTH); "
-                    + "sub(/rootTaskId=/,\"\",id); print id; exit } "
-                    + "if (match($0, /Task\\{[^#]*#[0-9]+/)) { id=substr($0,RSTART,RLENGTH); "
-                    + "sub(/.*#/, \"\", id); print id; exit } }'); ";
-        } else {
-            sourceLookup = "ROOT_TASK_ID=$(printf '%s\\n' \"$ACTIVITIES\""
-                    + " | /system/bin/grep 'Task{'"
-                    + " | /system/bin/grep -F " + packageTask
-                    + " | /system/bin/sed -n -e 's/.*rootTaskId=\\([0-9][0-9]*\\).*/\\1/p'"
-                    + " -e 's/.*Task{[^#]*#\\([0-9][0-9]*\\).*/\\1/p'"
-                    + " | /system/bin/head -n 1); ";
-        }
-
-        final String command = "SOURCE_DISPLAY_ID=" + sourceDisplayId
-                + "; STATUS=0; ACTIVITIES=$(/system/bin/dumpsys activity activities 2>/dev/null); "
-                + sourceLookup
-                + "if [ \"$SOURCE_DISPLAY_ID\" -lt 0 ] && printf '%s\\n' \"$ACTIVITIES\" | /system/bin/awk "
-                + "-v wanted=" + packageTask + " -v display=" + displayHeader + " "
-                + "'/^Display #/ { active = index($0, display) > 0 }"
-                + " active && index($0, wanted) { found=1 }"
-                + " END { exit(found ? 0 : 1) }'; then "
-                + "echo 'CarAsistant: media task already on projection display'; "
-                + "elif [ -n \"$ROOT_TASK_ID\" ]; then "
-                + "/system/bin/am display move-stack \"$ROOT_TASK_ID\" " + displayId + " || STATUS=1; "
+        final String command = "STATUS=0; SKIP_MOVE=0; ROOT_TASK_ID=; "
+                + "ACTIVITIES=$(/system/bin/dumpsys activity activities 2>/dev/null); "
+                + activityLookup
+                + "LOOKUP_DISPLAY=" + displayId + "; scan_task_records; DEST_TASK_ID=\\"$ROOT_TASK_ID\\"; "
+                + "if [ \\"$DEST_TASK_ID\\" = \\"AMBIGUOUS\\" ]; then "
+                + "echo 'CarAsistant: multiple exact ActivityRecord tasks already exist on destination'; STATUS=1; "
+                + "elif [ -n \\"$DEST_TASK_ID\\" ]; then ROOT_TASK_ID=\\"$DEST_TASK_ID\\"; SKIP_MOVE=1; "
                 + "else "
-                + "if printf '%s\\n' \"$ACTIVITIES\" | /system/bin/grep -F " + packageTask + " >/dev/null; then "
-                + "echo 'CarAsistant: existing media task found but not on the requested source display'; STATUS=1; "
+                + "LOOKUP_DISPLAY=" + sourceDisplayId + "; scan_task_records; "
+                + "if [ \\"$ROOT_TASK_ID\\" = \\"AMBIGUOUS\\" ]; then "
+                + "echo 'CarAsistant: multiple exact ActivityRecord tasks match; refusing ambiguous move'; STATUS=1; "
+                + "elif [ -n \\"$ROOT_TASK_ID\\" ]; then "
+                + "if [ \\"$ROOT_TASK_ID\\" != \\"AMBIGUOUS\\" ]; then "
+                + "if [ \\"$SOURCE_DISPLAY_ID\\" -ge 0 ] 2>/dev/null; then :; fi; "
+                + "fi; "
+                + "else "
+                + "if printf '%s\\\\n' \\"$ACTIVITIES\\" | /system/bin/grep -F " + packageArg + " >/dev/null; then "
+                + "echo 'CarAsistant: package has tasks but no exact matching ActivityRecord; refusing duplicate'; STATUS=1; "
                 + "else "
                 + "/system/bin/am start --user " + userId
-                + " --display " + displayId
-                + " --windowingMode 1"
-                + " -a android.intent.action.MAIN"
-                + " -c android.intent.category.LAUNCHER"
-                + " -f 0x10000000"
-                + " -n '" + flat + "' || STATUS=1; "
-                + "fi; fi; "
-                + "VERIFIED=0; if [ \"$STATUS\" -eq 0 ]; then "
-                + "ATTEMPT=0; while [ \"$ATTEMPT\" -lt 10 ]; do "
+                + " --display " + displayId + " --windowingMode 1"
+                + " -a android.intent.action.MAIN -c android.intent.category.LAUNCHER"
+                + " -f 0x10000000 -n '" + component.flattenToString().replace("'", "'\\\"'\\\"'") + "' || STATUS=1; "
+                + "fi; fi; fi; "
+                + "if [ \\"$STATUS\\" -eq 0 ] && [ \\"$SKIP_MOVE\\" -eq 0 ] && [ -n \\"$ROOT_TASK_ID\\" ]; then "
+                + "/system/bin/am display move-stack \\"$ROOT_TASK_ID\\" " + displayId + " || STATUS=1; fi; "
+                + "VERIFIED=0; if [ \\"$STATUS\\" -eq 0 ]; then "
+                + "ATTEMPT=0; while [ \\"$ATTEMPT\\" -lt 10 ]; do "
                 + "ACTIVITIES=$(/system/bin/dumpsys activity activities 2>/dev/null); "
-                + "if [ -n \"$ROOT_TASK_ID\" ]; then "
-                + "printf '%s\\n' \"$ACTIVITIES\" | /system/bin/awk "
-                + "-v wanted=" + packageTask + " -v display=" + displayHeader + " -v task=\"$ROOT_TASK_ID\" "
-                + "'/^Display #/ { active = index($0, display) > 0 } "
-                + "active && /Task\\{/ && index($0, wanted) { "
-                + "if (match($0, /rootTaskId=[0-9]+/)) { id=substr($0,RSTART,RLENGTH); "
-                + "sub(/rootTaskId=/,\"\",id) } "
-                + "else if (match($0, /Task\\{[^#]*#[0-9]+/)) { id=substr($0,RSTART,RLENGTH); "
-                + "sub(/.*#/, \"\", id) } "
-                + "if (id == task) found=1 } END { exit(found ? 0 : 1) }' "
-                + "else printf '%s\\n' \"$ACTIVITIES\" | /system/bin/awk "
-                + "-v wanted=" + packageTask + " -v display=" + displayHeader + " "
-                + "'/^Display #/ { active = index($0, display) > 0 }"
-                + " active && index($0, wanted) { found=1 } "
-                + "END { exit(found ? 0 : 1) }'; fi "
-                + "if [ \"$?\" -eq 0 ]; then VERIFIED=1; break; fi; "
+                + "LOOKUP_DISPLAY=" + displayId + "; scan_task_records; "
+                + "if [ \\"$ROOT_TASK_ID\\" != \\"AMBIGUOUS\\" ] && [ -n \\"$ROOT_TASK_ID\\" ] "
+                + "&& { [ -z \\"$DEST_TASK_ID\\" ] || [ \\"$ROOT_TASK_ID\\" = \\"$DEST_TASK_ID\\" ] "
+                + "|| [ \\"$SKIP_MOVE\\" -eq 0 ]; }; then VERIFIED=1; break; fi; "
                 + "/system/bin/sleep 0.5; ATTEMPT=$((ATTEMPT + 1)); done; fi; "
-                + "if [ \"$VERIFIED\" -eq 1 ]; then "
-                + "echo 'CarAsistant: verified media task on projection display'; "
-                + "else echo 'CarAsistant: media task not verified on projection display'; false; fi";
+                + "if [ \\"$VERIFIED\\" -eq 1 ]; then "
+                + "echo 'CarAsistant: exact ActivityRecord verified on projection display'; "
+                + "else echo 'CarAsistant: exact ActivityRecord not verified on projection display'; false; fi";
         RootShellSession.EXEC.execute(() -> {
             try {
                 rootShell.run(12, command);
@@ -409,7 +403,7 @@ public final class V10DisplayController {
                 synchronized (V10DisplayController.this) {
                     if (component.equals(target)) launched = false;
                 }
-                Log.w(TAG, "Media task was not verified on projection display; retry remains enabled",
+                Log.w(TAG, "Exact ActivityRecord task was not verified on projection display",
                         error);
             }
         });
