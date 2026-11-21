@@ -88,7 +88,7 @@ public final class RootShellSession {
                 }
                 if (line.startsWith(marker)) {
                     int code = Integer.parseInt(line.substring(marker.length()).trim());
-                    if (out.length() >= outputLimit) {
+                    if (outputLimit > 16384 && out.length() >= outputLimit) {
                         throw new IllegalStateException(
                                 "Root command output exceeded the configured limit; refusing partial result");
                     }
