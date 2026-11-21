@@ -185,6 +185,23 @@ public final class V10CarActivity
     }
 
     @Override
+    public void onNewIntent(Intent intent) {
+        super.onNewIntent(intent);
+        setIntent(intent);
+        if (intent == null) return;
+        boolean openActiveMedia = intent.getBooleanExtra(
+                "com.carassistant.v10.OPEN_ACTIVE_MEDIA", false);
+        if (openActiveMedia) {
+            intent.removeExtra("com.carassistant.v10.OPEN_ACTIVE_MEDIA");
+            if (resumed) {
+                handler.post(() -> {
+                    if (root != null) openActiveMediaOnProjection();
+                });
+            }
+        }
+    }
+
+    @Override
     public void onResume() {
 
         super.onResume();
@@ -429,6 +446,10 @@ public final class V10CarActivity
 
         ComponentName backgroundTarget = V10SessionStore.getBackgroundTarget(this);
         if (backgroundTarget != null) launchBackgroundProjection(backgroundTarget);
+        // Restore both split panes synchronously on every fresh car-side resume.
+        // The periodic poller remains as a safety net for later settings changes.
+        ComponentName splitRightTarget = V10SessionStore.getSplitRightTarget(this);
+        if (splitRightTarget != null) launchSplitRightProjection(splitRightTarget);
 
         android.content.SharedPreferences restorePrefs =
                 getSharedPreferences("media_autoplay", MODE_PRIVATE);
