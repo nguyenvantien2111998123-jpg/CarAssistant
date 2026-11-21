@@ -50,9 +50,9 @@ public final class V10PaneContainer {
         host.addView(row, new FrameLayout.LayoutParams(-1, -1));
 
         leftPane = new V10PaneView(activity, true, leftSession,
-                menuListener::onOpenPaneMenu, focusListener::onPaneTouched, interactionListener);
+                menuListener::onOpenMenu, focusListener::onPaneTouched, interactionListener);
         rightPane = new V10PaneView(activity, false, rightSession,
-                menuListener::onOpenPaneMenu, focusListener::onPaneTouched, interactionListener);
+                menuListener::onOpenMenu, focusListener::onPaneTouched, interactionListener);
 
         row.addView(leftPane, new LinearLayout.LayoutParams(0, -1, ratio));
         divider = new Divider(activity);
