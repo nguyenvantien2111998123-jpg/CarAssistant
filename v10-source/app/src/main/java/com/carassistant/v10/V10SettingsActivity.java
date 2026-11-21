@@ -36,11 +36,15 @@ public final class V10SettingsActivity extends Activity {
     private LinearLayout list;
     private LinearLayout favoriteChoices;
     private LinearLayout backgroundChoices;
+    private LinearLayout splitLeftAllowedChoices;
+    private TextView splitLeftAllowedStatus;
     private TextView favoriteStatus;
     private TextView selectedBackground;
     private TextView permissionStatus;
     private TextView orientationStatus;
     private LinearLayout defaultVoiceAppChoices;
+    private LinearLayout defaultVoiceCategoryChoices;
+    private LinearLayout defaultVoiceDetail;
     private TextView defaultVoiceAppStatus;
     private TextView permissionGuideStatus;
     private TextView permissionGuideAction;
@@ -59,7 +63,7 @@ public final class V10SettingsActivity extends Activity {
         requestedSection = getIntent().getStringExtra(EXTRA_OPEN_SECTION);
         loadAvailableApps();
         buildUi();
-        if (!returnAfterMicPermission) getWindow().getDecorView().post(this::startFirstLaunchPermissionFlow);
+        // Permissions are requested only after the user opens the corresponding item.
         if (returnAfterMicPermission) {
             if (checkSelfPermission(Manifest.permission.RECORD_AUDIO)
                     == PackageManager.PERMISSION_GRANTED) {
@@ -77,6 +81,7 @@ public final class V10SettingsActivity extends Activity {
         refreshPermissionGuide();
         rebuildFavoriteAppChoices();
         rebuildBackgroundAppChoices();
+        rebuildSplitLeftAllowedChoices();
         refreshOrientationStatus();
     }
 
@@ -111,19 +116,24 @@ public final class V10SettingsActivity extends Activity {
         if (!detailMode) addPermissionGuideCard();
         else addButton(list, "‹  QUAY LẠI TỔNG QUAN", this::finish);
 
-        addSection("ỨNG DỤNG MẶC ĐỊNH VÙNG 3/10", "Chọn ứng dụng khởi tạo cho khung trái trên màn hình phụ 1", body -> {
-            selectedBackground = text("", 14, Color.LTGRAY);
-            selectedBackground.setPadding(dp(4), dp(4), dp(4), dp(8));
-            body.addView(selectedBackground, params(-1, -2));
-            backgroundChoices = new LinearLayout(this);
-            backgroundChoices.setOrientation(LinearLayout.VERTICAL);
-            body.addView(backgroundChoices, params(-1, -2));
-            addButton(body, "XÓA ỨNG DỤNG MẶC ĐỊNH VÙNG 3/10", () -> {
-                V10SessionStore.setBackgroundTarget(this, null);
-                refreshBackgroundLabel();
-                rebuildBackgroundAppChoices();
+        addSection("CẤP QUYỀN", "Chọn riêng quyền cần cấp hoặc bật", body -> {
+            addButton(body, "MICROPHONE · CẤP QUYỀN GHI ÂM", () -> {
+                if (checkSelfPermission(Manifest.permission.RECORD_AUDIO)
+                        != PackageManager.PERMISSION_GRANTED) {
+                    requestPermissions(new String[]{Manifest.permission.RECORD_AUDIO}, 4102);
+                } else {
+                    new android.app.AlertDialog.Builder(this)
+                            .setMessage("Quyền micro đã được cấp.")
+                            .setPositiveButton("ĐÓNG", null).show();
+                }
             });
-            rebuildBackgroundAppChoices();
+            addButton(body, "MEDIA SESSION · MỞ QUYỀN TRUY CẬP THÔNG BÁO", this::openNotificationAccessSettings);
+            addButton(body, "TRỢ NĂNG · MỞ CÀI ĐẶT ACCESSIBILITY", this::openAccessibilitySettings);
+            TextView note = text(
+                    "Root/su: cấp quyền cho CarAsistant trong ứng dụng quản lý root. LSPosed: bật module CarAsistant và chọn đúng scope System Framework, Android Auto cùng các ứng dụng cần hook. Đây là quyền đặc biệt, người dùng phải bật thủ công.",
+                    13, Color.LTGRAY);
+            note.setPadding(dp(4), dp(10), dp(4), dp(8));
+            body.addView(note, params(-1, -2));
         });
 
         addSection("HƯỚNG MÀN HÌNH CHIẾU", "Tùy chọn ép các ứng dụng ở hai vùng chiếu sang ngang", body -> {
@@ -141,9 +151,9 @@ public final class V10SettingsActivity extends Activity {
             addButton(body, "TẮT ÉP ỨNG DỤNG CHIẾU NGANG", () -> setForceLandscape(false));
         });
 
-        addSection("ỨNG DỤNG HAY DÙNG", "Chọn tối đa 3 ứng dụng cho menu nhanh của vùng 3/10", body -> {
+        addSection("ỨNG DỤNG HAY DÙNG", "Chọn tối đa 3 ứng dụng để chiếu toàn màn hình phụ 2", body -> {
             TextView hint = text(
-                    "Chạm ứng dụng để chọn hoặc bỏ chọn. Tối đa 3 ứng dụng này sẽ xuất hiện trong menu của vùng 3/10 trên màn hình xe.",
+                    "Chạm ứng dụng để chọn hoặc bỏ chọn. Tối đa 3 ứng dụng này sẽ xuất hiện ở thanh ứng dụng hay dùng trên màn hình xe; chạm vào sẽ chiếu toàn màn hình phụ 2.",
                     13, Color.LTGRAY);
             hint.setPadding(dp(4), dp(2), dp(4), dp(8));
             body.addView(hint, params(-1, -2));
@@ -156,89 +166,56 @@ public final class V10SettingsActivity extends Activity {
             rebuildFavoriteAppChoices();
         });
 
-        addSection("TỰ KHỞI CHẠY KHI KẾT NỐI XE", "Ưu tiên để Android Auto mở lại CarAsistant khi kết nối", body -> {
-            TextView autoLaunchHint = text(
-                    "CarAsistant đã đăng ký loại ứng dụng chiếu Navigation của Android Auto. Android Auto có thể tự mở lại ứng dụng điều hướng được dùng gần nhất khi kết nối xe. Để CarAsistant được ưu tiên, hãy mở CarAsistant từ launcher Android Auto ít nhất một lần và để CarAsistant là ứng dụng điều hướng được mở gần nhất. Nếu bạn mở một ứng dụng điều hướng khác, Android Auto có thể khôi phục ứng dụng đó thay thế. Android không cung cấp API công khai để ứng dụng trên điện thoại tự ép Android Auto đưa một ứng dụng bất kỳ lên màn hình xe.",
+        addSection("ỨNG DỤNG ĐƯỢC PHÉP Ở VÙNG 3/10",
+                "Chọn không giới hạn ứng dụng được phép xuất hiện trong menu vùng tỉ lệ 3", body -> {
+            TextView hint = text(
+                    "Chỉ các ứng dụng được đánh dấu mới xuất hiện trong menu ở phía vùng 3/10 trên màn hình xe. Danh sách này không giới hạn số lượng và độc lập với 3 ứng dụng hay dùng để chiếu toàn màn hình phụ 2.",
                     13, Color.LTGRAY);
-            autoLaunchHint.setPadding(dp(4), dp(4), dp(4), dp(8));
-            body.addView(autoLaunchHint, params(-1, -2));
+            hint.setPadding(dp(4), dp(2), dp(4), dp(8));
+            body.addView(hint, params(-1, -2));
+            splitLeftAllowedStatus = text("", 14, Color.WHITE);
+            splitLeftAllowedStatus.setPadding(dp(4), dp(4), dp(4), dp(8));
+            body.addView(splitLeftAllowedStatus, params(-1, -2));
+            splitLeftAllowedChoices = new LinearLayout(this);
+            splitLeftAllowedChoices.setOrientation(LinearLayout.VERTICAL);
+            body.addView(splitLeftAllowedChoices, params(-1, -2));
+            rebuildSplitLeftAllowedChoices();
         });
 
-        addSection("ỨNG DỤNG MẶC ĐỊNH CHO TRỢ LÝ", "Chọn app ưu tiên cho dẫn đường, nhạc, video và TV", body -> {
+        addSection("ỨNG DỤNG MẶC ĐỊNH CHO TRỢ LÝ",
+                "Chọn nhóm tác vụ trước, sau đó chọn ứng dụng mặc định", body -> {
             TextView hint = text(
-                    "Lựa chọn được lưu riêng theo từng nhóm. Đây là ứng dụng ưu tiên khi câu lệnh không nêu tên ứng dụng.",
+                    "Mỗi nhóm lưu lựa chọn riêng. Chạm vào Dẫn đường, Nghe nhạc, Xem video hoặc Xem TV để mở danh sách ứng dụng tương ứng.",
                     13, Color.LTGRAY);
             hint.setPadding(dp(4), dp(2), dp(4), dp(8));
             body.addView(hint, params(-1, -2));
 
-            addButton(body, "DẪN ĐƯỜNG", () -> selectDefaultVoiceCategory("navigation"));
-            addButton(body, "NGHE NHẠC", () -> selectDefaultVoiceCategory("music"));
-            addButton(body, "XEM VIDEO", () -> selectDefaultVoiceCategory("video"));
-            addButton(body, "XEM TV", () -> selectDefaultVoiceCategory("tv"));
+            defaultVoiceCategoryChoices = new LinearLayout(this);
+            defaultVoiceCategoryChoices.setOrientation(LinearLayout.VERTICAL);
+            body.addView(defaultVoiceCategoryChoices, params(-1, -2));
+            addButton(defaultVoiceCategoryChoices, "DẪN ĐƯỜNG", () -> selectDefaultVoiceCategory("navigation"));
+            addButton(defaultVoiceCategoryChoices, "NGHE NHẠC", () -> selectDefaultVoiceCategory("music"));
+            addButton(defaultVoiceCategoryChoices, "XEM VIDEO", () -> selectDefaultVoiceCategory("video"));
+            addButton(defaultVoiceCategoryChoices, "XEM TV", () -> selectDefaultVoiceCategory("tv"));
 
+            defaultVoiceDetail = new LinearLayout(this);
+            defaultVoiceDetail.setOrientation(LinearLayout.VERTICAL);
+            body.addView(defaultVoiceDetail, params(-1, -2));
             defaultVoiceAppStatus = text("", 14, Color.WHITE);
             defaultVoiceAppStatus.setPadding(dp(4), dp(8), dp(4), dp(8));
-            body.addView(defaultVoiceAppStatus, params(-1, -2));
-
+            defaultVoiceDetail.addView(defaultVoiceAppStatus, params(-1, -2));
             defaultVoiceAppChoices = new LinearLayout(this);
             defaultVoiceAppChoices.setOrientation(LinearLayout.VERTICAL);
-            body.addView(defaultVoiceAppChoices, params(-1, -2));
-
-            addButton(body, "BỎ CHỌN ỨNG DỤNG MẶC ĐỊNH", () -> {
+            defaultVoiceDetail.addView(defaultVoiceAppChoices, params(-1, -2));
+            addButton(defaultVoiceDetail, "BỎ CHỌN ỨNG DỤNG MẶC ĐỊNH", () -> {
                 V10SessionStore.setDefaultVoiceApp(this, selectedDefaultVoiceCategory, null);
                 rebuildDefaultVoiceAppChoices();
             });
-            rebuildDefaultVoiceAppChoices();
+            addButton(defaultVoiceDetail, "‹  QUAY LẠI 4 NHÓM", this::showDefaultVoiceCategories);
+            showDefaultVoiceCategories();
         });
 
-        addSection("TỰ ĐỘNG PHÁT MEDIA", "Khôi phục ứng dụng và vị trí phát khi Android Auto kết nối", body -> {
-            android.content.SharedPreferences mediaPrefs =
-                    getSharedPreferences("media_autoplay", MODE_PRIVATE);
-            Switch autoplaySwitch = new Switch(this);
-            autoplaySwitch.setText("Tự động phát media khi kết nối Android Auto");
-            autoplaySwitch.setTextColor(Color.WHITE);
-            autoplaySwitch.setTextSize(14);
-            autoplaySwitch.setPadding(dp(4), dp(10), dp(4), dp(10));
-            autoplaySwitch.setChecked(mediaPrefs.getBoolean("enabled", true));
-            autoplaySwitch.setOnCheckedChangeListener((button, checked) ->
-                    mediaPrefs.edit().putBoolean("enabled", checked).apply());
-            body.addView(autoplaySwitch, params(-1, -2));
 
-            TextView autoplayHint = text(
-                    "Bật: khôi phục ứng dụng media trên màn hình phụ và tiếp tục phát từ checkpoint gần nhất. "
-                    + "Tắt: vẫn khôi phục ứng dụng/vị trí nhưng giữ tạm dừng. "
-                    + "Checkpoint mới ghi đè checkpoint cũ mỗi 60 giây. Việc khôi phục nội dung phụ thuộc "
-                    + "ứng dụng media còn giữ phiên phát; Android không cung cấp cách ép mọi ứng dụng "
-                    + "mở lại đúng video/bài hát nếu ứng dụng đã xóa phiên.",
-                    13, Color.LTGRAY);
-            autoplayHint.setPadding(dp(4), dp(6), dp(4), dp(8));
-            body.addView(autoplayHint, params(-1, -2));
-        });
-
-        addSection("QUYỀN & CHẨN ĐOÁN", "Cấp quyền Android và xem hướng dẫn tích hợp", body -> {
-            addButton(body, "CẤP QUYỀN MICRO", () ->
-                    requestPermissions(new String[]{Manifest.permission.RECORD_AUDIO}, 4102));
-            addButton(body, "MỞ QUYỀN TRỢ NĂNG MEDIA AUTO PLAY", this::openAccessibilitySettings);
-            addButton(body, "MỞ QUYỀN TRUY CẬP THÔNG BÁO / MEDIA", this::openNotificationAccessSettings);
-
-            TextView mediaHint = text(
-                    "Để trợ lý tự chọn kết quả và bấm Phát trong YouTube/Zing MP3, mở Trợ năng và bật dịch vụ “CarAsistant Media Auto Play”. Android yêu cầu người dùng tự bật quyền này; ứng dụng không thể tự cấp.",
-                    13, Color.LTGRAY);
-            mediaHint.setPadding(dp(4), dp(10), dp(4), dp(8));
-            body.addView(mediaHint, params(-1, -2));
-
-            addButton(body, "MỞ CÀI ĐẶT ỨNG DỤNG", () -> {
-                Intent i = new Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
-                        Uri.parse("package:" + getPackageName()));
-                startActivity(i);
-            });
-
-            TextView note = text(
-                    "Root/su phải được cấp trong trình quản lý root. LSPosed cần bật module và chọn scope phù hợp. Android không cho ứng dụng tự cấp các quyền đặc biệt này.",
-                    13, Color.LTGRAY);
-            note.setPadding(dp(4), dp(12), dp(4), dp(8));
-            body.addView(note, params(-1, -2));
-        });
 
         if (!detailMode) addButton(list, "QUAY LẠI", this::finish);
         refreshStatus();
@@ -246,20 +223,26 @@ public final class V10SettingsActivity extends Activity {
 
     private boolean shouldShowSection(String heading) {
         if (requestedSection == null || requestedSection.trim().isEmpty()) return true;
-        if ("CHIẾU MÀN HÌNH".equals(requestedSection)) {
-            return heading.equals("ỨNG DỤNG MẶC ĐỊNH VÙNG 3/10")
-                    || heading.equals("HƯỚNG MÀN HÌNH CHIẾU")
-                    || heading.equals("ỨNG DỤNG HAY DÙNG")
-                    || heading.equals("TỰ KHỞI CHẠY KHI KẾT NỐI XE");
+        if ("CẤP QUYỀN".equals(requestedSection) || "QUYỀN & TÍCH HỢP".equals(requestedSection)
+                || "QUYỀN & CHẨN ĐOÁN".equals(requestedSection)) {
+            return heading.equals("CẤP QUYỀN");
         }
-        if ("TRỢ LÝ GIỌNG NÓI".equals(requestedSection)) {
+        if ("ÉP NGANG ỨNG DỤNG".equals(requestedSection)) {
+            return heading.equals("HƯỚNG MÀN HÌNH CHIẾU");
+        }
+        if ("ỨNG DỤNG HAY DÙNG".equals(requestedSection)) {
+            return heading.equals("ỨNG DỤNG HAY DÙNG");
+        }
+        if ("APP VÙNG 3".equals(requestedSection)) {
+            return heading.equals("ỨNG DỤNG ĐƯỢC PHÉP Ở VÙNG 3/10");
+        }
+        if ("TRỢ LÝ MẶC ĐỊNH".equals(requestedSection) || "TRỢ LÝ GIỌNG NÓI".equals(requestedSection)) {
             return heading.equals("ỨNG DỤNG MẶC ĐỊNH CHO TRỢ LÝ");
         }
-        if ("TỰ ĐỘNG PHÁT MEDIA".equals(requestedSection)) {
-            return heading.equals("TỰ ĐỘNG PHÁT MEDIA");
-        }
-        if ("QUYỀN & TÍCH HỢP".equals(requestedSection)) {
-            return heading.equals("QUYỀN & CHẨN ĐOÁN");
+        if ("CHIẾU MÀN HÌNH".equals(requestedSection)) {
+            return heading.equals("HƯỚNG MÀN HÌNH CHIẾU")
+                    || heading.equals("ỨNG DỤNG HAY DÙNG")
+                    || heading.equals("ỨNG DỤNG ĐƯỢC PHÉP Ở VÙNG 3/10");
         }
         // Preserve compatibility with callers that still request a legacy section title.
         return heading.equals(requestedSection);
@@ -330,7 +313,18 @@ public final class V10SettingsActivity extends Activity {
 
     private void selectDefaultVoiceCategory(String category) {
         selectedDefaultVoiceCategory = category;
+        showDefaultVoiceDetail();
         rebuildDefaultVoiceAppChoices();
+    }
+
+    private void showDefaultVoiceCategories() {
+        if (defaultVoiceCategoryChoices != null) defaultVoiceCategoryChoices.setVisibility(View.VISIBLE);
+        if (defaultVoiceDetail != null) defaultVoiceDetail.setVisibility(View.GONE);
+    }
+
+    private void showDefaultVoiceDetail() {
+        if (defaultVoiceCategoryChoices != null) defaultVoiceCategoryChoices.setVisibility(View.GONE);
+        if (defaultVoiceDetail != null) defaultVoiceDetail.setVisibility(View.VISIBLE);
     }
 
     private String defaultVoiceCategoryLabel(String category) {
@@ -410,6 +404,48 @@ public final class V10SettingsActivity extends Activity {
             boolean checked = isFavoriteSelected(selected, component);
             addFavoriteChoiceButton(label + (checked ? "   ✓ ĐÃ CHỌN" : ""), component, checked);
         }
+    }
+
+    private void rebuildSplitLeftAllowedChoices() {
+        if (splitLeftAllowedChoices == null || splitLeftAllowedStatus == null) return;
+        splitLeftAllowedChoices.removeAllViews();
+        ArrayList<ComponentName> selected = V10SessionStore.getSplitLeftAllowedApps(this);
+        splitLeftAllowedStatus.setText("Đã cho phép " + selected.size() + " ứng dụng ở vùng 3/10");
+        for (ResolveInfo info : availableApps) {
+            if (info.activityInfo == null) continue;
+            ComponentName component = new ComponentName(info.activityInfo.packageName, info.activityInfo.name);
+            boolean checked = isPackageSelected(selected, component);
+            String label = String.valueOf(info.loadLabel(getPackageManager()));
+            TextView button = text((checked ? "☑  " : "□  ") + label, 14, Color.WHITE);
+            button.setGravity(Gravity.CENTER_VERTICAL);
+            button.setPadding(dp(12), 0, dp(10), 0);
+            button.setBackground(rounded(checked ? Color.rgb(29, 76, 83) : Color.rgb(27, 38, 51),
+                    dp(11), checked ? Color.rgb(53, 190, 183) : Color.rgb(43, 62, 82)));
+            LinearLayout.LayoutParams p = params(-1, dp(46));
+            p.setMargins(0, dp(3), 0, dp(3));
+            splitLeftAllowedChoices.addView(button, p);
+            button.setOnClickListener(v -> {
+                ArrayList<ComponentName> current = V10SessionStore.getSplitLeftAllowedApps(this);
+                int found = -1;
+                for (int i = 0; i < current.size(); i++) {
+                    if (current.get(i).getPackageName().equals(component.getPackageName())) {
+                        found = i;
+                        break;
+                    }
+                }
+                if (found >= 0) current.remove(found);
+                else current.add(component);
+                V10SessionStore.setSplitLeftAllowedApps(this, current);
+                rebuildSplitLeftAllowedChoices();
+            });
+        }
+    }
+
+    private boolean isPackageSelected(List<ComponentName> selected, ComponentName candidate) {
+        for (ComponentName item : selected) {
+            if (item != null && item.getPackageName().equals(candidate.getPackageName())) return true;
+        }
+        return false;
     }
 
     private boolean isFavoriteSelected(List<ComponentName> selected, ComponentName candidate) {
@@ -663,6 +699,8 @@ public final class V10SettingsActivity extends Activity {
     }
 
     private String sectionIcon(String heading) {
+        if (heading.contains("CẤP QUYỀN")) return "⚙";
+        if (heading.contains("VÙNG 3/10")) return "▦";
         if (heading.contains("NỀN")) return "▣";
         if (heading.contains("HƯỚNG")) return "↔";
         if (heading.contains("ỨNG DỤNG HAY")) return "★";
