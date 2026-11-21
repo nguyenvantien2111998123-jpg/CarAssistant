@@ -20,6 +20,7 @@ public final class V10ProjectionSession implements TextureView.SurfaceTextureLis
     private boolean destroyed;
     private boolean restoreMediaTaskOnAttach;
     private int pendingMoveSourceDisplayId = -1;
+    private int lastLaunchSourceDisplayId = -1;
     private int contentWidth;
     private int contentHeight;
 
@@ -53,6 +54,7 @@ public final class V10ProjectionSession implements TextureView.SurfaceTextureLis
         if (changed) {
             // A newer selection supersedes any not-yet-attached move request.
             pendingMoveSourceDisplayId = -1;
+            lastLaunchSourceDisplayId = -1;
             restoreMediaTaskOnAttach = false;
             taskSession.setTarget(component);
             // If the headless AA-connect restore already launched this exact component
@@ -74,6 +76,7 @@ public final class V10ProjectionSession implements TextureView.SurfaceTextureLis
             restoreMediaTaskOnAttach = false;
             int sourceDisplayId = pendingMoveSourceDisplayId;
             pendingMoveSourceDisplayId = -1;
+            lastLaunchSourceDisplayId = sourceDisplayId;
             displayController.launchMediaTaskOnDisplay(target, sourceDisplayId);
         } else {
             displayController.launchNewTask(target);
@@ -89,6 +92,7 @@ public final class V10ProjectionSession implements TextureView.SurfaceTextureLis
         // controller must never choose an arbitrary task from the same package
         // (for example, a phone-side browser task instead of the pane task).
         pendingMoveSourceDisplayId = sourceDisplayId;
+        lastLaunchSourceDisplayId = sourceDisplayId;
         if (displayController.isLaunched()) displayController.markNotLaunched();
         restoreMediaTaskOnAttach = true;
         attachCurrentSurface();
@@ -114,6 +118,7 @@ public final class V10ProjectionSession implements TextureView.SurfaceTextureLis
                 && component.equals(displayController.getTarget());
         target = component;
         pendingMoveSourceDisplayId = -1;
+        lastLaunchSourceDisplayId = -1;
         taskSession.setTarget(component);
         if (sameHeadlessTask) {
             // Android Auto opened V10 after the background restore. Keep the exact
@@ -133,6 +138,19 @@ public final class V10ProjectionSession implements TextureView.SurfaceTextureLis
     /** True after the root task has been moved or created on this projection display. */
     public boolean isTaskLaunched() {
         return !destroyed && target != null && displayController.isLaunched();
+    }
+
+    /**
+     * Retry a failed initial restore/launch only after the previous root-shell
+     * attempt has completed. The controller caps retries to avoid a shell loop.
+     */
+    public void retryPendingTaskLaunch() {
+        if (destroyed || target == null || textureView == null || !textureView.isAvailable()
+                || !displayController.isReady() || displayController.isLaunched()
+                || !displayController.canRetryTaskLaunch()) {
+            return;
+        }
+        displayController.launchMediaTaskOnDisplay(target, lastLaunchSourceDisplayId);
     }
 
     public int getDisplayId() { return displayController.getDisplayId(); }
