@@ -79,9 +79,16 @@ public final class V10ProjectionSession implements TextureView.SurfaceTextureLis
         if (destroyed || component == null) return;
         target = component;
         taskSession.setTarget(component);
-        restoreMediaTaskOnAttach = false;
-        displayController.launchMediaTaskOnDisplay(component);
-        attachCurrentSurface();
+        if (displayController.isReady()) {
+            // The destination display already owns a live Surface. Do not call
+            // attachCurrentSurface here: its normal launch path could race this
+            // task migration and start a duplicate activity instance.
+            restoreMediaTaskOnAttach = false;
+            displayController.launchMediaTaskOnDisplay(component);
+        } else {
+            restoreMediaTaskOnAttach = true;
+            attachCurrentSurface();
+        }
     }
 
     /** Restore the saved player task to this projection without force-stopping its package. */
