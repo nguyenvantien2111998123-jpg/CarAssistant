@@ -82,6 +82,7 @@ public final class V10SettingsActivity extends Activity {
 
     private void buildUi() {
         ScrollView scroll = new ScrollView(this);
+        settingsScroll = scroll;
         scroll.setFillViewport(true);
         scroll.setBackgroundColor(Color.rgb(10, 14, 20));
 
@@ -295,14 +296,12 @@ public final class V10SettingsActivity extends Activity {
             body.setVisibility(expanded ? View.GONE : View.VISIBLE);
             updateSectionHeader(header, heading, subtitle, !expanded);
         });
-        boolean open = heading.equals(requestedSection);
+        boolean open = requestedSection != null
+                && (heading.equals(requestedSection) || shouldShowSection(heading));
         header.setTag(open);
         body.setVisibility(open ? View.VISIBLE : View.GONE);
         updateSectionHeader(header, heading, subtitle, open);
-        if (open && settingsScroll != null) {
-            settingsScroll.post(() -> settingsScroll.smoothScrollTo(0, section.getTop()));
-            requestedSection = null;
-        }
+
     }
 
     private void updateSectionHeader(TextView header, String heading, String subtitle, boolean expanded) {
