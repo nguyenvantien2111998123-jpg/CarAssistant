@@ -139,8 +139,6 @@ public final class PolicyMediaKeyHooks {
                             + actionName(copy) + " to CarAsistant observer");
                 } catch (Throwable error) {
                     XposedBridge.log(TAG + " relay failed: " + error);
-                } finally {
-                        }
             });
         } catch (Throwable error) {
             XposedBridge.log(TAG + " relay queue rejected event: " + error);
