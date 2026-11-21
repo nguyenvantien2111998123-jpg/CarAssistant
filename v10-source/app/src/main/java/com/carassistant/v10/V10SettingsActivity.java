@@ -109,7 +109,7 @@ public final class V10SettingsActivity extends Activity {
             backgroundChoices = new LinearLayout(this);
             backgroundChoices.setOrientation(LinearLayout.VERTICAL);
             body.addView(backgroundChoices, params(-1, -2));
-            addButton(body, "TẮT APP NỀN HOME", () -> {
+            addButton(body, "XÓA ỨNG DỤNG MẶC ĐỊNH VÙNG 3/10", () -> {
                 V10SessionStore.setBackgroundTarget(this, null);
                 refreshBackgroundLabel();
                 rebuildBackgroundAppChoices();
@@ -117,9 +117,9 @@ public final class V10SettingsActivity extends Activity {
             rebuildBackgroundAppChoices();
         });
 
-        addSection("HƯỚNG MÀN HÌNH CHIẾU", "Tùy chọn ép ứng dụng trên màn hình phụ sang ngang", body -> {
+        addSection("HƯỚNG MÀN HÌNH CHIẾU", "Tùy chọn ép các ứng dụng ở hai vùng chiếu sang ngang", body -> {
             TextView hint = text(
-                    "Khi bật, CarAssistant cố định hướng ngang riêng cho màn hình chiếu 2. Không thay đổi hướng màn hình điện thoại. Cần LSPosed hoạt động trong system_server; có thể cần mở lại ứng dụng đang chiếu để áp dụng.",
+                    "Khi bật, CarAsistant cố định hướng ngang cho các ứng dụng đang chiếu trên màn hình phụ 1 và 2. Không thay đổi hướng màn hình điện thoại. Cần LSPosed hoạt động trong system_server; có thể cần mở lại ứng dụng đang chiếu để áp dụng.",
                     13, Color.LTGRAY);
             hint.setPadding(dp(4), dp(2), dp(4), dp(8));
             body.addView(hint, params(-1, -2));
@@ -132,7 +132,7 @@ public final class V10SettingsActivity extends Activity {
             addButton(body, "TẮT ÉP ỨNG DỤNG CHIẾU NGANG", () -> setForceLandscape(false));
         });
 
-        addSection("ỨNG DỤNG HAY DÙNG", "Chọn tối đa 3 ứng dụng cho thanh dọc bên trái", body -> {
+        addSection("ỨNG DỤNG HAY DÙNG", "Chọn tối đa 3 ứng dụng cho menu nhanh của vùng 3/10", body -> {
             TextView hint = text(
                     "Chạm ứng dụng để chọn hoặc bỏ chọn. Tối đa 3 ứng dụng này sẽ xuất hiện trong menu của vùng 3/10 trên màn hình xe.",
                     13, Color.LTGRAY);
@@ -363,8 +363,8 @@ public final class V10SettingsActivity extends Activity {
         if (selectedBackground == null) return;
         ComponentName current = V10SessionStore.getBackgroundTarget(this);
         selectedBackground.setText(current == null
-                ? "Chưa chọn ứng dụng chiếu nền"
-                : "Đang chọn: " + current.getPackageName());
+                ? "Chưa chọn ứng dụng mặc định vùng 3/10"
+                : "Ứng dụng khởi tạo vùng 3/10: " + current.getPackageName());
     }
 
     private void rebuildFavoriteAppChoices() {
