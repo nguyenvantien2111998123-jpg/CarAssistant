@@ -102,7 +102,7 @@ public final class V10SettingsActivity extends Activity {
 
         addPermissionGuideCard();
 
-        addSection("NỀN HOME", "Chọn ứng dụng chạy ở lớp nền", body -> {
+        addSection("ỨNG DỤNG MẶC ĐỊNH VÙNG 3/10", "Chọn ứng dụng khởi tạo cho khung trái trên màn hình phụ 1", body -> {
             selectedBackground = text("", 14, Color.LTGRAY);
             selectedBackground.setPadding(dp(4), dp(4), dp(4), dp(8));
             body.addView(selectedBackground, params(-1, -2));
@@ -134,7 +134,7 @@ public final class V10SettingsActivity extends Activity {
 
         addSection("ỨNG DỤNG HAY DÙNG", "Chọn tối đa 3 ứng dụng cho thanh dọc bên trái", body -> {
             TextView hint = text(
-                    "Chạm ứng dụng để chọn hoặc bỏ chọn. Danh sách lựa chọn được lưu lại.",
+                    "Chạm ứng dụng để chọn hoặc bỏ chọn. Tối đa 3 ứng dụng này sẽ xuất hiện trong menu của vùng 3/10 trên màn hình xe.",
                     13, Color.LTGRAY);
             hint.setPadding(dp(4), dp(2), dp(4), dp(8));
             body.addView(hint, params(-1, -2));
@@ -145,6 +145,14 @@ public final class V10SettingsActivity extends Activity {
             favoriteChoices.setOrientation(LinearLayout.VERTICAL);
             body.addView(favoriteChoices, params(-1, -2));
             rebuildFavoriteAppChoices();
+        });
+
+        addSection("TỰ KHỞI CHẠY KHI KẾT NỐI XE", "Ưu tiên để Android Auto mở lại CarAsistant khi kết nối", body -> {
+            TextView autoLaunchHint = text(
+                    "CarAsistant đã đăng ký loại ứng dụng chiếu Navigation của Android Auto. Android Auto có thể tự mở lại ứng dụng điều hướng được dùng gần nhất khi kết nối xe. Để CarAsistant được ưu tiên, hãy mở CarAsistant từ launcher Android Auto ít nhất một lần và để CarAsistant là ứng dụng điều hướng được mở gần nhất. Nếu bạn mở một ứng dụng điều hướng khác, Android Auto có thể khôi phục ứng dụng đó thay thế. Android không cung cấp API công khai để ứng dụng trên điện thoại tự ép Android Auto đưa một ứng dụng bất kỳ lên màn hình xe.",
+                    13, Color.LTGRAY);
+            autoLaunchHint.setPadding(dp(4), dp(4), dp(4), dp(8));
+            body.addView(autoLaunchHint, params(-1, -2));
         });
 
         addSection("ỨNG DỤNG MẶC ĐỊNH CHO TRỢ LÝ", "Chọn app ưu tiên cho dẫn đường, nhạc, video và TV", body -> {
