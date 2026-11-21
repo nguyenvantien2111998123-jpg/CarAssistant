@@ -5,6 +5,8 @@ import android.content.Context;
 import android.graphics.SurfaceTexture;
 import android.hardware.display.DisplayManager;
 import android.os.Process;
+import android.os.SystemClock;
+import android.os.UserHandle;
 import android.util.Log;
 import android.view.Display;
 import android.view.Surface;
@@ -27,6 +29,9 @@ public final class V10DisplayController {
     private Surface surface;
     private ComponentName target;
     private boolean launched;
+    private boolean launchInProgress;
+    private int launchAttempts;
+    private long lastLaunchAttemptAt;
     private boolean destroyed;
 
     private V10DisplayController(Context context, int displayIndex) {
@@ -322,96 +327,152 @@ public final class V10DisplayController {
      */
     public synchronized void launchMediaTaskOnDisplay(ComponentName component, int sourceDisplayId) {
         if (!isReady() || component == null) return;
+        if (!component.equals(target)) launchAttempts = 0;
         managedPackages.add(component.getPackageName());
         target = component;
         launched = false;
+        if (launchInProgress || launchAttempts >= 3) return;
+
+        launchInProgress = true;
+        launchAttempts++;
+        lastLaunchAttemptAt = SystemClock.uptimeMillis();
 
         final int displayId = display.getDisplayId();
-        final int userId = Process.myUid() / 100000;
+        final int userId = UserHandle.getUserId(Process.myUid());
         final String packageName = component.getPackageName();
         final String className = component.getClassName();
         final String shortClassName = className.startsWith(packageName)
                 ? "." + className.substring(packageName.length()) : className;
-        final String packageArg = shellQuote(packageName);
-        final String classArg = shellQuote(className);
-        final String shortClassArg = shellQuote(shortClassName);
-        final String dq = String.valueOf((char) 34);
-
-        final String awkProgram = "function finish_task() { "
-                + "if (length(task_id)>0 && task_match && (wanted_display == " + dq + "-1" + dq
-                + " || task_display == wanted_display)) { count++; selected=task_id } } "
-                + "/^Display #[0-9]+/ { finish_task(); task_id=" + dq + dq
-                + "; task_match=0; if (match($0, /Display #[0-9]+/)) "
-                + "task_display=substr($0,RSTART+9,RLENGTH-9); next } "
-                + "/Task\\{/ { finish_task(); task_id=" + dq + dq + "; task_match=0; "
-                + "if (match($0, /rootTaskId=[0-9]+/)) { task_id=substr($0,RSTART,RLENGTH); "
-                + "sub(/rootTaskId=/, " + dq + dq + ", task_id) } "
-                + "else if (match($0, /#[0-9]+/)) task_id=substr($0,RSTART+1,RLENGTH-1); next } "
-                + "/ActivityRecord/ && length(task_id)>0 { "
-                + "if (index($0, pkg " + dq + "/" + dq + " cls) "
-                + "|| index($0, pkg " + dq + "/" + dq + " shortcls)) task_match=1 } "
-                + "END { finish_task(); if (count==1) print selected; "
-                + "else if (count>1) print " + dq + "AMBIGUOUS" + dq + " }";
-
-        final String activityLookup = "function scan_task_records() { ROOT_TASK_ID=$(printf '%s\\n' "
-                + dq + "$ACTIVITIES" + dq + " | /system/bin/awk "
-                + "-v pkg=" + packageArg + " -v cls=" + classArg
-                + " -v shortcls=" + shortClassArg + " -v wanted_display=" + dq
-                + "$LOOKUP_DISPLAY" + dq + " '" + awkProgram + "'); }; ";
-
-        final String command = "STATUS=0; SKIP_MOVE=0; ROOT_TASK_ID=" + dq + dq + "; "
-                + "ACTIVITIES=$(/system/bin/dumpsys activity activities 2>/dev/null); "
-                + activityLookup
-                + "LOOKUP_DISPLAY=" + displayId + "; scan_task_records; DEST_TASK_ID="
-                + dq + "$ROOT_TASK_ID" + dq + "; MOVE_TASK_ID=" + dq + dq + "; "
-                + "if [ " + dq + "$DEST_TASK_ID" + dq + " = " + dq + "AMBIGUOUS" + dq + " ]; then "
-                + "echo 'CarAsistant: multiple matching ActivityRecord tasks on destination'; STATUS=1; "
-                + "elif [ -n " + dq + "$DEST_TASK_ID" + dq + " ]; then "
-                + "ROOT_TASK_ID=" + dq + "$DEST_TASK_ID" + dq + "; "
-                + "MOVE_TASK_ID=" + dq + "$DEST_TASK_ID" + dq + "; SKIP_MOVE=1; "
-                + "else LOOKUP_DISPLAY=" + sourceDisplayId + "; scan_task_records; "
-                + "if [ " + dq + "$ROOT_TASK_ID" + dq + " = " + dq + "AMBIGUOUS" + dq + " ]; then "
-                + "echo 'CarAsistant: ambiguous ActivityRecord task; refusing move'; STATUS=1; "
-                + "elif [ -n " + dq + "$ROOT_TASK_ID" + dq + " ]; then "
-                + "MOVE_TASK_ID=" + dq + "$ROOT_TASK_ID" + dq + "; "
-                + "else if printf '%s\\n' " + dq + "$ACTIVITIES" + dq
-                + " | /system/bin/grep -F " + packageArg + " >/dev/null; then "
-                + "echo 'CarAsistant: package task exists but selected ActivityRecord was not found'; STATUS=1; "
-                + "else /system/bin/am start --user " + userId
-                + " --display " + displayId + " --windowingMode 1"
-                + " -a android.intent.action.MAIN -c android.intent.category.LAUNCHER"
-                + " -f 0x10000000 -n '" + component.flattenToString().replace("'", "'\\\"'\\\"'") + "' || STATUS=1; "
-                + "fi; fi; "
-                + "if [ " + dq + "$STATUS" + dq + " -eq 0 ] && [ " + dq + "$SKIP_MOVE" + dq
-                + " -eq 0 ] && [ -n " + dq + "$ROOT_TASK_ID" + dq + " ]; then "
-                + "/system/bin/am display move-stack " + dq + "$ROOT_TASK_ID" + dq
-                + " " + displayId + " || STATUS=1; fi; "
-                + "VERIFIED=0; if [ " + dq + "$STATUS" + dq + " -eq 0 ]; then "
-                + "ATTEMPT=0; while [ " + dq + "$ATTEMPT" + dq + " -lt 10 ]; do "
-                + "ACTIVITIES=$(/system/bin/dumpsys activity activities 2>/dev/null); "
-                + "LOOKUP_DISPLAY=" + displayId + "; scan_task_records; "
-                + "if [ " + dq + "$ROOT_TASK_ID" + dq + " != " + dq + "AMBIGUOUS" + dq
-                + " ] && [ -n " + dq + "$ROOT_TASK_ID" + dq + " ] && { [ -z "
-                + dq + "$MOVE_TASK_ID" + dq + " ] || [ " + dq + "$ROOT_TASK_ID" + dq
-                + " = " + dq + "$MOVE_TASK_ID" + dq + " ]; }; then VERIFIED=1; break; fi; "
-                + "/system/bin/sleep 0.5; ATTEMPT=$((ATTEMPT + 1)); done; fi; "
-                + "if [ " + dq + "$VERIFIED" + dq + " -eq 1 ]; then "
-                + "echo 'CarAsistant: exact ActivityRecord verified on destination'; "
-                + "else echo 'CarAsistant: ActivityRecord verification failed'; false; fi";
 
         RootShellSession.EXEC.execute(() -> {
             try {
-                rootShell.run(12, command);
+                if (!isCurrentTarget(component)) return;
+
+                ActivityRecordTaskParser.Snapshot snapshot = readActivitySnapshot(
+                        packageName, className);
+                java.util.List<Integer> destinationTasks = snapshot.matchingTaskIds(displayId);
+                if (destinationTasks.size() > 1) {
+                    throw new IllegalStateException(
+                            "Multiple exact ActivityRecord tasks already exist on destination display");
+                }
+
+                int selectedTaskId = -1;
+                boolean alreadyOnDestination = destinationTasks.size() == 1;
+                if (alreadyOnDestination) {
+                    selectedTaskId = destinationTasks.get(0);
+                } else {
+                    java.util.List<Integer> sourceTasks = sourceDisplayId >= 0
+                            ? snapshot.matchingTaskIds(sourceDisplayId)
+                            : snapshot.allMatchingTaskIds();
+
+                    if (sourceTasks.size() > 1) {
+                        throw new IllegalStateException(
+                                "Multiple exact ActivityRecord tasks match the requested source");
+                    }
+                    if (sourceTasks.size() == 1) {
+                        selectedTaskId = sourceTasks.get(0);
+                    } else if (!snapshot.allMatchingTaskIds().isEmpty()) {
+                        throw new IllegalStateException(
+                                "Exact ActivityRecord exists, but not on the requested source display");
+                    } else if (snapshot.hasPackageTask()) {
+                        throw new IllegalStateException(
+                                "Package task exists but selected ActivityRecord was not found; refusing duplicate");
+                    } else {
+                        String launchCommand = "/system/bin/am start --user " + userId
+                                + " --display " + displayId
+                                + " --windowingMode 1"
+                                + " -a android.intent.action.MAIN"
+                                + " -c android.intent.category.LAUNCHER"
+                                + " -f 0x10000000 -n " + shellQuote(
+                                        packageName + "/" + className);
+                        rootShell.run(12, launchCommand);
+                        selectedTaskId = awaitExactTaskOnDisplay(
+                                packageName, className, displayId, -1);
+                    }
+                }
+
+                if (selectedTaskId < 0) {
+                    throw new IllegalStateException("No exact ActivityRecord task could be selected");
+                }
+
+                if (!alreadyOnDestination && !isTaskOnDisplay(
+                        packageName, className, displayId, selectedTaskId)) {
+                    if (!isCurrentTarget(component)) return;
+                    rootShell.run(12, "/system/bin/am display move-stack "
+                            + selectedTaskId + " " + displayId);
+                }
+
+                int verifiedTaskId = awaitExactTaskOnDisplay(
+                        packageName, className, displayId, selectedTaskId);
+                if (verifiedTaskId != selectedTaskId) {
+                    throw new IllegalStateException(
+                            "ActivityRecord task verification did not preserve the selected Task ID");
+                }
+
                 synchronized (V10DisplayController.this) {
                     if (!destroyed && component.equals(target)) launched = true;
                 }
+                Log.i(TAG, "Verified exact ActivityRecord task " + selectedTaskId
+                        + " on display " + displayId + " for " + component.flattenToShortString());
             } catch (Throwable error) {
                 synchronized (V10DisplayController.this) {
                     if (component.equals(target)) launched = false;
                 }
                 Log.w(TAG, "Exact ActivityRecord task was not verified on projection display", error);
+            } finally {
+                synchronized (V10DisplayController.this) {
+                    launchInProgress = false;
+                }
             }
         });
+    }
+
+    private boolean isCurrentTarget(ComponentName component) {
+        synchronized (this) {
+            return !destroyed && component.equals(target);
+        }
+    }
+
+    private ActivityRecordTaskParser.Snapshot readActivitySnapshot(
+            String packageName, String className) {
+        String dump = rootShell.run(12, "/system/bin/dumpsys activity activities", 2_000_000);
+        return ActivityRecordTaskParser.parse(dump, packageName, className);
+    }
+
+    private boolean isTaskOnDisplay(
+            String packageName, String className, int displayId, int taskId) {
+        ActivityRecordTaskParser.Snapshot snapshot = readActivitySnapshot(packageName, className);
+        java.util.List<Integer> matches = snapshot.matchingTaskIds(displayId);
+        return matches.size() == 1 && matches.get(0) == taskId;
+    }
+
+    private int awaitExactTaskOnDisplay(
+            String packageName, String className, int displayId, int expectedTaskId) {
+        for (int attempt = 0; attempt < 10; attempt++) {
+            ActivityRecordTaskParser.Snapshot snapshot = readActivitySnapshot(packageName, className);
+            java.util.List<Integer> matches = snapshot.matchingTaskIds(displayId);
+            if (matches.size() > 1) {
+                throw new IllegalStateException(
+                        "Ambiguous ActivityRecord verification: multiple matching tasks on destination");
+            }
+            if (matches.size() == 1) {
+                int found = matches.get(0);
+                if (expectedTaskId < 0 || expectedTaskId == found) return found;
+            }
+            try {
+                Thread.sleep(500L);
+            } catch (InterruptedException interrupted) {
+                Thread.currentThread().interrupt();
+                throw new IllegalStateException("Interrupted while verifying ActivityRecord task", interrupted);
+            }
+        }
+        throw new IllegalStateException("Timed out waiting for exact ActivityRecord on display " + displayId);
+    }
+
+    /** True when the session may safely retry a failed or not-yet-started task launch. */
+    public synchronized boolean canRetryTaskLaunch() {
+        return !destroyed && !launched && !launchInProgress && launchAttempts < 3
+                && SystemClock.uptimeMillis() - lastLaunchAttemptAt >= 1500L;
     }
 
     /**
@@ -459,6 +520,7 @@ public final class V10DisplayController {
     public synchronized void markNotLaunched() {
         launched = false;
         target = null;
+        launchAttempts = 0;
     }
 
     public synchronized void destroy() {
