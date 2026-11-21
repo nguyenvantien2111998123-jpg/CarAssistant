@@ -139,6 +139,27 @@ public final class V10SettingsActivity extends Activity {
             body.addView(note, params(-1, -2));
         });
 
+        addSection("TỰ ĐỘNG PHÁT MEDIA",
+                "Bật hoặc tắt việc tự động phát khi khôi phục nội dung Media", body -> {
+            TextView hint = text(
+                    "Khi bật, CarAsistant yêu cầu phát nội dung Media đã được nhận diện trong quá trình khôi phục. Khi tắt, ứng dụng vẫn có thể duy trì MediaSession và trạng thái điều khiển nhưng không tự yêu cầu phát.",
+                    13, Color.LTGRAY);
+            hint.setPadding(dp(4), dp(2), dp(4), dp(8));
+            body.addView(hint, params(-1, -2));
+
+            Switch autoplaySwitch = new Switch(this);
+            autoplaySwitch.setText("CHO PHÉP TỰ ĐỘNG PHÁT MEDIA");
+            autoplaySwitch.setTextColor(Color.WHITE);
+            autoplaySwitch.setTextSize(14);
+            autoplaySwitch.setPadding(dp(4), dp(8), dp(4), dp(8));
+            autoplaySwitch.setChecked(getSharedPreferences("media_autoplay", MODE_PRIVATE)
+                    .getBoolean("enabled", true));
+            autoplaySwitch.setOnCheckedChangeListener((button, checked) ->
+                    getSharedPreferences("media_autoplay", MODE_PRIVATE).edit()
+                            .putBoolean("enabled", checked).apply());
+            body.addView(autoplaySwitch, params(-1, dp(52)));
+        });
+
         addSection("HƯỚNG MÀN HÌNH CHIẾU", "Tùy chọn ép các ứng dụng ở hai vùng chiếu sang ngang", body -> {
             TextView hint = text(
                     "Khi bật, CarAsistant cố định hướng ngang cho các ứng dụng đang chiếu trên màn hình phụ 1 và 2. Không thay đổi hướng màn hình điện thoại. Cần LSPosed hoạt động trong system_server; có thể cần mở lại ứng dụng đang chiếu để áp dụng.",
@@ -229,6 +250,9 @@ public final class V10SettingsActivity extends Activity {
         if ("CẤP QUYỀN".equals(requestedSection) || "QUYỀN & TÍCH HỢP".equals(requestedSection)
                 || "QUYỀN & CHẨN ĐOÁN".equals(requestedSection)) {
             return heading.equals("CẤP QUYỀN");
+        }
+        if ("TỰ ĐỘNG PHÁT MEDIA".equals(requestedSection)) {
+            return heading.equals("TỰ ĐỘNG PHÁT MEDIA");
         }
         if ("ÉP NGANG ỨNG DỤNG".equals(requestedSection)) {
             return heading.equals("HƯỚNG MÀN HÌNH CHIẾU");
