@@ -48,6 +48,12 @@ public final class RootShellSession {
      * Ném IllegalStateException khi timeout / phiên đóng / lệnh lỗi.
      */
     public synchronized String run(int timeoutSeconds, String cmd) {
+        return run(timeoutSeconds, cmd, 16384);
+    }
+
+    /** Run a command with an explicit output cap for complete ActivityManager snapshots. */
+    public synchronized String run(int timeoutSeconds, String cmd, int maxOutputChars) {
+        final int outputLimit = Math.max(1024, maxOutputChars);
         if (process == null || !process.isAlive()) {
             destroy();
             try {
@@ -93,7 +99,7 @@ public final class RootShellSession {
                     }
                     throw new IllegalStateException(text.isEmpty() ? "Root command failed" : text);
                 }
-                if (out.length() < 16384) {
+                if (out.length() < outputLimit) {
                     out.append(line).append('\n');
                 }
             }
