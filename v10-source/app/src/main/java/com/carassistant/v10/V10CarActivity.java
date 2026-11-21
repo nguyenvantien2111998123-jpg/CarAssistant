@@ -1084,6 +1084,21 @@ public final class V10CarActivity
         return out;
     }
 
+    private ArrayList<AppInfo> getSplitLeftAllowedApps() {
+        ArrayList<AppInfo> out = new ArrayList<>();
+        ArrayList<ComponentName> configured = V10SessionStore.getSplitLeftAllowedApps(this);
+        for (ComponentName component : configured) {
+            if (component == null) continue;
+            for (AppInfo app : apps) {
+                if (component.getPackageName().equals(app.component.getPackageName())) {
+                    out.add(app);
+                    break;
+                }
+            }
+        }
+        return out;
+    }
+
     private LinearLayout quickLaunchTile(AppInfo app) {
         LinearLayout t=new LinearLayout(this);
         t.setOrientation(LinearLayout.VERTICAL);
@@ -1379,7 +1394,7 @@ private boolean isHomeScreen() {
     private void showSplitPaneMenu(boolean leftPane) {
         loadApps();
         ArrayList<AppInfo> choices = leftPane
-                ? getQuickLaunchApps()
+                ? getSplitLeftAllowedApps()
                 : new ArrayList<>(apps);
         ComponentName current = leftPane
                 ? V10SessionStore.getBackgroundTarget(this)
@@ -1388,15 +1403,15 @@ private boolean isHomeScreen() {
         for (int i = 0; i < choices.size(); i++) labels[i] = choices.get(i).name;
 
         AlertDialog.Builder builder = new AlertDialog.Builder(this)
-                .setTitle(leftPane ? "ỨNG DỤNG HAY DÙNG · VÙNG 3/10"
+                .setTitle(leftPane ? "APP ĐƯỢC PHÉP · VÙNG 3/10"
                         : "CHỌN ỨNG DỤNG · VÙNG 7/10")
                 .setNegativeButton("ĐÓNG", null)
-                .setNeutralButton("⛶ TOÀN MÀN HÌNH", (dialog, which) -> {
+                .setNeutralButton("⛶ CHIẾU FULL MÀN HÌNH PHỤ 2", (dialog, which) -> {
                     if (current != null) movePaneAppToFullscreen(leftPane, current);
                 });
         if (choices.isEmpty()) {
             builder.setMessage(leftPane
-                    ? "Chưa chọn ứng dụng hay dùng. Hãy chọn tối đa 3 ứng dụng trong Cài đặt CarAsistant trên điện thoại."
+                    ? "Chưa có ứng dụng được cho phép ở vùng 3/10. Hãy tick ứng dụng trong mục Menu app vùng tỉ lệ 3 trên điện thoại."
                     : "Không tìm thấy ứng dụng có thể khởi chạy.");
         } else {
             builder.setItems(labels, (dialog, which) ->
