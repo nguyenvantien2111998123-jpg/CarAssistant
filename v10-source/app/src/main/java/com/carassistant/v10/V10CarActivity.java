@@ -1512,7 +1512,6 @@ private void expandPaneToFullscreen(boolean leftPane, ComponentName component) {
         activeRightPaneTarget = null;
         if (dualPaneHome != null) dualPaneHome.setPaneTarget(false, null, "MÀN HÌNH PHỤ 1.1");
     }
-    rememberProjectedTask(component);
 }
 
 private boolean isHomeScreen() {
