@@ -180,6 +180,37 @@ public final class VoiceCommandParserMediaTest {
     }
 
     @Test
+    public void parsesEnglishOpenAppAndPaneTarget() {
+        VoiceCommandParser.Command command = parser.parse("Open YouTube on the left");
+        assertEquals(VoiceCommandParser.Type.OPEN_APP, command.type);
+        assertEquals("youtube", command.argument);
+        assertEquals(VoiceCommandParser.TargetScreen.LEFT, command.targetScreen);
+    }
+
+    @Test
+    public void parsesEnglishFullscreenAppCommand() {
+        VoiceCommandParser.Command command = parser.parse("Open full screen YouTube");
+        assertEquals(VoiceCommandParser.Type.OPEN_APP, command.type);
+        assertEquals("youtube", command.argument);
+        assertEquals(VoiceCommandParser.TargetScreen.FULLSCREEN, command.targetScreen);
+    }
+
+    @Test
+    public void parsesEnglishNavigationCommand() {
+        VoiceCommandParser.Command command = parser.parse("Navigate to the airport using Google Maps");
+        assertEquals(VoiceCommandParser.Type.NAVIGATE, command.type);
+        assertEquals("the airport", command.argument);
+        assertEquals("google maps", command.provider);
+    }
+
+    @Test
+    public void parsesEnglishFullscreenPaneCommand() {
+        VoiceCommandParser.Command command = parser.parse("Full screen right");
+        assertEquals(VoiceCommandParser.Type.EXPAND_PANE, command.type);
+        assertEquals(VoiceCommandParser.TargetScreen.RIGHT, command.targetScreen);
+    }
+
+    @Test
     public void understandsNavigationSynonyms() {
         VoiceCommandParser.Command command = parser.parse("Tìm đường tới sân bay Buôn Ma Thuột bằng Vietmap");
         assertEquals(VoiceCommandParser.Type.NAVIGATE, command.type);
