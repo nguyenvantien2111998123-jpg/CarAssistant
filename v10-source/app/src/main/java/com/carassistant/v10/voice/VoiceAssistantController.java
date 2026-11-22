@@ -5,6 +5,7 @@ import android.content.Context;
 import android.content.Intent;
 import android.content.pm.PackageManager;
 import android.os.Bundle;
+import android.os.Build;
 import android.os.Handler;
 import android.os.Looper;
 import android.speech.RecognitionListener;
@@ -142,15 +143,16 @@ public final class VoiceAssistantController {
             speak("Bạn hãy cấp quyền micro cho CarAssistant trước.");
             return;
         }
-        if (!SpeechRecognizer.isRecognitionAvailable(context)) {
-            notifyState(false, "Không có dịch vụ nhận dạng giọng nói.", "", false);
-            speak("Điện thoại chưa có dịch vụ nhận dạng giọng nói. Hãy kiểm tra dịch vụ Google và ngôn ngữ tiếng Việt.");
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S
+                || !SpeechRecognizer.isOnDeviceRecognitionAvailable(context)) {
+            notifyState(false, "Chưa có bộ nhận dạng giọng nói ngoại tuyến.", "", false);
+            speak("Điện thoại chưa có bộ nhận dạng giọng nói ngoại tuyến. Hãy cài gói tiếng Việt ngoại tuyến trong cài đặt dịch vụ nhận dạng giọng nói.");
             return;
         }
 
         try {
             if (recognizer == null) {
-                recognizer = SpeechRecognizer.createSpeechRecognizer(context);
+                recognizer = SpeechRecognizer.createOnDeviceSpeechRecognizer(context);
                 recognizer.setRecognitionListener(new RecognitionListener() {
                     @Override public void onReadyForSpeech(Bundle params) {
                         if (!destroyed && sessionActive && !commandHandled)
@@ -338,6 +340,7 @@ public final class VoiceAssistantController {
         intent.putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM);
         intent.putExtra(RecognizerIntent.EXTRA_LANGUAGE, "vi-VN");
         intent.putExtra(RecognizerIntent.EXTRA_LANGUAGE_PREFERENCE, "vi-VN");
+        intent.putExtra(RecognizerIntent.EXTRA_PREFER_OFFLINE, true);
         intent.putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 1);
         intent.putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true);
         intent.putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_COMPLETE_SILENCE_LENGTH_MILLIS, COMPLETE_SILENCE_MS);
