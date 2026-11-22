@@ -38,6 +38,8 @@ public final class VoiceCommandParser {
 
     public Command parse(String transcript) {
         String text = normalize(transcript);
+        Command englishCommand = parseEnglishCommand(text);
+        if (englishCommand != null) return englishCommand;
         text = normalizeEnglishCommand(text);
         if (text.isEmpty()) return new Command(Type.UNKNOWN, "");
         TargetScreen target = TargetScreen.AUTO;
@@ -211,6 +213,64 @@ public final class VoiceCommandParser {
         String result = value;
         for (String choice : choices) result = result.replace(choice, " ");
         return result;
+    }
+
+    /**
+     * Parse common English commands before converting aliases to the Vietnamese
+     * grammar. This keeps screen modifiers attached to the original command and
+     * avoids the generic parser mistaking "full screen" for an app-name modifier.
+     */
+    private static Command parseEnglishCommand(String text) {
+        if (text == null || text.isEmpty()) return null;
+        String value = text.trim();
+
+        if (matches(value, "full screen left", "fullscreen left", "full left")) {
+            return command(TargetScreen.LEFT, Type.EXPAND_PANE, "");
+        }
+        if (matches(value, "full screen right", "fullscreen right", "full right")) {
+            return command(TargetScreen.RIGHT, Type.EXPAND_PANE, "");
+        }
+
+        if (value.startsWith("open full screen ") || value.startsWith("open fullscreen ")) {
+            int prefixLength = value.startsWith("open full screen ")
+                    ? "open full screen ".length() : "open fullscreen ".length();
+            String app = value.substring(prefixLength).trim();
+            if (!app.isEmpty()) return command(TargetScreen.FULLSCREEN, Type.OPEN_APP, app);
+        }
+
+        TargetScreen target = TargetScreen.AUTO;
+        if (value.endsWith(" on the left") || value.endsWith(" on left")
+                || value.endsWith(" to the left")) {
+            target = TargetScreen.LEFT;
+            value = value.replaceFirst(" (on the left|on left|to the left)$", "").trim();
+        } else if (value.endsWith(" on the right") || value.endsWith(" on right")
+                || value.endsWith(" to the right")) {
+            target = TargetScreen.RIGHT;
+            value = value.replaceFirst(" (on the right|on right|to the right)$", "").trim();
+        }
+
+        if (value.startsWith("open app ")) value = value.substring("open app ".length()).trim();
+        else if (value.startsWith("open the app ")) value = value.substring("open the app ".length()).trim();
+        else if (value.startsWith("open ")) value = value.substring("open ".length()).trim();
+        else if (value.startsWith("launch app ")) value = value.substring("launch app ".length()).trim();
+        else if (value.startsWith("launch ")) value = value.substring("launch ".length()).trim();
+        else value = null;
+        if (value != null && !value.isEmpty()) {
+            return command(target, Type.OPEN_APP, value);
+        }
+
+        value = text.trim();
+        String destination = null;
+        if (value.startsWith("navigate to ")) destination = value.substring("navigate to ".length()).trim();
+        else if (value.startsWith("directions to ")) destination = value.substring("directions to ".length()).trim();
+        else if (value.startsWith("take me to ")) destination = value.substring("take me to ".length()).trim();
+        else if (value.startsWith("drive to ")) destination = value.substring("drive to ".length()).trim();
+        if (destination != null) {
+            String[] pair = splitFirst(destination, " using ", " with ", " on ");
+            if (!pair[0].isEmpty()) return command(TargetScreen.AUTO, Type.NAVIGATE,
+                    pair[0], pair[1], "navigation");
+        }
+        return null;
     }
 
     /** Map common English command phrases to the same deterministic command grammar. */
