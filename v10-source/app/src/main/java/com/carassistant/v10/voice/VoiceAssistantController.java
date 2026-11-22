@@ -43,6 +43,7 @@ public final class VoiceAssistantController {
     private Intent pendingListeningIntent;
     private boolean initialRecognizerStarted;
     private boolean restartPending;
+    private int transientErrorRetries;
     private String lastTranscript = "";
 
     /** Cancels a fresh listening session if no speech starts within three seconds. */
@@ -188,6 +189,17 @@ public final class VoiceAssistantController {
                                 || error == SpeechRecognizer.ERROR_SPEECH_TIMEOUT;
                         String transcript = lastTranscript.trim();
                         if (transcript.isEmpty() && noSpeechError) { restartListeningAfterSilence(); return; }
+                        // Some on-device recognizer providers transiently return CLIENT/SERVER
+                        // immediately after startListening. Retry a bounded number of times
+                        // instead of ending push-to-talk on the first provider hiccup.
+                        if (transcript.isEmpty()
+                                && error != SpeechRecognizer.ERROR_INSUFFICIENT_PERMISSIONS
+                                && transientErrorRetries < 2) {
+                            transientErrorRetries++;
+                            cancelRecognizer();
+                            restartListeningAfterSilence();
+                            return;
+                        }
                         cancelSilenceWatchdog();
                         mainHandler.removeCallbacks(finalResultFallback);
                         if (!transcript.isEmpty()) {
@@ -215,6 +227,7 @@ public final class VoiceAssistantController {
 
                         // Empty results are retried without ending the voice session.
                         if (transcript.trim().isEmpty()) { restartListeningAfterSilence(); return; }
+                        transientErrorRetries = 0;
 
                         cancelSilenceWatchdog();
                         mainHandler.removeCallbacks(finalResultFallback);
@@ -233,6 +246,7 @@ public final class VoiceAssistantController {
                         String partial = matches.get(0);
                         if (partial == null || partial.trim().isEmpty()) return;
                         String updated = partial.trim();
+                        transientErrorRetries = 0;
                         speechStarted = true;
                         mainHandler.removeCallbacks(noSpeechWatchdog);
                         if (!updated.equals(lastTranscript)) {
@@ -250,6 +264,7 @@ public final class VoiceAssistantController {
             speechStarted = false;
             initialRecognizerStarted = false;
             restartPending = false;
+            transientErrorRetries = 0;
             commandHandled = false;
             sessionActive = true;
             listening = true;
