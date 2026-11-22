@@ -11,8 +11,11 @@ public final class VoiceCommandParser {
         UNKNOWN
     }
 
+    public enum TargetScreen { AUTO, LEFT, RIGHT, FULLSCREEN }
+
     public static final class Command {
         public final Type type;
+        public final TargetScreen targetScreen;
         /** Destination, search query, channel, or app name. */
         public final String argument;
         /** Explicit provider/app spoken after "bằng" or "trên". */
@@ -20,9 +23,13 @@ public final class VoiceCommandParser {
         /** navigation, music, video, or tv; empty for general commands. */
         public final String category;
 
-        Command(Type type, String argument) { this(type, argument, "", ""); }
+        Command(Type type, String argument) { this(type, argument, "", "", TargetScreen.AUTO); }
         Command(Type type, String argument, String provider, String category) {
+            this(type, argument, provider, category, TargetScreen.AUTO);
+        }
+        Command(Type type, String argument, String provider, String category, TargetScreen targetScreen) {
             this.type = type;
+            this.targetScreen = targetScreen == null ? TargetScreen.AUTO : targetScreen;
             this.argument = argument == null ? "" : argument.trim();
             this.provider = provider == null ? "" : provider.trim();
             this.category = category == null ? "" : category;
@@ -31,7 +38,19 @@ public final class VoiceCommandParser {
 
     public Command parse(String transcript) {
         String text = normalize(transcript);
-        if (text.isEmpty()) return new Command(Type.UNKNOWN, "");
+        if (text.isEmpty()) return command(target, Type.UNKNOWN, "");
+        TargetScreen target = TargetScreen.AUTO;
+        if (containsAny(text, "full man hinh", "toan man hinh", "full man", "toan man")) {
+            target = TargetScreen.FULLSCREEN;
+            text = removeAny(text, "full man hinh", "toan man hinh", "full man", "toan man");
+        } else if (containsAny(text, "ben trai", "man hinh trai", "vung trai", "o trai")) {
+            target = TargetScreen.LEFT;
+            text = removeAny(text, "ben trai", "man hinh trai", "vung trai", "o trai");
+        } else if (containsAny(text, "ben phai", "man hinh phai", "vung phai", "o phai")) {
+            target = TargetScreen.RIGHT;
+            text = removeAny(text, "ben phai", "man hinh phai", "vung phai", "o phai");
+        }
+        text = text.replaceAll("\\s+", " ").trim();
 
         if (text.equals("hey cu")) return new Command(Type.CANCEL, "");
         if (text.startsWith("hey cu ")) text = text.substring(7).trim();
@@ -135,6 +154,26 @@ public final class VoiceCommandParser {
             if (!app.isEmpty()) return new Command(Type.OPEN_APP, app);
         }
         return new Command(Type.UNKNOWN, text);
+    }
+
+    private static Command command(TargetScreen target, Type type, String argument) {
+        return new Command(type, argument, "", "", target);
+    }
+
+    private static Command command(TargetScreen target, Type type, String argument,
+                                   String provider, String category) {
+        return new Command(type, argument, provider, category, target);
+    }
+
+    private static boolean containsAny(String value, String... choices) {
+        for (String choice : choices) if (value.contains(choice)) return true;
+        return false;
+    }
+
+    private static String removeAny(String value, String... choices) {
+        String result = value;
+        for (String choice : choices) result = result.replace(choice, " ");
+        return result;
     }
 
     private static Command navigationCommand(String value) {
