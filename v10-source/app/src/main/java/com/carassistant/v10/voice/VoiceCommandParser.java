@@ -72,7 +72,7 @@ public final class VoiceCommandParser {
         String value = firstPrefix(text,
                 "dan duong den ", "dan duong toi ", "chi duong den ",
                 "chi duong toi ", "chi duong ", "dieu huong den ", "dieu huong toi ");
-        if (value != null) return navigationCommand(value);
+        if (value != null) return navigationCommand(value, target);
 
         // "Đến cây xăng gần nhất bằng Navitel" is also a destination command.
         value = stripPrefix(text, "den ");
@@ -95,7 +95,7 @@ public final class VoiceCommandParser {
         }
 
         value = firstPrefix(text, "mo bai hat ", "phat bai hat ", "bat bai hat ", "tim bai hat ");
-        if (value != null) return mediaCommand(Type.PLAY_MUSIC, value, "music");
+        if (value != null) return mediaCommand(Type.PLAY_MUSIC, value, "music", target);
         value = firstPrefix(text, "mo nhac ", "phat nhac ", "bat nhac ", "tim nhac ");
         if (value != null) return mediaCommand(Type.PLAY_MUSIC, value, "music");
 
@@ -106,7 +106,7 @@ public final class VoiceCommandParser {
             if (startsWithAny(value, "tre ", "bolero", "rap ", "remix", "lofi", "tru tinh", "tinh ca")) {
                 value = "nhac " + value;
             }
-            return mediaCommand(Type.PLAY_VIDEO, value, "video");
+            return mediaCommand(Type.PLAY_VIDEO, value, "video", target);
         }
         value = firstPrefix(text, "mo video bai hat ", "phat video bai hat ", "tim video bai hat ");
         if (value != null) return mediaCommand(Type.PLAY_VIDEO, value, "video");
@@ -118,7 +118,7 @@ public final class VoiceCommandParser {
         if (value != null) return mediaCommand(Type.PLAY_VIDEO, value, "video");
 
         value = firstPrefix(text, "mo kenh ", "chuyen kenh ", "xem kenh ");
-        if (value != null) return mediaCommand(Type.OPEN_TV, value, "tv");
+        if (value != null) return mediaCommand(Type.OPEN_TV, value, "tv", target);
         if (matches(text, "mo tv", "mo truyen hinh", "bat tv", "mo ung dung tv")) {
             return new Command(Type.OPEN_TV, "", "", "tv");
         }
@@ -176,16 +176,16 @@ public final class VoiceCommandParser {
         return result;
     }
 
-    private static Command navigationCommand(String value) {
+    private static Command navigationCommand(String value, TargetScreen target) {
         String[] pair = splitFirst(value, " bang ", " tren ");
-        if (pair[0].isEmpty()) return new Command(Type.UNKNOWN, value);
-        return new Command(Type.NAVIGATE, pair[0], pair[1], "navigation");
+        if (pair[0].isEmpty()) return command(target, Type.UNKNOWN, value);
+        return command(target, Type.NAVIGATE, pair[0], pair[1], "navigation");
     }
 
-    private static Command mediaCommand(Type type, String value, String category) {
+    private static Command mediaCommand(Type type, String value, String category, TargetScreen target) {
         String clean = value == null ? "" : value.trim();
         String[] pair = splitFirst(clean, " tren ", " bang ");
-        return new Command(type, pair[0], pair[1], category);
+        return command(target, type, pair[0], pair[1], category);
     }
 
     private static String nearbyCategory(String value) {
