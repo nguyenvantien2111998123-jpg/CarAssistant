@@ -91,7 +91,7 @@ public final class VoiceCommandParser {
         value = stripPrefix(text, "tim ");
         if (value != null) {
             String place = nearbyCategory(value);
-            if (place != null) return new Command(Type.SEARCH_NEARBY, place, "", "navigation");
+            if (place != null) return command(target, Type.SEARCH_NEARBY, place, "", "navigation");
         }
 
         value = firstPrefix(text, "mo bai hat ", "phat bai hat ", "bat bai hat ", "tim bai hat ");
@@ -115,7 +115,7 @@ public final class VoiceCommandParser {
 
         value = firstPrefix(text, "mo phim ", "phat phim ", "xem phim ", "tim phim ",
                 "mo bo phim ", "phat bo phim ", "tim bo phim ");
-        if (value != null) return mediaCommand(Type.PLAY_VIDEO, value, "video");
+        if (value != null) return mediaCommand(Type.PLAY_VIDEO, value, "video", target);
 
         value = firstPrefix(text, "mo kenh ", "chuyen kenh ", "xem kenh ");
         if (value != null) return mediaCommand(Type.OPEN_TV, value, "tv", target);
