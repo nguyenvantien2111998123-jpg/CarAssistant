@@ -211,6 +211,18 @@ public final class VoiceCommandParserMediaTest {
     }
 
     @Test
+    public void fuzzyMatcherAcceptsCommonVietmapLiveRecognitionTypo() {
+        assertEquals(true, VoiceCommandParser.nameSimilarityPercent(
+                "vietmep lỉke", "VIETMAP LIVE") >= 82);
+    }
+
+    @Test
+    public void fuzzyMatcherRejectsUnrelatedAppNames() {
+        assertEquals(true, VoiceCommandParser.nameSimilarityPercent(
+                "vietmap live", "youtube music") < 82);
+    }
+
+    @Test
     public void understandsNavigationSynonyms() {
         VoiceCommandParser.Command command = parser.parse("Tìm đường tới sân bay Buôn Ma Thuột bằng Vietmap");
         assertEquals(VoiceCommandParser.Type.NAVIGATE, command.type);
