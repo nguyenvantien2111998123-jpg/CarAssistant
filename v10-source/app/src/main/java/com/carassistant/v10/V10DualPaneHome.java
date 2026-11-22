@@ -159,6 +159,12 @@ public final class V10DualPaneHome extends FrameLayout {
         updateDividerPosition();
     }
 
+    @Override
+    protected void onLayout(boolean changed, int left, int top, int right, int bottom) {
+        super.onLayout(changed, left, top, right, bottom);
+        updateDividerPosition();
+    }
+
     private void updateRatioFromRawX(float rawX) {
         int[] location = new int[2];
         getLocationOnScreen(location);
