@@ -158,6 +158,28 @@ public final class VoiceCommandParserMediaTest {
     }
 
     @Test
+    public void expandsCurrentLeftPaneOnFullscreenLeftCommand() {
+        VoiceCommandParser.Command command = parser.parse("Full bên trái");
+        assertEquals(VoiceCommandParser.Type.EXPAND_PANE, command.type);
+        assertEquals(VoiceCommandParser.TargetScreen.LEFT, command.targetScreen);
+    }
+
+    @Test
+    public void expandsCurrentRightPaneOnFullscreenRightCommand() {
+        VoiceCommandParser.Command command = parser.parse("Toàn màn hình bên phải");
+        assertEquals(VoiceCommandParser.Type.EXPAND_PANE, command.type);
+        assertEquals(VoiceCommandParser.TargetScreen.RIGHT, command.targetScreen);
+    }
+
+    @Test
+    public void opensNamedAppDirectlyFullscreen() {
+        VoiceCommandParser.Command command = parser.parse("Mở full app YouTube");
+        assertEquals(VoiceCommandParser.Type.OPEN_APP, command.type);
+        assertEquals("youtube", command.argument);
+        assertEquals(VoiceCommandParser.TargetScreen.FULLSCREEN, command.targetScreen);
+    }
+
+    @Test
     public void understandsNavigationSynonyms() {
         VoiceCommandParser.Command command = parser.parse("Tìm đường tới sân bay Buôn Ma Thuột bằng Vietmap");
         assertEquals(VoiceCommandParser.Type.NAVIGATE, command.type);
