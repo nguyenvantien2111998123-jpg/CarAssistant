@@ -336,9 +336,22 @@ public final class VoiceAssistantController {
     private Intent createRecognizerIntent() {
         Intent intent = new Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH);
         intent.putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM);
-        intent.putExtra(RecognizerIntent.EXTRA_LANGUAGE, "vi-VN");
-        intent.putExtra(RecognizerIntent.EXTRA_LANGUAGE_PREFERENCE, "vi-VN");
-        intent.putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 1);
+        // Android 14+ exposes official language detection and automatic language
+        // switching. Restrict it to the two command languages so the recognizer does
+        // not drift to unrelated downloaded languages.
+        if (android.os.Build.VERSION.SDK_INT >= 34) {
+            intent.putExtra("android.speech.extra.ENABLE_LANGUAGE_DETECTION", true);
+            intent.putExtra("android.speech.extra.ENABLE_LANGUAGE_SWITCH", "balanced");
+            intent.putExtra("android.speech.extra.LANGUAGE_SWITCH_ALLOWED_LANGUAGES",
+                    new String[] {"vi-VN", "en-US"});
+            intent.putExtra("android.speech.extra.LANGUAGE_DETECTION_ALLOWED_LANGUAGES",
+                    new String[] {"vi-VN", "en-US"});
+        } else {
+            // Older recognizers do not implement Android's language-switch API.
+            // Do not pin every utterance to Vietnamese; let the installed speech
+            // provider use its configured recognition language/default detection.
+        }
+        intent.putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 3);
         intent.putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true);
         intent.putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_COMPLETE_SILENCE_LENGTH_MILLIS, COMPLETE_SILENCE_MS);
         intent.putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_POSSIBLY_COMPLETE_SILENCE_LENGTH_MILLIS, COMPLETE_SILENCE_MS);
