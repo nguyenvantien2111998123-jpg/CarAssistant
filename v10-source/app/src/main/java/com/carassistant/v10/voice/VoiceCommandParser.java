@@ -52,7 +52,7 @@ public final class VoiceCommandParser {
         }
         text = text.replaceAll("\\s+", " ").trim();
 
-        if (text.equals("hey cu")) return new Command(Type.CANCEL, "");
+        if (text.equals("hey cu")) return command(target, Type.CANCEL, "");
         if (text.startsWith("hey cu ")) text = text.substring(7).trim();
         if (text.startsWith("kiki ")) text = text.substring(5).trim();
         if (text.startsWith("car assistant ")) text = text.substring(14).trim();
@@ -62,11 +62,11 @@ public final class VoiceCommandParser {
         }
         if (matches(text, "mo danh sach ung dung", "hien danh sach ung dung",
                 "danh sach ung dung", "mo app chon", "app chon", "hien app")) {
-            return new Command(Type.SHOW_APPS, "");
+            return command(target, Type.SHOW_APPS, "");
         }
         if (matches(text, "ve man hinh chinh", "ve trang chu",
                 "tro ve man hinh chinh", "ve home", "home", "trang chu")) {
-            return new Command(Type.HOME, "");
+            return command(target, Type.HOME, "");
         }
 
         String value = firstPrefix(text,
@@ -76,12 +76,12 @@ public final class VoiceCommandParser {
 
         // "Đến cây xăng gần nhất bằng Navitel" is also a destination command.
         value = stripPrefix(text, "den ");
-        if (value != null && !value.isEmpty()) return navigationCommand(value);
+        if (value != null && !value.isEmpty()) return navigationCommand(value, target);
 
         value = stripPrefix(text, "tim quanh day ");
         if (value != null) {
             String place = nearbyCategory(value);
-            if (place != null) return new Command(Type.SEARCH_NEARBY, place, "", "navigation");
+            if (place != null) return command(target, Type.SEARCH_NEARBY, place, "", "navigation");
         }
         value = stripPrefix(text, "tim gan day ");
         if (value != null) {
@@ -97,7 +97,7 @@ public final class VoiceCommandParser {
         value = firstPrefix(text, "mo bai hat ", "phat bai hat ", "bat bai hat ", "tim bai hat ");
         if (value != null) return mediaCommand(Type.PLAY_MUSIC, value, "music", target);
         value = firstPrefix(text, "mo nhac ", "phat nhac ", "bat nhac ", "tim nhac ");
-        if (value != null) return mediaCommand(Type.PLAY_MUSIC, value, "music");
+        if (value != null) return mediaCommand(Type.PLAY_MUSIC, value, "music", target);
 
         value = firstPrefix(text, "mo video nhac ", "phat video nhac ", "tim video nhac ");
         if (value != null) {
@@ -109,7 +109,7 @@ public final class VoiceCommandParser {
             return mediaCommand(Type.PLAY_VIDEO, value, "video", target);
         }
         value = firstPrefix(text, "mo video bai hat ", "phat video bai hat ", "tim video bai hat ");
-        if (value != null) return mediaCommand(Type.PLAY_VIDEO, value, "video");
+        if (value != null) return mediaCommand(Type.PLAY_VIDEO, value, "video", target);
         value = firstPrefix(text, "mo video ", "phat video ", "xem video ", "tim video ", "mo youtube ");
         if (value != null) return mediaCommand(Type.PLAY_VIDEO, value, "video");
 
@@ -120,13 +120,13 @@ public final class VoiceCommandParser {
         value = firstPrefix(text, "mo kenh ", "chuyen kenh ", "xem kenh ");
         if (value != null) return mediaCommand(Type.OPEN_TV, value, "tv", target);
         if (matches(text, "mo tv", "mo truyen hinh", "bat tv", "mo ung dung tv")) {
-            return new Command(Type.OPEN_TV, "", "", "tv");
+            return command(target, Type.OPEN_TV, "", "", "tv");
         }
         if (matches(text, "mo nhac", "bat nhac", "phat nhac")) {
-            return new Command(Type.PLAY_MUSIC, "", "", "music");
+            return command(target, Type.PLAY_MUSIC, "", "", "music");
         }
         if (matches(text, "mo video", "phat video", "xem video", "mo phim", "phat phim", "xem phim", "mo youtube")) {
-            return new Command(Type.PLAY_VIDEO, "", "", "video");
+            return command(target, Type.PLAY_VIDEO, "", "", "video");
         }
 
         // Generic media wording: "Mở <tên nội dung> trên YouTube" and
@@ -140,20 +140,20 @@ public final class VoiceCommandParser {
                 if (provider.contains("youtube music") || provider.contains("zing mp3")
                         || provider.contains("spotify") || provider.contains("nhaccuatui")
                         || provider.contains("nhac cua tui")) {
-                    return new Command(Type.PLAY_MUSIC, mediaPair[0], mediaPair[1], "music");
+                    return command(target, Type.PLAY_MUSIC, mediaPair[0], mediaPair[1], "music");
                 }
                 if (provider.contains("youtube") || provider.contains("revanced")
                         || provider.contains("morphe")) {
-                    return new Command(Type.PLAY_VIDEO, mediaPair[0], mediaPair[1], "video");
+                    return command(target, Type.PLAY_VIDEO, mediaPair[0], mediaPair[1], "video");
                 }
             }
         }
 
         if (text.startsWith("mo ")) {
             String app = text.substring(3).trim();
-            if (!app.isEmpty()) return new Command(Type.OPEN_APP, app);
+            if (!app.isEmpty()) return command(target, Type.OPEN_APP, app);
         }
-        return new Command(Type.UNKNOWN, text);
+        return command(target, Type.UNKNOWN, text);
     }
 
     private static Command command(TargetScreen target, Type type, String argument) {
