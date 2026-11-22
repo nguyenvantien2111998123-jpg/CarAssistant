@@ -58,7 +58,7 @@ public final class VoiceCommandParser {
         if (text.startsWith("car assistant ")) text = text.substring(14).trim();
 
         if (matches(text, "huy", "huy lenh", "dung lai", "bo qua", "thoi", "cancel", "dung")) {
-            return new Command(Type.CANCEL, "");
+            return command(target, Type.CANCEL, "");
         }
         if (matches(text, "mo danh sach ung dung", "hien danh sach ung dung",
                 "danh sach ung dung", "mo app chon", "app chon", "hien app")) {
@@ -86,7 +86,7 @@ public final class VoiceCommandParser {
         value = stripPrefix(text, "tim gan day ");
         if (value != null) {
             String place = nearbyCategory(value);
-            if (place != null) return new Command(Type.SEARCH_NEARBY, place, "", "navigation");
+            if (place != null) return command(target, Type.SEARCH_NEARBY, place, "", "navigation");
         }
         value = stripPrefix(text, "tim ");
         if (value != null) {
@@ -111,7 +111,7 @@ public final class VoiceCommandParser {
         value = firstPrefix(text, "mo video bai hat ", "phat video bai hat ", "tim video bai hat ");
         if (value != null) return mediaCommand(Type.PLAY_VIDEO, value, "video", target);
         value = firstPrefix(text, "mo video ", "phat video ", "xem video ", "tim video ", "mo youtube ");
-        if (value != null) return mediaCommand(Type.PLAY_VIDEO, value, "video");
+        if (value != null) return mediaCommand(Type.PLAY_VIDEO, value, "video", target);
 
         value = firstPrefix(text, "mo phim ", "phat phim ", "xem phim ", "tim phim ",
                 "mo bo phim ", "phat bo phim ", "tim bo phim ");
