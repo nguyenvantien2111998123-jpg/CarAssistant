@@ -44,7 +44,7 @@ public final class VoiceCommandParser {
         // phrased naturally ("đưa ... qua bên trái", "chiếu ... toàn màn hình").
         if (containsAny(text, "full man hinh", "toan man hinh", "toan man", "full man", "phong to toan man", "phong to man hinh")) {
             target = TargetScreen.FULLSCREEN;
-            text = removeAny(text, "full man hinh", "toan man hinh", "phong to toan man", "phong to man hinh", "phong to", "toan man", "full man");
+            text = removeAny(text, "full man hinh", "toan man hinh", "phong to toan man", "phong to man hinh", "toan man", "full man");
         } else if (containsAny(text, "ben trai", "o ben trai", "sang ben trai", "qua ben trai", "dua sang ben trai", "sang man hinh trai", "qua man hinh trai", "o man hinh trai", "man hinh trai", "vung trai", "o trai", "sang trai", "qua trai")) {
             target = TargetScreen.LEFT;
             text = removeAny(text, "dua sang ben trai", "sang ben trai", "qua ben trai", "o ben trai", "sang man hinh trai", "qua man hinh trai", "o man hinh trai", "man hinh ben trai", "man hinh trai", "vung ben trai", "vung trai", "ben trai", "o trai", "sang trai", "qua trai");
@@ -164,7 +164,7 @@ public final class VoiceCommandParser {
         // is not mistaken for an installed application.
         value = firstPrefix(text, "mo ung dung ", "mo app ", "khoi dong ",
                 "chay ung dung ", "chay app ", "mo lai ", "chuyen sang ",
-                "chuyen qua ", "doi sang ", "dua len man hinh ", "chieu ");
+                "chuyen qua ", "doi sang ", "dua len man hinh ", "chieu ", "phong to ");
         if (value != null && !value.isEmpty()) {
             if (value.startsWith("ung dung ")) value = value.substring(9).trim();
             else if (value.startsWith("app ")) value = value.substring(4).trim();
