@@ -42,15 +42,15 @@ public final class VoiceCommandParser {
         TargetScreen target = TargetScreen.AUTO;
         // Extract screen intent as a separate modifier so the command body can be
         // phrased naturally ("đưa ... qua bên trái", "chiếu ... toàn màn hình").
-        if (containsAny(text, "full man hinh", "toan man hinh", "toan man", "full man", "phong to toan man")) {
+        if (containsAny(text, "full man hinh", "toan man hinh", "toan man", "full man", "phong to toan man", "phong to man hinh")) {
             target = TargetScreen.FULLSCREEN;
-            text = removeAny(text, "full man hinh", "toan man hinh", "phong to toan man", "toan man", "full man");
-        } else if (containsAny(text, "ben trai", "man hinh trai", "vung trai", "o trai", "sang trai", "qua trai")) {
+            text = removeAny(text, "full man hinh", "toan man hinh", "phong to toan man", "phong to man hinh", "toan man", "full man");
+        } else if (containsAny(text, "ben trai", "sang ben trai", "qua ben trai", "dua sang ben trai", "man hinh trai", "vung trai", "o trai", "sang trai", "qua trai")) {
             target = TargetScreen.LEFT;
-            text = removeAny(text, "man hinh ben trai", "man hinh trai", "vung ben trai", "vung trai", "ben trai", "o trai", "sang trai", "qua trai");
-        } else if (containsAny(text, "ben phai", "man hinh phai", "vung phai", "o phai", "sang phai", "qua phai")) {
+            text = removeAny(text, "dua sang ben trai", "sang ben trai", "qua ben trai", "man hinh ben trai", "man hinh trai", "vung ben trai", "vung trai", "ben trai", "o trai", "sang trai", "qua trai");
+        } else if (containsAny(text, "ben phai", "sang ben phai", "qua ben phai", "dua sang ben phai", "man hinh phai", "vung phai", "o phai", "sang phai", "qua phai")) {
             target = TargetScreen.RIGHT;
-            text = removeAny(text, "man hinh ben phai", "man hinh phai", "vung ben phai", "vung phai", "ben phai", "o phai", "sang phai", "qua phai");
+            text = removeAny(text, "dua sang ben phai", "sang ben phai", "qua ben phai", "man hinh ben phai", "man hinh phai", "vung ben phai", "vung phai", "ben phai", "o phai", "sang phai", "qua phai");
         }
         text = text.replaceAll("\\s+", " ").trim();
 
@@ -165,7 +165,11 @@ public final class VoiceCommandParser {
         value = firstPrefix(text, "mo ung dung ", "mo app ", "khoi dong ",
                 "chay ung dung ", "chay app ", "mo lai ", "chuyen sang ",
                 "chuyen qua ", "doi sang ", "dua len man hinh ", "chieu ");
-        if (value != null && !value.isEmpty()) return command(target, Type.OPEN_APP, value);
+        if (value != null && !value.isEmpty()) {
+            if (value.startsWith("ung dung ")) value = value.substring(9).trim();
+            else if (value.startsWith("app ")) value = value.substring(4).trim();
+            if (!value.isEmpty()) return command(target, Type.OPEN_APP, value);
+        }
         if (text.startsWith("mo ")) {
             String app = text.substring(3).trim();
             if (app.startsWith("ung dung ")) app = app.substring(9).trim();
