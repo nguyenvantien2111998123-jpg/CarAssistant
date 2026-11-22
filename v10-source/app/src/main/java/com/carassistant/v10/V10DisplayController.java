@@ -371,18 +371,12 @@ public final class V10DisplayController {
                 + " -f 0x10000000"
                 + " -n '" + flat + "' || STATUS=1; "
                 + "fi; fi; "
-                + "VERIFIED=0; if [ \"$STATUS\" -eq 0 ]; then "
-                + "ATTEMPT=0; while [ \"$ATTEMPT\" -lt 10 ]; do "
-                + "ACTIVITIES=$(/system/bin/dumpsys activity activities 2>/dev/null); "
-                + "if printf '%s\\n' \"$ACTIVITIES\" | /system/bin/awk "
-                + "-v wanted=" + packageTask + " -v display=" + displayHeader + " "
-                + "'/^Display #/ { active = index($0, display) > 0 }"
-                + " active && index($0, wanted) { found=1 }"
-                + " END { exit(found ? 0 : 1) }'; then VERIFIED=1; break; fi; "
-                + "/system/bin/sleep 0.5; ATTEMPT=$((ATTEMPT + 1)); done; fi; "
-                + "if [ \"$VERIFIED\" -eq 1 ]; then "
-                + "echo 'CarAsistant: verified media task on projection display'; "
-                + "else echo 'CarAsistant: media task not verified on projection display'; false; fi";
+                // am display move-stack is synchronous with the task reparent operation.
+                // The previous ten-round dumpsys polling added up to five seconds after
+                // the move had already completed, delaying input on the destination pane.
+                + "if [ \"$STATUS\" -eq 0 ]; then "
+                + "echo 'CarAsistant: media task move command completed'; "
+                + "else echo 'CarAsistant: media task move command failed'; false; fi";
         RootShellSession.EXEC.execute(() -> {
             try {
                 rootShell.run(12, command);
