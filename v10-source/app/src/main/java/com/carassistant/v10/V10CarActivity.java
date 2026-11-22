@@ -2204,57 +2204,92 @@ private void hideTaskSwitcher() {
         String query = VoiceCommandParser.normalize(spokenName);
         if (query.isEmpty()) return null;
 
+        // Repair common Vietnamese speech-to-text substitutions for navigation app names.
+        // Keep this dictionary narrow: it must not turn arbitrary speech into an app launch.
+        if (query.equals("vietmep like") || query.equals("vietmap like")
+                || query.equals("vietmep live") || query.equals("vietmap life")) {
+            query = "vietmap live";
+        }
+
         AppInfo best = null;
         int bestScore = 0;
+        int secondBestScore = 0;
         for (AppInfo app : apps) {
             String label = VoiceCommandParser.normalize(app.name);
             String pkg = app.component.getPackageName().toLowerCase(Locale.ROOT);
             int score = 0;
 
-            if (label.equals(query)) score = 100;
-            else if (label.length() >= 4 && query.contains(label)) score = 80;
-            else if (query.length() >= 4 && label.contains(query)) score = 70;
+            if (label.equals(query)) score = 130;
+            else if (label.length() >= 4 && query.contains(label)) score = 100;
+            else if (query.length() >= 4 && label.contains(query)) score = 90;
 
             // Prefer the exact requested app family before generic YouTube matching.
-            // This avoids selecting the first installed YouTube variant when the user says
-            // "Morphe" or "ReVanced" explicitly.
-            if (query.contains("morphe") && pkg.contains("morphe")) {
-                score = Math.max(score, 120);
-            }
-            if (query.contains("revanced") && pkg.contains("revanced")) {
-                score = Math.max(score, 120);
-            }
+            if (query.contains("morphe") && pkg.contains("morphe")) score = Math.max(score, 140);
+            if (query.contains("revanced") && pkg.contains("revanced")) score = Math.max(score, 140);
             if (query.contains("youtube music")) {
                 boolean musicPackage = com.carassistant.v10.voice.MediaSearchUriBuilder
                         .isYouTubeMusicPackage(pkg);
-                if (musicPackage) score = Math.max(score, 115);
-                else if (pkg.contains("youtube")) score = Math.max(score, 60);
+                if (musicPackage) score = Math.max(score, 125);
+                else if (pkg.contains("youtube")) score = Math.max(score, 65);
             } else if (query.equals("youtube") && pkg.contains("youtube")) {
-                score = Math.max(score, 90);
+                score = Math.max(score, 115);
             }
             if ((query.equals("maps") || query.equals("google maps"))
                     && (pkg.equals("com.google.android.apps.maps") || label.contains("maps"))) {
-                score = Math.max(score, 95);
+                score = Math.max(score, 120);
             }
-            if (query.contains("spotify") && pkg.contains("spotify")) score = Math.max(score, 110);
+            if (query.contains("spotify") && pkg.contains("spotify")) score = Math.max(score, 125);
             if (query.contains("zing mp3") && (pkg.contains("zing") || label.contains("zing mp3"))) {
-                score = Math.max(score, 110);
+                score = Math.max(score, 125);
             }
             if (query.contains("vietmap") && (pkg.contains("vietmap") || label.contains("vietmap"))) {
-                score = Math.max(score, 95);
+                score = Math.max(score, 125);
             }
             if (query.contains("navitel") && (pkg.contains("navitel") || label.contains("navitel"))) {
-                score = Math.max(score, 95);
+                score = Math.max(score, 125);
+            }
+
+            // Conservative fuzzy fallback for ASR typos (e.g. "vietmep like" ->
+            // "vietmap live"). Require a high whole-label similarity and a clear winner.
+            if (score < 60 && label.length() >= 5 && query.length() >= 5) {
+                int distance = voiceNameEditDistance(query, label);
+                int maxLength = Math.max(query.length(), label.length());
+                int similarity = 100 * (maxLength - distance) / maxLength;
+                if (similarity >= 82) score = 60 + similarity - 82;
             }
 
             if (score > bestScore) {
+                secondBestScore = bestScore;
                 bestScore = score;
                 best = app;
+            } else if (score > secondBestScore) {
+                secondBestScore = score;
             }
         }
 
+        // Exact and explicit package-family matches win normally. For fuzzy-only
+        // matches, require a margin so similarly named apps are not guessed.
         if (best == null || bestScore < 60) return null;
+        if (bestScore < 80 && bestScore - secondBestScore < 6) return null;
         return best;
+    }
+
+    private static int voiceNameEditDistance(String first, String second) {
+        int[] previous = new int[second.length() + 1];
+        int[] current = new int[second.length() + 1];
+        for (int j = 0; j <= second.length(); j++) previous[j] = j;
+        for (int i = 1; i <= first.length(); i++) {
+            current[0] = i;
+            for (int j = 1; j <= second.length(); j++) {
+                int cost = first.charAt(i - 1) == second.charAt(j - 1) ? 0 : 1;
+                current[j] = Math.min(Math.min(current[j - 1] + 1,
+                        previous[j] + 1), previous[j - 1] + cost);
+            }
+            int[] swap = previous;
+            previous = current;
+            current = swap;
+        }
+        return previous[second.length()];
     }
 
     private String openAppByVoice(String spokenName) {
