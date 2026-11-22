@@ -77,10 +77,12 @@ public final class V10DualPaneHome extends FrameLayout {
                 Gravity.CENTER);
         divider.addView(dividerGrip, gripParams);
 
-        LinearLayout.LayoutParams dividerParams = new LinearLayout.LayoutParams(dp(24), -1);
+        divider.setElevation(dp(20));
         row.addView(left, new LinearLayout.LayoutParams(0, -1, 3f));
-        row.addView(divider, dividerParams);
         row.addView(right, new LinearLayout.LayoutParams(0, -1, 7f));
+        FrameLayout.LayoutParams dividerParams = new FrameLayout.LayoutParams(dp(24), -1,
+                Gravity.TOP | Gravity.LEFT);
+        addView(divider, dividerParams);
         setRatio(initialRatio, false);
 
         divider.setOnTouchListener((view, event) -> {
@@ -115,6 +117,11 @@ public final class V10DualPaneHome extends FrameLayout {
         right.closePicker();
     }
 
+    /** Opens the app picker for the pane whose projected task was just closed. */
+    public void openPicker(boolean leftPane) {
+        (leftPane ? left : right).openPicker();
+    }
+
     public void setPaneTarget(boolean leftPane, ComponentName component, String label) {
         Pane pane = leftPane ? left : right;
         pane.target = component;
@@ -136,7 +143,20 @@ public final class V10DualPaneHome extends FrameLayout {
             left.setLayoutParams(lp);
             right.setLayoutParams(rp);
         }
+        updateDividerPosition();
         if (persist && listener != null) listener.onRatioChanged(ratio);
+    }
+
+    private void updateDividerPosition() {
+        if (divider == null || getWidth() <= 0) return;
+        divider.setX(Math.max(0f, Math.min(getWidth() - divider.getWidth(),
+                getWidth() * ratio - divider.getWidth() / 2f)));
+    }
+
+    @Override
+    protected void onSizeChanged(int w, int h, int oldw, int oldh) {
+        super.onSizeChanged(w, h, oldw, oldh);
+        updateDividerPosition();
     }
 
     private void updateRatioFromRawX(float rawX) {
@@ -246,11 +266,13 @@ public final class V10DualPaneHome extends FrameLayout {
 
         void togglePicker() {
             if (picker.getVisibility() == View.VISIBLE) closePicker();
-            else {
-                rebuildApps();
-                picker.setVisibility(View.VISIBLE);
-                topHandle.setVisibility(View.GONE);
-            }
+            else openPicker();
+        }
+
+        void openPicker() {
+            rebuildApps();
+            picker.setVisibility(View.VISIBLE);
+            topHandle.setVisibility(View.GONE);
         }
 
         void closePicker() {
