@@ -2252,9 +2252,7 @@ private void hideTaskSwitcher() {
             // Conservative fuzzy fallback for ASR typos (e.g. "vietmep like" ->
             // "vietmap live"). Require a high whole-label similarity and a clear winner.
             if (score < 60 && label.length() >= 5 && query.length() >= 5) {
-                int distance = voiceNameEditDistance(query, label);
-                int maxLength = Math.max(query.length(), label.length());
-                int similarity = 100 * (maxLength - distance) / maxLength;
+                int similarity = VoiceCommandParser.nameSimilarityPercent(query, label);
                 if (similarity >= 82) score = 60 + similarity - 82;
             }
 
@@ -2274,23 +2272,6 @@ private void hideTaskSwitcher() {
         return best;
     }
 
-    private static int voiceNameEditDistance(String first, String second) {
-        int[] previous = new int[second.length() + 1];
-        int[] current = new int[second.length() + 1];
-        for (int j = 0; j <= second.length(); j++) previous[j] = j;
-        for (int i = 1; i <= first.length(); i++) {
-            current[0] = i;
-            for (int j = 1; j <= second.length(); j++) {
-                int cost = first.charAt(i - 1) == second.charAt(j - 1) ? 0 : 1;
-                current[j] = Math.min(Math.min(current[j - 1] + 1,
-                        previous[j] + 1), previous[j - 1] + cost);
-            }
-            int[] swap = previous;
-            previous = current;
-            current = swap;
-        }
-        return previous[second.length()];
-    }
 
     private String openAppByVoice(String spokenName) {
         return openAppByVoice(spokenName, VoiceCommandParser.TargetScreen.AUTO);
