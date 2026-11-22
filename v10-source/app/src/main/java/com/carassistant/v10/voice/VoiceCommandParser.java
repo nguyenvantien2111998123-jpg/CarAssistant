@@ -6,7 +6,7 @@ import java.util.Locale;
 /** Deterministic Vietnamese voice command parser for CarAssistant. */
 public final class VoiceCommandParser {
     public enum Type {
-        OPEN_APP, SHOW_APPS, HOME, CANCEL,
+        OPEN_APP, SHOW_APPS, HOME, CANCEL, EXPAND_PANE,
         NAVIGATE, SEARCH_NEARBY, PLAY_MUSIC, PLAY_VIDEO, OPEN_TV,
         UNKNOWN
     }
@@ -40,9 +40,22 @@ public final class VoiceCommandParser {
         String text = normalize(transcript);
         if (text.isEmpty()) return new Command(Type.UNKNOWN, "");
         TargetScreen target = TargetScreen.AUTO;
+        boolean fullRequest = containsAny(text, "full", "toan man hinh", "toan man", "phong to");
+        boolean leftRequested = containsAny(text, "ben trai", "man hinh trai", "man hinh 1", "vung trai");
+        boolean rightRequested = containsAny(text, "ben phai", "man hinh phai", "man hinh 1 1", "vung phai");
+        if (fullRequest && leftRequested) return command(TargetScreen.LEFT, Type.EXPAND_PANE, "");
+        if (fullRequest && rightRequested) return command(TargetScreen.RIGHT, Type.EXPAND_PANE, "");
+        // "Mở full <app>" and "full <app>" launch directly on Display 2.
+        if (text.startsWith("mo full ")) {
+            target = TargetScreen.FULLSCREEN;
+            text = text.substring("mo full ".length()).trim();
+        } else if (text.startsWith("full ") && !text.startsWith("full man hinh")) {
+            target = TargetScreen.FULLSCREEN;
+            text = text.substring("full ".length()).trim();
+        }
         // Extract screen intent as a separate modifier so the command body can be
         // phrased naturally ("đưa ... qua bên trái", "chiếu ... toàn màn hình").
-        if (containsAny(text, "full man hinh", "toan man hinh", "toan man", "full man", "phong to toan man", "phong to man hinh")) {
+        if (target != TargetScreen.FULLSCREEN && containsAny(text, "full man hinh", "toan man hinh", "toan man", "full man", "phong to toan man", "phong to man hinh")) {
             target = TargetScreen.FULLSCREEN;
             text = removeAny(text, "full man hinh", "toan man hinh", "phong to toan man", "phong to man hinh", "toan man", "full man");
         } else if (containsAny(text, "ben trai", "o ben trai", "sang ben trai", "qua ben trai", "dua sang ben trai", "sang man hinh trai", "qua man hinh trai", "o man hinh trai", "man hinh trai", "vung trai", "o trai", "sang trai", "qua trai")) {
