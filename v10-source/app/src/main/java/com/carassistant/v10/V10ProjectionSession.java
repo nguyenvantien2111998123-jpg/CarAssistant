@@ -81,19 +81,13 @@ public final class V10ProjectionSession implements TextureView.SurfaceTextureLis
     /** Restore the saved player task to this projection without force-stopping its package. */
     public void restoreMediaTask(ComponentName component) {
         if (destroyed || component == null) return;
-        boolean sameHeadlessTask = displayController.isReady()
-                && displayController.isLaunched()
-                && component.equals(displayController.getTarget());
+        // A controller's cached target only describes its previous owner; it does
+        // not prove that Android still keeps the task on this virtual display. Query
+        // the system task list and move the existing root task to this display on
+        // every restore. This is required when returning from fullscreen Display 2.
         target = component;
         taskSession.setTarget(component);
-        if (sameHeadlessTask) {
-            // Android Auto opened V10 after the background restore. Keep the exact
-            // running root task; only replace the ImageReader Surface with TextureView.
-            restoreMediaTaskOnAttach = false;
-        } else {
-            if (displayController.isLaunched()) displayController.markNotLaunched();
-            restoreMediaTaskOnAttach = true;
-        }
+        restoreMediaTaskOnAttach = true;
         attachCurrentSurface();
     }
 
@@ -208,7 +202,15 @@ public final class V10ProjectionSession implements TextureView.SurfaceTextureLis
             HeadlessProjectionHost.onV10SurfaceAttached(displayController);
         }
 
-        if (!wasReady) {
+        if (restoreMediaTaskOnAttach) {
+            // Move the existing root task from whichever projection display currently
+            // owns it. Do not trust the per-controller launched cache after a transfer.
+            launchTargetTask();
+            taskSession.active();
+            Log.d(TAG, "[RESTORE_MOVE] layer=" + displayIndex
+                    + " display=" + displayController.getDisplayId()
+                    + " task=" + target.flattenToString());
+        } else if (!wasReady) {
             launchTargetTask();
             taskSession.active();
             Log.d(TAG, "[CREATE] layer=" + displayIndex + " display=" + displayController.getDisplayId());
