@@ -111,6 +111,12 @@ public final class V10CarActivity
 
     private ComponentName activeTarget;
 
+    // Remember which Home pane supplied the task currently expanded on Display 2.
+    private static final String RETURN_PANE_TARGET = "fullscreen_return_pane_target";
+    private static final String RETURN_PANE_LEFT = "fullscreen_return_pane_left";
+    private ComponentName fullscreenReturnTarget;
+    private boolean fullscreenReturnLeft;
+
     // Voice commands launched from Home follow the pane most recently touched/selected.
     // Default to the larger right pane until the user interacts with either pane.
     private boolean activeVoiceLeftPane;
@@ -1499,9 +1505,17 @@ private void dispatchVoiceSearchIntent(V10ProjectionSession targetSession,
 private void expandPaneToFullscreen(boolean leftPane, ComponentName component) {
     if (component == null || session == null) return;
     if (keyboardController != null) keyboardController.hide();
+
+    // Preserve the exact source pane so Back/Home can return the same running task.
+    fullscreenReturnTarget = component;
+    fullscreenReturnLeft = leftPane;
+    getSharedPreferences("v10_session", MODE_PRIVATE).edit()
+            .putString(RETURN_PANE_TARGET, component.flattenToString())
+            .putBoolean(RETURN_PANE_LEFT, leftPane)
+            .apply();
+
     if (activeTarget != null && !activeTarget.equals(component)) session.release();
 
-    // Move the existing pane task to Display 2; do not create a duplicate app task.
     activeTarget = component;
     activeInputSession = session;
     V10SessionStore.setTarget(this, component);
@@ -1513,6 +1527,9 @@ private void expandPaneToFullscreen(boolean leftPane, ComponentName component) {
         floatingVoiceButton.setVisibility(View.VISIBLE);
         floatingVoiceButton.bringToFront();
     }
+
+    // Move the same Android task to Display 2; the source pane session is retained
+    // and will explicitly move it back when the user returns to Home.
     session.restoreMediaTask(component);
     activeInputSession = session;
     rememberProjectedTask(component, session, 1);
@@ -1528,6 +1545,36 @@ private void expandPaneToFullscreen(boolean leftPane, ComponentName component) {
         activeRightPaneTarget = null;
         if (dualPaneHome != null) dualPaneHome.setPaneTarget(false, null, "MÀN HÌNH PHỤ 1.1");
     }
+}
+
+private void restoreExpandedPaneTask() {
+    android.content.SharedPreferences prefs = getSharedPreferences("v10_session", MODE_PRIVATE);
+    if (fullscreenReturnTarget == null) {
+        String stored = prefs.getString(RETURN_PANE_TARGET, null);
+        if (stored != null) fullscreenReturnTarget = ComponentName.unflattenFromString(stored);
+        fullscreenReturnLeft = prefs.getBoolean(RETURN_PANE_LEFT, false);
+    }
+    ComponentName component = fullscreenReturnTarget;
+    if (component == null) return;
+
+    V10ProjectionSession paneSession = fullscreenReturnLeft ? backgroundSession : rightPaneSession;
+    if (paneSession != null) {
+        paneSession.restoreMediaTask(component);
+        if (fullscreenReturnLeft) {
+            activeBackgroundTarget = component;
+            V10SessionStore.setBackgroundTarget(this, component);
+            if (dualPaneHome != null) dualPaneHome.setPaneTarget(true, component, appLabelForComponent(component));
+        } else {
+            activeRightPaneTarget = component;
+            V10SessionStore.setRightPaneTarget(this, component);
+            if (dualPaneHome != null) dualPaneHome.setPaneTarget(false, component, appLabelForComponent(component));
+        }
+        activeInputSession = paneSession;
+        if (keyboardController != null) keyboardController.setPreferredSession(paneSession);
+    }
+
+    fullscreenReturnTarget = null;
+    prefs.edit().remove(RETURN_PANE_TARGET).remove(RETURN_PANE_LEFT).apply();
 }
 
 private boolean isHomeScreen() {
@@ -1560,6 +1607,8 @@ private boolean isHomeScreen() {
 
         if (dualPaneHome != null) dualPaneHome.closePickers();
         projectionLayer.setVisibility(View.VISIBLE);
+        // Return the exact app task to the pane from which it was expanded.
+        restoreExpandedPaneTask();
     }
 
 
