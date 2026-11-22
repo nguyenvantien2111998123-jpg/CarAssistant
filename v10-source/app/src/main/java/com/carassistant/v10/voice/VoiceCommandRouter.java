@@ -4,9 +4,9 @@ package com.carassistant.v10.voice;
 public final class VoiceCommandRouter {
     public interface Host {
         /** Opens a matching installed app and returns its visible label, or null when not found. */
-        String openApp(String spokenName);
+        String openApp(String spokenName, VoiceCommandParser.TargetScreen targetScreen);
         /** Opens a category's explicit app or configured default. */
-        String openVoiceTask(String category, String query, String explicitProvider);
+        String openVoiceTask(String category, String query, String explicitProvider, VoiceCommandParser.TargetScreen targetScreen);
         void showAppPicker();
         void goHome();
     }
@@ -35,7 +35,7 @@ public final class VoiceCommandRouter {
         VoiceCommandParser.Command command = parser.parse(transcript);
         switch (command.type) {
             case OPEN_APP: {
-                String opened = host.openApp(command.argument);
+                String opened = host.openApp(command.argument, command.targetScreen);
                 if (opened == null) return new Result(true,
                         "Tôi chưa tìm thấy ứng dụng " + command.argument + ".", false);
                 return new Result(true, "Đang mở " + opened + ".", false);
@@ -67,7 +67,7 @@ public final class VoiceCommandRouter {
     }
 
     private Result openCategory(VoiceCommandParser.Command command, String category, String prefix) {
-        String opened = host.openVoiceTask(category, command.argument, command.provider);
+        String opened = host.openVoiceTask(category, command.argument, command.provider, command.targetScreen);
         if (opened == null) {
             String categoryName = ("navigation".equals(category) || "nearby".equals(category)) ? "bản đồ"
                     : category.equals("music") ? "ứng dụng nhạc"
