@@ -1900,9 +1900,10 @@ private void hideFloatingMenu() {
 
 private void rememberProjectedTask(ComponentName component, V10ProjectionSession owner, int displayIndex) {
     if (component == null || owner == null) return;
+    // One shared task list: an app is represented once regardless of which
+    // projection surface currently owns its task. Ownership stays internal.
     for (int i = projectedTaskHistory.size() - 1; i >= 0; i--) {
-        ProjectedTaskEntry e = projectedTaskHistory.get(i);
-        if (e.displayIndex == displayIndex && component.equals(e.component)) projectedTaskHistory.remove(i);
+        if (component.equals(projectedTaskHistory.get(i).component)) projectedTaskHistory.remove(i);
     }
     projectedTaskHistory.add(0, new ProjectedTaskEntry(component, owner, displayIndex));
     while (projectedTaskHistory.size() > 12) projectedTaskHistory.remove(projectedTaskHistory.size() - 1);
@@ -1918,22 +1919,24 @@ private void showTaskSwitcher() {
     LinearLayout panel = new LinearLayout(this);
     panel.setOrientation(LinearLayout.VERTICAL);
     panel.setPadding(dp(18), dp(14), dp(18), dp(14));
-    TextView heading = text("TASK TRÊN CÁC MÀN HÌNH PHỤ", 18, Color.WHITE);
+    TextView heading = text("TASK ĐANG CHIẾU", 18, Color.WHITE);
     heading.setGravity(Gravity.CENTER_VERTICAL);
     panel.addView(heading, new LinearLayout.LayoutParams(-1, dp(48)));
     TextView close = text("✕", 22, Color.WHITE);
-    close.setGravity(Gravity.CENTER); close.setContentDescription("Đóng danh sách task");
+    close.setGravity(Gravity.CENTER);
+    close.setContentDescription("Đóng danh sách task");
     panel.addView(close, new FrameLayout.LayoutParams(dp(48), dp(48), Gravity.TOP | Gravity.END));
     close.setOnClickListener(v -> hideTaskSwitcher());
     ScrollView scroll = new ScrollView(this);
-    taskSwitcherList = new LinearLayout(this); taskSwitcherList.setOrientation(LinearLayout.VERTICAL);
+    taskSwitcherList = new LinearLayout(this);
+    taskSwitcherList.setOrientation(LinearLayout.VERTICAL);
     scroll.addView(taskSwitcherList, new ScrollView.LayoutParams(-1, -2));
     panel.addView(scroll, new LinearLayout.LayoutParams(-1, 0, 1f));
     if (activeBackgroundTarget != null && backgroundSession != null) rememberProjectedTask(activeBackgroundTarget, backgroundSession, 0);
     if (activeRightPaneTarget != null && rightPaneSession != null) rememberProjectedTask(activeRightPaneTarget, rightPaneSession, 2);
     if (activeTarget != null && session != null) rememberProjectedTask(activeTarget, session, 1);
     if (projectedTaskHistory.isEmpty()) {
-        TextView empty = text("Chưa có task nào được mở qua CarAsistant.", 14, Color.LTGRAY);
+        TextView empty = text("Chưa có task nào đang chiếu.", 14, Color.LTGRAY);
         empty.setGravity(Gravity.CENTER);
         taskSwitcherList.addView(empty, new LinearLayout.LayoutParams(-1, dp(100)));
     } else {
@@ -1941,24 +1944,27 @@ private void showTaskSwitcher() {
     }
     taskSwitcherLayer.addView(panel, new FrameLayout.LayoutParams(-1, -1));
     root.addView(taskSwitcherLayer, new FrameLayout.LayoutParams(-1, -1));
-    taskSwitcherLayer.bringToFront(); keepFloatingTouchKeyVisible();
+    taskSwitcherLayer.bringToFront();
+    keepFloatingTouchKeyVisible();
 }
 
 private void addProjectedTaskRow(ProjectedTaskEntry entry) {
     if (taskSwitcherList == null || entry == null || entry.component == null) return;
     ComponentName component = entry.component;
     LinearLayout row = new LinearLayout(this);
-    row.setOrientation(LinearLayout.HORIZONTAL); row.setGravity(Gravity.CENTER_VERTICAL);
+    row.setOrientation(LinearLayout.HORIZONTAL);
+    row.setGravity(Gravity.CENTER_VERTICAL);
     row.setPadding(dp(12), dp(6), dp(6), dp(6));
     GradientDrawable bg = new GradientDrawable();
     boolean active = entry.owner != null && entry.owner.isActive()
             && component.equals(entry.owner == backgroundSession ? activeBackgroundTarget
             : entry.owner == rightPaneSession ? activeRightPaneTarget : activeTarget);
-    bg.setColor(active ? Color.rgb(35, 65, 83) : Color.rgb(27, 34, 42)); bg.setCornerRadius(dp(12));
+    bg.setColor(active ? Color.rgb(35, 65, 83) : Color.rgb(27, 34, 42));
+    bg.setCornerRadius(dp(12));
     row.setBackground(bg);
-    String pane = entry.displayIndex == 0 ? " • Màn hình 1" : entry.displayIndex == 2 ? " • Màn hình 1.1" : " • Toàn màn hình";
-    TextView name = text(appLabelForComponent(component) + pane, 15, Color.WHITE);
-    name.setGravity(Gravity.CENTER_VERTICAL); name.setMaxLines(2);
+    TextView name = text(appLabelForComponent(component), 15, Color.WHITE);
+    name.setGravity(Gravity.CENTER_VERTICAL);
+    name.setMaxLines(2);
     row.addView(name, new LinearLayout.LayoutParams(0, dp(58), 1f));
     name.setOnClickListener(v -> {
         hideTaskSwitcher();
@@ -1973,32 +1979,57 @@ private void addProjectedTaskRow(ProjectedTaskEntry entry) {
             launchProjection(component);
         }
     });
-    TextView remove = text("×", 28, Color.WHITE); remove.setGravity(Gravity.CENTER);
+    TextView remove = text("×", 28, Color.WHITE);
+    remove.setGravity(Gravity.CENTER);
     remove.setContentDescription("Đóng task " + appLabelForComponent(component));
-    GradientDrawable closeBg = new GradientDrawable(); closeBg.setShape(GradientDrawable.OVAL);
-    closeBg.setColor(Color.rgb(180, 54, 54)); remove.setBackground(closeBg);
+    GradientDrawable closeBg = new GradientDrawable();
+    closeBg.setShape(GradientDrawable.OVAL);
+    closeBg.setColor(Color.rgb(180, 54, 54));
+    remove.setBackground(closeBg);
     LinearLayout.LayoutParams closeParams = new LinearLayout.LayoutParams(dp(42), dp(42));
-    closeParams.setMargins(dp(8), 0, 0, 0); row.addView(remove, closeParams);
+    closeParams.setMargins(dp(8), 0, 0, 0);
+    row.addView(remove, closeParams);
     remove.setOnClickListener(v -> closeProjectedTask(entry));
     LinearLayout.LayoutParams rowParams = new LinearLayout.LayoutParams(-1, -2);
-    rowParams.setMargins(0, dp(4), 0, dp(4)); taskSwitcherList.addView(row, rowParams);
+    rowParams.setMargins(0, dp(4), 0, dp(4));
+    taskSwitcherList.addView(row, rowParams);
 }
 
 private void closeProjectedTask(ProjectedTaskEntry entry) {
     if (entry == null || entry.component == null || entry.owner == null) return;
     ComponentName component = entry.component;
+    boolean activeLeft = entry.owner == backgroundSession && component.equals(activeBackgroundTarget);
+    boolean activeRight = entry.owner == rightPaneSession && component.equals(activeRightPaneTarget);
+    boolean activeFullscreen = entry.owner == session && component.equals(activeTarget);
     entry.owner.closeTaskOnDisplay(component, closed -> {
         if (!closed) {
-            Toast.makeText(this, "Không thể đóng task trên màn hình phụ; CarAsistant giữ nguyên task.", Toast.LENGTH_LONG).show();
+            Toast.makeText(this, "Không thể đóng task; CarAsistant giữ nguyên phiên chiếu.", Toast.LENGTH_LONG).show();
             return;
         }
         projectedTaskHistory.remove(entry);
-        if (entry.owner == backgroundSession && component.equals(activeBackgroundTarget)) stopBackgroundProjection();
-        else if (entry.owner == rightPaneSession && component.equals(activeRightPaneTarget)) stopRightPaneProjection();
-        else if (entry.owner == session && component.equals(activeTarget)) {
-            session.setTarget(null); V10SessionStore.clearTarget(this); activeTarget = null; activeInputSession = null;
+        if (activeLeft) {
+            stopBackgroundProjection();
+            if (activeInputSession == backgroundSession) activeInputSession = null;
+            hideTaskSwitcher();
+            if (dualPaneHome != null) dualPaneHome.openPicker(true);
+            return;
+        }
+        if (activeRight) {
+            stopRightPaneProjection();
+            if (activeInputSession == rightPaneSession) activeInputSession = null;
+            hideTaskSwitcher();
+            if (dualPaneHome != null) dualPaneHome.openPicker(false);
+            return;
+        }
+        if (activeFullscreen) {
+            session.setTarget(null);
+            V10SessionStore.clearTarget(this);
+            activeTarget = null;
+            activeInputSession = null;
             if (appProjectionLayer != null) appProjectionLayer.setVisibility(View.GONE);
             returnToLauncher();
+            hideTaskSwitcher();
+            return;
         }
         showTaskSwitcher();
     });
