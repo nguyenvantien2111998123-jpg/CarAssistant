@@ -1947,10 +1947,16 @@ private void addProjectedTaskRow(ProjectedTaskEntry entry) {
     row.addView(name, new LinearLayout.LayoutParams(0, dp(58), 1f));
     name.setOnClickListener(v -> {
         hideTaskSwitcher();
-        if (entry.displayIndex == 0) { activeVoiceLeftPane = true; activeInputSession = backgroundSession; }
-        else if (entry.displayIndex == 2) { activeVoiceLeftPane = false; activeInputSession = rightPaneSession; }
-        else { activeInputSession = session; launchProjection(component); return; }
-        if (entry.owner != null) entry.owner.setTarget(component);
+        if (entry.displayIndex == 0) {
+            activeVoiceLeftPane = true;
+            launchBackgroundProjection(component);
+        } else if (entry.displayIndex == 2) {
+            activeVoiceLeftPane = false;
+            launchRightPaneProjection(component);
+        } else {
+            activeInputSession = session;
+            launchProjection(component);
+        }
     });
     TextView remove = text("×", 28, Color.WHITE); remove.setGravity(Gravity.CENTER);
     remove.setContentDescription("Đóng task " + appLabelForComponent(component));
