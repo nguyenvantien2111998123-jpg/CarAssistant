@@ -48,10 +48,10 @@ public final class VoiceCommandParser {
         // "Mở full <app>" and "full <app>" launch directly on Display 2.
         if (text.startsWith("mo full ")) {
             target = TargetScreen.FULLSCREEN;
-            text = text.substring("mo full ".length()).trim();
+            text = "mo " + text.substring("mo full ".length()).trim();
         } else if (text.startsWith("full ") && !text.startsWith("full man hinh")) {
             target = TargetScreen.FULLSCREEN;
-            text = text.substring("full ".length()).trim();
+            text = "mo " + text.substring("full ".length()).trim();
         }
         // Extract screen intent as a separate modifier so the command body can be
         // phrased naturally ("đưa ... qua bên trái", "chiếu ... toàn màn hình").
