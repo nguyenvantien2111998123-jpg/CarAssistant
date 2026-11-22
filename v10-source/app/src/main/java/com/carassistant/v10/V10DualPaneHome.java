@@ -41,7 +41,7 @@ public final class V10DualPaneHome extends FrameLayout {
     private final Pane left;
     private final Pane right;
     private final LinearLayout row;
-    private final View divider;
+    private final FrameLayout divider;
     private float ratio = 0.30f;
     private boolean draggingDivider;
 
@@ -57,9 +57,27 @@ public final class V10DualPaneHome extends FrameLayout {
 
         left = new Pane(context, true);
         right = new Pane(context, false);
-        divider = new View(context);
-        divider.setBackgroundColor(Color.argb(210, 100, 150, 175));
-        LinearLayout.LayoutParams dividerParams = new LinearLayout.LayoutParams(dp(7), -1);
+        // Keep a generous transparent touch target while drawing only a hairline
+        // and a small translucent grip in the center of the split boundary.
+        divider = new FrameLayout(context);
+        divider.setBackgroundColor(Color.TRANSPARENT);
+        View dividerLine = new View(context);
+        dividerLine.setBackgroundColor(Color.argb(150, 125, 160, 180));
+        FrameLayout.LayoutParams lineParams = new FrameLayout.LayoutParams(dp(1), -1,
+                Gravity.CENTER);
+        divider.addView(dividerLine, lineParams);
+
+        View dividerGrip = new View(context);
+        GradientDrawable gripBackground = new GradientDrawable();
+        gripBackground.setColor(Color.argb(38, 225, 238, 248));
+        gripBackground.setCornerRadius(dp(5));
+        gripBackground.setStroke(dp(1), Color.argb(95, 205, 225, 240));
+        dividerGrip.setBackground(gripBackground);
+        FrameLayout.LayoutParams gripParams = new FrameLayout.LayoutParams(dp(10), dp(24),
+                Gravity.CENTER);
+        divider.addView(dividerGrip, gripParams);
+
+        LinearLayout.LayoutParams dividerParams = new LinearLayout.LayoutParams(dp(24), -1);
         row.addView(left, new LinearLayout.LayoutParams(0, -1, 3f));
         row.addView(divider, dividerParams);
         row.addView(right, new LinearLayout.LayoutParams(0, -1, 7f));
