@@ -415,6 +415,14 @@ public final class V10CarActivity
                         }
 
                         @Override
+                        public String expandPane(boolean leftPane) {
+                            ComponentName component = leftPane ? activeBackgroundTarget : activeRightPaneTarget;
+                            if (component == null) return null;
+                            expandPaneToFullscreen(leftPane, component);
+                            return appLabelForComponent(component);
+                        }
+
+                        @Override
                         public void showAppPicker() {
                             V10CarActivity.this.showApps();
                         }
@@ -1390,16 +1398,24 @@ private V10ProjectionSession launchVoiceProjection(ComponentName component,
     if (component == null) return null;
     VoiceCommandParser.TargetScreen target = requestedTarget == null
             ? VoiceCommandParser.TargetScreen.AUTO : requestedTarget;
-    if (target == VoiceCommandParser.TargetScreen.AUTO) {
-        target = navigationDefaultLeft
-                ? VoiceCommandParser.TargetScreen.LEFT : VoiceCommandParser.TargetScreen.RIGHT;
+
+    // AUTO preserves the current fullscreen Display 2 context. On Home, defaults
+    // are deterministic: navigation on the left pane, all other commands right.
+    boolean fullscreenVisible = appProjectionLayer != null
+            && appProjectionLayer.getVisibility() == View.VISIBLE;
+    if (target == VoiceCommandParser.TargetScreen.AUTO && fullscreenVisible) {
+        launchProjection(component);
+        return session;
     }
     if (target == VoiceCommandParser.TargetScreen.FULLSCREEN) {
         launchProjection(component);
         return session;
     }
-    if (appProjectionLayer != null && appProjectionLayer.getVisibility() == View.VISIBLE) {
-        returnToLauncher();
+    if (fullscreenVisible) returnToLauncher();
+
+    if (target == VoiceCommandParser.TargetScreen.AUTO) {
+        target = navigationDefaultLeft
+                ? VoiceCommandParser.TargetScreen.LEFT : VoiceCommandParser.TargetScreen.RIGHT;
     }
     if (isHomeScreen() && dualPaneHome != null) {
         dualPaneHome.closePickers();
