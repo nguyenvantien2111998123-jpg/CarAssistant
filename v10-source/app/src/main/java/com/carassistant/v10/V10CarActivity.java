@@ -375,7 +375,7 @@ public final class V10CarActivity
                                     }
                                 }
                                 if (selectedApp == null) return null;
-                                V10ProjectionSession targetSession = launchVoiceProjection(selectedApp.component);
+                                V10ProjectionSession targetSession = launchVoiceProjection(selectedApp.component, targetScreen, false);
                                 if (query != null && !query.trim().isEmpty() && targetSession != null) {
                                     dispatchVoiceSearchIntent(targetSession,
                                             selectedApp.component.getPackageName(), query);
