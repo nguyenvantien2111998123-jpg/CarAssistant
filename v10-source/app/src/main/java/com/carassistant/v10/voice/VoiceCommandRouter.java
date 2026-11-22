@@ -31,6 +31,24 @@ public final class VoiceCommandRouter {
         this.host = host;
     }
 
+    /**
+     * Uses the recognizer's ranked alternatives. Prefer the first candidate that
+     * maps to a supported command instead of failing on an imperfect top transcript.
+     * Only the selected command is ever executed.
+     */
+    public Result routeCandidates(java.util.List<String> transcripts) {
+        if (transcripts == null || transcripts.isEmpty()) return route("");
+        String first = null;
+        for (String transcript : transcripts) {
+            if (transcript == null || transcript.trim().isEmpty()) continue;
+            if (first == null) first = transcript;
+            if (parser.parse(transcript).type != VoiceCommandParser.Type.UNKNOWN) {
+                return route(transcript);
+            }
+        }
+        return route(first == null ? "" : first);
+    }
+
     public Result route(String transcript) {
         VoiceCommandParser.Command command = parser.parse(transcript);
         switch (command.type) {
