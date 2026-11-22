@@ -132,4 +132,58 @@ public final class VoiceCommandParserMediaTest {
         assertEquals("vtv1", command.argument);
         assertEquals("tv", command.category);
     }
+
+    @Test
+    public void understandsAppLaunchSynonymsAndExplicitLeftPane() {
+        VoiceCommandParser.Command command = parser.parse("Chuyển sang ứng dụng YouTube qua bên trái");
+        assertEquals(VoiceCommandParser.Type.OPEN_APP, command.type);
+        assertEquals("youtube", command.argument);
+        assertEquals(VoiceCommandParser.TargetScreen.LEFT, command.targetScreen);
+    }
+
+    @Test
+    public void understandsOpenAppAndRightPaneWording() {
+        VoiceCommandParser.Command command = parser.parse("Khởi động app Vietmap ở bên phải");
+        assertEquals(VoiceCommandParser.Type.OPEN_APP, command.type);
+        assertEquals("vietmap", command.argument);
+        assertEquals(VoiceCommandParser.TargetScreen.RIGHT, command.targetScreen);
+    }
+
+    @Test
+    public void understandsFullscreenProjectionSynonyms() {
+        VoiceCommandParser.Command command = parser.parse("Phóng to YouTube toàn màn hình");
+        assertEquals(VoiceCommandParser.Type.OPEN_APP, command.type);
+        assertEquals("youtube", command.argument);
+        assertEquals(VoiceCommandParser.TargetScreen.FULLSCREEN, command.targetScreen);
+    }
+
+    @Test
+    public void understandsNavigationSynonyms() {
+        VoiceCommandParser.Command command = parser.parse("Tìm đường tới sân bay Buôn Ma Thuột bằng Vietmap");
+        assertEquals(VoiceCommandParser.Type.NAVIGATE, command.type);
+        assertEquals("san bay buon ma thuot", command.argument);
+        assertEquals("vietmap", command.provider);
+    }
+
+    @Test
+    public void understandsNearbySearchSynonyms() {
+        VoiceCommandParser.Command command = parser.parse("Tìm trạm đổ xăng gần tôi");
+        assertEquals(VoiceCommandParser.Type.SEARCH_NEARBY, command.type);
+        assertEquals("cay xang", command.argument);
+    }
+
+    @Test
+    public void understandsNaturalHomeAndAppPickerCommands() {
+        assertEquals(VoiceCommandParser.Type.HOME, parser.parse("Quay về giao diện chính").type);
+        assertEquals(VoiceCommandParser.Type.SHOW_APPS, parser.parse("Cho xem các ứng dụng").type);
+    }
+
+    @Test
+    public void doesNotConfuseMediaSearchWithAppLaunch() {
+        VoiceCommandParser.Command command = parser.parse("Cho phát bài hát Nơi này có anh trên YouTube Music");
+        assertEquals(VoiceCommandParser.Type.PLAY_MUSIC, command.type);
+        assertEquals("noi nay co anh", command.argument);
+        assertEquals("youtube music", command.provider);
+    }
+
 }
