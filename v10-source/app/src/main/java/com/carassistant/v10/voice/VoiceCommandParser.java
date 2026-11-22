@@ -38,7 +38,7 @@ public final class VoiceCommandParser {
 
     public Command parse(String transcript) {
         String text = normalize(transcript);
-        if (text.isEmpty()) return command(target, Type.UNKNOWN, "");
+        if (text.isEmpty()) return new Command(Type.UNKNOWN, "");
         TargetScreen target = TargetScreen.AUTO;
         if (containsAny(text, "full man hinh", "toan man hinh", "full man", "toan man")) {
             target = TargetScreen.FULLSCREEN;
