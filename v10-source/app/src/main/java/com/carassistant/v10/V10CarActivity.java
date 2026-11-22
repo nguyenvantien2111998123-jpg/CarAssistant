@@ -1387,7 +1387,7 @@ private V10ProjectionSession launchVoiceProjection(ComponentName component,
     if (appProjectionLayer != null && appProjectionLayer.getVisibility() == View.VISIBLE) {
         returnToLauncher();
     }
-    if (dualPaneHome != null) {
+    if (isHomeScreen() && dualPaneHome != null) {
         dualPaneHome.closePickers();
         if (target == VoiceCommandParser.TargetScreen.LEFT) {
             launchBackgroundProjection(component);
