@@ -38,6 +38,7 @@ public final class VoiceCommandParser {
 
     public Command parse(String transcript) {
         String text = normalize(transcript);
+        text = normalizeEnglishCommand(text);
         if (text.isEmpty()) return new Command(Type.UNKNOWN, "");
         TargetScreen target = TargetScreen.AUTO;
         boolean fullRequest = containsAny(text, "full", "toan man hinh", "toan man", "phong to");
@@ -158,7 +159,7 @@ public final class VoiceCommandParser {
         // search-and-play requests, not as requests to launch an app by name.
         value = firstPrefix(text, "mo ", "phat ", "bat ", "xem ", "tim ", "cho phat ");
         if (value != null) {
-            String[] mediaPair = splitFirst(value, " tren ", " bang ");
+            String[] mediaPair = splitFirst(value, " tren ", " bang ", " on ", " with ", " using ");
             String provider = normalize(mediaPair[1]);
             if (!mediaPair[1].isEmpty() && !mediaPair[0].isEmpty()) {
                 if (provider.contains("youtube music") || provider.contains("zing mp3")
@@ -212,15 +213,58 @@ public final class VoiceCommandParser {
         return result;
     }
 
+    /** Map common English command phrases to the same deterministic command grammar. */
+    private static String normalizeEnglishCommand(String text) {
+        if (text == null || text.isEmpty()) return "";
+        String value = " " + text.trim() + " ";
+        value = value.replace(" on the left", " ben trai")
+                .replace(" on left", " ben trai")
+                .replace(" to the left", " ben trai")
+                .replace(" on the right", " ben phai")
+                .replace(" on right", " ben phai")
+                .replace(" to the right", " ben phai")
+                .replace(" full screen left", " full ben trai")
+                .replace(" fullscreen left", " full ben trai")
+                .replace(" full screen right", " full ben phai")
+                .replace(" fullscreen right", " full ben phai")
+                .replace(" open full screen ", " mo full ")
+                .replace(" open fullscreen ", " mo full ")
+                .replace(" fullscreen ", " mo full ")
+                .replace(" full screen ", " mo full ")
+                .replace(" open app ", " mo app ")
+                .replace(" open the app ", " mo app ")
+                .replace(" launch app ", " mo app ")
+                .replace(" launch ", " mo ")
+                .replace(" open ", " mo ")
+                .replace(" start app ", " mo app ")
+                .replace(" start ", " mo ")
+                .replace(" navigate to ", " dan duong den ")
+                .replace(" directions to ", " dan duong den ")
+                .replace(" take me to ", " dan duong den ")
+                .replace(" drive to ", " dan duong den ")
+                .replace(" go to ", " dan duong den ")
+                .replace(" show apps", " mo danh sach ung dung")
+                .replace(" list apps", " mo danh sach ung dung")
+                .replace(" go home", " home")
+                .replace(" return home", " home")
+                .replace(" play music ", " phat nhac ")
+                .replace(" listen to music ", " phat nhac ")
+                .replace(" play video ", " phat video ")
+                .replace(" watch video ", " xem video ")
+                .replace(" find nearby ", " tim gan day ")
+                .replace(" search nearby ", " tim gan day ");
+        return value.trim().replaceAll("\\s+", " ");
+    }
+
     private static Command navigationCommand(String value, TargetScreen target) {
-        String[] pair = splitFirst(value, " bang ", " tren ");
+        String[] pair = splitFirst(value, " bang ", " tren ", " with ", " using ");
         if (pair[0].isEmpty()) return command(target, Type.UNKNOWN, value);
         return command(target, Type.NAVIGATE, pair[0], pair[1], "navigation");
     }
 
     private static Command mediaCommand(Type type, String value, String category, TargetScreen target) {
         String clean = value == null ? "" : value.trim();
-        String[] pair = splitFirst(clean, " tren ", " bang ");
+        String[] pair = splitFirst(clean, " tren ", " bang ", " on ", " with ", " using ");
         return command(target, type, pair[0], pair[1], category);
     }
 
