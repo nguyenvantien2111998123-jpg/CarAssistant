@@ -237,12 +237,12 @@ public final class V10CarActivity
                     },
                     new VoiceCommandRouter(new VoiceCommandRouter.Host() {
                         @Override
-                        public String openApp(String spokenName) {
-                            return openAppByVoice(spokenName);
+                        public String openApp(String spokenName, VoiceCommandParser.TargetScreen targetScreen) {
+                            return openAppByVoice(spokenName, targetScreen);
                         }
 
                         @Override
-                        public String openVoiceTask(String category, String query, String explicitProvider) {
+                        public String openVoiceTask(String category, String query, String explicitProvider, VoiceCommandParser.TargetScreen targetScreen) {
                             if ("navigation".equals(category) || "nearby".equals(category)) {
                                 AppInfo selectedApp = null;
                                 if (explicitProvider != null && !explicitProvider.trim().isEmpty()) {
@@ -269,7 +269,7 @@ public final class V10CarActivity
                                     }
                                 }
                                 if (selectedApp == null) return null;
-                                V10ProjectionSession targetSession = launchVoiceProjection(selectedApp.component);
+                                V10ProjectionSession targetSession = launchVoiceProjection(selectedApp.component, targetScreen, true);
                                 if (query != null && !query.trim().isEmpty() && targetSession != null) {
                                     String mapUri = buildMapUri(selectedApp.component, query,
                                             "nearby".equals(category));
@@ -346,7 +346,7 @@ public final class V10CarActivity
 
                                 // Launch and search on the same active pane/session. The proven
                                 // fullscreen MiniAccess pipeline remains unchanged.
-                                V10ProjectionSession targetSession = launchVoiceProjection(selected);
+                                V10ProjectionSession targetSession = launchVoiceProjection(selected, targetScreen, false);
                                 if (mediaUri != null && targetSession != null) {
                                     dispatchVoiceMediaSearch(targetSession, selected, mediaUri, query.trim());
                                 }
@@ -384,13 +384,13 @@ public final class V10CarActivity
                             }
 
                             if (explicitProvider != null && !explicitProvider.trim().isEmpty()) {
-                                return openAppByVoice(explicitProvider);
+                                return openAppByVoice(explicitProvider, targetScreen);
                             }
 
                             ComponentName configured = V10SessionStore.getDefaultVoiceApp(
                                     V10CarActivity.this, category);
                             if (configured != null) {
-                                launchVoiceProjection(configured);
+                                launchVoiceProjection(configured, targetScreen, false);
                                 return appLabelForComponent(configured);
                             }
 
@@ -401,7 +401,7 @@ public final class V10CarActivity
                                 candidates = new String[]{"VTV Go", "FPT Play", "TV"};
                             }
                             for (String candidate : candidates) {
-                                String opened = openAppByVoice(candidate);
+                                String opened = openAppByVoice(candidate, targetScreen);
                                 if (opened != null) return opened;
                             }
                             return null;
@@ -1368,25 +1368,34 @@ private void stopRightPaneProjection() {
  * projection is visible, commands continue using the existing fullscreen session.
  */
 private V10ProjectionSession launchVoiceProjection(ComponentName component) {
-    if (component == null) return null;
+    return launchVoiceProjection(component, VoiceCommandParser.TargetScreen.AUTO, false);
+}
 
-    if (appProjectionLayer != null
-            && appProjectionLayer.getVisibility() == View.VISIBLE) {
+private V10ProjectionSession launchVoiceProjection(ComponentName component,
+        VoiceCommandParser.TargetScreen requestedTarget, boolean navigationDefaultLeft) {
+    if (component == null) return null;
+    VoiceCommandParser.TargetScreen target = requestedTarget == null
+            ? VoiceCommandParser.TargetScreen.AUTO : requestedTarget;
+    if (target == VoiceCommandParser.TargetScreen.AUTO) {
+        target = navigationDefaultLeft
+                ? VoiceCommandParser.TargetScreen.LEFT : VoiceCommandParser.TargetScreen.RIGHT;
+    }
+    if (target == VoiceCommandParser.TargetScreen.FULLSCREEN) {
         launchProjection(component);
         return session;
     }
-
-    if (isHomeScreen()) {
-        if (dualPaneHome != null) dualPaneHome.closePickers();
-        if (activeVoiceLeftPane) {
+    if (appProjectionLayer != null && appProjectionLayer.getVisibility() == View.VISIBLE) {
+        returnToLauncher();
+    }
+    if (dualPaneHome != null) {
+        dualPaneHome.closePickers();
+        if (target == VoiceCommandParser.TargetScreen.LEFT) {
             launchBackgroundProjection(component);
             return backgroundSession;
         }
         launchRightPaneProjection(component);
         return rightPaneSession;
     }
-
-    // App picker and transitional states retain the established fullscreen path.
     launchProjection(component);
     return session;
 }
@@ -2167,9 +2176,13 @@ private void hideTaskSwitcher() {
     }
 
     private String openAppByVoice(String spokenName) {
+        return openAppByVoice(spokenName, VoiceCommandParser.TargetScreen.AUTO);
+    }
+
+    private String openAppByVoice(String spokenName, VoiceCommandParser.TargetScreen targetScreen) {
         AppInfo best = findAppByVoice(spokenName);
         if (best == null) return null;
-        launchVoiceProjection(best.component);
+        launchVoiceProjection(best.component, targetScreen, false);
         return best.name;
     }
 
