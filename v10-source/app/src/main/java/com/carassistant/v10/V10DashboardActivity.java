@@ -135,9 +135,8 @@ public final class V10DashboardActivity extends Activity {
     private void renderSettingsHub() {
         addEyebrow("SETTINGS");
         addTitle("Cài đặt", "Quản lý các tùy chọn chiếu màn hình, trợ lý giọng nói và media tại một nơi.");
-        addFeature("⚙", "Cấu hình CarAsistant", "Ứng dụng nền, ứng dụng yêu thích, hướng màn hình, ứng dụng mặc định và khôi phục media.", CYAN, this::openSettings);
-        addInfoCard("GỌN VÀ TẬP TRUNG", "Các mục cấu hình chi tiết không lặp lại ở nhiều tab. Mở cấu hình để thay đổi thiết lập hiện có.");
-        addPrimaryButton("MỞ CẤU HÌNH", this::openSettings, BLUE);
+        addInfoCard("CẤU HÌNH TẬP TRUNG", "Ứng dụng nền, ứng dụng yêu thích, hướng màn hình, ứng dụng mặc định và khôi phục media được quản lý tại cùng một màn hình cài đặt.");
+        addPrimaryButton("MỞ CẤU HÌNH CARASSISTANT", this::openSettings, BLUE);
     }
 
     private void renderProjection() {
