@@ -45,12 +45,12 @@ public final class VoiceCommandParser {
         if (containsAny(text, "full man hinh", "toan man hinh", "toan man", "full man", "phong to toan man", "phong to man hinh")) {
             target = TargetScreen.FULLSCREEN;
             text = removeAny(text, "full man hinh", "toan man hinh", "phong to toan man", "phong to man hinh", "phong to", "toan man", "full man");
-        } else if (containsAny(text, "ben trai", "o ben trai", "sang ben trai", "qua ben trai", "dua sang ben trai", "man hinh trai", "vung trai", "o trai", "sang trai", "qua trai")) {
+        } else if (containsAny(text, "ben trai", "o ben trai", "sang ben trai", "qua ben trai", "dua sang ben trai", "sang man hinh trai", "qua man hinh trai", "o man hinh trai", "man hinh trai", "vung trai", "o trai", "sang trai", "qua trai")) {
             target = TargetScreen.LEFT;
-            text = removeAny(text, "dua sang ben trai", "sang ben trai", "qua ben trai", "o ben trai", "man hinh ben trai", "man hinh trai", "vung ben trai", "vung trai", "ben trai", "o trai", "sang trai", "qua trai");
-        } else if (containsAny(text, "ben phai", "o ben phai", "sang ben phai", "qua ben phai", "dua sang ben phai", "man hinh phai", "vung phai", "o phai", "sang phai", "qua phai")) {
+            text = removeAny(text, "dua sang ben trai", "sang ben trai", "qua ben trai", "o ben trai", "sang man hinh trai", "qua man hinh trai", "o man hinh trai", "man hinh ben trai", "man hinh trai", "vung ben trai", "vung trai", "ben trai", "o trai", "sang trai", "qua trai");
+        } else if (containsAny(text, "ben phai", "o ben phai", "sang ben phai", "qua ben phai", "dua sang ben phai", "sang man hinh phai", "qua man hinh phai", "o man hinh phai", "man hinh phai", "vung phai", "o phai", "sang phai", "qua phai")) {
             target = TargetScreen.RIGHT;
-            text = removeAny(text, "dua sang ben phai", "sang ben phai", "qua ben phai", "o ben phai", "man hinh ben phai", "man hinh phai", "vung ben phai", "vung phai", "ben phai", "o phai", "sang phai", "qua phai");
+            text = removeAny(text, "dua sang ben phai", "sang ben phai", "qua ben phai", "o ben phai", "sang man hinh phai", "qua man hinh phai", "o man hinh phai", "man hinh ben phai", "man hinh phai", "vung ben phai", "vung phai", "ben phai", "o phai", "sang phai", "qua phai");
         }
         text = text.replaceAll("\\s+", " ").trim();
 
@@ -69,7 +69,7 @@ public final class VoiceCommandParser {
         }
         if (matches(text, "ve man hinh chinh", "ve trang chu",
                 "tro ve man hinh chinh", "tro ve home", "quay ve home",
-                "quay ve trang chu", "ve giao dien chinh", "home", "trang chu")) {
+                "quay ve trang chu", "ve giao dien chinh", "quay ve giao dien chinh", "tro ve giao dien chinh", "home", "trang chu")) {
             return command(target, Type.HOME, "");
         }
 
