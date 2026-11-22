@@ -31,8 +31,8 @@ public final class V10DashboardActivity extends Activity {
     private LinearLayout root;
     private LinearLayout content;
     private int selectedTab = 0;
-    private final String[] tabNames = {"Tổng quan", "Chiếu màn hình", "Trợ lý & Media", "Hệ thống"};
-    private final String[] tabIcons = {"⌂", "▣", "♫", "⚙"};
+    private final String[] tabNames = {"Tổng quan", "Cài đặt", "Hệ thống"};
+    private final String[] tabIcons = {"⌂", "⚙", "✓"};
 
     @Override protected void onCreate(Bundle state) {
         super.onCreate(state);
@@ -89,8 +89,7 @@ public final class V10DashboardActivity extends Activity {
         content.removeAllViews();
         updateNav();
         if (tab == 0) renderOverview();
-        else if (tab == 1) renderProjection();
-        else if (tab == 2) renderAssistantMedia();
+        else if (tab == 1) renderSettingsHub();
         else renderSystem();
     }
 
@@ -116,7 +115,6 @@ public final class V10DashboardActivity extends Activity {
         addText(hero, "TRẢI NGHIỆM LÁI XE THÔNG MINH", 11, Color.rgb(164, 235, 241), true);
         addText(hero, "CarAsistant", 25, Color.WHITE, true);
         addText(hero, "Quản lý ứng dụng chiếu, trợ lý giọng nói và media ngay trên điện thoại.", 13, Color.rgb(220, 237, 248), false);
-        addAction(hero, "MỞ CẤU HÌNH", "→", CYAN, this::openSettings);
         content.addView(hero, bottom(16));
 
         addSectionTitle("TÌNH TRẠNG QUYỀN", "Các quyền Android cần thiết");
@@ -130,11 +128,16 @@ public final class V10DashboardActivity extends Activity {
         addMetric(row, "♫", "Media", notification ? "Đã cấp" : "Cần bật", notification ? GREEN : ORANGE);
         addMetric(row, "✧", "Trợ năng", accessibility ? "Đã bật" : "Tùy chọn", accessibility ? GREEN : BLUE);
 
-        addSectionTitle("TRUY CẬP NHANH", "Đi thẳng đến khu vực bạn cần");
-        addFeature("▣", "Thiết lập màn hình chiếu", "Nền Home, ứng dụng yêu thích và hướng màn hình.", BLUE, this::openSettings);
-        addFeature("♫", "Trợ lý & Media", "Ứng dụng mặc định và tự động khôi phục media.", PURPLE, this::openSettings);
-        addFeature("⚙", "Quyền hệ thống", "Micro, quyền Media Session, Trợ năng và chẩn đoán.", GREEN, () -> renderTab(3));
+        addInfoCard("THAO TÁC", "Dùng thanh điều hướng bên dưới để mở Cài đặt hoặc kiểm tra quyền hệ thống. Các cấu hình chi tiết chỉ xuất hiện tại một nơi.");
         addFooter();
+    }
+
+    private void renderSettingsHub() {
+        addEyebrow("SETTINGS");
+        addTitle("Cài đặt", "Quản lý các tùy chọn chiếu màn hình, trợ lý giọng nói và media tại một nơi.");
+        addFeature("⚙", "Cấu hình CarAsistant", "Ứng dụng nền, ứng dụng yêu thích, hướng màn hình, ứng dụng mặc định và khôi phục media.", CYAN, this::openSettings);
+        addInfoCard("GỌN VÀ TẬP TRUNG", "Các mục cấu hình chi tiết không lặp lại ở nhiều tab. Mở cấu hình để thay đổi thiết lập hiện có.");
+        addPrimaryButton("MỞ CẤU HÌNH", this::openSettings, BLUE);
     }
 
     private void renderProjection() {
