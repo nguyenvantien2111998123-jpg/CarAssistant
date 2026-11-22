@@ -7,6 +7,8 @@ public final class VoiceCommandRouter {
         String openApp(String spokenName, VoiceCommandParser.TargetScreen targetScreen);
         /** Opens a category's explicit app or configured default. */
         String openVoiceTask(String category, String query, String explicitProvider, VoiceCommandParser.TargetScreen targetScreen);
+        /** Expands the currently projected app in the requested Home pane. */
+        String expandPane(boolean leftPane);
         void showAppPicker();
         void goHome();
     }
@@ -76,6 +78,12 @@ public final class VoiceCommandRouter {
                 return new Result(true, "Đã về màn hình chính.", false);
             case CANCEL:
                 return new Result(true, "Đã hủy lệnh.", true);
+            case EXPAND_PANE: {
+                String expanded = host.expandPane(command.targetScreen == VoiceCommandParser.TargetScreen.LEFT);
+                return new Result(expanded != null, expanded == null
+                        ? "Vùng màn hình đó chưa có ứng dụng để phóng to."
+                        : "Đang phóng to " + expanded + " lên toàn màn hình.", false);
+            }
             case UNKNOWN:
             default:
                 return new Result(false,
