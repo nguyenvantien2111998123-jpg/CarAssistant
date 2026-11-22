@@ -5,7 +5,6 @@ import android.content.Context;
 import android.content.Intent;
 import android.content.pm.PackageManager;
 import android.os.Bundle;
-import android.os.Build;
 import android.os.Handler;
 import android.os.Looper;
 import android.speech.RecognitionListener;
@@ -43,7 +42,6 @@ public final class VoiceAssistantController {
     private Intent pendingListeningIntent;
     private boolean initialRecognizerStarted;
     private boolean restartPending;
-    private int transientErrorRetries;
     private String lastTranscript = "";
 
     /** Cancels a fresh listening session if no speech starts within three seconds. */
@@ -144,16 +142,15 @@ public final class VoiceAssistantController {
             speak("Bạn hãy cấp quyền micro cho CarAssistant trước.");
             return;
         }
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S
-                || !SpeechRecognizer.isOnDeviceRecognitionAvailable(context)) {
-            notifyState(false, "Chưa có bộ nhận dạng giọng nói ngoại tuyến.", "", false);
-            speak("Điện thoại chưa có bộ nhận dạng giọng nói ngoại tuyến. Hãy cài gói tiếng Việt ngoại tuyến trong cài đặt dịch vụ nhận dạng giọng nói.");
+        if (!SpeechRecognizer.isRecognitionAvailable(context)) {
+            notifyState(false, "Không có dịch vụ nhận dạng giọng nói.", "", false);
+            speak("Điện thoại chưa có dịch vụ nhận dạng giọng nói. Hãy kiểm tra dịch vụ Google và ngôn ngữ tiếng Việt.");
             return;
         }
 
         try {
             if (recognizer == null) {
-                recognizer = SpeechRecognizer.createOnDeviceSpeechRecognizer(context);
+                recognizer = SpeechRecognizer.createSpeechRecognizer(context);
                 recognizer.setRecognitionListener(new RecognitionListener() {
                     @Override public void onReadyForSpeech(Bundle params) {
                         if (!destroyed && sessionActive && !commandHandled)
@@ -189,17 +186,6 @@ public final class VoiceAssistantController {
                                 || error == SpeechRecognizer.ERROR_SPEECH_TIMEOUT;
                         String transcript = lastTranscript.trim();
                         if (transcript.isEmpty() && noSpeechError) { restartListeningAfterSilence(); return; }
-                        // Some on-device recognizer providers transiently return CLIENT/SERVER
-                        // immediately after startListening. Retry a bounded number of times
-                        // instead of ending push-to-talk on the first provider hiccup.
-                        if (transcript.isEmpty()
-                                && error != SpeechRecognizer.ERROR_INSUFFICIENT_PERMISSIONS
-                                && transientErrorRetries < 2) {
-                            transientErrorRetries++;
-                            cancelRecognizer();
-                            restartListeningAfterSilence();
-                            return;
-                        }
                         cancelSilenceWatchdog();
                         mainHandler.removeCallbacks(finalResultFallback);
                         if (!transcript.isEmpty()) {
@@ -227,16 +213,14 @@ public final class VoiceAssistantController {
 
                         // Empty results are retried without ending the voice session.
                         if (transcript.trim().isEmpty()) { restartListeningAfterSilence(); return; }
-                        transientErrorRetries = 0;
 
-                        cancelSilenceWatchdog();
+                                        cancelSilenceWatchdog();
                         mainHandler.removeCallbacks(finalResultFallback);
                         sessionActive = false;
                         listening = false;
                         commandHandled = true;
                         notifyState(false, "Đang xử lý lệnh…", "", false);
-                        if (matches != null && !matches.isEmpty()) dispatchTranscriptCandidates(matches);
-                        else dispatchTranscriptOnce(transcript);
+                        dispatchTranscriptOnce(transcript);
                     }
                     @Override public void onPartialResults(Bundle partialResults) {
                         if (destroyed || !sessionActive || !listening || commandHandled) return;
@@ -246,7 +230,6 @@ public final class VoiceAssistantController {
                         String partial = matches.get(0);
                         if (partial == null || partial.trim().isEmpty()) return;
                         String updated = partial.trim();
-                        transientErrorRetries = 0;
                         speechStarted = true;
                         mainHandler.removeCallbacks(noSpeechWatchdog);
                         if (!updated.equals(lastTranscript)) {
@@ -264,7 +247,6 @@ public final class VoiceAssistantController {
             speechStarted = false;
             initialRecognizerStarted = false;
             restartPending = false;
-            transientErrorRetries = 0;
             commandHandled = false;
             sessionActive = true;
             listening = true;
@@ -307,33 +289,6 @@ public final class VoiceAssistantController {
     private void cancelRecognizer() {
         if (recognizer == null) return;
         try { recognizer.cancel(); } catch (RuntimeException ignored) { }
-    }
-
-    private void dispatchTranscriptCandidates(ArrayList<String> candidates) {
-        if (destroyed) return;
-        String displayTranscript = "";
-        if (candidates != null) {
-            for (String candidate : candidates) {
-                if (candidate != null && !candidate.trim().isEmpty()) {
-                    displayTranscript = candidate.trim();
-                    break;
-                }
-            }
-        }
-        if (displayTranscript.isEmpty()) {
-            dispatchTranscriptOnce(lastTranscript);
-            return;
-        }
-        sessionActive = false;
-        listening = false;
-        commandHandled = true;
-        cancelSilenceWatchdog();
-        mainHandler.removeCallbacks(noSpeechWatchdog);
-        mainHandler.removeCallbacks(finalResultFallback);
-        VoiceCommandRouter.Result result = router.routeCandidates(candidates);
-        notifyState(false, (result.understood ? "Đã nhận: " : "Chưa hiểu: ") + displayTranscript, "", false);
-        speak(result.response);
-        lastTranscript = "";
     }
 
     private void dispatchTranscriptOnce(String transcript) {
@@ -383,10 +338,7 @@ public final class VoiceAssistantController {
         intent.putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM);
         intent.putExtra(RecognizerIntent.EXTRA_LANGUAGE, "vi-VN");
         intent.putExtra(RecognizerIntent.EXTRA_LANGUAGE_PREFERENCE, "vi-VN");
-        intent.putExtra(RecognizerIntent.EXTRA_PREFER_OFFLINE, true);
-        // Multiple ranked hypotheses let the deterministic parser recover when the
-        // recognizer's first transcript contains a small Vietnamese ASR error.
-        intent.putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 3);
+        intent.putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 1);
         intent.putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true);
         intent.putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_COMPLETE_SILENCE_LENGTH_MILLIS, COMPLETE_SILENCE_MS);
         intent.putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_POSSIBLY_COMPLETE_SILENCE_LENGTH_MILLIS, COMPLETE_SILENCE_MS);
