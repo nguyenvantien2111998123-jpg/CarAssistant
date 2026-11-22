@@ -342,10 +342,13 @@ public final class VoiceAssistantController {
         if (android.os.Build.VERSION.SDK_INT >= 34) {
             intent.putExtra("android.speech.extra.ENABLE_LANGUAGE_DETECTION", true);
             intent.putExtra("android.speech.extra.ENABLE_LANGUAGE_SWITCH", "balanced");
-            intent.putExtra("android.speech.extra.LANGUAGE_SWITCH_ALLOWED_LANGUAGES",
-                    new String[] {"vi-VN", "en-US"});
-            intent.putExtra("android.speech.extra.LANGUAGE_DETECTION_ALLOWED_LANGUAGES",
-                    new String[] {"vi-VN", "en-US"});
+            ArrayList<String> bilingualLanguages = new ArrayList<>();
+            bilingualLanguages.add("vi-VN");
+            bilingualLanguages.add("en-US");
+            intent.putStringArrayListExtra("android.speech.extra.LANGUAGE_SWITCH_ALLOWED_LANGUAGES",
+                    new ArrayList<>(bilingualLanguages));
+            intent.putStringArrayListExtra("android.speech.extra.LANGUAGE_DETECTION_ALLOWED_LANGUAGES",
+                    new ArrayList<>(bilingualLanguages));
         } else {
             // Older recognizers do not implement Android's language-switch API.
             // Do not pin every utterance to Vietnamese; let the installed speech
