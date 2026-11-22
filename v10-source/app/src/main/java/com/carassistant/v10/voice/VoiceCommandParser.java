@@ -216,7 +216,35 @@ public final class VoiceCommandParser {
     /** Map common English command phrases to the same deterministic command grammar. */
     private static String normalizeEnglishCommand(String text) {
         if (text == null || text.isEmpty()) return "";
-        String value = " " + text.trim() + " ";
+        String value = text.trim();
+        if (value.startsWith("open full screen ")) {
+            value = "mo full " + value.substring("open full screen ".length());
+        } else if (value.startsWith("open fullscreen ")) {
+            value = "mo full " + value.substring("open fullscreen ".length());
+        } else if (value.startsWith("open app ")) {
+            value = "mo app " + value.substring("open app ".length());
+        } else if (value.startsWith("open ")) {
+            value = "mo " + value.substring("open ".length());
+        } else if (value.startsWith("launch app ")) {
+            value = "mo app " + value.substring("launch app ".length());
+        } else if (value.startsWith("launch ")) {
+            value = "mo " + value.substring("launch ".length());
+        } else if (value.startsWith("start app ")) {
+            value = "mo app " + value.substring("start app ".length());
+        } else if (value.startsWith("start ")) {
+            value = "mo " + value.substring("start ".length());
+        } else if (value.startsWith("navigate to ")) {
+            value = "dan duong den " + value.substring("navigate to ".length());
+        } else if (value.startsWith("directions to ")) {
+            value = "dan duong den " + value.substring("directions to ".length());
+        } else if (value.startsWith("take me to ")) {
+            value = "dan duong den " + value.substring("take me to ".length());
+        } else if (value.startsWith("drive to ")) {
+            value = "dan duong den " + value.substring("drive to ".length());
+        } else if (value.startsWith("go to ")) {
+            value = "dan duong den " + value.substring("go to ".length());
+        }
+        value = " " + value + " ";
         value = value.replace(" on the left", " ben trai")
                 .replace(" on left", " ben trai")
                 .replace(" to the left", " ben trai")
