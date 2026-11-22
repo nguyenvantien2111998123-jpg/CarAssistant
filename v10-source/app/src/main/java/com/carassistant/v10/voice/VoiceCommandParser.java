@@ -44,13 +44,13 @@ public final class VoiceCommandParser {
         // phrased naturally ("đưa ... qua bên trái", "chiếu ... toàn màn hình").
         if (containsAny(text, "full man hinh", "toan man hinh", "toan man", "full man", "phong to toan man", "phong to man hinh")) {
             target = TargetScreen.FULLSCREEN;
-            text = removeAny(text, "full man hinh", "toan man hinh", "phong to toan man", "phong to man hinh", "toan man", "full man");
-        } else if (containsAny(text, "ben trai", "sang ben trai", "qua ben trai", "dua sang ben trai", "man hinh trai", "vung trai", "o trai", "sang trai", "qua trai")) {
+            text = removeAny(text, "full man hinh", "toan man hinh", "phong to toan man", "phong to man hinh", "phong to", "toan man", "full man");
+        } else if (containsAny(text, "ben trai", "o ben trai", "sang ben trai", "qua ben trai", "dua sang ben trai", "man hinh trai", "vung trai", "o trai", "sang trai", "qua trai")) {
             target = TargetScreen.LEFT;
-            text = removeAny(text, "dua sang ben trai", "sang ben trai", "qua ben trai", "man hinh ben trai", "man hinh trai", "vung ben trai", "vung trai", "ben trai", "o trai", "sang trai", "qua trai");
-        } else if (containsAny(text, "ben phai", "sang ben phai", "qua ben phai", "dua sang ben phai", "man hinh phai", "vung phai", "o phai", "sang phai", "qua phai")) {
+            text = removeAny(text, "dua sang ben trai", "sang ben trai", "qua ben trai", "o ben trai", "man hinh ben trai", "man hinh trai", "vung ben trai", "vung trai", "ben trai", "o trai", "sang trai", "qua trai");
+        } else if (containsAny(text, "ben phai", "o ben phai", "sang ben phai", "qua ben phai", "dua sang ben phai", "man hinh phai", "vung phai", "o phai", "sang phai", "qua phai")) {
             target = TargetScreen.RIGHT;
-            text = removeAny(text, "dua sang ben phai", "sang ben phai", "qua ben phai", "man hinh ben phai", "man hinh phai", "vung ben phai", "vung phai", "ben phai", "o phai", "sang phai", "qua phai");
+            text = removeAny(text, "dua sang ben phai", "sang ben phai", "qua ben phai", "o ben phai", "man hinh ben phai", "man hinh phai", "vung ben phai", "vung phai", "ben phai", "o phai", "sang phai", "qua phai");
         }
         text = text.replaceAll("\\s+", " ").trim();
 
@@ -100,7 +100,7 @@ public final class VoiceCommandParser {
             if (place != null) return command(target, Type.SEARCH_NEARBY, place, "", "navigation");
         }
 
-        value = firstPrefix(text, "mo bai hat ", "phat bai hat ", "bat bai hat ", "tim bai hat ",
+        value = firstPrefix(text, "mo bai hat ", "phat bai hat ", "bat bai hat ", "tim bai hat ", "cho phat bai hat ",
                 "mo ca khuc ", "phat ca khuc ", "tim ca khuc ", "mo ban nhac ", "phat ban nhac ");
         if (value != null) return mediaCommand(Type.PLAY_MUSIC, value, "music", target);
         value = firstPrefix(text, "mo nhac ", "phat nhac ", "bat nhac ", "tim nhac ",
