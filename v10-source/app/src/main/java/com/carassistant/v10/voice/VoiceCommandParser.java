@@ -409,6 +409,29 @@ public final class VoiceCommandParser {
         return false;
     }
 
+    /** Percentage similarity for conservative speech-to-app-name matching. */
+    public static int nameSimilarityPercent(String first, String second) {
+        String a = normalize(first);
+        String b = normalize(second);
+        if (a.isEmpty() || b.isEmpty()) return 0;
+        int[] previous = new int[b.length() + 1];
+        int[] current = new int[b.length() + 1];
+        for (int j = 0; j <= b.length(); j++) previous[j] = j;
+        for (int i = 1; i <= a.length(); i++) {
+            current[0] = i;
+            for (int j = 1; j <= b.length(); j++) {
+                int cost = a.charAt(i - 1) == b.charAt(j - 1) ? 0 : 1;
+                current[j] = Math.min(Math.min(current[j - 1] + 1,
+                        previous[j] + 1), previous[j - 1] + cost);
+            }
+            int[] swap = previous;
+            previous = current;
+            current = swap;
+        }
+        int maxLength = Math.max(a.length(), b.length());
+        return 100 * (maxLength - previous[b.length()]) / maxLength;
+    }
+
     /** Lowercase, remove Vietnamese diacritics and normalize whitespace for matching. */
     public static String normalize(String value) {
         if (value == null) return "";
