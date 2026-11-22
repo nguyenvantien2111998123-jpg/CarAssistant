@@ -40,15 +40,17 @@ public final class VoiceCommandParser {
         String text = normalize(transcript);
         if (text.isEmpty()) return new Command(Type.UNKNOWN, "");
         TargetScreen target = TargetScreen.AUTO;
-        if (containsAny(text, "full man hinh", "toan man hinh", "full man", "toan man")) {
+        // Extract screen intent as a separate modifier so the command body can be
+        // phrased naturally ("đưa ... qua bên trái", "chiếu ... toàn màn hình").
+        if (containsAny(text, "full man hinh", "toan man hinh", "toan man", "full man", "phong to toan man")) {
             target = TargetScreen.FULLSCREEN;
-            text = removeAny(text, "full man hinh", "toan man hinh", "full man", "toan man");
-        } else if (containsAny(text, "ben trai", "man hinh trai", "vung trai", "o trai")) {
+            text = removeAny(text, "full man hinh", "toan man hinh", "phong to toan man", "toan man", "full man");
+        } else if (containsAny(text, "ben trai", "man hinh trai", "vung trai", "o trai", "sang trai", "qua trai")) {
             target = TargetScreen.LEFT;
-            text = removeAny(text, "ben trai", "man hinh trai", "vung trai", "o trai");
-        } else if (containsAny(text, "ben phai", "man hinh phai", "vung phai", "o phai")) {
+            text = removeAny(text, "man hinh ben trai", "man hinh trai", "vung ben trai", "vung trai", "ben trai", "o trai", "sang trai", "qua trai");
+        } else if (containsAny(text, "ben phai", "man hinh phai", "vung phai", "o phai", "sang phai", "qua phai")) {
             target = TargetScreen.RIGHT;
-            text = removeAny(text, "ben phai", "man hinh phai", "vung phai", "o phai");
+            text = removeAny(text, "man hinh ben phai", "man hinh phai", "vung ben phai", "vung phai", "ben phai", "o phai", "sang phai", "qua phai");
         }
         text = text.replaceAll("\\s+", " ").trim();
 
@@ -57,33 +59,37 @@ public final class VoiceCommandParser {
         if (text.startsWith("kiki ")) text = text.substring(5).trim();
         if (text.startsWith("car assistant ")) text = text.substring(14).trim();
 
-        if (matches(text, "huy", "huy lenh", "dung lai", "bo qua", "thoi", "cancel", "dung")) {
+        if (matches(text, "huy", "huy lenh", "huy bo", "dung lai", "dung nghe", "bo qua", "thoi", "cancel", "dung")) {
             return command(target, Type.CANCEL, "");
         }
         if (matches(text, "mo danh sach ung dung", "hien danh sach ung dung",
-                "danh sach ung dung", "mo app chon", "app chon", "hien app")) {
+                "danh sach ung dung", "mo app chon", "app chon", "hien app",
+                "liet ke ung dung", "cho xem cac ung dung", "chon ung dung")) {
             return command(target, Type.SHOW_APPS, "");
         }
         if (matches(text, "ve man hinh chinh", "ve trang chu",
-                "tro ve man hinh chinh", "ve home", "home", "trang chu")) {
+                "tro ve man hinh chinh", "tro ve home", "quay ve home",
+                "quay ve trang chu", "ve giao dien chinh", "home", "trang chu")) {
             return command(target, Type.HOME, "");
         }
 
         String value = firstPrefix(text,
-                "dan duong den ", "dan duong toi ", "chi duong den ",
-                "chi duong toi ", "chi duong ", "dieu huong den ", "dieu huong toi ");
+                "dan duong den ", "dan duong toi ", "dan toi ", "dan den ",
+                "chi duong den ", "chi duong toi ", "chi duong ", "tim duong den ",
+                "tim duong toi ", "dieu huong den ", "dieu huong toi ",
+                "dua toi den ", "dua toi toi ", "di den ", "di toi ", "lai xe den ");
         if (value != null) return navigationCommand(value, target);
 
         // "Đến cây xăng gần nhất bằng Navitel" is also a destination command.
-        value = stripPrefix(text, "den ");
+        value = firstPrefix(text, "den ", "toi ", "di den ", "di toi ");
         if (value != null && !value.isEmpty()) return navigationCommand(value, target);
 
-        value = stripPrefix(text, "tim quanh day ");
+        value = firstPrefix(text, "tim quanh day ", "tim xung quanh ", "tim o gan day ", "tim gan toi ");
         if (value != null) {
             String place = nearbyCategory(value);
             if (place != null) return command(target, Type.SEARCH_NEARBY, place, "", "navigation");
         }
-        value = stripPrefix(text, "tim gan day ");
+        value = firstPrefix(text, "tim gan day ", "tim dia diem gan day ", "tim dia diem quanh day ");
         if (value != null) {
             String place = nearbyCategory(value);
             if (place != null) return command(target, Type.SEARCH_NEARBY, place, "", "navigation");
@@ -94,12 +100,15 @@ public final class VoiceCommandParser {
             if (place != null) return command(target, Type.SEARCH_NEARBY, place, "", "navigation");
         }
 
-        value = firstPrefix(text, "mo bai hat ", "phat bai hat ", "bat bai hat ", "tim bai hat ");
+        value = firstPrefix(text, "mo bai hat ", "phat bai hat ", "bat bai hat ", "tim bai hat ",
+                "mo ca khuc ", "phat ca khuc ", "tim ca khuc ", "mo ban nhac ", "phat ban nhac ");
         if (value != null) return mediaCommand(Type.PLAY_MUSIC, value, "music", target);
-        value = firstPrefix(text, "mo nhac ", "phat nhac ", "bat nhac ", "tim nhac ");
+        value = firstPrefix(text, "mo nhac ", "phat nhac ", "bat nhac ", "tim nhac ",
+                "nghe nhac ", "cho nghe ", "mo playlist ", "phat playlist ");
         if (value != null) return mediaCommand(Type.PLAY_MUSIC, value, "music", target);
 
-        value = firstPrefix(text, "mo video nhac ", "phat video nhac ", "tim video nhac ");
+        value = firstPrefix(text, "mo video nhac ", "phat video nhac ", "tim video nhac ",
+                "xem video nhac ", "mo mv ", "xem mv ");
         if (value != null) {
             // Keep "nhạc trẻ/bolero/rap/remix..." as the actual search phrase,
             // while treating "nhạc <artist/song>" as a command prefix.
@@ -108,18 +117,20 @@ public final class VoiceCommandParser {
             }
             return mediaCommand(Type.PLAY_VIDEO, value, "video", target);
         }
-        value = firstPrefix(text, "mo video bai hat ", "phat video bai hat ", "tim video bai hat ");
+        value = firstPrefix(text, "mo video bai hat ", "phat video bai hat ", "tim video bai hat ",
+                "xem video bai hat ", "mo clip ", "xem clip ");
         if (value != null) return mediaCommand(Type.PLAY_VIDEO, value, "video", target);
-        value = firstPrefix(text, "mo video ", "phat video ", "xem video ", "tim video ", "mo youtube ");
+        value = firstPrefix(text, "mo video ", "phat video ", "xem video ", "tim video ",
+                "bat video ", "mo youtube ", "xem youtube ");
         if (value != null) return mediaCommand(Type.PLAY_VIDEO, value, "video", target);
 
         value = firstPrefix(text, "mo phim ", "phat phim ", "xem phim ", "tim phim ",
                 "mo bo phim ", "phat bo phim ", "tim bo phim ");
         if (value != null) return mediaCommand(Type.PLAY_VIDEO, value, "video", target);
 
-        value = firstPrefix(text, "mo kenh ", "chuyen kenh ", "xem kenh ");
+        value = firstPrefix(text, "mo kenh ", "chuyen kenh ", "xem kenh ", "bat kenh ", "doi kenh ");
         if (value != null) return mediaCommand(Type.OPEN_TV, value, "tv", target);
-        if (matches(text, "mo tv", "mo truyen hinh", "bat tv", "mo ung dung tv")) {
+        if (matches(text, "mo tv", "mo truyen hinh", "bat tv", "mo ung dung tv", "xem tv", "bat truyen hinh")) {
             return command(target, Type.OPEN_TV, "", "", "tv");
         }
         if (matches(text, "mo nhac", "bat nhac", "phat nhac")) {
@@ -132,7 +143,7 @@ public final class VoiceCommandParser {
         // Generic media wording: "Mở <tên nội dung> trên YouTube" and
         // "Mở <tên bài> trên YouTube Music/Zing MP3" need to be treated as
         // search-and-play requests, not as requests to launch an app by name.
-        value = firstPrefix(text, "mo ", "phat ", "bat ", "xem ", "tim ");
+        value = firstPrefix(text, "mo ", "phat ", "bat ", "xem ", "tim ", "cho phat ");
         if (value != null) {
             String[] mediaPair = splitFirst(value, " tren ", " bang ");
             String provider = normalize(mediaPair[1]);
@@ -149,8 +160,16 @@ public final class VoiceCommandParser {
             }
         }
 
+        // App-launch synonyms. Keep this after media parsing so "mở bài hát ..."
+        // is not mistaken for an installed application.
+        value = firstPrefix(text, "mo ung dung ", "mo app ", "khoi dong ",
+                "chay ung dung ", "chay app ", "mo lai ", "chuyen sang ",
+                "chuyen qua ", "doi sang ", "dua len man hinh ", "chieu ");
+        if (value != null && !value.isEmpty()) return command(target, Type.OPEN_APP, value);
         if (text.startsWith("mo ")) {
             String app = text.substring(3).trim();
+            if (app.startsWith("ung dung ")) app = app.substring(9).trim();
+            else if (app.startsWith("app ")) app = app.substring(4).trim();
             if (!app.isEmpty()) return command(target, Type.OPEN_APP, app);
         }
         return command(target, Type.UNKNOWN, text);
@@ -195,11 +214,12 @@ public final class VoiceCommandParser {
             if (v.endsWith(" " + suffix)) v = v.substring(0, v.length() - suffix.length()).trim();
             else if (v.equals(suffix)) v = "";
         }
-        if (matches(v, "nha hang", "quan an", "nha hang gan nhat", "quan an gan nhat")) return "nha hang";
-        if (matches(v, "quan cafe", "quan ca phe", "cafe", "ca phe", "quan coffee")) return "quan cafe";
-        if (matches(v, "tiem sua xe", "gara sua xe", "sua xe", "garage sua xe")) return "tiem sua xe";
-        if (matches(v, "cay xang", "tram xang", "cay xang gan nhat")) return "cay xang";
-        if (matches(v, "benh vien", "atm", "bai do xe", "khach san", "nha thuoc")) return v;
+        if (matches(v, "nha hang", "quan an", "do an", "quan nhau", "nha hang gan nhat", "quan an gan nhat")) return "nha hang";
+        if (matches(v, "quan cafe", "quan ca phe", "cafe", "ca phe", "quan coffee", "coffee", "tra sua")) return "quan cafe";
+        if (matches(v, "tiem sua xe", "gara sua xe", "sua xe", "garage sua xe", "sua oto", "sua xe hoi")) return "tiem sua xe";
+        if (matches(v, "cay xang", "tram xang", "do xang", "tram do xang", "cay xang gan nhat")) return "cay xang";
+        if (matches(v, "benh vien", "phong kham", "atm", "ngan hang", "bai do xe", "cho do xe",
+                "khach san", "nha nghi", "nha thuoc", "buu dien", "sieu thi", "cho", "truong hoc")) return v;
         return null;
     }
 
