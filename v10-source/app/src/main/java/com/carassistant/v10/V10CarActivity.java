@@ -104,6 +104,10 @@ public final class V10CarActivity
 
     private ComponentName activeTarget;
 
+    // Voice commands launched from Home follow the pane most recently touched/selected.
+    // Default to the larger right pane until the user interacts with either pane.
+    private boolean activeVoiceLeftPane;
+
     private final ArrayList<AppInfo> apps =
             new ArrayList<>();
 
@@ -265,12 +269,12 @@ public final class V10CarActivity
                                     }
                                 }
                                 if (selectedApp == null) return null;
-                                launchProjection(selectedApp.component);
-                                if (query != null && !query.trim().isEmpty() && session != null) {
+                                V10ProjectionSession targetSession = launchVoiceProjection(selectedApp.component);
+                                if (query != null && !query.trim().isEmpty() && targetSession != null) {
                                     String mapUri = buildMapUri(selectedApp.component, query,
                                             "nearby".equals(category));
                                     if (mapUri != null) {
-                                        session.launchViewIntentOnDisplay(
+                                        dispatchVoiceViewIntent(targetSession,
                                                 selectedApp.component.getPackageName(), mapUri);
                                     }
                                 }
@@ -332,7 +336,7 @@ public final class V10CarActivity
                                     }
                                 }
 
-                                if (selected == null || session == null) return null;
+                                if (selected == null) return null;
                                 String mediaUri = null;
                                 if (query != null && !query.trim().isEmpty()) {
                                     mediaUri = MediaSearchUriBuilder.build(
@@ -340,11 +344,11 @@ public final class V10CarActivity
                                     if (mediaUri == null) return null;
                                 }
 
-                                // Launch on the real projection surface, then send the search
-                                // intent to that same display. Keep the phone UI out of this flow.
-                                launchProjection(selected);
-                                if (mediaUri != null) {
-                                    dispatchMediaSearchOnProjection(selected, mediaUri, query.trim());
+                                // Launch and search on the same active pane/session. The proven
+                                // fullscreen MiniAccess pipeline remains unchanged.
+                                V10ProjectionSession targetSession = launchVoiceProjection(selected);
+                                if (mediaUri != null && targetSession != null) {
+                                    dispatchVoiceMediaSearch(targetSession, selected, mediaUri, query.trim());
                                 }
                                 return selectedLabel == null ? selected.getPackageName() : selectedLabel;
                             }
@@ -371,9 +375,9 @@ public final class V10CarActivity
                                     }
                                 }
                                 if (selectedApp == null) return null;
-                                launchProjection(selectedApp.component);
-                                if (query != null && !query.trim().isEmpty() && session != null) {
-                                    session.launchSearchIntentOnDisplay(
+                                V10ProjectionSession targetSession = launchVoiceProjection(selectedApp.component);
+                                if (query != null && !query.trim().isEmpty() && targetSession != null) {
+                                    dispatchVoiceSearchIntent(targetSession,
                                             selectedApp.component.getPackageName(), query);
                                 }
                                 return selectedApp.name;
@@ -386,7 +390,7 @@ public final class V10CarActivity
                             ComponentName configured = V10SessionStore.getDefaultVoiceApp(
                                     V10CarActivity.this, category);
                             if (configured != null) {
-                                launchProjection(configured);
+                                launchVoiceProjection(configured);
                                 return appLabelForComponent(configured);
                             }
 
@@ -497,10 +501,12 @@ public final class V10CarActivity
                 .getFloat("home_pane_ratio", 0.30f);
         dualPaneHome = new V10DualPaneHome(this, new V10DualPaneHome.Listener() {
             @Override public void onAppSelected(boolean leftPane, ComponentName component) {
+                activeVoiceLeftPane = leftPane;
                 if (leftPane) launchBackgroundProjection(component);
                 else launchRightPaneProjection(component);
             }
             @Override public void onExpandRequested(boolean leftPane, ComponentName component) {
+                activeVoiceLeftPane = leftPane;
                 expandPaneToFullscreen(leftPane, component);
             }
             @Override public void onRatioChanged(float ratio) {
@@ -1157,8 +1163,9 @@ public final class V10CarActivity
                 new V10InputController(backgroundSession).createListener();
         textureView.setOnTouchListener((view, event) -> {
             scheduleDrivingChromeAutoHide();
-            if (event.getActionMasked() == MotionEvent.ACTION_DOWN && keyboardController != null) {
-                keyboardController.setPreferredSession(backgroundSession);
+            if (event.getActionMasked() == MotionEvent.ACTION_DOWN) {
+                activeVoiceLeftPane = true;
+                if (keyboardController != null) keyboardController.setPreferredSession(backgroundSession);
             }
             return leftInputListener.onTouch(view, event);
         });
@@ -1170,8 +1177,9 @@ public final class V10CarActivity
                 new V10InputController(rightPaneSession).createListener();
         rightTextureView.setOnTouchListener((view, event) -> {
             scheduleDrivingChromeAutoHide();
-            if (event.getActionMasked() == MotionEvent.ACTION_DOWN && keyboardController != null) {
-                keyboardController.setPreferredSession(rightPaneSession);
+            if (event.getActionMasked() == MotionEvent.ACTION_DOWN) {
+                activeVoiceLeftPane = false;
+                if (keyboardController != null) keyboardController.setPreferredSession(rightPaneSession);
             }
             return rightInputListener.onTouch(view, event);
         });
@@ -1352,6 +1360,102 @@ private void stopRightPaneProjection() {
     V10SessionStore.setRightPaneTarget(this, null);
     activeRightPaneTarget = null;
     if (dualPaneHome != null) dualPaneHome.setPaneTarget(false, null, "MÀN HÌNH PHỤ 1.1");
+}
+
+/**
+ * Routes voice-launched apps to the currently active projection surface.
+ * On Home this is the last touched/selected 30% or 70% pane. While fullscreen
+ * projection is visible, commands continue using the existing fullscreen session.
+ */
+private V10ProjectionSession launchVoiceProjection(ComponentName component) {
+    if (component == null) return null;
+
+    if (appProjectionLayer != null
+            && appProjectionLayer.getVisibility() == View.VISIBLE) {
+        launchProjection(component);
+        return session;
+    }
+
+    if (isHomeScreen()) {
+        if (dualPaneHome != null) dualPaneHome.closePickers();
+        if (activeVoiceLeftPane) {
+            launchBackgroundProjection(component);
+            return backgroundSession;
+        }
+        launchRightPaneProjection(component);
+        return rightPaneSession;
+    }
+
+    // App picker and transitional states retain the established fullscreen path.
+    launchProjection(component);
+    return session;
+}
+
+/** Sends a VIEW URI after the selected pane has finished attaching its task. */
+private void dispatchVoiceViewIntent(V10ProjectionSession targetSession,
+                                     String packageName, String uri) {
+    if (targetSession == null || packageName == null || uri == null) return;
+    final long deadline = SystemClock.uptimeMillis() + 5000L;
+    Runnable dispatch = new Runnable() {
+        @Override public void run() {
+            if (targetSession.isActive()
+                    && targetSession.launchViewIntentOnDisplay(packageName, uri)) return;
+            if (SystemClock.uptimeMillis() < deadline) {
+                handler.postDelayed(this, 200L);
+            } else {
+                Toast.makeText(V10CarActivity.this,
+                        "Không thể gửi yêu cầu đến ứng dụng trên vùng màn hình đang chọn.",
+                        Toast.LENGTH_SHORT).show();
+            }
+        }
+    };
+    handler.post(dispatch);
+}
+
+/** Sends a media search to the active pane; fullscreen keeps the proven MiniAccess flow. */
+private void dispatchVoiceMediaSearch(V10ProjectionSession targetSession,
+                                      ComponentName target, String uri, String query) {
+    if (targetSession == null || target == null || uri == null || query == null) return;
+    if (targetSession == session) {
+        dispatchMediaSearchOnProjection(target, uri, query);
+        return;
+    }
+    final long deadline = SystemClock.uptimeMillis() + 5000L;
+    Runnable dispatch = new Runnable() {
+        @Override public void run() {
+            if (targetSession.isActive()
+                    && targetSession.launchMediaViewIntentOnDisplay(target.getPackageName(), uri)) return;
+            if (SystemClock.uptimeMillis() < deadline) {
+                handler.postDelayed(this, 200L);
+            } else {
+                Toast.makeText(V10CarActivity.this,
+                        "Không thể mở nội dung tìm kiếm trên vùng màn hình đang chọn.",
+                        Toast.LENGTH_SHORT).show();
+            }
+        }
+    };
+    handler.post(dispatch);
+}
+
+/** Sends an ACTION_SEARCH request after the active projection session is ready. */
+private void dispatchVoiceSearchIntent(V10ProjectionSession targetSession,
+                                       String packageName, String query) {
+    if (targetSession == null || packageName == null || query == null || query.trim().isEmpty()) return;
+    final long deadline = SystemClock.uptimeMillis() + 5000L;
+    Runnable dispatch = new Runnable() {
+        @Override public void run() {
+            if (targetSession.isActive()
+                    && targetSession.launchSearchIntentOnDisplay(packageName, query)) return;
+            if (SystemClock.uptimeMillis() < deadline) {
+                handler.postDelayed(this, 200L);
+            } else {
+                Toast.makeText(V10CarActivity.this,
+                        "Ứng dụng chưa sẵn sàng nhận yêu cầu tìm kiếm.",
+                        Toast.LENGTH_SHORT).show();
+            }
+        }
+    };
+    handler.post(dispatch);
 }
 private void expandPaneToFullscreen(boolean leftPane, ComponentName component) {
     if (component == null || session == null) return;
@@ -2065,7 +2169,7 @@ private void hideTaskSwitcher() {
     private String openAppByVoice(String spokenName) {
         AppInfo best = findAppByVoice(spokenName);
         if (best == null) return null;
-        launchProjection(best.component);
+        launchVoiceProjection(best.component);
         return best.name;
     }
 
