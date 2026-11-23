@@ -28,6 +28,7 @@ public final class AACastDisplay {
         }
         return (PREFIX + "1").equals(name)
                 || (PREFIX + "2").equals(name)
-                || (PREFIX + "3").equals(name);
+                || (PREFIX + "3").equals(name)
+                || (PREFIX + "4").equals(name);
     }
 }
