@@ -1408,7 +1408,8 @@ private void dispatchVoiceViewIntent(V10ProjectionSession targetSession,
 private void dispatchVoiceMediaSearch(V10ProjectionSession targetSession,
                                       ComponentName target, String uri, String query) {
     if (targetSession == null || target == null || uri == null || query == null) return;
-    if (targetSession == rightPaneSession) {
+    if (targetSession == rightPaneSession && fullscreenPaneActive
+            && !fullscreenPaneLeft && target.equals(activeTarget)) {
         dispatchMediaSearchOnProjection(target, uri, query);
         return;
     }
