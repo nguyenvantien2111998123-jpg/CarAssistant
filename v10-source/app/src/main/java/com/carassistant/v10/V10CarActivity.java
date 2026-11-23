@@ -209,6 +209,8 @@ public final class V10CarActivity
         super.onResume();
 
         resumed = true;
+        Log.i("GeminiCommandTrace", "V10CarActivity.onResume - Android Auto CarAsistant entry active");
+        GeminiCommandLogCapture.onCarActivityResumed();
 
         applyChrome();
 
