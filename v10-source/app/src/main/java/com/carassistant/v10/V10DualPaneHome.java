@@ -44,6 +44,8 @@ public final class V10DualPaneHome extends FrameLayout {
     private final FrameLayout divider;
     private float ratio = 0.30f;
     private boolean draggingDivider;
+    private boolean fullscreenPane;
+    private boolean fullscreenLeft;
 
     public V10DualPaneHome(Context context, Listener listener, float initialRatio) {
         super(context);
@@ -132,6 +134,44 @@ public final class V10DualPaneHome extends FrameLayout {
     public void setRightTargetLabel(String label) { right.setTargetLabel(label); }
 
     public void setRatio(float value) { setRatio(value, true); }
+
+    /** Expand one existing pane to the complete projection area without creating another display. */
+    public void setFullscreenPane(boolean leftPane) {
+        fullscreenPane = true;
+        fullscreenLeft = leftPane;
+        closePickers();
+        Pane selected = leftPane ? left : right;
+        Pane hidden = leftPane ? right : left;
+        hidden.setVisibility(View.GONE);
+        selected.setVisibility(View.VISIBLE);
+        LinearLayout.LayoutParams selectedParams = (LinearLayout.LayoutParams) selected.getLayoutParams();
+        LinearLayout.LayoutParams hiddenParams = (LinearLayout.LayoutParams) hidden.getLayoutParams();
+        selectedParams.weight = 1f;
+        hiddenParams.weight = 0f;
+        selected.setLayoutParams(selectedParams);
+        hidden.setLayoutParams(hiddenParams);
+        divider.setVisibility(View.GONE);
+        requestLayout();
+    }
+
+    /** Restore the original adjustable 3:7 Home composition. */
+    public void restoreSplitLayout() {
+        fullscreenPane = false;
+        left.setVisibility(View.VISIBLE);
+        right.setVisibility(View.VISIBLE);
+        divider.setVisibility(View.VISIBLE);
+        LinearLayout.LayoutParams lp = (LinearLayout.LayoutParams) left.getLayoutParams();
+        LinearLayout.LayoutParams rp = (LinearLayout.LayoutParams) right.getLayoutParams();
+        lp.weight = ratio;
+        rp.weight = 1f - ratio;
+        left.setLayoutParams(lp);
+        right.setLayoutParams(rp);
+        updateDividerPosition();
+        requestLayout();
+    }
+
+    public boolean isFullscreenPane() { return fullscreenPane; }
+    public boolean isFullscreenLeftPane() { return fullscreenPane && fullscreenLeft; }
 
     private void setRatio(float value, boolean persist) {
         ratio = Math.max(0.18f, Math.min(0.65f, value));
@@ -234,7 +274,7 @@ public final class V10DualPaneHome extends FrameLayout {
             panel.addView(header, new LinearLayout.LayoutParams(-1, dp(38)));
 
             TextView expand = actionButton("⛶");
-            expand.setContentDescription("Phóng to ứng dụng lên màn hình phụ 2");
+            expand.setContentDescription("Chuyển vùng này sang chế độ toàn màn hình");
             header.addView(expand, new LinearLayout.LayoutParams(dp(38), -1));
             expand.setOnClickListener(v -> {
                 if (target != null && listener != null) listener.onExpandRequested(isLeft, target);
