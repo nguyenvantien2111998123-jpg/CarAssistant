@@ -1322,7 +1322,7 @@ private void launchRightPaneProjection(ComponentName component) {
     if (component == null || rightPaneSession == null) return;
     activeRightPaneTarget = component;
     activeInputSession = rightPaneSession;
-    rememberProjectedTask(component, rightPaneSession, 2);
+    rememberProjectedTask(component, rightPaneSession, 1);
     V10SessionStore.setRightPaneTarget(this, component);
     projectionLayer.setVisibility(isHomeScreen() ? View.VISIBLE : View.GONE);
     if (dualPaneHome != null) {
@@ -1524,6 +1524,12 @@ private boolean isHomeScreen() {
     }
 
 private void showApps() {
+
+    // The global vertical app chooser always targets region 1.1, regardless
+    // of which pane was previously fullscreen.
+    fullscreenPaneActive = false;
+    fullscreenPaneLeft = false;
+    if (dualPaneHome != null) dualPaneHome.restoreSplitLayout();
 
     scheduleDrivingChromeAutoHide();
     if (keyboardController != null) keyboardController.hide();
@@ -1894,7 +1900,7 @@ private void showTaskSwitcher() {
     panel.addView(scroll, new LinearLayout.LayoutParams(-1, 0, 1f));
     if (activeBackgroundTarget != null && backgroundSession != null) rememberProjectedTask(activeBackgroundTarget, backgroundSession, 0);
     if (activeRightPaneTarget != null && rightPaneSession != null) rememberProjectedTask(activeRightPaneTarget, rightPaneSession, 1);
-    if (activeTarget != null && session != null) rememberProjectedTask(activeTarget, session, 1);
+    if (activeTarget != null && session != null) rememberProjectedTask(activeTarget, session, fullscreenPaneLeft ? 0 : 1);
     if (projectedTaskHistory.isEmpty()) {
         TextView empty = text("Chưa có task nào đang chiếu.", 14, Color.LTGRAY);
         empty.setGravity(Gravity.CENTER);
