@@ -116,6 +116,8 @@ public final class V10CarActivity
     private static final String RETURN_PANE_LEFT = "fullscreen_return_pane_left";
     private ComponentName fullscreenReturnTarget;
     private boolean fullscreenReturnLeft;
+    private boolean fullscreenPaneActive;
+    private boolean fullscreenPaneLeft;
 
     // Voice commands launched from Home follow the pane most recently touched/selected.
     // Default to the larger right pane until the user interacts with either pane.
@@ -528,7 +530,12 @@ public final class V10CarActivity
             }
             @Override public void onExpandRequested(boolean leftPane, ComponentName component) {
                 activeVoiceLeftPane = leftPane;
-                expandPaneToFullscreen(leftPane, component);
+                if (dualPaneHome != null && dualPaneHome.isFullscreenPane()
+                        && dualPaneHome.isFullscreenLeftPane() == leftPane) {
+                    returnToLauncher();
+                } else {
+                    expandPaneToFullscreen(leftPane, component);
+                }
             }
             @Override public void onRatioChanged(float ratio) {
                 getSharedPreferences("v10_session", MODE_PRIVATE).edit()
@@ -540,7 +547,7 @@ public final class V10CarActivity
         // Independent second projection surface, controlled only by APP CHỌN.
         appProjectionLayer = new FrameLayout(this);
         appProjectionLayer.setVisibility(View.GONE);
-        root.addView(appProjectionLayer, new FrameLayout.LayoutParams(-1, -1));
+        // Retained as an inert compatibility container; fullscreen apps now use a Home pane surface.
 
         launcherLayer=new LinearLayout(this);
         launcherLayer.setOrientation(LinearLayout.VERTICAL);
@@ -1176,7 +1183,8 @@ public final class V10CarActivity
     private void attachProjection() {
         if (dualPaneHome == null) return;
 
-        // Display 1: narrow 30% pane. Display 1.1: independent 70% pane.
+        // Only two visible projection surfaces remain: region 1 (index 0)
+        // and region 1.1 (index 1). Fullscreen is a layout change on either one.
         textureView = dualPaneHome.getLeftTextureView();
         backgroundSession = new V10ProjectionSession(this, 0);
         backgroundSession.attachTextureView(textureView);
@@ -1185,125 +1193,64 @@ public final class V10CarActivity
         textureView.setOnTouchListener((view, event) -> {
             scheduleDrivingChromeAutoHide();
             if (event.getActionMasked() == MotionEvent.ACTION_DOWN) {
-                activeVoiceLeftPane = true; activeInputSession = backgroundSession;
+                activeVoiceLeftPane = true;
+                activeInputSession = backgroundSession;
                 if (keyboardController != null) keyboardController.setPreferredSession(backgroundSession);
             }
             return leftInputListener.onTouch(view, event);
         });
 
         rightTextureView = dualPaneHome.getRightTextureView();
-        rightPaneSession = new V10ProjectionSession(this, 2);
+        rightPaneSession = new V10ProjectionSession(this, 1);
         rightPaneSession.attachTextureView(rightTextureView);
         View.OnTouchListener rightInputListener =
                 new V10InputController(rightPaneSession).createListener();
         rightTextureView.setOnTouchListener((view, event) -> {
             scheduleDrivingChromeAutoHide();
             if (event.getActionMasked() == MotionEvent.ACTION_DOWN) {
-                activeVoiceLeftPane = false; activeInputSession = rightPaneSession;
+                activeVoiceLeftPane = false;
+                activeInputSession = rightPaneSession;
                 if (keyboardController != null) keyboardController.setPreferredSession(rightPaneSession);
             }
             return rightInputListener.onTouch(view, event);
         });
 
-        // Display 2 remains the dedicated fullscreen surface and headless media-resume target.
-        appTextureView = new TextureView(this);
-        appProjectionLayer.addView(appTextureView, new FrameLayout.LayoutParams(-1, -1));
-        session = new V10ProjectionSession(this, 1);
-        session.attachTextureView(appTextureView);
-        View.OnTouchListener appInputListener =
-                new V10InputController(session).createListener();
-        appTextureView.setOnTouchListener((view, event) -> {
-            scheduleDrivingChromeAutoHide();
-            if (event.getActionMasked() == MotionEvent.ACTION_DOWN) {
-                activeInputSession = session;
-                if (keyboardController != null) keyboardController.setPreferredSession(session);
-            }
-            return appInputListener.onTouch(view, event);
-        });
-        miniAccessEngine = new MiniAccessEngine(this, appTextureView, session);
+        // Alias used by existing media/search/task code; no third visible display is created.
+        session = rightPaneSession;
+        appTextureView = rightTextureView;
+        miniAccessEngine = new MiniAccessEngine(this, rightTextureView, rightPaneSession);
 
         createFloatingTouchKey();
-        keyboardController = new CarAssistantKeyboardController(root, backgroundSession, rightPaneSession, session);
+        keyboardController = new CarAssistantKeyboardController(root, backgroundSession, rightPaneSession, null);
         keyboardController.start();
     }
 
-
 private void launchActiveMediaProjection(ComponentName component) {
     if (keyboardController != null) keyboardController.hide();
-    if (component == null || session == null) return;
+    if (component == null || rightPaneSession == null) return;
 
-    if (activeTarget != null && !activeTarget.equals(component)) {
-        session.release();
+    activeRightPaneTarget = component;
+    V10SessionStore.setRightPaneTarget(this, component);
+    if (dualPaneHome != null) {
+        dualPaneHome.setPaneTarget(false, component, appLabelForComponent(component));
     }
-
-    activeTarget = component;
-    activeInputSession = session;
-    V10SessionStore.setTarget(this, component);
-    if (keyboardController != null) keyboardController.setPreferredSession(session);
-
-    if (floatingVoiceButton != null) {
-        floatingVoiceButton.setVisibility(View.VISIBLE);
-        floatingVoiceButton.bringToFront();
-    }
-
-    projectionLayer.setVisibility(View.GONE);
-    appProjectionLayer.setVisibility(View.VISIBLE);
-    launcherLayer.setVisibility(View.GONE);
-
-    // This path specifically reuses the currently playing media task and moves
-    // it to the projection display; normal app selection keeps launchProjection().
-    session.restoreMediaTask(component);
-    rememberProjectedTask(component, session, 1);
+    // Reuse the exact checkpointed task, moving it from the hidden media sink
+    // to region 1.1 rather than creating a duplicate app task.
+    rightPaneSession.restoreMediaTask(component);
+    expandPaneToFullscreen(false, component);
 }
 
 private void launchProjection(ComponentName component) {
-
     scheduleDrivingChromeAutoHide();
     if (keyboardController != null) keyboardController.hide();
+    if (component == null) return;
 
-    if (component == null
-            || session == null) {
-
-        return;
-    }
-
-    /*
-     * If the user selects another application while
-     * an application is already projected, release
-     * the old display first.
-     *
-     * V10ProjectionSession itself also handles target
-     * changes safely.
-     */
-    if (activeTarget != null
-            && !activeTarget.equals(component)) {
-
-        session.release();
-    }
-
-    activeTarget = component;
-    activeInputSession = session;
-    V10SessionStore.setTarget(this, component);
-    if (keyboardController != null) keyboardController.setPreferredSession(session);
-
-    if (floatingVoiceButton != null) {
-        floatingVoiceButton.setVisibility(View.VISIBLE);
-        floatingVoiceButton.bringToFront();
-    }
-
-    // Display 2 owns the entire surface while an app is projected:
-    // hide display 1 and the Android Auto Home chrome so neither can
-    // cover the selected app.
-    projectionLayer.setVisibility(View.GONE);
-    appProjectionLayer.setVisibility(View.VISIBLE);
-    launcherLayer.setVisibility(View.GONE);
-
-    /*
-     * Start the existing proven V10 projection
-     * engine.
-     */
-    session.setTarget(component);
-    rememberProjectedTask(component, session, 1);
+    // If a pane is already fullscreen, keep using that same pane. Global app
+    // selection from Home defaults to region 1.1.
+    boolean leftPane = fullscreenPaneActive && fullscreenPaneLeft;
+    if (leftPane) launchBackgroundProjection(component);
+    else launchRightPaneProjection(component);
+    expandPaneToFullscreen(leftPane, component);
 }
 
 /**
@@ -1407,8 +1354,8 @@ private V10ProjectionSession launchVoiceProjection(ComponentName component,
 
     // AUTO preserves the current fullscreen Display 2 context. On Home, defaults
     // are deterministic: navigation on the left pane, all other commands right.
-    boolean fullscreenVisible = appProjectionLayer != null
-            && appProjectionLayer.getVisibility() == View.VISIBLE;
+    boolean fullscreenVisible = fullscreenPaneActive
+            && dualPaneHome != null && dualPaneHome.isFullscreenPane();
     if (target == VoiceCommandParser.TargetScreen.AUTO && fullscreenVisible) {
         launchProjection(component);
         return session;
@@ -1503,78 +1450,38 @@ private void dispatchVoiceSearchIntent(V10ProjectionSession targetSession,
     handler.post(dispatch);
 }
 private void expandPaneToFullscreen(boolean leftPane, ComponentName component) {
-    if (component == null || session == null) return;
+    if (component == null || dualPaneHome == null) return;
+    V10ProjectionSession paneSession = leftPane ? backgroundSession : rightPaneSession;
+    if (paneSession == null) return;
     if (keyboardController != null) keyboardController.hide();
 
-    // Preserve the exact source pane so Back/Home can return the same running task.
-    fullscreenReturnTarget = component;
-    fullscreenReturnLeft = leftPane;
-    getSharedPreferences("v10_session", MODE_PRIVATE).edit()
-            .putString(RETURN_PANE_TARGET, component.flattenToString())
-            .putBoolean(RETURN_PANE_LEFT, leftPane)
-            .apply();
-
-    if (activeTarget != null && !activeTarget.equals(component)) session.release();
-
+    // Fullscreen is strictly a layout operation. Keep the app task on its
+    // original pane display; do not move-stack/relaunch it to a third display.
+    fullscreenPaneActive = true;
+    fullscreenPaneLeft = leftPane;
     activeTarget = component;
-    activeInputSession = session;
+    session = paneSession;
+    activeInputSession = paneSession;
+    activeVoiceLeftPane = leftPane;
     V10SessionStore.setTarget(this, component);
-    if (keyboardController != null) keyboardController.setPreferredSession(session);
-    projectionLayer.setVisibility(View.GONE);
-    appProjectionLayer.setVisibility(View.VISIBLE);
+    if (keyboardController != null) keyboardController.setPreferredSession(paneSession);
+
+    dualPaneHome.setFullscreenPane(leftPane);
+    projectionLayer.setVisibility(View.VISIBLE);
+    appProjectionLayer.setVisibility(View.GONE);
     launcherLayer.setVisibility(View.GONE);
     if (floatingVoiceButton != null) {
         floatingVoiceButton.setVisibility(View.VISIBLE);
         floatingVoiceButton.bringToFront();
     }
-
-    // Move the same Android task to Display 2; the source pane session is retained
-    // and will explicitly move it back when the user returns to Home.
-    session.restoreMediaTask(component);
-    activeInputSession = session;
-    rememberProjectedTask(component, session, 1);
-
-    if (leftPane) {
-        if (backgroundSession != null) backgroundSession.setTarget(null);
-        V10SessionStore.setBackgroundTarget(this, null);
-        activeBackgroundTarget = null;
-        if (dualPaneHome != null) dualPaneHome.setPaneTarget(true, null, "MÀN HÌNH PHỤ 1");
-    } else {
-        if (rightPaneSession != null) rightPaneSession.setTarget(null);
-        V10SessionStore.setRightPaneTarget(this, null);
-        activeRightPaneTarget = null;
-        if (dualPaneHome != null) dualPaneHome.setPaneTarget(false, null, "MÀN HÌNH PHỤ 1.1");
-    }
+    rememberProjectedTask(component, paneSession, leftPane ? 0 : 1);
 }
 
+/** Fullscreen no longer transfers tasks; clear only the legacy return marker. */
 private void restoreExpandedPaneTask() {
-    android.content.SharedPreferences prefs = getSharedPreferences("v10_session", MODE_PRIVATE);
-    if (fullscreenReturnTarget == null) {
-        String stored = prefs.getString(RETURN_PANE_TARGET, null);
-        if (stored != null) fullscreenReturnTarget = ComponentName.unflattenFromString(stored);
-        fullscreenReturnLeft = prefs.getBoolean(RETURN_PANE_LEFT, false);
-    }
-    ComponentName component = fullscreenReturnTarget;
-    if (component == null) return;
-
-    V10ProjectionSession paneSession = fullscreenReturnLeft ? backgroundSession : rightPaneSession;
-    if (paneSession != null) {
-        paneSession.restoreMediaTask(component);
-        if (fullscreenReturnLeft) {
-            activeBackgroundTarget = component;
-            V10SessionStore.setBackgroundTarget(this, component);
-            if (dualPaneHome != null) dualPaneHome.setPaneTarget(true, component, appLabelForComponent(component));
-        } else {
-            activeRightPaneTarget = component;
-            V10SessionStore.setRightPaneTarget(this, component);
-            if (dualPaneHome != null) dualPaneHome.setPaneTarget(false, component, appLabelForComponent(component));
-        }
-        activeInputSession = paneSession;
-        if (keyboardController != null) keyboardController.setPreferredSession(paneSession);
-    }
-
     fullscreenReturnTarget = null;
-    prefs.edit().remove(RETURN_PANE_TARGET).remove(RETURN_PANE_LEFT).apply();
+    getSharedPreferences("v10_session", MODE_PRIVATE).edit()
+            .remove(RETURN_PANE_TARGET).remove(RETURN_PANE_LEFT).apply();
 }
 
 private boolean isHomeScreen() {
@@ -1587,30 +1494,34 @@ private boolean isHomeScreen() {
 }
 
     private void returnToLauncher() {
-
         if (keyboardController != null) keyboardController.hide();
 
-        // Leaving display 2 returns to Home and restores display 1.
-        // Detach display 2 first so it cannot remain visible under Home chrome.
-        if (session != null) {
-            session.hideTask();
-            session.setTarget(null);
-        }
         V10SessionStore.clearTarget(this);
         activeTarget = null;
-        appProjectionLayer.setVisibility(View.GONE);
+        fullscreenPaneActive = false;
+        fullscreenPaneLeft = false;
+        restoreExpandedPaneTask();
 
+        if (dualPaneHome != null) {
+            dualPaneHome.restoreSplitLayout();
+            dualPaneHome.closePickers();
+        }
+        appProjectionLayer.setVisibility(View.GONE);
+        projectionLayer.setVisibility(View.VISIBLE);
         launcherLayer.setVisibility(View.VISIBLE);
         dashboard.setVisibility(View.VISIBLE);
         appPanel.setVisibility(View.GONE);
         if (floatingVoiceButton != null) floatingVoiceButton.setVisibility(View.GONE);
 
-        if (dualPaneHome != null) dualPaneHome.closePickers();
-        projectionLayer.setVisibility(View.VISIBLE);
-        // Return the exact app task to the pane from which it was expanded.
-        restoreExpandedPaneTask();
+        // Both pane tasks remain attached; Home simply restores the 3:7 layout.
+        session = rightPaneSession;
+        if (activeInputSession == null || !activeInputSession.isActive()) {
+            activeInputSession = rightPaneSession;
+        }
+        if (keyboardController != null && activeInputSession != null) {
+            keyboardController.setPreferredSession(activeInputSession);
+        }
     }
-
 
 private void showApps() {
 
@@ -1982,7 +1893,7 @@ private void showTaskSwitcher() {
     scroll.addView(taskSwitcherList, new ScrollView.LayoutParams(-1, -2));
     panel.addView(scroll, new LinearLayout.LayoutParams(-1, 0, 1f));
     if (activeBackgroundTarget != null && backgroundSession != null) rememberProjectedTask(activeBackgroundTarget, backgroundSession, 0);
-    if (activeRightPaneTarget != null && rightPaneSession != null) rememberProjectedTask(activeRightPaneTarget, rightPaneSession, 2);
+    if (activeRightPaneTarget != null && rightPaneSession != null) rememberProjectedTask(activeRightPaneTarget, rightPaneSession, 1);
     if (activeTarget != null && session != null) rememberProjectedTask(activeTarget, session, 1);
     if (projectedTaskHistory.isEmpty()) {
         TextView empty = text("Chưa có task nào đang chiếu.", 14, Color.LTGRAY);
@@ -2020,12 +1931,13 @@ private void addProjectedTaskRow(ProjectedTaskEntry entry) {
         if (entry.displayIndex == 0) {
             activeVoiceLeftPane = true;
             launchBackgroundProjection(component);
-        } else if (entry.displayIndex == 2) {
+        } else if (entry.displayIndex == 1) {
             activeVoiceLeftPane = false;
             launchRightPaneProjection(component);
         } else {
-            activeInputSession = session;
-            launchProjection(component);
+            activeVoiceLeftPane = false;
+            launchRightPaneProjection(component);
+            expandPaneToFullscreen(false, component);
         }
     });
     TextView remove = text("×", 28, Color.WHITE);
@@ -2068,16 +1980,6 @@ private void closeProjectedTask(ProjectedTaskEntry entry) {
             if (activeInputSession == rightPaneSession) activeInputSession = null;
             hideTaskSwitcher();
             if (dualPaneHome != null) dualPaneHome.openPicker(false);
-            return;
-        }
-        if (activeFullscreen) {
-            session.setTarget(null);
-            V10SessionStore.clearTarget(this);
-            activeTarget = null;
-            activeInputSession = null;
-            if (appProjectionLayer != null) appProjectionLayer.setVisibility(View.GONE);
-            returnToLauncher();
-            hideTaskSwitcher();
             return;
         }
         showTaskSwitcher();
@@ -2346,7 +2248,10 @@ private void hideTaskSwitcher() {
             voiceAssistantController = null;
         }
 
-        if (session != null) { session.destroy(); session = null; }
+        if (session != null && session != backgroundSession && session != rightPaneSession) {
+            session.destroy();
+        }
+        session = null;
         if (backgroundSession != null) { backgroundSession.destroy(); backgroundSession = null; }
         if (rightPaneSession != null) { rightPaneSession.destroy(); rightPaneSession = null; }
 
