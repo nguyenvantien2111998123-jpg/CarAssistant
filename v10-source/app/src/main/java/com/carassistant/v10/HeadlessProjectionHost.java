@@ -16,7 +16,7 @@ import android.view.Surface;
  */
 public final class HeadlessProjectionHost {
     private static final String TAG = "CarAssistantHeadlessDisplay";
-    public static final int DISPLAY_INDEX = 1; // V10 Display 2 (index 0 is the Home background).
+    public static final int DISPLAY_INDEX = 3; // Internal headless media sink; visible panes use indices 0 and 1.
     public static final int DEFAULT_WIDTH = 1280;
     public static final int DEFAULT_HEIGHT = 720;
 
@@ -43,7 +43,7 @@ public final class HeadlessProjectionHost {
         HandlerThread thread = null;
         try {
             created = ImageReader.newInstance(width, height, PixelFormat.RGBA_8888, 3);
-            thread = new HandlerThread("CarAsistant-Display2-Drain");
+            thread = new HandlerThread("CarAsistant-HeadlessMedia-Drain");
             thread.start();
             Handler handler = new Handler(thread.getLooper());
             ImageReader listenerReader = created;
@@ -70,7 +70,7 @@ public final class HeadlessProjectionHost {
             drainThread = thread;
             drainHandler = handler;
             owner = controller;
-            Log.i(TAG, "Headless Display 2 ready; displayId=" + controller.getDisplayId()
+            Log.i(TAG, "Headless media display ready; displayId=" + controller.getDisplayId()
                     + ", size=" + width + "x" + height);
             return true;
         } catch (Throwable error) {
@@ -101,7 +101,7 @@ public final class HeadlessProjectionHost {
         }
         if (controller != null) controller.destroy();
         closeReaderOnly();
-        Log.i(TAG, "Released headless Display 2 after Android Auto disconnect");
+        Log.i(TAG, "Released headless media display after Android Auto disconnect");
     }
 
     public static synchronized boolean isHeadless() {
