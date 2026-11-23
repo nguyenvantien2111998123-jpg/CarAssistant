@@ -7,6 +7,7 @@ import android.content.Context;
 import android.content.Intent;
 import android.database.Cursor;
 import android.graphics.Color;
+import android.hardware.display.DisplayManager;
 import android.net.Uri;
 import android.os.Handler;
 import android.os.Looper;
@@ -48,6 +49,12 @@ public final class GearheadDockPatcher {
     private static final String GEARHEAD = "com.google.android.projection.gearhead";
     private static final long LEASE_MS = 3000L;
     private static final long POLL_MS = 1000L;
+    // Android Auto creates this Gearhead-owned virtual display when a projection
+    // session is established. It is a stronger connection signal than USB/Bluetooth.
+    private static final String PROJECTION_DISPLAY_NAME = "GhFacetBar";
+    private static final long AUTO_OPEN_DELAY_MS = 1800L;
+    private static final long AUTO_OPEN_RETRY_MS = 1500L;
+    private static final int AUTO_OPEN_MAX_ATTEMPTS = 8;
 
     /** Tên resource-entry của dock/nav bar trong gearhead. */
     private static final String[] DOCK_NAMES = {
@@ -75,6 +82,11 @@ public final class GearheadDockPatcher {
 
     private volatile Context context;
     private volatile long visibleUntil;
+    // All fields below are confined to the main thread.
+    private boolean projectionConnected;
+    private int missingProjectionDisplayTicks;
+    private boolean autoOpenDispatched;
+    private int autoOpenAttempts;
     private boolean leaseActive;
     private boolean rootsDirty = true;
     private boolean loggedNoDock;
@@ -237,6 +249,7 @@ public final class GearheadDockPatcher {
     /** Vòng lặp lease: ẩn dock khi active, khôi phục khi hết hạn. */
     private void tick() {
         try {
+            detectProjectionConnection();
             long until = visibleUntil;
             long now = SystemClock.uptimeMillis();
             boolean active = until > now && until - now <= LEASE_MS;
@@ -267,6 +280,87 @@ public final class GearheadDockPatcher {
                 providerExecutor.execute(this::readLeaseFromProvider);
             }
             main.postDelayed(this::tick, POLL_MS);
+        }
+    }
+
+    /**
+     * Detect the actual Android Auto projection session from Gearhead's private
+     * GhFacetBar display. The display is created on connection and removed on
+     * disconnect; USB/Bluetooth state alone is not sufficient to prove AA is ready.
+     */
+    private void detectProjectionConnection() {
+        boolean present = hasProjectionDisplay();
+        if (present) {
+            missingProjectionDisplayTicks = 0;
+            if (!projectionConnected) {
+                projectionConnected = true;
+                autoOpenDispatched = false;
+                autoOpenAttempts = 0;
+                log("Android Auto projection session detected (GhFacetBar); auto-open scheduled");
+                main.postDelayed(this::attemptAutoOpenCarApp, AUTO_OPEN_DELAY_MS);
+            }
+            return;
+        }
+
+        if (projectionConnected && ++missingProjectionDisplayTicks >= 3) {
+            projectionConnected = false;
+            missingProjectionDisplayTicks = 0;
+            autoOpenDispatched = false;
+            autoOpenAttempts = 0;
+            log("Android Auto projection display disappeared; session reset");
+        }
+    }
+
+    private boolean hasProjectionDisplay() {
+        Context current = context;
+        if (current == null) return false;
+        try {
+            DisplayManager manager = (DisplayManager) current.getSystemService(Context.DISPLAY_SERVICE);
+            if (manager == null) return false;
+            for (Display display : manager.getDisplays()) {
+                if (display != null && display.getDisplayId() > 0
+                        && PROJECTION_DISPLAY_NAME.equals(display.getName())
+                        && display.getState() != Display.STATE_OFF) {
+                    return true;
+                }
+            }
+        } catch (Throwable error) {
+            log("Projection display check unavailable: " + error);
+        }
+        return false;
+    }
+
+    /** Reuse the same Gearhead Car App launcher used by the proven media-card path. */
+    private void attemptAutoOpenCarApp() {
+        if (!projectionConnected || autoOpenDispatched || !hasProjectionDisplay()) return;
+        Context current = context;
+        if (current == null) return;
+
+        try {
+            ClassLoader loader = current.getClassLoader();
+            Class<?> controller = XposedHelpers.findClassIfExists(
+                    "com.google.android.projection.gearhead.service.CarSystemUiControllerService",
+                    loader);
+            Method launcher = findCarAppLauncher(controller);
+            if (launcher == null) {
+                throw new NoSuchMethodException("Gearhead Car App launcher unavailable");
+            }
+            launcher.setAccessible(true);
+            Intent intent = new Intent();
+            intent.setComponent(new ComponentName(
+                    "com.carassistant.v10", "com.carassistant.v10.AACastCarService"));
+            intent.putExtra("android.intent.extra.PACKAGE_NAME", "com.carassistant.v10");
+            launcher.invoke(null, intent);
+            autoOpenDispatched = true;
+            log("Auto-opened CarAsistant through Gearhead Car App launcher after AA connection");
+        } catch (Throwable error) {
+            autoOpenAttempts++;
+            log("Auto-open attempt " + autoOpenAttempts + " failed: " + error);
+            if (autoOpenAttempts < AUTO_OPEN_MAX_ATTEMPTS && projectionConnected) {
+                main.postDelayed(this::attemptAutoOpenCarApp, AUTO_OPEN_RETRY_MS);
+            } else {
+                log("Auto-open retries exhausted for this Android Auto session; no further retries");
+            }
         }
     }
 
