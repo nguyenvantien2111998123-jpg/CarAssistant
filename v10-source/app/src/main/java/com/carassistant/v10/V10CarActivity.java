@@ -1408,7 +1408,7 @@ private void dispatchVoiceViewIntent(V10ProjectionSession targetSession,
 private void dispatchVoiceMediaSearch(V10ProjectionSession targetSession,
                                       ComponentName target, String uri, String query) {
     if (targetSession == null || target == null || uri == null || query == null) return;
-    if (targetSession == session) {
+    if (targetSession == rightPaneSession) {
         dispatchMediaSearchOnProjection(target, uri, query);
         return;
     }
@@ -1937,9 +1937,11 @@ private void addProjectedTaskRow(ProjectedTaskEntry entry) {
         if (entry.displayIndex == 0) {
             activeVoiceLeftPane = true;
             launchBackgroundProjection(component);
+            if (fullscreenPaneActive) expandPaneToFullscreen(true, component);
         } else if (entry.displayIndex == 1) {
             activeVoiceLeftPane = false;
             launchRightPaneProjection(component);
+            if (fullscreenPaneActive) expandPaneToFullscreen(false, component);
         } else {
             activeVoiceLeftPane = false;
             launchRightPaneProjection(component);
@@ -1967,7 +1969,6 @@ private void closeProjectedTask(ProjectedTaskEntry entry) {
     ComponentName component = entry.component;
     boolean activeLeft = entry.owner == backgroundSession && component.equals(activeBackgroundTarget);
     boolean activeRight = entry.owner == rightPaneSession && component.equals(activeRightPaneTarget);
-    boolean activeFullscreen = entry.owner == session && component.equals(activeTarget);
     entry.owner.closeTaskOnDisplay(component, closed -> {
         if (!closed) {
             Toast.makeText(this, "Không thể đóng task; CarAsistant giữ nguyên phiên chiếu.", Toast.LENGTH_LONG).show();
@@ -1976,6 +1977,10 @@ private void closeProjectedTask(ProjectedTaskEntry entry) {
         projectedTaskHistory.remove(entry);
         if (activeLeft) {
             stopBackgroundProjection();
+            if (component.equals(activeTarget)) {
+                activeTarget = null;
+                V10SessionStore.clearTarget(this);
+            }
             if (activeInputSession == backgroundSession) activeInputSession = null;
             hideTaskSwitcher();
             if (dualPaneHome != null) dualPaneHome.openPicker(true);
@@ -1983,6 +1988,10 @@ private void closeProjectedTask(ProjectedTaskEntry entry) {
         }
         if (activeRight) {
             stopRightPaneProjection();
+            if (component.equals(activeTarget)) {
+                activeTarget = null;
+                V10SessionStore.clearTarget(this);
+            }
             if (activeInputSession == rightPaneSession) activeInputSession = null;
             hideTaskSwitcher();
             if (dualPaneHome != null) dualPaneHome.openPicker(false);
