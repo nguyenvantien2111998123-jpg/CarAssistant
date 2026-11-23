@@ -10,7 +10,7 @@ import android.util.Log;
 import android.view.Surface;
 
 /**
- * Owns the off-screen producer used to keep V10 Display 2 alive before the
+ * Owns the off-screen producer used as an internal media sink before the
  * Android Auto CarActivity is opened. Frames are drained immediately: the
  * ImageReader is a Surface sink, not a recording buffer.
  */
@@ -79,17 +79,17 @@ public final class HeadlessProjectionHost {
                 try { created.close(); } catch (Throwable ignored) { }
             }
             if (thread != null) thread.quitSafely();
-            Log.e(TAG, "Could not create headless Display 2", error);
+            Log.e(TAG, "Could not create headless media sink", error);
             return false;
         }
     }
 
-    /** Called only after VirtualDisplay.setSurface(TextureViewSurface) succeeds. */
+    /** Legacy handoff callback; the media sink now stays headless and is not a pane Surface. */
     public static synchronized void onV10SurfaceAttached(V10DisplayController controller) {
         if (imageReader == null || owner != controller) return;
         handedOff = true;
         closeReaderOnly();
-        Log.i(TAG, "Display 2 Surface handed from ImageReader to V10 TextureView");
+        Log.i(TAG, "Headless media sink handed to a V10 TextureView");
     }
 
     /** On AA disconnect, destroy the display only while it is still headless. */
