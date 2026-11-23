@@ -18,6 +18,7 @@ import android.widget.LinearLayout;
 import android.widget.Switch;
 import android.widget.ScrollView;
 import android.widget.TextView;
+import androidx.core.content.FileProvider;
 
 import com.carassistant.v10.RootShellSession;
 
@@ -43,6 +44,7 @@ public final class V10SettingsActivity extends Activity {
     private TextView defaultVoiceAppStatus;
     private TextView permissionGuideStatus;
     private TextView permissionGuideAction;
+    private TextView geminiLogStatus;
     private boolean permissionRequestInFlight;
     private String selectedDefaultVoiceCategory = "navigation";
     private final RootShellSession orientationShell = new RootShellSession();
@@ -73,6 +75,7 @@ public final class V10SettingsActivity extends Activity {
         super.onResume();
         refreshStatus();
         refreshPermissionGuide();
+        refreshGeminiLogStatus();
         rebuildFavoriteAppChoices();
         rebuildBackgroundAppChoices();
         rebuildSplitLeftChoices();
@@ -218,6 +221,23 @@ public final class V10SettingsActivity extends Activity {
                     13, Color.LTGRAY);
             autoplayHint.setPadding(dp(4), dp(6), dp(4), dp(8));
             body.addView(autoplayHint, params(-1, -2));
+        });
+
+        addSection("GHI LOG GEMINI", "Ghi lại quá trình Gemini/Assistant chuyển lệnh mở CarAsistant trên Android Auto", body -> {
+            geminiLogStatus = text("", 13, Color.LTGRAY);
+            geminiLogStatus.setPadding(dp(6), dp(6), dp(6), dp(10));
+            body.addView(geminiLogStatus, params(-1, -2));
+
+            addButton(body, "BẮT ĐẦU GHI LOG GEMINI", () -> {
+                boolean started = GeminiCommandLogCapture.start(this);
+                if (started) {
+                    geminiLogStatus.setText("ĐANG GHI… Hãy rời màn hình cài đặt, vào Android Auto và nói: “Mở app CarAsistant”.\nTự dừng khi CarAsistant được mở, hoặc sau tối đa 60 giây.");
+                } else {
+                    geminiLogStatus.setText("Phiên ghi đang chạy. Hãy thực hiện lệnh mở CarAsistant trên Android Auto.");
+                }
+            });
+            addButton(body, "XUẤT / CHIA SẺ FILE LOG MỚI NHẤT", this::shareLatestGeminiLog);
+            refreshGeminiLogStatus();
         });
 
         addSection("QUYỀN & CHẨN ĐOÁN", "Theo dõi quyền hệ thống và trạng thái tích hợp", body -> {
@@ -493,6 +513,40 @@ public final class V10SettingsActivity extends Activity {
         if (requestCode == 4101 && hasRuntimePermissions()
                 && !MediaSessionBridge.hasAccess(this)) {
             openNotificationAccessSettings();
+        }
+    }
+
+    private void refreshGeminiLogStatus() {
+        if (geminiLogStatus == null) return;
+        if (GeminiCommandLogCapture.isCapturing()) {
+            geminiLogStatus.setText("ĐANG GHI LOG. Hãy nói “Mở app CarAsistant” trên Android Auto. Ghi sẽ tự dừng khi CarAsistant mở hoặc sau 60 giây.");
+            return;
+        }
+        java.io.File latest = GeminiCommandLogCapture.getLatestFile(this);
+        geminiLogStatus.setText(latest == null
+                ? "Chưa có file log. Cần cấp quyền root/su cho CarAsistant để đọc log hệ thống."
+                : "File log mới nhất đã lưu:\n" + latest.getAbsolutePath()
+                    + "\nChạm “XUẤT / CHIA SẺ” để gửi file.");
+    }
+
+    private void shareLatestGeminiLog() {
+        java.io.File file = GeminiCommandLogCapture.getLatestFile(this);
+        if (file == null || !file.isFile()) {
+            android.widget.Toast.makeText(this, "Chưa có file log. Hãy bắt đầu ghi trước.", android.widget.Toast.LENGTH_LONG).show();
+            return;
+        }
+        try {
+            android.net.Uri uri = FileProvider.getUriForFile(
+                    this, getPackageName() + ".diagnostic-files", file);
+            Intent share = new Intent(Intent.ACTION_SEND);
+            share.setType("text/plain");
+            share.putExtra(Intent.EXTRA_STREAM, uri);
+            share.putExtra(Intent.EXTRA_SUBJECT, "CarAsistant - Gemini command log");
+            share.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
+            share.setClipData(android.content.ClipData.newUri(getContentResolver(), "Gemini command log", uri));
+            startActivity(Intent.createChooser(share, "Chia sẻ log Gemini"));
+        } catch (RuntimeException error) {
+            android.widget.Toast.makeText(this, "Không thể xuất file log: " + error.getMessage(), android.widget.Toast.LENGTH_LONG).show();
         }
     }
 
