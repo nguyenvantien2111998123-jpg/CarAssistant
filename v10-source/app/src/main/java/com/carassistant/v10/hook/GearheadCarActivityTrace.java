@@ -65,7 +65,7 @@ public final class GearheadCarActivityTrace {
                                     }
                                 }
                                 if (!foundIntent) {
-                                    log("CONTROLLER_CALL id=" + id + " method=" + signature(param.method)
+                                    log("CONTROLLER_CALL id=" + id + " method=" + String.valueOf(param.method)
                                             + " args=" + argumentTypes(param.args));
                                 }
                             }
