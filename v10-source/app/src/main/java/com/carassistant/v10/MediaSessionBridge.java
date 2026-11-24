@@ -1012,6 +1012,7 @@ public final class MediaSessionBridge extends NotificationListenerService {
         MediaController checkpointCandidate = null;
         MediaController playingCandidate = null;
         MediaController activeMetadataCandidate = null;
+        boolean hasAnyExternalPlayingSession = false;
         String checkpointPackage = getCheckpointPackage(this);
         if (checkpointPackage == null) checkpointPackage = getLastKnownPackage(this);
         String lastPackage = getLastKnownPackage(this);
@@ -1021,8 +1022,13 @@ public final class MediaSessionBridge extends NotificationListenerService {
                 if (checkpointPackage != null && checkpointPackage.equals(candidate.getPackageName())) {
                     checkpointCandidate = candidate;
                 }
+                PlaybackState candidateState = candidate.getPlaybackState();
+                if (candidateState != null
+                        && candidateState.getState() == PlaybackState.STATE_PLAYING) {
+                    hasAnyExternalPlayingSession = true;
+                }
                 if (!isUsableExternalSession(candidate)) continue;
-                PlaybackState state = candidate.getPlaybackState();
+                PlaybackState state = candidateState;
                 if (savedCandidate == null && lastPackage != null
                         && lastPackage.equals(candidate.getPackageName())) savedCandidate = candidate;
                 if (playingCandidate == null && state.getState() == PlaybackState.STATE_PLAYING) {
@@ -1034,7 +1040,7 @@ public final class MediaSessionBridge extends NotificationListenerService {
         // Keep the independent phone-side keepalive session active only while AA is
         // connected and no external source is actually PLAYING. A paused YouTube/Zing
         // session remains the mirror/transport target but does not block keepalive.
-        syncKeepAliveMediaSession(isAndroidAutoConnected(), playingCandidate != null);
+        syncKeepAliveMediaSession(isAndroidAutoConnected(), hasAnyExternalPlayingSession);
 
         // Only a session with both meaningful item identity and a live playback state
         // may become the command target. Keep checkpointCandidate separately so the
