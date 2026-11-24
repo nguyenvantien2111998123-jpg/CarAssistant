@@ -39,10 +39,13 @@ public final class GearheadCarActivityTrace {
         }
         log("INSTALL_BEGIN controller=" + CONTROLLER
                 + "; classLoader=" + (classLoader == null ? "null" : classLoader.getClass().getName()));
+        int frameworkCount = hookFrameworkActivityLaunches();
         try {
             Class<?> type = XposedHelpers.findClassIfExists(CONTROLLER, classLoader);
             if (type == null) {
-                log("CONTROLLER_NOT_FOUND; Gearhead scope may be active but controller class is not resolvable yet");
+                installed = frameworkCount > 0;
+                log("CONTROLLER_NOT_FOUND; frameworkLaunchMethodsHooked=" + frameworkCount
+                        + "; Gearhead scope may be active but controller class is not resolvable");
                 return;
             }
 
@@ -78,11 +81,67 @@ public final class GearheadCarActivityTrace {
                     }
                 }
             }
-            installed = count > 0;
-            log("INSTALL_RESULT hookedIntentMethods=" + count + "; installed=" + installed);
+            installed = count + frameworkCount > 0;
+            log("INSTALL_RESULT controllerIntentMethods=" + count
+                    + "; frameworkLaunchMethods=" + frameworkCount + "; installed=" + installed);
         } catch (Throwable error) {
             log("INSTALL_FAILED " + error.getClass().getName() + ":" + error.getMessage());
         }
+    }
+
+    /**
+     * Secondary read-only observation points in Gearhead's own process. These
+     * catch launches routed through framework Activity/Instrumentation APIs even
+     * when Gemini does not call the known CarSystemUiControllerService method.
+     */
+    private static int hookFrameworkActivityLaunches() {
+        int count = 0;
+        count += hookFrameworkMethods("android.app.Instrumentation", "execStartActivity");
+        count += hookFrameworkMethods("android.app.Activity", "startActivity");
+        count += hookFrameworkMethods("android.content.ContextWrapper", "startActivity");
+        log("FRAMEWORK_LAUNCH_HOOKS count=" + count
+                + "; scope=Gearhead process only; readOnly=true");
+        return count;
+    }
+
+    private static int hookFrameworkMethods(String className, String methodName) {
+        int count = 0;
+        try {
+            Class<?> type = Class.forName(className, false, null);
+            for (Method method : type.getDeclaredMethods()) {
+                if (!methodName.equals(method.getName()) || !acceptsIntent(method)) continue;
+                try {
+                    XposedBridge.hookMethod(method, new XC_MethodHook() {
+                        @Override protected void beforeHookedMethod(MethodHookParam param) {
+                            int id = INVOCATION.incrementAndGet();
+                            boolean foundIntent = false;
+                            for (Object arg : param.args) {
+                                if (arg instanceof Intent) {
+                                    foundIntent = true;
+                                    logIntentInvocation(id, param.method, (Intent) arg);
+                                }
+                            }
+                            if (!foundIntent) {
+                                log("FRAMEWORK_LAUNCH_CALL id=" + id
+                                        + " method=" + String.valueOf(param.method)
+                                        + " args=" + argumentTypes(param.args));
+                            }
+                        }
+                    });
+                    count++;
+                    log("FRAMEWORK_HOOKED " + className + "#" + methodName
+                            + " signature=" + signature(method));
+                } catch (Throwable error) {
+                    log("FRAMEWORK_HOOK_FAILED " + className + "#" + methodName
+                            + " signature=" + signature(method) + " error="
+                            + error.getClass().getSimpleName() + ":" + error.getMessage());
+                }
+            }
+        } catch (Throwable error) {
+            log("FRAMEWORK_CLASS_UNAVAILABLE " + className + " error="
+                    + error.getClass().getSimpleName() + ":" + error.getMessage());
+        }
+        return count;
     }
 
     private static boolean acceptsIntent(Method method) {
