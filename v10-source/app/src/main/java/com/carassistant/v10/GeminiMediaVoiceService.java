@@ -1,26 +1,25 @@
 package com.carassistant.v10;
 
 import android.content.Context;
-import android.media.MediaDescription;
-import android.media.MediaMetadata;
-import android.media.browse.MediaBrowser;
-import android.media.browse.MediaBrowser.MediaItem;
 import android.media.session.MediaSession;
 import android.os.Bundle;
 import android.provider.MediaStore;
-import android.service.media.MediaBrowserService;
 import android.text.TextUtils;
 import android.util.Log;
+
+import android.support.v4.media.MediaBrowserCompat;
+import android.support.v4.media.session.MediaSessionCompat;
+import androidx.media.MediaBrowserServiceCompat;
 
 import java.util.Collections;
 import java.util.List;
 
 /**
- * Exposes CarAsistant's existing mirrored MediaSession to Android Auto's
- * media-browser/voice-action pipeline. It deliberately reuses the one existing
- * session; it does not create a second session or alter steering/media controls.
+ * Android Auto-compatible media browser entry point. It wraps the already
+ * existing platform MediaSession token; it never creates a second playback
+ * session and never changes the active media/steering-wheel controller.
  */
-public final class GeminiMediaVoiceService extends MediaBrowserService {
+public final class GeminiMediaVoiceService extends MediaBrowserServiceCompat {
     private static final String TAG = "AACastGeminiMediaVoice";
     private static final String ROOT_ID = "carassistant_root";
     private static final String PREFS = "gemini_media_voice";
@@ -36,7 +35,8 @@ public final class GeminiMediaVoiceService extends MediaBrowserService {
         instance = this;
         MediaSession session = MediaSessionBridge.getPublishedMirrorSession();
         if (session != null) attachSession(session);
-        Log.i(TAG, "MediaBrowserService created; waiting for CarAsistant mirror session if needed");
+        Log.i(TAG, "Compat MediaBrowserService created; existing mirror session="
+                + (session != null));
     }
 
     static void onMirrorSessionReady(MediaSession session) {
@@ -47,9 +47,15 @@ public final class GeminiMediaVoiceService extends MediaBrowserService {
     private synchronized void attachSession(MediaSession session) {
         if (session == null || attachedSession == session) return;
         try {
-            setSessionToken(session.getSessionToken());
+            MediaSessionCompat.Token compatToken =
+                    MediaSessionCompat.Token.fromToken(session.getSessionToken());
+            if (compatToken == null) {
+                Log.e(TAG, "Platform MediaSession token could not be wrapped");
+                return;
+            }
+            setSessionToken(compatToken);
             attachedSession = session;
-            Log.i(TAG, "Android Auto media browser now shares the existing CarAsistant MediaSession");
+            Log.i(TAG, "Android Auto browser now shares the existing CarAsistant MediaSession");
         } catch (RuntimeException error) {
             Log.e(TAG, "Could not publish existing MediaSession to Android Auto", error);
         }
@@ -61,15 +67,17 @@ public final class GeminiMediaVoiceService extends MediaBrowserService {
             if (session != null) attachSession(session);
         }
         if (attachedSession == null) {
-            Log.w(TAG, "Rejecting media browser root until the existing mirror session is ready");
+            Log.w(TAG, "Rejecting media browser root: CarAsistant mirror MediaSession is not ready");
             return null;
         }
+        Log.i(TAG, "onGetRoot client=" + clientPackageName + " uid=" + clientUid);
         return new BrowserRoot(ROOT_ID, null);
     }
 
-    @Override public void onLoadChildren(String parentId, Result<List<MediaItem>> result) {
-        // CarAsistant mirrors external players rather than owning a browsable music catalogue.
-        // Voice search is handled by the shared MediaSession callback below.
+    @Override public void onLoadChildren(String parentId,
+            Result<List<MediaBrowserCompat.MediaItem>> result) {
+        // CarAsistant mirrors third-party players; it has no independent music catalogue.
+        // Voice actions are delivered to the shared MediaSession callback.
         result.sendResult(Collections.emptyList());
     }
 
@@ -79,11 +87,13 @@ public final class GeminiMediaVoiceService extends MediaBrowserService {
         String focus = "";
         String artist = "";
         String title = "";
+        String album = "";
         if (extras != null) {
             try {
                 focus = extras.getString(MediaStore.EXTRA_MEDIA_FOCUS, "");
                 artist = extras.getString(MediaStore.EXTRA_MEDIA_ARTIST, "");
                 title = extras.getString(MediaStore.EXTRA_MEDIA_TITLE, "");
+                album = extras.getString(MediaStore.EXTRA_MEDIA_ALBUM, "");
             } catch (RuntimeException error) {
                 Log.w(TAG, "Could not read voice-search extras", error);
             }
@@ -91,6 +101,7 @@ public final class GeminiMediaVoiceService extends MediaBrowserService {
         if (TextUtils.isEmpty(resolved)) {
             if (!TextUtils.isEmpty(artist)) resolved = artist.trim();
             else if (!TextUtils.isEmpty(title)) resolved = title.trim();
+            else if (!TextUtils.isEmpty(album)) resolved = album.trim();
         }
         if (TextUtils.isEmpty(resolved)) {
             Log.w(TAG, "Ignoring empty Android Auto voice-search query");
@@ -104,10 +115,11 @@ public final class GeminiMediaVoiceService extends MediaBrowserService {
                 .putString("search_focus", focus == null ? "" : focus)
                 .putString("search_artist", artist == null ? "" : artist)
                 .putString("search_title", title == null ? "" : title)
+                .putString("search_album", album == null ? "" : album)
                 .commit();
         Log.i(TAG, "VOICE_SEARCH_ACCEPTED id=" + requestId
                 + " query=" + resolved + " focus=" + focus
-                + " artist=" + artist + " title=" + title);
+                + " artist=" + artist + " title=" + title + " album=" + album);
     }
 
     @Override public void onDestroy() {
