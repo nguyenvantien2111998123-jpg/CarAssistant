@@ -228,15 +228,15 @@ public final class V10SettingsActivity extends Activity {
             geminiLogStatus.setPadding(dp(6), dp(6), dp(6), dp(10));
             body.addView(geminiLogStatus, params(-1, -2));
 
-            addButton(body, "BẮT ĐẦU GHI LOG GEMINI + WYN", () -> {
+            addButton(body, "BẮT ĐẦU THU TOÀN BỘ LOG", () -> {
                 boolean started = GeminiCommandLogCapture.start(this);
                 if (started) {
-                    geminiLogStatus.setText("ĐANG GHI… Hãy nói “Mở app CarAsistant” trên Android Auto. Sau khi CarAsistant mở, tiếp tục chờ popup WYN xuất hiện/thay đổi. Tự dừng sau tối đa 120 giây.");
+                    geminiLogStatus.setText("ĐANG THU LOG TỔNG HỢP (tối đa 180 giây). Hãy kết nối/ngắt-kết nối Android Auto, nói với Gemini “Mở app CarAsistant”, chờ CarAsistant mở, sau đó để WYN chạy nền và chờ cảnh báo thay đổi. Không vuốt bỏ WYN khỏi màn hình ứng dụng gần đây.");
                 } else {
-                    geminiLogStatus.setText("Phiên ghi đang chạy. Hãy thực hiện lệnh mở CarAsistant trên Android Auto.");
+                    geminiLogStatus.setText("Bộ thu log đang chạy. Hãy tiếp tục thực hiện các bước kiểm tra; không cần bấm bắt đầu lần nữa.");
                 }
             });
-            addButton(body, "XUẤT / CHIA SẺ FILE LOG CHUNG", this::shareLatestGeminiLog);
+            addButton(body, "DỪNG VÀ XUẤT FILE LOG DUY NHẤT", this::stopAndShareGeminiLog);
             refreshGeminiLogStatus();
         });
 
@@ -519,14 +519,24 @@ public final class V10SettingsActivity extends Activity {
     private void refreshGeminiLogStatus() {
         if (geminiLogStatus == null) return;
         if (GeminiCommandLogCapture.isCapturing()) {
-            geminiLogStatus.setText("ĐANG GHI LOG GEMINI + WYN. Sau khi CarAsistant mở, vẫn tiếp tục thu popup WYN. Tự dừng sau tối đa 120 giây.");
+            geminiLogStatus.setText("ĐANG THU LOG TỔNG HỢP. Thời gian đã thu: "
+                    + GeminiCommandLogCapture.getCaptureDurationSeconds()
+                    + " giây / tối đa 180 giây. Khi hoàn tất, bấm “DỪNG VÀ XUẤT FILE LOG DUY NHẤT”.");
             return;
         }
         java.io.File latest = GeminiCommandLogCapture.getLatestFile(this);
         geminiLogStatus.setText(latest == null
-                ? "Chưa có file log. Cần cấp quyền root/su cho CarAsistant để đọc log hệ thống."
-                : "File log mới nhất đã lưu:\n" + latest.getAbsolutePath()
-                    + "\nChạm “XUẤT / CHIA SẺ FILE LOG CHUNG” để gửi file.");
+                ? "Chưa có file log tổng hợp. Cần cấp quyền root/su cho CarAsistant để đọc log hệ thống và bật scope LSPosed cho Android Auto/Gearhead, WYN nếu kiểm tra WYN."
+                : "File log tổng hợp mới nhất đã lưu:\n" + latest.getAbsolutePath()
+                    + "\nChạm “DỪNG VÀ XUẤT FILE LOG DUY NHẤT” để gửi file.");
+    }
+
+    private void stopAndShareGeminiLog() {
+        if (GeminiCommandLogCapture.isCapturing()) {
+            GeminiCommandLogCapture.stopByUser();
+            refreshGeminiLogStatus();
+        }
+        shareLatestGeminiLog();
     }
 
     private void shareLatestGeminiLog() {
