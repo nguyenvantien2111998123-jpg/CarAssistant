@@ -43,6 +43,7 @@ public final class WynHomeProbe {
                                 Context appContext = application.getApplicationContext();
                                 WynWarningLinkProbe.install(
                                         application.getClassLoader(), appContext);
+                                WynPopupWindowTrace.install(application.getClassLoader());
                             } catch (Throwable ignored) { }
                         }
                     });
@@ -60,6 +61,7 @@ public final class WynHomeProbe {
                         if (!PACKAGE.equals(activity.getPackageName())) return;
                         WynWarningLinkProbe.install(
                                 activity.getClassLoader(), activity.getApplicationContext());
+                        WynPopupWindowTrace.install(activity.getClassLoader());
                     } catch (Throwable ignored) { }
                 }
             });
