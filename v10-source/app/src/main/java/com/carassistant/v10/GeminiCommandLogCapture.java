@@ -165,6 +165,8 @@ public final class GeminiCommandLogCapture {
                 || s.contains("system_server")
                 || s.contains("googlequicksearchbox")
                 || s.contains("googleassistant")
+                || s.contains("assistant")
+                || s.contains("google.android.apps")
                 || s.contains("google.android.projection")
                 || s.contains("voiceinteraction")
                 || s.contains("speechrecognizer")
@@ -187,7 +189,9 @@ public final class GeminiCommandLogCapture {
                 || s.contains("wm_task_created")
                 || s.contains("wm_task_removed")
                 || s.contains("wm_set_resumed_activity")
-                || s.contains("wm_on_top_resumed_gained");
+                || s.contains("wm_on_top_resumed_gained")
+                || s.contains("am_")
+                || s.contains("wm_");
     }
 
     private static void addLocked(String line) {
