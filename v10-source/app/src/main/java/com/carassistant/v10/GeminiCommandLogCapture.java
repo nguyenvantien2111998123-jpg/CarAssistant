@@ -84,10 +84,14 @@ public final class GeminiCommandLogCapture {
 
         Thread worker = new Thread(() -> {
             try {
-                Process process = new ProcessBuilder("su", "-c", "logcat -b all -v threadtime")
+                Process process = new ProcessBuilder("su", "-c", "logcat -b all -v threadtime -T 1")
                         .redirectErrorStream(true).start();
                 logcatProcess = process;
-                append("CAPTURE_STATUS: root logcat process started.");
+                if (!capturing) {
+                    process.destroy();
+                    return;
+                }
+                append("CAPTURE_STATUS: root logcat process started; command=logcat -b all -v threadtime -T 1.");
                 BufferedReader reader = new BufferedReader(new InputStreamReader(
                         process.getInputStream(), StandardCharsets.UTF_8));
                 String line;
