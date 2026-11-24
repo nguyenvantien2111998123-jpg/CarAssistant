@@ -97,26 +97,26 @@ public final class GearheadCarActivityTrace {
         out.append("CONTROLLER_INTENT_CALL id=").append(id)
                 .append(" method=").append(methodObject instanceof Method
                         ? signature((Method) methodObject) : String.valueOf(methodObject))
-                .append("\naction=").append(intent.getAction())
-                .append("\ncomponent=").append(intent.getComponent())
-                .append("\npackage=").append(intent.getPackage())
-                .append("\nflags=0x").append(Integer.toHexString(intent.getFlags()))
-                .append("\ncategories=").append(intent.getCategories());
+                .append("; action=").append(intent.getAction())
+                .append("; component=").append(intent.getComponent())
+                .append("; package=").append(intent.getPackage())
+                .append("; flags=0x").append(Integer.toHexString(intent.getFlags()))
+                .append("; categories=").append(intent.getCategories());
 
         try {
             Bundle extras = intent.getExtras();
-            out.append("\nextraKeys=").append(extras == null ? "[]" : extras.keySet());
+            out.append("; extraKeys=").append(extras == null ? "[]" : extras.keySet());
             if (extras != null) {
                 Object packageName = extras.get("android.intent.extra.PACKAGE_NAME");
                 if (packageName instanceof String) {
-                    out.append("\nextra.PACKAGE_NAME=").append(packageName);
+                    out.append("; extra.PACKAGE_NAME=").append(packageName);
                 }
             }
         } catch (Throwable error) {
-            out.append("\nextras=<unavailable:").append(error.getClass().getSimpleName()).append(">");
+            out.append("; extras=<unavailable:").append(error.getClass().getSimpleName()).append(">");
         }
 
-        out.append("\ncallStack:");
+        out.append("; callStack:");
         StackTraceElement[] stack = Thread.currentThread().getStackTrace();
         int written = 0;
         for (StackTraceElement frame : stack) {
@@ -124,7 +124,7 @@ public final class GearheadCarActivityTrace {
             if (className.equals(Thread.class.getName())
                     || className.equals(GearheadCarActivityTrace.class.getName())
                     || className.startsWith("de.robv.android.xposed.")) continue;
-            out.append("\n  at ").append(frame);
+            out.append(";   at ").append(frame);
             if (++written >= 20) break;
         }
         log(out.toString());
