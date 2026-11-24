@@ -957,7 +957,8 @@ public final class MediaSessionBridge extends NotificationListenerService {
         if (keepAliveMediaSession == null) {
             keepAliveMediaSession = new KeepAliveMediaSession(this);
         }
-        syncKeepAliveMediaSession(isAndroidAutoConnected(), false);
+        // Do not start the MP4 until refreshControllers has inspected every
+        // external session; otherwise a live player could be interrupted briefly.
     }
 
     private void syncKeepAliveMediaSession(boolean connected, boolean externalPlaying) {
