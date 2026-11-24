@@ -82,6 +82,7 @@ public final class V10CarActivity
     private TextView floatingVoiceButton;
     private TextView voiceTranscriptView;
     private VoiceAssistantController voiceAssistantController;
+    private VoiceCommandRouter geminiVoiceCommandRouter;
     private MiniAccessEngine miniAccessEngine;
 
     private TextView floatingTouchKey;
@@ -252,7 +253,7 @@ public final class V10CarActivity
                             }
                         }
                     },
-                    new VoiceCommandRouter(new VoiceCommandRouter.Host() {
+                    geminiVoiceCommandRouter = new VoiceCommandRouter(new VoiceCommandRouter.Host() {
                         @Override
                         public String openApp(String spokenName, VoiceCommandParser.TargetScreen targetScreen) {
                             return openAppByVoice(spokenName, targetScreen);
@@ -447,6 +448,7 @@ public final class V10CarActivity
         loadApps();
         refreshPaneAppChoices();
         rebuildDock();
+        processGeminiMediaVoiceRequest();
 
         handler.removeCallbacks(
                 clockTicker);
@@ -511,6 +513,47 @@ public final class V10CarActivity
 
     }
 
+
+
+    /**
+     * Executes a media search received from Android Auto's MediaSession voice-action
+     * callback. It reuses the existing voice router and V10 projection pipeline;
+     * the legacy on-device speech recognizer is not started.
+     */
+    private void processGeminiMediaVoiceRequest() {
+        Intent request = getIntent();
+        if (request == null
+                || !request.getBooleanExtra("com.carassistant.v10.OPEN_GEMINI_MEDIA_SEARCH", false)) {
+            return;
+        }
+        String query = request.getStringExtra("com.carassistant.v10.GEMINI_MEDIA_QUERY");
+        long requestId = request.getLongExtra("com.carassistant.v10.GEMINI_MEDIA_REQUEST_ID", 0L);
+        if (TextUtils.isEmpty(query) || geminiVoiceCommandRouter == null) {
+            Log.w("AACastGeminiMediaVoice", "Cannot route empty query or uninitialized voice router");
+            return;
+        }
+        VoiceCommandRouter.Result result = geminiVoiceCommandRouter.route(
+                "mở nhạc " + query.trim() + " trên YouTube");
+        Log.i("AACastGeminiMediaVoice", "V10_ROUTED id=" + requestId
+                + " query=" + query + " understood=" + result.understood
+                + " response=" + result.response);
+        request.removeExtra("com.carassistant.v10.OPEN_GEMINI_MEDIA_SEARCH");
+        request.removeExtra("com.carassistant.v10.GEMINI_MEDIA_QUERY");
+        request.removeExtra("com.carassistant.v10.GEMINI_MEDIA_REQUEST_ID");
+        android.content.SharedPreferences prefs = getSharedPreferences(
+                "gemini_media_voice", MODE_PRIVATE);
+        if (requestId > 0L && prefs.getLong("pending_request_id", 0L) == requestId) {
+            prefs.edit().remove("pending_request_id").remove("pending_query")
+                    .remove("pending_provider").apply();
+        }
+    }
+
+    @Override
+    protected void onNewIntent(Intent intent) {
+        super.onNewIntent(intent);
+        setIntent(intent);
+        handler.post(this::processGeminiMediaVoiceRequest);
+    }
 
     private void buildUi() {
         root=new FrameLayout(this);
