@@ -22,8 +22,8 @@ import java.util.Locale;
  */
 public final class GeminiCommandLogCapture {
     private static final String TAG = "GeminiCommandTrace";
-    private static final int MAX_LINES = 20000;
-    private static final long AUTO_STOP_MS = 180_000L;
+    private static final int MAX_LINES = 30000;
+    private static final long AUTO_STOP_MS = 300_000L;
 
     private static final Object LOCK = new Object();
     private static final ArrayDeque<String> BUFFER = new ArrayDeque<>();
