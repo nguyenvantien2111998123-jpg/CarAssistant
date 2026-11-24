@@ -448,7 +448,6 @@ public final class V10CarActivity
         loadApps();
         refreshPaneAppChoices();
         rebuildDock();
-        processGeminiMediaVoiceRequest();
 
         handler.removeCallbacks(
                 clockTicker);
@@ -510,6 +509,7 @@ public final class V10CarActivity
                 }
             }
         }
+        processGeminiMediaVoiceRequest();
 
     }
 
