@@ -240,7 +240,7 @@ public final class V10SettingsActivity extends Activity {
             addButton(body, "BẮT ĐẦU THU TOÀN BỘ LOG", () -> {
                 boolean started = GeminiCommandLogCapture.start(this);
                 if (started) {
-                    geminiLogStatus.setText("ĐANG THU LOG TỔNG HỢP (tối đa 180 giây). Hãy kết nối/ngắt-kết nối Android Auto, nói với Gemini “Mở app CarAsistant”, chờ CarAsistant mở, sau đó để WYN chạy nền và chờ cảnh báo thay đổi. Không vuốt bỏ WYN khỏi màn hình ứng dụng gần đây.");
+                    geminiLogStatus.setText("ĐANG THU LOG TỔNG HỢP (tối đa 300 giây). Hãy kết nối/ngắt-kết nối Android Auto, nói với Gemini “Mở app CarAsistant”, chờ CarAsistant mở, sau đó để WYN chạy nền và chờ cảnh báo thay đổi. Không vuốt bỏ WYN khỏi màn hình ứng dụng gần đây.");
                 } else {
                     geminiLogStatus.setText("Bộ thu log đang chạy. Hãy tiếp tục thực hiện các bước kiểm tra; không cần bấm bắt đầu lần nữa.");
                 }
@@ -530,7 +530,7 @@ public final class V10SettingsActivity extends Activity {
         if (GeminiCommandLogCapture.isCapturing()) {
             geminiLogStatus.setText("ĐANG THU LOG TỔNG HỢP. Thời gian đã thu: "
                     + GeminiCommandLogCapture.getCaptureDurationSeconds()
-                    + " giây / tối đa 180 giây. Khi hoàn tất, bấm “DỪNG VÀ XUẤT FILE LOG DUY NHẤT”.");
+                    + " giây / tối đa 300 giây. Khi hoàn tất, bấm “DỪNG VÀ XUẤT FILE LOG DUY NHẤT”.");
             return;
         }
         java.io.File latest = GeminiCommandLogCapture.getLatestFile(this);
