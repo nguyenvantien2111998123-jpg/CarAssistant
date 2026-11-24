@@ -237,7 +237,7 @@ public final class V10SettingsActivity extends Activity {
             scopeHint.setPadding(dp(6), 0, dp(6), dp(10));
             body.addView(scopeHint, params(-1, -2));
 
-            addButton(body, "BẮT ĐẦU THU TOÀN BỘ LOG", () -> {
+            addButton(body, "BẮT ĐẦU THU LOG TỔNG HỢP", () -> {
                 boolean started = GeminiCommandLogCapture.start(this);
                 if (started) {
                     geminiLogStatus.setText("ĐANG THU LOG TỔNG HỢP (tối đa 300 giây). Hãy kết nối/ngắt-kết nối Android Auto, nói với Gemini “Mở app CarAsistant”, chờ CarAsistant mở, sau đó để WYN chạy nền và chờ cảnh báo thay đổi. Không vuốt bỏ WYN khỏi màn hình ứng dụng gần đây.");
