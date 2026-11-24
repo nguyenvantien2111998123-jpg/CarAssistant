@@ -13,6 +13,7 @@ import com.carassistant.v10.hook.OrientationHooks;
 import com.carassistant.v10.hook.PolicyMediaKeyHooks;
 import com.carassistant.v10.hook.SystemMediaKeyHooks;
 import com.carassistant.v10.hook.InstallerSpoof;
+import com.carassistant.v10.hook.WynPopupWindowTrace;
 
 import de.robv.android.xposed.IXposedHookLoadPackage;
 import de.robv.android.xposed.XposedBridge;
@@ -24,6 +25,7 @@ import de.robv.android.xposed.callbacks.XC_LoadPackage;
  * Scope cần bật trong LSPosed:
  *   • android                                  (system_server)
  *   • com.google.android.projection.gearhead   (Android Auto)
+ *   • com.wynauto.wyn                       (WYN warning popup trace)
  */
 public final class AACastBridge implements IXposedHookLoadPackage {
 
@@ -48,6 +50,12 @@ public final class AACastBridge implements IXposedHookLoadPackage {
             // Observe the alternate Android input-policy route where media keys
             // are passed to the foreground window instead of MediaSessionService.
             PolicyMediaKeyHooks.install(param.classLoader);
+            return;
+        }
+
+        // ---- WYN: read-only popup/window trace; no UI or behavior changes ----
+        if ("com.wynauto.wyn".equals(packageName)) {
+            WynPopupWindowTrace.install(param.classLoader);
             return;
         }
 
