@@ -63,6 +63,9 @@ public final class MediaSessionBridge extends NotificationListenerService {
     private static volatile long lastCheckpointPosition;
     private static volatile long lastCheckpointDuration;
     private MediaSession mirrorSession;
+    private static volatile MediaSession publishedMirrorSession;
+
+    public static MediaSession getPublishedMirrorSession() { return publishedMirrorSession; }
     private KeepAliveMediaSession keepAliveMediaSession;
     private SteeringWheelMediaKeyHandler steeringKeyHandler;
     private MediaSessionManager manager;
@@ -580,6 +583,8 @@ public final class MediaSessionBridge extends NotificationListenerService {
     private void ensureMirrorSession() {
         if (mirrorSession != null) return;
         mirrorSession = new MediaSession(this, "CarAsistant Media Controller");
+        publishedMirrorSession = mirrorSession;
+        GeminiMediaVoiceService.onMirrorSessionReady(mirrorSession);
         mirrorSession.setFlags(MediaSession.FLAG_HANDLES_MEDIA_BUTTONS
                 | MediaSession.FLAG_HANDLES_TRANSPORT_CONTROLS);
         steeringKeyHandler = new SteeringWheelMediaKeyHandler(
@@ -601,6 +606,12 @@ public final class MediaSessionBridge extends NotificationListenerService {
                 return super.onMediaButtonEvent(mediaButtonIntent);
             }
             @Override public void onPlay() { MediaSessionBridge.play(); }
+            @Override public void onPlayFromSearch(String query, Bundle extras) {
+                Log.i(TAG, "Android Auto voice search callback: query=" + query
+                        + ", extras=" + (extras == null ? "none" : extras));
+                GeminiMediaVoiceService.enqueueVoiceSearch(
+                        MediaSessionBridge.this, query, extras);
+            }
             @Override public void onPause() { MediaSessionBridge.pause(); }
             @Override public void onSkipToNext() {
                 Log.i(TAG, "CarAsistant MediaSession callback: onSkipToNext");
@@ -737,7 +748,8 @@ public final class MediaSessionBridge extends NotificationListenerService {
     }
 
     private PlaybackState buildMirrorPlaybackState(boolean playing, long position, long duration) {
-        long actions = PlaybackState.ACTION_PLAY | PlaybackState.ACTION_PAUSE
+        long actions = PlaybackState.ACTION_PLAY | PlaybackState.ACTION_PLAY_FROM_SEARCH
+                | PlaybackState.ACTION_PAUSE
                 | PlaybackState.ACTION_PLAY_PAUSE | PlaybackState.ACTION_SKIP_TO_NEXT
                 | PlaybackState.ACTION_SKIP_TO_PREVIOUS
                 | PlaybackState.ACTION_SEEK_TO | PlaybackState.ACTION_FAST_FORWARD
@@ -846,6 +858,7 @@ public final class MediaSessionBridge extends NotificationListenerService {
         }
         MediaSession session = mirrorSession;
         mirrorSession = null;
+        if (publishedMirrorSession == session) publishedMirrorSession = null;
         if (session != null) {
             try {
                 session.setActive(false);
