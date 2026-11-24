@@ -11,6 +11,7 @@ import com.carassistant.v10.hook.InputHooks;
 import com.carassistant.v10.hook.OrientationHooks;
 import com.carassistant.v10.hook.SystemMediaKeyHooks;
 import com.carassistant.v10.hook.InstallerSpoof;
+import com.carassistant.v10.hook.WynPopupWindowTrace;
 
 import de.robv.android.xposed.IXposedHookLoadPackage;
 import de.robv.android.xposed.XposedBridge;
@@ -43,6 +44,12 @@ public final class AACastBridge implements IXposedHookLoadPackage {
             // Capture AVRCP steering-wheel media keys at the system media-session
             // dispatch point so single/double/hold gestures can be distinguished.
             SystemMediaKeyHooks.install(param.classLoader);
+            return;
+        }
+
+        // ---- WYN: trace popup window lifecycle and dynamic bounds only ----
+        if ("com.wynauto.wyn".equals(packageName)) {
+            WynPopupWindowTrace.install(param.classLoader);
             return;
         }
 
