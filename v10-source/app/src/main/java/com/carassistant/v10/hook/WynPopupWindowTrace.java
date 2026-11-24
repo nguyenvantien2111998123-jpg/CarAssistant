@@ -7,9 +7,7 @@ import android.view.View;
 import android.view.ViewGroup;
 import android.view.WindowManager;
 
-import java.lang.reflect.Method;
 import java.util.Collections;
-import java.util.Locale;
 import java.util.Map;
 import java.util.WeakHashMap;
 
@@ -27,6 +25,8 @@ public final class WynPopupWindowTrace {
     private static final String WYN_PACKAGE = "com.wynauto.wyn";
     private static final Map<View, String> LAST_GEOMETRY =
             Collections.synchronizedMap(new WeakHashMap<View, String>());
+    private static final Map<View, Boolean> OBSERVED_LAYOUT =
+            Collections.synchronizedMap(new WeakHashMap<View, Boolean>());
     private static volatile boolean installed;
 
     private WynPopupWindowTrace() { }
@@ -127,9 +127,7 @@ public final class WynPopupWindowTrace {
 
     private static void attachLayoutObserver(View view) {
         try {
-            Object marker = view.getTag(android.R.id.content);
-            if (Boolean.TRUE.equals(marker)) return;
-            view.setTag(android.R.id.content, Boolean.TRUE);
+            if (OBSERVED_LAYOUT.put(view, Boolean.TRUE) != null) return;
             view.addOnLayoutChangeListener((v, left, top, right, bottom,
                                             oldLeft, oldTop, oldRight, oldBottom) -> {
                 if (left != oldLeft || top != oldTop || right != oldRight || bottom != oldBottom) {
