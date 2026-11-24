@@ -19,9 +19,8 @@ import java.util.Locale;
  */
 public final class GeminiCommandLogCapture {
     private static final String TAG = "GeminiCommandTrace";
-    private static final int MAX_LINES = 1800;
-    private static final long AUTO_STOP_MS = 60_000L;
-    private static final long POST_LAUNCH_MS = 2_500L;
+    private static final int MAX_LINES = 3000;
+    private static final long AUTO_STOP_MS = 120_000L;
 
     private static final Object LOCK = new Object();
     private static final ArrayDeque<String> BUFFER = new ArrayDeque<>();
@@ -57,11 +56,13 @@ public final class GeminiCommandLogCapture {
             launchSeen = false;
             startedAt = System.currentTimeMillis();
             capturing = true;
-            BUFFER.add("CarAsistant Gemini command diagnostic");
+            BUFFER.add("CarAsistant Gemini + WYN diagnostic");
             BUFFER.add("Started: " + new Date(startedAt));
             BUFFER.add("Trigger phrase: Mở app CarAsistant");
-            BUFFER.add("Capture source: root logcat -b all; only relevant Google Assistant, Android Auto and CarAsistant lines are retained.");
-            BUFFER.add("Included diagnostic tag: AACastGeminiTrace (Gearhead Car Activity Intent/method trace).");
+            BUFFER.add("Capture source: root logcat -b all; relevant Google Assistant, Android Auto, CarAsistant and WYN lines are retained.");
+            BUFFER.add("Included tag: AACastGeminiTrace (Gearhead Car Activity Intent/method trace).");
+            BUFFER.add("Included tag: AACastWYNPopupTrace (WYN Activity/Window/View bounds trace).");
+            BUFFER.add("Capture remains active after CarAsistant opens so later WYN popup events are included; maximum duration 120 seconds.");
             BUFFER.add("Note: private Gemini conversation content may not be exposed by Android logcat.");
         }
 
@@ -89,8 +90,8 @@ public final class GeminiCommandLogCapture {
         Thread watchdog = new Thread(() -> {
             try { Thread.sleep(AUTO_STOP_MS); } catch (InterruptedException ignored) { return; }
             if (capturing) finish(launchSeen
-                    ? "Đã mở CarAsistant (hết thời gian hậu kiểm)"
-                    : "Hết 60 giây nhưng chưa thấy CarAsistant được mở");
+                    ? "Đã mở CarAsistant; hoàn tất cửa sổ thu log Gemini + WYN 120 giây"
+                    : "Hết 120 giây nhưng chưa thấy CarAsistant được mở");
         }, "CarAsistant-Gemini-Log-Watchdog");
         watchdog.setDaemon(true);
         watchdog.start();
@@ -102,17 +103,14 @@ public final class GeminiCommandLogCapture {
         if (!capturing || launchSeen) return;
         launchSeen = true;
         append("CARASISTANT_MARKER: V10CarActivity.onResume observed at " + new Date());
-        Thread finisher = new Thread(() -> {
-            try { Thread.sleep(POST_LAUNCH_MS); } catch (InterruptedException ignored) { }
-            if (capturing) finish("Đã phát hiện CarAsistant mở trên Android Auto");
-        }, "CarAsistant-Gemini-Log-Finisher");
-        finisher.setDaemon(true);
-        finisher.start();
+        append("CAPTURE_STATUS: tiếp tục thu log WYN popup sau khi CarAsistant mở; tự dừng theo giới hạn 120 giây.");
     }
 
     private static boolean isRelevant(String line) {
         String s = line.toLowerCase(Locale.ROOT);
         return s.contains("aacastgeminitrace")
+                || s.contains("aacastwynpopuptrace")
+                || s.contains("com.wynauto.wyn")
                 || s.contains("gemini")
                 || s.contains("googlequicksearchbox")
                 || s.contains("googleassistant")
