@@ -7,35 +7,42 @@ import android.util.Log;
 
 import java.lang.reflect.Method;
 import java.lang.reflect.Modifier;
-import java.util.Arrays;
 import java.util.HashSet;
 import java.util.Set;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import de.robv.android.xposed.XC_MethodHook;
 import de.robv.android.xposed.XposedBridge;
 import de.robv.android.xposed.XposedHelpers;
 
 /**
- * Read-only diagnostic for Gemini -> Gearhead -> Car Activity handoff.
+ * Read-only Gearhead diagnostic for Gemini -> Car Activity hand-off.
  *
- * Hooks only Intent-accepting methods declared by Gearhead's
- * CarSystemUiControllerService. It never changes arguments or results.
+ * It observes Intent-accepting methods on CarSystemUiControllerService. To avoid
+ * missing an undocumented Gemini path, it records method/Intent metadata for all
+ * calls through this narrow controller class, not only already-known target Intents.
+ * Extra values and voice/conversation payloads are deliberately not logged.
  */
 public final class GearheadCarActivityTrace {
-
     private static final String TAG = "AACastGeminiTrace";
-    private static final String TARGET_PACKAGE = "com.carassistant.v10";
     private static final String CONTROLLER =
             "com.google.android.projection.gearhead.service.CarSystemUiControllerService";
+    private static final AtomicInteger INVOCATION = new AtomicInteger();
+    private static volatile boolean installed;
 
-    private GearheadCarActivityTrace() {
-    }
+    private GearheadCarActivityTrace() { }
 
-    public static void install(ClassLoader classLoader) {
+    public static synchronized void install(ClassLoader classLoader) {
+        if (installed) {
+            log("install requested again; already installed in this Gearhead process");
+            return;
+        }
+        log("INSTALL_BEGIN controller=" + CONTROLLER
+                + "; classLoader=" + (classLoader == null ? "null" : classLoader.getClass().getName()));
         try {
             Class<?> type = XposedHelpers.findClassIfExists(CONTROLLER, classLoader);
             if (type == null) {
-                log("Controller class not found; trace not installed");
+                log("CONTROLLER_NOT_FOUND; Gearhead scope may be active but controller class is not resolvable yet");
                 return;
             }
 
@@ -43,71 +50,53 @@ public final class GearheadCarActivityTrace {
             int count = 0;
             for (Class<?> current = type; current != null; current = current.getSuperclass()) {
                 for (Method method : current.getDeclaredMethods()) {
-                    if (!acceptsIntent(method)) {
-                        continue;
-                    }
+                    if (!acceptsIntent(method)) continue;
                     String signature = signature(method);
-                    if (!hooked.add(signature)) {
-                        continue;
-                    }
+                    if (!hooked.add(signature)) continue;
                     try {
                         XposedBridge.hookMethod(method, new XC_MethodHook() {
-                            @Override
-                            protected void beforeHookedMethod(MethodHookParam param) {
+                            @Override protected void beforeHookedMethod(MethodHookParam param) {
+                                int id = INVOCATION.incrementAndGet();
+                                boolean foundIntent = false;
                                 for (Object arg : param.args) {
                                     if (arg instanceof Intent) {
-                                        Intent intent = (Intent) arg;
-                                        if (isTargetIntent(intent)) {
-                                            logInvocation(param.method, intent);
-                                        }
+                                        foundIntent = true;
+                                        logIntentInvocation(id, param.method, (Intent) arg);
                                     }
+                                }
+                                if (!foundIntent) {
+                                    log("CONTROLLER_CALL id=" + id + " method=" + signature(param.method)
+                                            + " args=" + argumentTypes(param.args));
                                 }
                             }
                         });
                         count++;
+                        log("HOOKED " + signature);
                     } catch (Throwable error) {
-                        log("Could not hook " + signature + ": " + error);
+                        log("HOOK_FAILED " + signature + " error=" + error.getClass().getName()
+                                + ":" + error.getMessage());
                     }
                 }
             }
-            log("Read-only Gearhead Car Activity trace installed; hookedMethods=" + count);
+            installed = count > 0;
+            log("INSTALL_RESULT hookedIntentMethods=" + count + "; installed=" + installed);
         } catch (Throwable error) {
-            log("Trace installation failed: " + error);
+            log("INSTALL_FAILED " + error.getClass().getName() + ":" + error.getMessage());
         }
     }
 
     private static boolean acceptsIntent(Method method) {
         for (Class<?> parameter : method.getParameterTypes()) {
-            if (Intent.class.isAssignableFrom(parameter)) {
-                return true;
-            }
+            if (Intent.class.isAssignableFrom(parameter)) return true;
         }
         return false;
     }
 
-    private static boolean isTargetIntent(Intent intent) {
-        if (intent == null) return false;
-        ComponentName component = intent.getComponent();
-        if (component != null && TARGET_PACKAGE.equals(component.getPackageName())) {
-            return true;
-        }
-        if (TARGET_PACKAGE.equals(intent.getPackage())) {
-            return true;
-        }
-        try {
-            Bundle extras = intent.getExtras();
-            return extras != null && TARGET_PACKAGE.equals(
-                    extras.getString("android.intent.extra.PACKAGE_NAME"));
-        } catch (Throwable ignored) {
-            return false;
-        }
-    }
-
-    private static void logInvocation(Object methodObject, Intent intent) {
-        StringBuilder out = new StringBuilder(512);
-        out.append("GEARHEAD_INTENT_METHOD ")
-                .append(methodObject instanceof Method ? signature((Method) methodObject)
-                        : String.valueOf(methodObject))
+    private static void logIntentInvocation(int id, Object methodObject, Intent intent) {
+        StringBuilder out = new StringBuilder(768);
+        out.append("CONTROLLER_INTENT_CALL id=").append(id)
+                .append(" method=").append(methodObject instanceof Method
+                        ? signature((Method) methodObject) : String.valueOf(methodObject))
                 .append("\naction=").append(intent.getAction())
                 .append("\ncomponent=").append(intent.getComponent())
                 .append("\npackage=").append(intent.getPackage())
@@ -116,13 +105,11 @@ public final class GearheadCarActivityTrace {
 
         try {
             Bundle extras = intent.getExtras();
-            if (extras == null) {
-                out.append("\nextraKeys=[]");
-            } else {
-                out.append("\nextraKeys=").append(extras.keySet());
-                Object target = extras.get("android.intent.extra.PACKAGE_NAME");
-                if (target != null) {
-                    out.append("\nextra.PACKAGE_NAME=").append(target);
+            out.append("\nextraKeys=").append(extras == null ? "[]" : extras.keySet());
+            if (extras != null) {
+                Object packageName = extras.get("android.intent.extra.PACKAGE_NAME");
+                if (packageName instanceof String) {
+                    out.append("\nextra.PACKAGE_NAME=").append(packageName);
                 }
             }
         } catch (Throwable error) {
@@ -136,13 +123,22 @@ public final class GearheadCarActivityTrace {
             String className = frame.getClassName();
             if (className.equals(Thread.class.getName())
                     || className.equals(GearheadCarActivityTrace.class.getName())
-                    || className.startsWith("de.robv.android.xposed.")) {
-                continue;
-            }
+                    || className.startsWith("de.robv.android.xposed.")) continue;
             out.append("\n  at ").append(frame);
-            if (++written >= 18) break;
+            if (++written >= 20) break;
         }
         log(out.toString());
+    }
+
+    private static String argumentTypes(Object[] args) {
+        if (args == null || args.length == 0) return "[]";
+        StringBuilder out = new StringBuilder("[");
+        for (int i = 0; i < args.length; i++) {
+            if (i > 0) out.append(',');
+            Object arg = args[i];
+            out.append(arg == null ? "null" : arg.getClass().getName());
+        }
+        return out.append(']').toString();
     }
 
     private static String signature(Method method) {
