@@ -1,6 +1,7 @@
 package com.carassistant.v10.aabridge;
 
 import android.os.Build;
+import android.util.Log;
 
 import com.carassistant.v10.AACastDisplay;
 import com.carassistant.v10.hook.DisplayHooks;
@@ -55,6 +56,8 @@ public final class AACastBridge implements IXposedHookLoadPackage {
 
         // ---- WYN: read-only popup/window trace; no UI or behavior changes ----
         if ("com.wynauto.wyn".equals(packageName)) {
+            Log.i("AACastWYNPopupTrace", "PACKAGE_LOAD package=" + packageName
+                    + "; process=" + param.processName + "; pid=" + android.os.Process.myPid());
             WynPopupWindowTrace.install(param.classLoader);
             return;
         }
@@ -64,6 +67,10 @@ public final class AACastBridge implements IXposedHookLoadPackage {
             InstallerSpoof.hookLegacy(param.classLoader, PLAY);
 
             if (GEARHEAD.equals(packageName)) {
+                Log.i("AACastGeminiTrace", "GEARHEAD_PACKAGE_LOAD package=" + packageName
+                        + "; process=" + param.processName + "; pid=" + android.os.Process.myPid()
+                        + "; module=CarAsistant");
+                XposedBridge.log("[AACastGeminiTrace] GEARHEAD_PACKAGE_LOAD process=" + param.processName);
                 GearheadAllow.install(param.classLoader);
                 GearheadMediaSessionFilter.install();
                 GearheadDockPatcher.install();
