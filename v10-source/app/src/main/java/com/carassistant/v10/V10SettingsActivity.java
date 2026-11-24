@@ -228,6 +228,15 @@ public final class V10SettingsActivity extends Activity {
             geminiLogStatus.setPadding(dp(6), dp(6), dp(6), dp(10));
             body.addView(geminiLogStatus, params(-1, -2));
 
+            TextView scopeHint = text(
+                    "LSPosed cần bật module trong các scope: android (system_server), "
+                    + "com.google.android.projection.gearhead (Android Auto), "
+                    + "com.carassistant.v10 (CarAsistant) và com.wynauto.wyn (nếu thu WYN). "
+                    + "Không cần bật Google Search. Cấp quyền root/su cho CarAsistant để đọc log hệ thống.",
+                    12, Color.LTGRAY);
+            scopeHint.setPadding(dp(6), 0, dp(6), dp(10));
+            body.addView(scopeHint, params(-1, -2));
+
             addButton(body, "BẮT ĐẦU THU TOÀN BỘ LOG", () -> {
                 boolean started = GeminiCommandLogCapture.start(this);
                 if (started) {
