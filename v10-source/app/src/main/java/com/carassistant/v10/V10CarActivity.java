@@ -532,8 +532,11 @@ public final class V10CarActivity
             Log.w("AACastGeminiMediaVoice", "Cannot route empty query or uninitialized voice router");
             return;
         }
+        // Use the parser's explicit provider grammar. "mở nhạc <query>" is
+        // intentionally a generic category command in the legacy parser and drops
+        // the search term; "phát <query> trên YouTube" preserves both query/provider.
         VoiceCommandRouter.Result result = geminiVoiceCommandRouter.route(
-                "mở nhạc " + query.trim() + " trên YouTube");
+                "phát " + query.trim() + " trên YouTube");
         Log.i("AACastGeminiMediaVoice", "V10_ROUTED id=" + requestId
                 + " query=" + query + " understood=" + result.understood
                 + " response=" + result.response);
