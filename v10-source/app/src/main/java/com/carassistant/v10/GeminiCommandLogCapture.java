@@ -51,7 +51,7 @@ public final class GeminiCommandLogCapture {
         File base = context.getExternalFilesDir(null);
         if (base == null) base = context.getFilesDir();
         File dir = new File(base, "diagnostics");
-        File[] files = dir.listFiles((d, name) -> name.startsWith("gemini-command-") && name.endsWith(".txt"));
+        File[] files = dir.listFiles((d, name) -> (name.startsWith("gemini-command-") || name.startsWith("carassistant-unified-")) && name.endsWith(".txt"));
         if (files == null || files.length == 0) return null;
         File newest = files[0];
         for (File candidate : files) if (candidate.lastModified() > newest.lastModified()) newest = candidate;
