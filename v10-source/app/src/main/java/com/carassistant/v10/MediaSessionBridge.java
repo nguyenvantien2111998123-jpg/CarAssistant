@@ -63,6 +63,7 @@ public final class MediaSessionBridge extends NotificationListenerService {
     private static volatile long lastCheckpointPosition;
     private static volatile long lastCheckpointDuration;
     private MediaSession mirrorSession;
+    private KeepAliveMediaSession keepAliveMediaSession;
     private SteeringWheelMediaKeyHandler steeringKeyHandler;
     private MediaSessionManager manager;
     private MediaSessionManager.OnActiveSessionsChangedListener sessionsListener;
@@ -772,6 +773,7 @@ public final class MediaSessionBridge extends NotificationListenerService {
     public void onListenerConnected() {
         super.onListenerConnected();
         ensureMirrorSession();
+        ensureKeepAliveMediaSession();
         // Publish the CarAsistant controller before querying source sessions. This closes
         // the startup race in which Gearhead discovers a phone player before our mirror.
         updateMirrorSession(snapshot);
@@ -829,6 +831,10 @@ public final class MediaSessionBridge extends NotificationListenerService {
         MAIN.removeCallbacks(checkpointTask);
         MAIN.removeCallbacks(fallbackStartTask);
         stopFallbackPlayer();
+        if (keepAliveMediaSession != null) {
+            keepAliveMediaSession.release();
+            keepAliveMediaSession = null;
+        }
         releaseMirrorSession();
         super.onDestroy();
     }
@@ -940,10 +946,23 @@ public final class MediaSessionBridge extends NotificationListenerService {
                         .remove(AA_NOTIFICATION_TAG_PREF)
                         .apply();
                 syncFallbackPlayer(false);
+                syncKeepAliveMediaSession(false, false);
                 Log.i(TAG, "Android Auto connection notification removed; headless restore stop requested");
             }
         }
         refreshFromManager();
+    }
+
+    private void ensureKeepAliveMediaSession() {
+        if (keepAliveMediaSession == null) {
+            keepAliveMediaSession = new KeepAliveMediaSession(this);
+        }
+        syncKeepAliveMediaSession(isAndroidAutoConnected(), false);
+    }
+
+    private void syncKeepAliveMediaSession(boolean connected, boolean externalPlaying) {
+        if (keepAliveMediaSession == null) return;
+        keepAliveMediaSession.update(connected, externalPlaying);
     }
 
     private void refreshFromManager() {
@@ -1012,6 +1031,11 @@ public final class MediaSessionBridge extends NotificationListenerService {
                 if (activeMetadataCandidate == null) activeMetadataCandidate = candidate;
             }
         }
+        // Keep the independent phone-side keepalive session active only while AA is
+        // connected and no external source is actually PLAYING. A paused YouTube/Zing
+        // session remains the mirror/transport target but does not block keepalive.
+        syncKeepAliveMediaSession(isAndroidAutoConnected(), playingCandidate != null);
+
         // Only a session with both meaningful item identity and a live playback state
         // may become the command target. Keep checkpointCandidate separately so the
         // exact saved item can still be verified/restored when its session reappears.
