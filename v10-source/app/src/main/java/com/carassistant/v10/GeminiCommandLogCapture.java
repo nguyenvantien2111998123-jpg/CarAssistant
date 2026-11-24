@@ -61,6 +61,7 @@ public final class GeminiCommandLogCapture {
             BUFFER.add("Started: " + new Date(startedAt));
             BUFFER.add("Trigger phrase: Mở app CarAsistant");
             BUFFER.add("Capture source: root logcat -b all; only relevant Google Assistant, Android Auto and CarAsistant lines are retained.");
+            BUFFER.add("Included diagnostic tag: AACastGeminiTrace (Gearhead Car Activity Intent/method trace).");
             BUFFER.add("Note: private Gemini conversation content may not be exposed by Android logcat.");
         }
 
@@ -111,7 +112,8 @@ public final class GeminiCommandLogCapture {
 
     private static boolean isRelevant(String line) {
         String s = line.toLowerCase(Locale.ROOT);
-        return s.contains("gemini")
+        return s.contains("aacastgeminitrace")
+                || s.contains("gemini")
                 || s.contains("googlequicksearchbox")
                 || s.contains("googleassistant")
                 || s.contains("voiceinteraction")
