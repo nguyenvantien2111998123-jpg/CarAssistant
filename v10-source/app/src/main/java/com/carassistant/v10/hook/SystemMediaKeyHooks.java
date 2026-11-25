@@ -174,6 +174,10 @@ public final class SystemMediaKeyHooks {
                 if (record == null) continue;
                 Object packageName = XposedHelpers.callMethod(record, "getPackageName");
                 if (!SELF.equals(packageName)) continue;
+                // The phone KeepAlive session is active for AA discovery but has no transport callback.
+                Object sessionTag = null;
+                try { sessionTag = XposedHelpers.getObjectField(record, "mTag"); } catch (Throwable ignored) { }
+                if (sessionTag != null && String.valueOf(sessionTag).toLowerCase(java.util.Locale.ROOT).contains("keepalive")) continue;
                 Object active = XposedHelpers.callMethod(record, "isActive");
                 if (!(active instanceof Boolean) || !((Boolean) active)) continue;
                 Object token = XposedHelpers.callMethod(record, "getSessionToken");
