@@ -558,7 +558,7 @@ public final class V10SettingsActivity extends Activity {
             android.net.Uri uri = FileProvider.getUriForFile(
                     this, getPackageName() + ".diagnostic-files", file);
             Intent share = new Intent(Intent.ACTION_SEND);
-            share.setType("text/plain");
+            share.setType(file.getName().endsWith(".zip") ? "application/zip" : "text/plain");
             share.putExtra(Intent.EXTRA_STREAM, uri);
             share.putExtra(Intent.EXTRA_SUBJECT, "CarAsistant - unified diagnostic bundle");
             share.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
