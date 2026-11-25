@@ -1,6 +1,7 @@
 package com.carassistant.v10;
 
 import android.content.Context;
+import android.graphics.Bitmap;
 import android.os.Build;
 import android.util.Log;
 
@@ -13,6 +14,8 @@ import java.text.SimpleDateFormat;
 import java.util.ArrayDeque;
 import java.util.Date;
 import java.util.Locale;
+import java.util.zip.ZipEntry;
+import java.util.zip.ZipOutputStream;
 
 /**
  * One-shot diagnostic recorder for Gemini -> Gearhead -> Android Auto Car Activity,
@@ -36,6 +39,7 @@ public final class GeminiCommandLogCapture {
     private static volatile File latestFile;
     private static volatile Process logcatProcess;
     private static volatile Context appContext;
+    private static volatile long lastWynImageAt;
 
     private GeminiCommandLogCapture() { }
 
@@ -63,6 +67,8 @@ public final class GeminiCommandLogCapture {
         synchronized (LOCK) {
             if (capturing) return false;
             appContext = context.getApplicationContext();
+            lastWynImageAt = 0L;
+            clearOldWynCaptureImages();
             BUFFER.clear();
             launchSeen = false;
             linesSeen = 0L;
@@ -128,6 +134,46 @@ public final class GeminiCommandLogCapture {
         return true;
     }
 
+
+
+    /** Save only the WYN popup crop (never the full phone screen) while a diagnostic capture is active. */
+    public static void saveWynPopupSnapshot(Bitmap bitmap) {
+        if (!capturing || bitmap == null) return;
+        long now = System.currentTimeMillis();
+        if (now - lastWynImageAt < 1500L) return;
+        lastWynImageAt = now;
+        Context context = appContext;
+        if (context == null) return;
+        File base = context.getExternalFilesDir(null);
+        if (base == null) base = context.getFilesDir();
+        File dir = new File(base, "diagnostics");
+        try {
+            if (!dir.exists() && !dir.mkdirs()) return;
+            File[] existing = dir.listFiles((d, name) -> name.startsWith("capture-wyn-") && name.endsWith(".jpg"));
+            if (existing != null && existing.length >= 12) return;
+            String stamp = new SimpleDateFormat("HHmmss-SSS", Locale.US).format(new Date(now));
+            File image = new File(dir, "capture-wyn-" + stamp + ".jpg");
+            try (FileOutputStream out = new FileOutputStream(image)) {
+                bitmap.compress(Bitmap.CompressFormat.JPEG, 82, out);
+                out.flush();
+            }
+            append("DIAG_WYN_IMAGE_SAVED file=" + image.getName()
+                    + " size=" + bitmap.getWidth() + "x" + bitmap.getHeight());
+        } catch (Throwable error) {
+            append("DIAG_WYN_IMAGE_SAVE_FAILED " + error.getClass().getSimpleName()
+                    + ":" + error.getMessage());
+        }
+    }
+
+    private static void clearOldWynCaptureImages() {
+        Context context = appContext;
+        if (context == null) return;
+        File base = context.getExternalFilesDir(null);
+        if (base == null) base = context.getFilesDir();
+        File dir = new File(base, "diagnostics");
+        File[] old = dir.listFiles((d, name) -> name.startsWith("capture-wyn-") && name.endsWith(".jpg"));
+        if (old != null) for (File file : old) try { file.delete(); } catch (Throwable ignored) { }
+    }
 
     /**
      * Captures a small, privacy-conscious device snapshot through root. It records
@@ -304,11 +350,30 @@ public final class GeminiCommandLogCapture {
                 }
             }
             stream.flush();
-            latestFile = output;
-            Log.i(TAG, "Unified diagnostic saved: " + output.getAbsolutePath()
-                    + "; bytes=" + output.length());
+            File bundle = new File(dir, "carassistant-diagnostic-" + stamp + ".zip");
+            try (ZipOutputStream zip = new ZipOutputStream(new FileOutputStream(bundle))) {
+                addFileToZip(zip, output, output.getName());
+                File[] images = dir.listFiles((d, name) -> name.startsWith("capture-wyn-") && name.endsWith(".jpg"));
+                if (images != null) {
+                    for (File image : images) addFileToZip(zip, image, "wyn-popup/" + image.getName());
+                }
+            }
+            latestFile = bundle;
+            Log.i(TAG, "Unified diagnostic bundle saved: " + bundle.getAbsolutePath()
+                    + "; bytes=" + bundle.length() + "; textBytes=" + output.length());
         } catch (Exception error) {
             Log.e(TAG, "Cannot save unified diagnostic log", error);
         }
+    }
+
+    private static void addFileToZip(ZipOutputStream zip, File file, String entryName)
+            throws java.io.IOException {
+        zip.putNextEntry(new ZipEntry(entryName));
+        try (java.io.FileInputStream in = new java.io.FileInputStream(file)) {
+            byte[] buffer = new byte[8192];
+            int count;
+            while ((count = in.read(buffer)) != -1) zip.write(buffer, 0, count);
+        }
+        zip.closeEntry();
     }
 }
