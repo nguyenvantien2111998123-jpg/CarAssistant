@@ -1654,7 +1654,8 @@ private void hideApps() {
         base.setStroke(dp(2), Color.rgb(80, 170, 230));
         BitmapDrawable image = new BitmapDrawable(getResources(), icon);
         LayerDrawable layers = new LayerDrawable(new Drawable[]{base, image});
-        layers.setLayerInset(1, dp(7), dp(7), dp(7), dp(7));
+        // Keep only a minimal inset for the outline; the WYN warning fills the existing Touch button.
+        layers.setLayerInset(1, dp(2), dp(2), dp(2), dp(2));
         floatingTouchKey.setBackground(layers);
         floatingTouchKey.setText("");
         floatingTouchKey.setContentDescription("Cảnh báo tốc độ WYN; giữ để về Home, kéo để di chuyển");
