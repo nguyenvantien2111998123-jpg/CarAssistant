@@ -13,10 +13,10 @@ public final class GearheadAutoOpen {
  private static final String TAG="AACastAutoOpen";
  private static final Handler H=new Handler(Looper.getMainLooper());
  private static Context app; private static DisplayManager dm;
- private static boolean connected,requested,installed,wynRequested; private static int retries,wynRetries;
+ private static boolean connected,requested,installed,wynRequested,wynStarting; private static int retries,wynRetries;
  private static final Runnable wynRetry=new Runnable(){public void run(){
-  if(!connected||wynRequested||app==null)return;
-  if(startWyn()){wynRequested=true;Log.i(TAG,"WYN startup requested independently of media restore");}
+  if(!connected||wynRequested||wynStarting||app==null)return;
+  if(startWyn()){wynStarting=true;Log.i(TAG,"WYN startup queued independently of media restore");}
   else if(++wynRetries<8)H.postDelayed(this,2500);
   else Log.w(TAG,"WYN startup retries exhausted for this AA connection");
  }};
@@ -41,8 +41,8 @@ public final class GearheadAutoOpen {
  }
  private static void scan(){if(dm==null)return;boolean found=false;
   for(Display d:dm.getDisplays())if(d!=null&&d.getName()!=null&&d.getName().contains("GhFacetBar")&&d.getState()==Display.STATE_ON){found=true;break;}
-  if(found&&!connected){connected=true;requested=false;wynRequested=false;retries=0;wynRetries=0;H.removeCallbacks(retry);H.removeCallbacks(wynRetry);H.postDelayed(retry,1800);}
-  else if(!found&&connected){connected=false;requested=false;wynRequested=false;retries=0;wynRetries=0;H.removeCallbacks(retry);H.removeCallbacks(wynRetry);Log.i(TAG,"Android Auto disconnected");}
+  if(found&&!connected){connected=true;requested=false;wynRequested=false;wynStarting=false;retries=0;wynRetries=0;H.removeCallbacks(retry);H.removeCallbacks(wynRetry);H.postDelayed(retry,1800);}
+  else if(!found&&connected){connected=false;requested=false;wynRequested=false;wynStarting=false;retries=0;wynRetries=0;H.removeCallbacks(retry);H.removeCallbacks(wynRetry);Log.i(TAG,"Android Auto disconnected");}
  }
 
  private static boolean startWyn(){
@@ -50,15 +50,26 @@ public final class GearheadAutoOpen {
    Intent mark=new Intent("com.carassistant.v10.ACTION_AUTO_BACKGROUND_WYN");
    mark.setComponent(new ComponentName("com.carassistant.v10","com.carassistant.v10.WynAutoStartReceiver"));
    mark.setPackage("com.carassistant.v10");
-   app.sendBroadcast(mark);
-   Intent launch=app.getPackageManager().getLaunchIntentForPackage("com.wynauto.wyn");
-   if(launch==null){Log.w(TAG,"WYN launch activity unavailable; is com.wynauto.wyn installed?");return false;}
-   launch.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK|Intent.FLAG_ACTIVITY_RESET_TASK_IF_NEEDED);
-   launch.putExtra("com.carassistant.v10.AUTO_BACKGROUND_AFTER_LOAD",true);
-   app.startActivity(launch);
-   Log.i(TAG,"Started WYN; Accessibility will background it after its home UI stabilizes");
+   app.sendOrderedBroadcast(mark,null,new BroadcastReceiver(){
+    @Override public void onReceive(Context receiverContext,Intent resultIntent){
+     wynStarting=false;
+     if(!connected)return;
+     try{
+      Intent launch=app.getPackageManager().getLaunchIntentForPackage("com.wynauto.wyn");
+      if(launch==null)throw new IllegalStateException("WYN launch activity unavailable");
+      launch.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK|Intent.FLAG_ACTIVITY_RESET_TASK_IF_NEEDED);
+      launch.putExtra("com.carassistant.v10.AUTO_BACKGROUND_AFTER_LOAD",true);
+      app.startActivity(launch);
+      wynRequested=true;
+      Log.i(TAG,"WYN started after auto-background marker was stored; Accessibility will background it after Home stabilizes");
+     }catch(Throwable t){
+      Log.w(TAG,"WYN could not be started",t);
+      if(++wynRetries<8)H.postDelayed(wynRetry,2500);
+     }
+    }
+   },H,android.app.Activity.RESULT_OK,null,null);
    return true;
-  }catch(Throwable t){Log.w(TAG,"WYN could not be started from Gearhead yet",t);return false;}
+  }catch(Throwable t){wynStarting=false;Log.w(TAG,"WYN startup broadcast failed",t);return false;}
  }
  private static boolean launch(){try{
   Class<?> c=XposedHelpers.findClassIfExists("com.google.android.projection.gearhead.service.CarSystemUiControllerService",app.getClassLoader());
