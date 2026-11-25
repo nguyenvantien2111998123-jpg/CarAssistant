@@ -100,15 +100,27 @@ public final class V10ControlReceiver
                 Log.d("CarAssistantSteering", "Ignored duplicate raw media key");
                 return;
             }
-            Log.d("CarAssistantSteering", "Observed raw fallback media key");
+            KeyEvent observed = null;
+            try { observed = intent.getParcelableExtra(Intent.EXTRA_KEY_EVENT); }
+            catch (RuntimeException ignored) { }
+            if (observed != null) {
+                Log.i("CarAssistantSteering", "DIAG_RAW_KEY code="
+                        + KeyEvent.keyCodeToString(observed.getKeyCode())
+                        + " action=" + (observed.getAction() == KeyEvent.ACTION_DOWN ? "DOWN" : "UP")
+                        + " repeat=" + observed.getRepeatCount()
+                        + " device=" + observed.getDeviceId()
+                        + " eventTime=" + observed.getEventTime());
+            } else {
+                Log.w("CarAssistantSteering", "DIAG_RAW_KEY missing KeyEvent extra");
+            }
             getRawKeyObserver(context).handle(intent);
             return;
         }
         if ("com.carassistant.v10.STEERING_VOICE".equals(action)) {
-            Log.i("CarAssistantSteering", "Receiver got STEERING_VOICE");
+            Log.i("CarAssistantSteering", "DIAG_STEERING_VOICE received");
             V10CarActivity activity = V10SessionStore.getCurrentActivity();
             if (activity != null) activity.handleSteeringVoice();
-            else Log.w("CarAssistantSteering", "V10 activity is not active; voice request ignored");
+            else Log.w("CarAssistantSteering", "DIAG_STEERING_VOICE_NO_CAR_ACTIVITY; voice request cannot use current UI");
             return;
         }
         if ("com.carassistant.v10.STEERING_MEDIA_NEXT".equals(action)) {
