@@ -74,12 +74,12 @@ public final class GeminiCommandLogCapture {
             addLocked("Started: " + new Date(startedAt));
             addLocked("Device: " + Build.MANUFACTURER + " " + Build.MODEL
                     + "; Android=" + Build.VERSION.RELEASE + "; SDK=" + Build.VERSION.SDK_INT);
-            addLocked("Trigger sequence: Android Auto connect -> Gemini: Mở app CarAsistant -> wait for Car Activity -> WYN Home/background/popup changes.");
-            addLocked("Sources: root logcat -b all; Gemini/Gearhead/Android Auto/ActivityTaskManager/WindowManager/DisplayManager/CarAsistant/WYN.");
+            addLocked("AUTO TEST PLAN: connect USB Android Auto; test CarAsistant auto-open; keep WYN open until Home and warning popup; test at least two warning changes; test steering double-NEXT with no media and with media.");
+            addLocked("Sources: root logcat -b all plus START device snapshot (DisplayManager, InputManager, Accessibility services, WYN/CarAsistant package versions).");
             addLocked("Trace tag: AACastGeminiTrace; WYN tag: AACastWYNPopupTrace.");
             addLocked("Buffer: newest " + MAX_LINES + " relevant lines; maximum capture duration " + (AUTO_STOP_MS / 1000L) + " seconds.");
             addLocked("Privacy: Intent extra values and private voice/conversation content are not deliberately dumped; metadata and extra keys only.");
-            addLocked("Capture boundary: records begin when this button is pressed; old logcat history is not intentionally cleared.");
+            addLocked("Capture boundary: records begin when this button is pressed; old logcat history is not intentionally cleared. Snapshot and log lines do not intentionally include screen text, voice transcripts, or message contents.");
         }
 
         Thread worker = new Thread(() -> {
@@ -114,6 +114,11 @@ public final class GeminiCommandLogCapture {
         worker.setDaemon(true);
         worker.start();
 
+        Thread snapshot = new Thread(() -> collectDeviceSnapshot("START"),
+                "CarAsistant-Diagnostic-Snapshot");
+        snapshot.setDaemon(true);
+        snapshot.start();
+
         Thread watchdog = new Thread(() -> {
             try { Thread.sleep(AUTO_STOP_MS); } catch (InterruptedException ignored) { return; }
             if (capturing) finish("Tự dừng sau " + (AUTO_STOP_MS / 1000L) + " giây");
@@ -121,6 +126,50 @@ public final class GeminiCommandLogCapture {
         watchdog.setDaemon(true);
         watchdog.start();
         return true;
+    }
+
+
+    /**
+     * Captures a small, privacy-conscious device snapshot through root. It records
+     * display/input/accessibility state and package versions, not screen contents.
+     */
+    private static void collectDeviceSnapshot(String phase) {
+        String[][] commands = new String[][] {
+                {"DISPLAY", "dumpsys display | grep -E 'DisplayDeviceInfo|mDisplayId|state=|mState='"},
+                {"INPUT", "dumpsys input | grep -E 'Device|Sources:|KeyboardType:|KeyLayoutFile:'"},
+                {"ACCESSIBILITY", "dumpsys accessibility | grep -E 'Enabled services|Bound services|ServiceInfo|com.carassistant|com.wynauto'"},
+                {"WYN_PACKAGE", "dumpsys package com.wynauto.wyn | grep -E 'versionName=|versionCode=|enabled='"},
+                {"CARASSISTANT_PACKAGE", "dumpsys package com.carassistant.v10 | grep -E 'versionName=|versionCode=|enabled='"}
+        };
+        append("DEVICE_SNAPSHOT_BEGIN phase=" + phase);
+        for (String[] item : commands) {
+            Process process = null;
+            try {
+                process = new ProcessBuilder("su", "-c", item[1])
+                        .redirectErrorStream(true).start();
+                BufferedReader reader = new BufferedReader(new InputStreamReader(
+                        process.getInputStream(), StandardCharsets.UTF_8));
+                append("SNAPSHOT_SECTION " + item[0]);
+                String line;
+                int count = 0;
+                while ((line = reader.readLine()) != null && count < 100) {
+                    if (capturing) append("SNAPSHOT[" + item[0] + "] " + line);
+                    count++;
+                }
+                reader.close();
+                if (!process.waitFor(8, java.util.concurrent.TimeUnit.SECONDS)) {
+                    process.destroy();
+                    append("SNAPSHOT_TIMEOUT " + item[0]);
+                }
+                append("SNAPSHOT_RESULT " + item[0] + " exit=" + safeExitCode(process)
+                        + " lines=" + count);
+            } catch (Throwable error) {
+                append("SNAPSHOT_ERROR " + item[0] + " "
+                        + error.getClass().getSimpleName() + ":" + error.getMessage());
+                if (process != null) try { process.destroy(); } catch (Throwable ignored) { }
+            }
+        }
+        append("DEVICE_SNAPSHOT_END phase=" + phase);
     }
 
     /** Called only when Android Auto's CarActivity has actually resumed. */
