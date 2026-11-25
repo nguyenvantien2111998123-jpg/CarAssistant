@@ -75,7 +75,10 @@ public final class WynPopupAccessibilityService extends AccessibilityService {
    @Override public void onSuccess(ScreenshotResult s){HardwareBuffer h=null;try{
     h=s.getHardwareBuffer();Bitmap a=Bitmap.wrapHardwareBuffer(h,s.getColorSpace());if(a==null)return;
     Rect q=new Rect(b);if(!q.intersect(0,0,a.getWidth(),a.getHeight()))return;
-    WynWarningStore.setWarning(Bitmap.createBitmap(a,q.left,q.top,q.width(),q.height()));
+    Bitmap popup=Bitmap.createBitmap(a,q.left,q.top,q.width(),q.height());
+    GeminiCommandLogCapture.saveWynPopupSnapshot(popup);
+    WynWarningStore.setWarning(popup);
+    popup.recycle();
     Log.i(TAG,"DIAG_POPUP_SCREENSHOT_CAPTURED bounds="+q+" bitmap="+a.getWidth()+"x"+a.getHeight());
    }catch(Throwable t){Log.w(TAG,"WYN capture failed",t);}finally{if(h!=null)h.close();busy=false;}}
    @Override public void onFailure(int code){busy=false;Log.w(TAG,"WYN screenshot unavailable="+code);}
