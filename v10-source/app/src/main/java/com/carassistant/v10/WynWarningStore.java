@@ -9,7 +9,7 @@ public final class WynWarningStore {
  private static volatile Bitmap warning;
  private WynWarningStore(){}
  public static Bitmap getWarning(){Bitmap b=warning;return b!=null&&!b.isRecycled()?b:null;}
- public static synchronized void setWarning(Bitmap b){if(b!=null&&!b.isRecycled())warning=b.copy(Bitmap.Config.ARGB_8888,false);}
+ public static synchronized void setWarning(Bitmap b){if(b!=null&&!b.isRecycled())warning=b.copy(Bitmap.Config.ARGB_8888,false);MediaSessionBridge.onWynWarningChanged();V10CarActivity.notifyWynWarningChanged();}
  public static Bitmap composeMediaArtwork(Bitmap media){
   Bitmap a=getWarning();if(a==null)return media;int s=512;Bitmap o=Bitmap.createBitmap(s,s,Bitmap.Config.ARGB_8888);
   Canvas c=new Canvas(o);c.drawColor(Color.DKGRAY);Paint p=new Paint(3);
