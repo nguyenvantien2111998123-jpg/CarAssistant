@@ -232,7 +232,7 @@ public final class V10SettingsActivity extends Activity {
                     "LSPosed cần bật module trong các scope: android (system_server), "
                     + "com.google.android.projection.gearhead (Android Auto), "
                     + "com.carassistant.v10 (CarAsistant) và com.wynauto.wyn (WYN). "
-                    + "Không cần bật Google Search. Cấp quyền root/su cho CarAsistant để đọc log và chụp trạng thái hệ thống. Bật Trợ năng WYN của CarAsistant để ghi nhận Popup và tọa độ cửa sổ.");
+                    + "Không cần bật Google Search. Cấp quyền root/su cho CarAsistant để đọc log và chụp trạng thái hệ thống. Bật Trợ năng WYN của CarAsistant để ghi nhận Popup và tọa độ cửa sổ.",
                     12, Color.LTGRAY);
             scopeHint.setPadding(dp(6), 0, dp(6), dp(10));
             body.addView(scopeHint, params(-1, -2));
