@@ -16,6 +16,8 @@ import android.content.pm.PackageManager;
 import android.graphics.Color;
 import android.graphics.drawable.GradientDrawable;
 import android.graphics.drawable.Drawable;
+import android.graphics.drawable.BitmapDrawable;
+import android.graphics.drawable.LayerDrawable;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
@@ -50,6 +52,18 @@ import java.util.Locale;
 
 public final class V10CarActivity
         extends CarActivity {
+    private static volatile V10CarActivity activeCarActivity;
+
+    public static void notifyWynWarningChanged() {
+        V10CarActivity activity = activeCarActivity;
+        if (activity != null) activity.handler.post(activity::updateWynWarningViews);
+    }
+
+    private void updateWynWarningViews() {
+        if (!resumed) return;
+        updateMediaCard(MediaSessionBridge.getSnapshot());
+        updateFloatingTouchWarningIcon();
+    }
 
     private final Handler handler =
             new Handler(Looper.getMainLooper());
@@ -209,6 +223,7 @@ public final class V10CarActivity
         super.onResume();
 
         resumed = true;
+        activeCarActivity = this;
         Log.i("GeminiCommandTrace", "V10CarActivity.onResume - Android Auto CarAsistant entry active");
         GeminiCommandLogCapture.onCarActivityResumed();
 
@@ -881,19 +896,28 @@ public final class V10CarActivity
         if (!MediaSessionBridge.hasAccess(this)) {
             mediaTitle.setText("Bật quyền media");
             mediaArtist.setText("Chạm để cấp quyền đồng bộ trình phát");
-            if (mediaArtwork != null) mediaArtwork.setImageDrawable(null);
+            if (mediaArtwork != null) {
+                Bitmap warningOnly = WynWarningStore.composeMediaArtwork(null);
+                if (warningOnly != null) mediaArtwork.setImageBitmap(warningOnly);
+                else mediaArtwork.setImageDrawable(null);
+            }
             return;
         }
         if (state == null || TextUtils.isEmpty(state.packageName)) {
             mediaTitle.setText("Chưa có media đang phát");
             mediaArtist.setText("Mở YouTube, Zing MP3 hoặc ứng dụng nghe nhạc");
-            if (mediaArtwork != null) mediaArtwork.setImageDrawable(null);
+            if (mediaArtwork != null) {
+                Bitmap warningOnly = WynWarningStore.composeMediaArtwork(null);
+                if (warningOnly != null) mediaArtwork.setImageBitmap(warningOnly);
+                else mediaArtwork.setImageDrawable(null);
+            }
             return;
         }
         mediaTitle.setText(TextUtils.isEmpty(state.title) ? "Đang phát media" : state.title);
         mediaArtist.setText(TextUtils.isEmpty(state.artist) ? state.packageName : state.artist);
         if (mediaArtwork != null) {
-            if (state.artwork != null) mediaArtwork.setImageBitmap(state.artwork);
+            Bitmap artwork = WynWarningStore.composeMediaArtwork(state.artwork);
+            if (artwork != null) mediaArtwork.setImageBitmap(artwork);
             else mediaArtwork.setImageDrawable(null);
         }
     }
@@ -1610,6 +1634,31 @@ private void hideApps() {
     returnToLauncher();
 }
 
+
+    private void updateFloatingTouchWarningIcon() {
+        if (floatingTouchKey == null) return;
+        Bitmap icon = WynWarningStore.makeTouchIcon();
+        if (icon == null) {
+            GradientDrawable base = new GradientDrawable();
+            base.setShape(GradientDrawable.OVAL);
+            base.setColor(Color.rgb(25, 35, 45));
+            base.setStroke(dp(2), Color.rgb(80, 170, 230));
+            floatingTouchKey.setBackground(base);
+            floatingTouchKey.setText("●");
+            return;
+        }
+        GradientDrawable base = new GradientDrawable();
+        base.setShape(GradientDrawable.OVAL);
+        base.setColor(Color.rgb(25, 35, 45));
+        base.setStroke(dp(2), Color.rgb(80, 170, 230));
+        BitmapDrawable image = new BitmapDrawable(getResources(), icon);
+        LayerDrawable layers = new LayerDrawable(new Drawable[]{base, image});
+        layers.setLayerInset(1, dp(7), dp(7), dp(7), dp(7));
+        floatingTouchKey.setBackground(layers);
+        floatingTouchKey.setText("");
+        floatingTouchKey.setContentDescription("Cảnh báo tốc độ WYN; giữ để về Home, kéo để di chuyển");
+    }
+
     private void createFloatingTouchKey() {
     if (floatingTouchKey != null) return;
     floatingTouchKey = new TextView(this);
@@ -1623,6 +1672,7 @@ private void hideApps() {
     bg.setStroke(dp(2), Color.rgb(80, 170, 230));
     floatingTouchKey.setBackground(bg);
     floatingTouchKey.setElevation(dp(60));
+    updateFloatingTouchWarningIcon();
     SharedPreferences prefs = getSharedPreferences("v10_floating_key", MODE_PRIVATE);
     FrameLayout.LayoutParams params = new FrameLayout.LayoutParams(dp(58), dp(58), Gravity.TOP | Gravity.END);
     int savedX = prefs.getInt("x", dp(18));
@@ -2208,6 +2258,7 @@ private void hideTaskSwitcher() {
     public void onPause() {
 
         MediaSessionBridge.removeListener(mediaSessionListener);
+        if (activeCarActivity == this) activeCarActivity = null;
 
         if (keyboardController != null) keyboardController.hide();
         if (voiceAssistantController != null) voiceAssistantController.cancelListening();
