@@ -20,7 +20,7 @@ public final class WynPopupAccessibilityService extends AccessibilityService {
  private static final long CAPTURE_GAP_MS=500L,HOME_WAIT_MS=12000L,HOME_MAX_WAIT_MS=45000L;
  private final Handler main=new Handler(Looper.getMainLooper());
  private boolean busy,homeCheckScheduled;
- private long last,wynFirstSeenAt;
+ private long last,wynFirstSeenAt,lastEventLog;
  private int contentEvents;
  private final Runnable backgroundCheck=new Runnable(){@Override public void run(){
   if(!isAutoBackgroundPending()){homeCheckScheduled=false;return;}
@@ -50,6 +50,14 @@ public final class WynPopupAccessibilityService extends AccessibilityService {
  @Override public void onAccessibilityEvent(AccessibilityEvent e){
   if(e==null||e.getPackageName()==null)return;
   boolean wyn=P.contentEquals(e.getPackageName());
+  if(wyn&&System.currentTimeMillis()-lastEventLog>=1000L){
+   lastEventLog=System.currentTimeMillis();
+   Log.i(TAG,"DIAG_ACCESSIBILITY_EVENT type="+AccessibilityEvent.eventTypeToString(e.getEventType())
+       +" windowId="+e.getWindowId()
+       +" class="+(e.getClassName()==null?"":e.getClassName())
+       +" contentEvents="+contentEvents
+       +" autoBackgroundPending="+isAutoBackgroundPending());
+  }
   if(wyn&&isAutoBackgroundPending()){
    if(e.getEventType()==AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED){
     if(wynFirstSeenAt==0L){wynFirstSeenAt=System.currentTimeMillis();contentEvents=0;}
@@ -68,7 +76,7 @@ public final class WynPopupAccessibilityService extends AccessibilityService {
     h=s.getHardwareBuffer();Bitmap a=Bitmap.wrapHardwareBuffer(h,s.getColorSpace());if(a==null)return;
     Rect q=new Rect(b);if(!q.intersect(0,0,a.getWidth(),a.getHeight()))return;
     WynWarningStore.setWarning(Bitmap.createBitmap(a,q.left,q.top,q.width(),q.height()));
-    Log.i(TAG,"WYN popup pixels captured from live Accessibility window "+q);
+    Log.i(TAG,"DIAG_POPUP_SCREENSHOT_CAPTURED bounds="+q+" bitmap="+a.getWidth()+"x"+a.getHeight());
    }catch(Throwable t){Log.w(TAG,"WYN capture failed",t);}finally{if(h!=null)h.close();busy=false;}}
    @Override public void onFailure(int code){busy=false;Log.w(TAG,"WYN screenshot unavailable="+code);}
   });}catch(Throwable t){busy=false;Log.w(TAG,"WYN screenshot request failed",t);}
@@ -90,6 +98,10 @@ public final class WynPopupAccessibilityService extends AccessibilityService {
   for(AccessibilityWindowInfo w:ws){AccessibilityNodeInfo n=null;try{
    n=w.getRoot();if(n==null||n.getPackageName()==null||!P.contentEquals(n.getPackageName()))continue;
    Rect r=new Rect();w.getBoundsInScreen(r);int a=Math.max(0,r.width())*Math.max(0,r.height());
+   if(a>=10000&&a<=screen/2){
+    Log.i(TAG,"DIAG_POPUP_CANDIDATE bounds="+r+" area="+a+" windowType="+w.getType()
+        +" rootClass="+n.getClassName());
+   }
    if(a>=10000&&a<=screen/2&&a<best){best=a;out=new Rect(r);}
   }finally{if(n!=null)n.recycle();}}
   return out;
