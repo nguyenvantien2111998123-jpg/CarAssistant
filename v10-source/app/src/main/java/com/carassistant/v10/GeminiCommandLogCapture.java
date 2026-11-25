@@ -181,9 +181,6 @@ public final class GeminiCommandLogCapture {
     }
 
     public static void stopByUser() {
-        // Snapshot before closing the stream so the exported file contains the
-        // final display/input/accessibility state after the test sequence.
-        collectDeviceSnapshot("END");
         finish("Người dùng chủ động dừng và xuất dữ liệu chẩn đoán");
     }
 
