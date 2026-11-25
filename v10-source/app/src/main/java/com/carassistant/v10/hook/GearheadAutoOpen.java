@@ -22,7 +22,7 @@ public final class GearheadAutoOpen {
  }};
  private static final Runnable retry=new Runnable(){public void run(){
   if(!connected||requested||app==null)return;
-  if(launch()){requested=true;Log.i(TAG,"CarAsistant launch request sent to Gearhead");H.removeCallbacks(wynRetry);H.postDelayed(wynRetry,3500);}
+  if(launch()){requested=true;Log.i(TAG,"CarAsistant launch request sent to Gearhead");H.removeCallbacks(wynRetry);H.postDelayed(wynRetry,25000);}
   else if(++retries<8)H.postDelayed(this,1500);
   else Log.w(TAG,"Gearhead launch retries exhausted for this connection");
  }};
