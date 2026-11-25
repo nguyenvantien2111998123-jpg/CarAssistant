@@ -1,6 +1,7 @@
 package com.carassistant.v10.aabridge;
 
 import android.os.Build;
+import android.util.Log;
 
 import com.carassistant.v10.AACastDisplay;
 import com.carassistant.v10.hook.DisplayHooks;
@@ -13,6 +14,7 @@ import com.carassistant.v10.hook.OrientationHooks;
 import com.carassistant.v10.hook.PolicyMediaKeyHooks;
 import com.carassistant.v10.hook.SystemMediaKeyHooks;
 import com.carassistant.v10.hook.InstallerSpoof;
+import com.carassistant.v10.hook.WynPopupWindowTrace;
 
 import de.robv.android.xposed.IXposedHookLoadPackage;
 import de.robv.android.xposed.XposedBridge;
@@ -24,6 +26,7 @@ import de.robv.android.xposed.callbacks.XC_LoadPackage;
  * Scope cần bật trong LSPosed:
  *   • android                                  (system_server)
  *   • com.google.android.projection.gearhead   (Android Auto)
+ *   • com.wynauto.wyn                       (WYN warning popup trace)
  */
 public final class AACastBridge implements IXposedHookLoadPackage {
 
@@ -51,11 +54,23 @@ public final class AACastBridge implements IXposedHookLoadPackage {
             return;
         }
 
+        // ---- WYN: read-only popup/window trace; no UI or behavior changes ----
+        if ("com.wynauto.wyn".equals(packageName)) {
+            Log.i("AACastWYNPopupTrace", "PACKAGE_LOAD package=" + packageName
+                    + "; process=" + param.processName + "; pid=" + android.os.Process.myPid());
+            WynPopupWindowTrace.install(param.classLoader);
+            return;
+        }
+
         // ---- Android Auto (và chính app, để mọi code path nhất quán) ----
         if (GEARHEAD.equals(packageName) || SELF.equals(packageName)) {
             InstallerSpoof.hookLegacy(param.classLoader, PLAY);
 
             if (GEARHEAD.equals(packageName)) {
+                Log.i("AACastGeminiTrace", "GEARHEAD_PACKAGE_LOAD package=" + packageName
+                        + "; process=" + param.processName + "; pid=" + android.os.Process.myPid()
+                        + "; module=CarAsistant");
+                XposedBridge.log("[AACastGeminiTrace] GEARHEAD_PACKAGE_LOAD process=" + param.processName);
                 GearheadAllow.install(param.classLoader);
                 GearheadMediaSessionFilter.install();
                 GearheadDockPatcher.install();
