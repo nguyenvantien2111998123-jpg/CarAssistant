@@ -181,7 +181,10 @@ public final class GeminiCommandLogCapture {
     }
 
     public static void stopByUser() {
-        finish("Người dùng chủ động dừng và xuất log");
+        // Snapshot before closing the stream so the exported file contains the
+        // final display/input/accessibility state after the test sequence.
+        collectDeviceSnapshot("END");
+        finish("Người dùng chủ động dừng và xuất dữ liệu chẩn đoán");
     }
 
     private static int safeExitCode(Process process) {
@@ -190,7 +193,10 @@ public final class GeminiCommandLogCapture {
 
     private static boolean isRelevant(String line) {
         String s = line.toLowerCase(Locale.ROOT);
-        return s.contains("aacastgeminitrace")
+        return s.contains("carasistant")
+                || s.contains("carassistantsteering")
+                || s.contains("aacastautopen")
+                || s.contains("aacastgeminitrace")
                 || s.contains("aacastwynpopuptrace")
                 || s.contains("geminicommandtrace")
                 || s.contains("com.wynauto.wyn")
