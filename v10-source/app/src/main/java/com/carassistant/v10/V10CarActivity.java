@@ -3,6 +3,9 @@ package com.carassistant.v10;
 
 import android.Manifest;
 import android.content.ComponentName;
+import android.content.BroadcastReceiver;
+import android.content.Context;
+import android.content.IntentFilter;
 import android.content.SharedPreferences;
 import android.os.SystemClock;
 import android.view.MotionEvent;
@@ -54,6 +57,15 @@ import java.util.Locale;
 public final class V10CarActivity
         extends CarActivity {
     private static volatile V10CarActivity activeCarActivity;
+
+    private final BroadcastReceiver wynDisplaySettingsReceiver = new BroadcastReceiver() {
+        @Override public void onReceive(Context context, Intent intent) {
+            if (!resumed) return;
+            updateMediaCard(MediaSessionBridge.getSnapshot());
+            updateFloatingTouchWarningIcon();
+            MediaSessionBridge.onWynDisplaySettingsChanged();
+        }
+    };
 
     public static void notifyWynWarningChanged() {
         V10CarActivity activity = activeCarActivity;
@@ -213,6 +225,9 @@ public final class V10CarActivity
 
         V10SessionStore
                 .setCurrentActivity(this);
+
+        registerReceiver(wynDisplaySettingsReceiver,
+                new IntentFilter("com.carassistant.v10.ACTION_WYN_DISPLAY_SETTINGS_CHANGED"));
 
         applyChrome();
 
@@ -898,7 +913,7 @@ public final class V10CarActivity
             mediaTitle.setText("Bật quyền media");
             mediaArtist.setText("Chạm để cấp quyền đồng bộ trình phát");
             if (mediaArtwork != null) {
-                Bitmap warningOnly = WynWarningStore.composeMediaArtwork(null);
+                Bitmap warningOnly = WynWarningStore.composeMediaArtwork(null, getConfiguredMediaOverlayPercent());
                 if (warningOnly != null) mediaArtwork.setImageBitmap(warningOnly);
                 else mediaArtwork.setImageDrawable(null);
             }
@@ -917,7 +932,7 @@ public final class V10CarActivity
         mediaTitle.setText(TextUtils.isEmpty(state.title) ? "Đang phát media" : state.title);
         mediaArtist.setText(TextUtils.isEmpty(state.artist) ? state.packageName : state.artist);
         if (mediaArtwork != null) {
-            Bitmap artwork = WynWarningStore.composeMediaArtwork(state.artwork);
+            Bitmap artwork = WynWarningStore.composeMediaArtwork(state.artwork, getConfiguredMediaOverlayPercent());
             if (artwork != null) mediaArtwork.setImageBitmap(artwork);
             else mediaArtwork.setImageDrawable(null);
         }
@@ -1636,9 +1651,22 @@ private void hideApps() {
 }
 
 
+    private int getConfiguredTouchWidthPx() {
+        int widthDp = getSharedPreferences("wyn_display_settings", MODE_PRIVATE)
+                .getInt("touch_width_dp", 78);
+        widthDp = Math.max(48, Math.min(120, widthDp));
+        return dp(widthDp);
+    }
+
+    private int getConfiguredMediaOverlayPercent() {
+        return Math.max(20, Math.min(80, getSharedPreferences(
+                "wyn_display_settings", MODE_PRIVATE).getInt("media_overlay_percent", 52)));
+    }
+
     private void updateFloatingTouchWarningIcon() {
         if (floatingTouchKey == null) return;
         Bitmap icon = WynWarningStore.makeTouchIcon();
+        int configuredWidth = getConfiguredTouchWidthPx();
         ViewGroup.LayoutParams raw = floatingTouchKey.getLayoutParams();
         if (icon == null) {
             GradientDrawable base = new GradientDrawable();
@@ -1649,8 +1677,8 @@ private void hideApps() {
             floatingTouchKey.setText("●");
             if (raw instanceof FrameLayout.LayoutParams) {
                 FrameLayout.LayoutParams params = (FrameLayout.LayoutParams) raw;
-                params.width = dp(58);
-                params.height = dp(58);
+                params.width = configuredWidth;
+                params.height = configuredWidth;
                 floatingTouchKey.setLayoutParams(params);
             }
             return;
@@ -1666,9 +1694,9 @@ private void hideApps() {
                 "Popup cảnh báo WYN đầy đủ; giữ để về Home, kéo để di chuyển");
 
         if (raw instanceof FrameLayout.LayoutParams) {
-            int width = dp(78);
+            int width = configuredWidth;
             float ratio = icon.getHeight() / (float) Math.max(1, icon.getWidth());
-            int height = Math.max(dp(76), Math.min(dp(178), Math.round(width * ratio)));
+            int height = Math.max(dp(48), Math.round(width * ratio));
             FrameLayout.LayoutParams params = (FrameLayout.LayoutParams) raw;
             params.width = width;
             params.height = height;
@@ -1696,7 +1724,9 @@ private void hideApps() {
     floatingTouchKey.setBackground(bg);
     floatingTouchKey.setElevation(dp(60));
     SharedPreferences prefs = getSharedPreferences("v10_floating_key", MODE_PRIVATE);
-    FrameLayout.LayoutParams params = new FrameLayout.LayoutParams(dp(58), dp(58), Gravity.TOP | Gravity.END);
+    int initialTouchSize = getConfiguredTouchWidthPx();
+    FrameLayout.LayoutParams params = new FrameLayout.LayoutParams(
+            initialTouchSize, initialTouchSize, Gravity.TOP | Gravity.END);
     int savedX = prefs.getInt("x", dp(18));
     int savedY = prefs.getInt("y", dp(120));
     params.setMargins(0, savedY, savedX, 0);
@@ -2316,6 +2346,8 @@ private void hideTaskSwitcher() {
     @Override
     public void onDestroy() {
 
+        try { unregisterReceiver(wynDisplaySettingsReceiver); }
+        catch (IllegalArgumentException ignored) { }
         hideTaskSwitcher();
         hideFloatingMenu();
         if (miniAccessEngine != null) {
