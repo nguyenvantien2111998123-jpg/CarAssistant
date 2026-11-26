@@ -1025,9 +1025,9 @@ public final class MediaSessionBridge extends NotificationListenerService {
     }
 
     /**
-     * Silent Media is a transport/keepalive target, not a checkpoint source.
-     * Its session may legitimately omit track identity because it plays one
-     * bundled silent clip; require a live playback state, not title metadata.
+     * Silent Media is a first-class live media source. Like any player it must
+     * expose a live playback state; unlike content players it is excluded only
+     * from durable real-content checkpoint/restore.
      */
     private static boolean isUsableSilentMediaSession(MediaController controller) {
         if (controller == null || !SILENT_MEDIA_PACKAGE.equals(controller.getPackageName())) {
@@ -1055,7 +1055,6 @@ public final class MediaSessionBridge extends NotificationListenerService {
         MediaController checkpointCandidate = null;
         MediaController playingCandidate = null;
         MediaController activeMetadataCandidate = null;
-        MediaController silentMediaCandidate = null;
         String checkpointPackage = getCheckpointPackage(this);
         if (checkpointPackage == null) checkpointPackage = getLastKnownPackage(this);
         String lastPackage = getLastKnownPackage(this);
@@ -1063,24 +1062,26 @@ public final class MediaSessionBridge extends NotificationListenerService {
             for (MediaController candidate : controllers) {
                 if (candidate == null || getPackageName().equals(candidate.getPackageName())) continue;
                 PlaybackState candidateState = candidate.getPlaybackState();
-                if (isInternalMediaPackage(candidate.getPackageName())) {
-                    // Silent Media is a legitimate transport target for CarAsistant Media,
-                    // but it must never become a durable source/checkpoint or restore target.
-                    if (silentMediaCandidate == null && isUsableSilentMediaSession(candidate)) {
-                        silentMediaCandidate = candidate;
-                        Log.i(TAG, "Silent Media accepted as active transport target; "
-                                + "excluded from media checkpoint/restore");
+                boolean silentMedia = isInternalMediaPackage(candidate.getPackageName());
+                // Silent Media participates in exactly the same live-session selection
+                // as third-party players. The only exception is persistence: it is not
+                // a real content source and must never replace a YouTube/Zing checkpoint.
+                if (silentMedia) {
+                    if (!isUsableSilentMediaSession(candidate)) continue;
+                } else {
+                    if (checkpointPackage != null
+                            && checkpointPackage.equals(candidate.getPackageName())) {
+                        checkpointCandidate = candidate;
                     }
-                    continue;
+                    if (!isUsableExternalSession(candidate)) continue;
+                    if (savedCandidate == null && lastPackage != null
+                            && lastPackage.equals(candidate.getPackageName())) {
+                        savedCandidate = candidate;
+                    }
                 }
-                if (checkpointPackage != null && checkpointPackage.equals(candidate.getPackageName())) {
-                    checkpointCandidate = candidate;
-                }
-                if (!isUsableExternalSession(candidate)) continue;
                 PlaybackState state = candidateState;
-                if (savedCandidate == null && lastPackage != null
-                        && lastPackage.equals(candidate.getPackageName())) savedCandidate = candidate;
-                if (playingCandidate == null && state.getState() == PlaybackState.STATE_PLAYING) {
+                if (playingCandidate == null && state != null
+                        && state.getState() == PlaybackState.STATE_PLAYING) {
                     playingCandidate = candidate;
                 }
                 if (activeMetadataCandidate == null) activeMetadataCandidate = candidate;
@@ -1093,7 +1094,6 @@ public final class MediaSessionBridge extends NotificationListenerService {
         if (playingCandidate != null) chosen = playingCandidate;
         else if (activeMetadataCandidate != null) chosen = activeMetadataCandidate;
         else if (savedCandidate != null) chosen = savedCandidate;
-        else if (silentMediaCandidate != null) chosen = silentMediaCandidate;
 
         MediaController previous = activeController;
         if (previous != chosen) {
