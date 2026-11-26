@@ -79,8 +79,10 @@ public final class WynWarningStore {
         float height = destination.height() / scale;
         float left = (bitmap.getWidth() - width) / 2f;
         float top = (bitmap.getHeight() - height) / 2f;
-        canvas.drawBitmap(bitmap,
-                new android.graphics.RectF(left, top, left + width, top + height),
-                destination, paint);
+        android.graphics.Rect source = new android.graphics.Rect(
+                Math.max(0, (int) left), Math.max(0, (int) top),
+                Math.min(bitmap.getWidth(), (int) Math.ceil(left + width)),
+                Math.min(bitmap.getHeight(), (int) Math.ceil(top + height)));
+        canvas.drawBitmap(bitmap, source, destination, paint);
     }
 }
