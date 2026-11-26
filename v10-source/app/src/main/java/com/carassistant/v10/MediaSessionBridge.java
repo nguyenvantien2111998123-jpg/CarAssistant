@@ -58,6 +58,12 @@ public final class MediaSessionBridge extends NotificationListenerService {
     private static final CopyOnWriteArrayList<Listener> LISTENERS = new CopyOnWriteArrayList<>();
 
     private static volatile Snapshot snapshot = Snapshot.empty();
+    private static volatile MediaSessionBridge instance;
+
+    public static void onWynWarningChanged() {
+        MediaSessionBridge service = instance;
+        if (service != null) MAIN.post(() -> service.updateMirrorSession(snapshot));
+    }
     private static volatile MediaController activeController;
     private static volatile MediaController checkpointController;
     private static volatile long lastCheckpointPosition;
@@ -696,23 +702,28 @@ public final class MediaSessionBridge extends NotificationListenerService {
                     getSharedPreferences(RESUME_PREFS, Context.MODE_PRIVATE);
             long savedDuration = Math.max(0L, prefs.getLong(CHECKPOINT_DURATION, 0L));
             long savedPosition = getAdjustedCheckpointPosition(this);
+            Bitmap warning = WynWarningStore.getWarning();
             if (!TextUtils.isEmpty(savedTitle)) {
-                session.setMetadata(new MediaMetadata.Builder()
+                MediaMetadata.Builder saved = new MediaMetadata.Builder()
                         .putString(MediaMetadata.METADATA_KEY_TITLE, savedTitle)
                         .putString(MediaMetadata.METADATA_KEY_ARTIST,
                                 TextUtils.isEmpty(savedArtist) ? savedPackage : savedArtist)
                         .putString(MediaMetadata.METADATA_KEY_ALBUM,
                                 TextUtils.isEmpty(savedPackage) ? "CarAsistant" : savedPackage)
-                        .putLong(MediaMetadata.METADATA_KEY_DURATION, savedDuration)
-                        .build());
+                        .putLong(MediaMetadata.METADATA_KEY_DURATION, savedDuration);
+                if (warning != null) saved.putBitmap(MediaMetadata.METADATA_KEY_ALBUM_ART, warning)
+                        .putBitmap(MediaMetadata.METADATA_KEY_DISPLAY_ICON, warning);
+                session.setMetadata(saved.build());
                 // Show the saved item as paused until its source session is verified.
                 session.setPlaybackState(buildMirrorPlaybackState(false, savedPosition, savedDuration));
             } else {
-                session.setMetadata(new MediaMetadata.Builder()
+                MediaMetadata.Builder empty = new MediaMetadata.Builder()
                         .putString(MediaMetadata.METADATA_KEY_TITLE, "CarAsistant Media")
                         .putString(MediaMetadata.METADATA_KEY_ARTIST, "Trình điều khiển media")
-                        .putString(MediaMetadata.METADATA_KEY_ALBUM, "CarAsistant")
-                        .build());
+                        .putString(MediaMetadata.METADATA_KEY_ALBUM, "CarAsistant");
+                if (warning != null) empty.putBitmap(MediaMetadata.METADATA_KEY_ALBUM_ART, warning)
+                        .putBitmap(MediaMetadata.METADATA_KEY_DISPLAY_ICON, warning);
+                session.setMetadata(empty.build());
                 session.setPlaybackState(buildMirrorPlaybackState(false, 0L, 0L));
             }
             session.setActive(true);
@@ -726,8 +737,10 @@ public final class MediaSessionBridge extends NotificationListenerService {
                         TextUtils.isEmpty(state.artist) ? state.packageName : state.artist)
                 .putString(MediaMetadata.METADATA_KEY_ALBUM, state.packageName)
                 .putLong(MediaMetadata.METADATA_KEY_DURATION, Math.max(0L, state.duration));
-        Bitmap artwork = safeMirrorArtwork(state.artwork);
+        Bitmap warning = WynWarningStore.getWarning();
+        Bitmap artwork = safeMirrorArtwork(WynWarningStore.composeMediaArtwork(state.artwork));
         if (artwork != null) metadata.putBitmap(MediaMetadata.METADATA_KEY_ALBUM_ART, artwork);
+        if (warning != null) metadata.putBitmap(MediaMetadata.METADATA_KEY_DISPLAY_ICON, safeMirrorArtwork(warning));
         session.setMetadata(metadata.build());
 
         session.setPlaybackState(buildMirrorPlaybackState(
@@ -772,6 +785,7 @@ public final class MediaSessionBridge extends NotificationListenerService {
     @Override
     public void onListenerConnected() {
         super.onListenerConnected();
+        instance = this;
         ensureMirrorSession();
         ensureKeepAliveMediaSession();
         // Publish the CarAsistant controller before querying source sessions. This closes
@@ -836,6 +850,7 @@ public final class MediaSessionBridge extends NotificationListenerService {
             keepAliveMediaSession = null;
         }
         releaseMirrorSession();
+        if (instance == this) instance = null;
         super.onDestroy();
     }
 

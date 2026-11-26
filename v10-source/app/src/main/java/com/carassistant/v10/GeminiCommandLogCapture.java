@@ -1,6 +1,7 @@
 package com.carassistant.v10;
 
 import android.content.Context;
+import android.graphics.Bitmap;
 import android.os.Build;
 import android.util.Log;
 
@@ -13,6 +14,8 @@ import java.text.SimpleDateFormat;
 import java.util.ArrayDeque;
 import java.util.Date;
 import java.util.Locale;
+import java.util.zip.ZipEntry;
+import java.util.zip.ZipOutputStream;
 
 /**
  * One-shot diagnostic recorder for Gemini -> Gearhead -> Android Auto Car Activity,
@@ -36,6 +39,7 @@ public final class GeminiCommandLogCapture {
     private static volatile File latestFile;
     private static volatile Process logcatProcess;
     private static volatile Context appContext;
+    private static volatile long lastWynImageAt;
 
     private GeminiCommandLogCapture() { }
 
@@ -51,7 +55,9 @@ public final class GeminiCommandLogCapture {
         File base = context.getExternalFilesDir(null);
         if (base == null) base = context.getFilesDir();
         File dir = new File(base, "diagnostics");
-        File[] files = dir.listFiles((d, name) -> (name.startsWith("gemini-command-") || name.startsWith("carassistant-unified-")) && name.endsWith(".txt"));
+        File[] files = dir.listFiles((d, name) ->
+                (name.startsWith("carassistant-diagnostic-") && name.endsWith(".zip"))
+                        || (name.startsWith("gemini-command-") || name.startsWith("carassistant-unified-")) && name.endsWith(".txt"));
         if (files == null || files.length == 0) return null;
         File newest = files[0];
         for (File candidate : files) if (candidate.lastModified() > newest.lastModified()) newest = candidate;
@@ -63,6 +69,8 @@ public final class GeminiCommandLogCapture {
         synchronized (LOCK) {
             if (capturing) return false;
             appContext = context.getApplicationContext();
+            lastWynImageAt = 0L;
+            clearOldWynCaptureImages();
             BUFFER.clear();
             launchSeen = false;
             linesSeen = 0L;
@@ -74,12 +82,12 @@ public final class GeminiCommandLogCapture {
             addLocked("Started: " + new Date(startedAt));
             addLocked("Device: " + Build.MANUFACTURER + " " + Build.MODEL
                     + "; Android=" + Build.VERSION.RELEASE + "; SDK=" + Build.VERSION.SDK_INT);
-            addLocked("Trigger sequence: Android Auto connect -> Gemini: Mở app CarAsistant -> wait for Car Activity -> WYN Home/background/popup changes.");
-            addLocked("Sources: root logcat -b all; Gemini/Gearhead/Android Auto/ActivityTaskManager/WindowManager/DisplayManager/CarAsistant/WYN.");
+            addLocked("AUTO TEST PLAN: connect USB Android Auto; test CarAsistant auto-open; keep WYN open until Home and warning popup; test at least two warning changes; test steering double-NEXT with no media and with media.");
+            addLocked("Sources: root logcat -b all plus START device snapshot (DisplayManager, InputManager, Accessibility services, WYN/CarAsistant package versions).");
             addLocked("Trace tag: AACastGeminiTrace; WYN tag: AACastWYNPopupTrace.");
             addLocked("Buffer: newest " + MAX_LINES + " relevant lines; maximum capture duration " + (AUTO_STOP_MS / 1000L) + " seconds.");
             addLocked("Privacy: Intent extra values and private voice/conversation content are not deliberately dumped; metadata and extra keys only.");
-            addLocked("Capture boundary: records begin when this button is pressed; old logcat history is not intentionally cleared.");
+            addLocked("Capture boundary: records begin when this button is pressed; old logcat history is not intentionally cleared. Snapshot and log lines do not intentionally include screen text, voice transcripts, or message contents.");
         }
 
         Thread worker = new Thread(() -> {
@@ -114,6 +122,11 @@ public final class GeminiCommandLogCapture {
         worker.setDaemon(true);
         worker.start();
 
+        Thread snapshot = new Thread(() -> collectDeviceSnapshot("START"),
+                "CarAsistant-Diagnostic-Snapshot");
+        snapshot.setDaemon(true);
+        snapshot.start();
+
         Thread watchdog = new Thread(() -> {
             try { Thread.sleep(AUTO_STOP_MS); } catch (InterruptedException ignored) { return; }
             if (capturing) finish("Tự dừng sau " + (AUTO_STOP_MS / 1000L) + " giây");
@@ -121,6 +134,90 @@ public final class GeminiCommandLogCapture {
         watchdog.setDaemon(true);
         watchdog.start();
         return true;
+    }
+
+
+
+    /** Save only the WYN popup crop (never the full phone screen) while a diagnostic capture is active. */
+    public static void saveWynPopupSnapshot(Bitmap bitmap) {
+        if (!capturing || bitmap == null) return;
+        long now = System.currentTimeMillis();
+        if (now - lastWynImageAt < 1500L) return;
+        lastWynImageAt = now;
+        Context context = appContext;
+        if (context == null) return;
+        File base = context.getExternalFilesDir(null);
+        if (base == null) base = context.getFilesDir();
+        File dir = new File(base, "diagnostics");
+        try {
+            if (!dir.exists() && !dir.mkdirs()) return;
+            File[] existing = dir.listFiles((d, name) -> name.startsWith("capture-wyn-") && name.endsWith(".jpg"));
+            if (existing != null && existing.length >= 12) return;
+            String stamp = new SimpleDateFormat("HHmmss-SSS", Locale.US).format(new Date(now));
+            File image = new File(dir, "capture-wyn-" + stamp + ".jpg");
+            try (FileOutputStream out = new FileOutputStream(image)) {
+                bitmap.compress(Bitmap.CompressFormat.JPEG, 82, out);
+                out.flush();
+            }
+            append("DIAG_WYN_IMAGE_SAVED file=" + image.getName()
+                    + " size=" + bitmap.getWidth() + "x" + bitmap.getHeight());
+        } catch (Throwable error) {
+            append("DIAG_WYN_IMAGE_SAVE_FAILED " + error.getClass().getSimpleName()
+                    + ":" + error.getMessage());
+        }
+    }
+
+    private static void clearOldWynCaptureImages() {
+        Context context = appContext;
+        if (context == null) return;
+        File base = context.getExternalFilesDir(null);
+        if (base == null) base = context.getFilesDir();
+        File dir = new File(base, "diagnostics");
+        File[] old = dir.listFiles((d, name) -> name.startsWith("capture-wyn-") && name.endsWith(".jpg"));
+        if (old != null) for (File file : old) try { file.delete(); } catch (Throwable ignored) { }
+    }
+
+    /**
+     * Captures a small, privacy-conscious device snapshot through root. It records
+     * display/input/accessibility state and package versions, not screen contents.
+     */
+    private static void collectDeviceSnapshot(String phase) {
+        String[][] commands = new String[][] {
+                {"DISPLAY", "dumpsys display | grep -E 'DisplayDeviceInfo|mDisplayId|state=|mState='"},
+                {"INPUT", "dumpsys input | grep -E 'Device|Sources:|KeyboardType:|KeyLayoutFile:'"},
+                {"ACCESSIBILITY", "dumpsys accessibility | grep -E 'Enabled services|Bound services|ServiceInfo|com.carassistant|com.wynauto'"},
+                {"WYN_PACKAGE", "dumpsys package com.wynauto.wyn | grep -E 'versionName=|versionCode=|enabled='"},
+                {"CARASSISTANT_PACKAGE", "dumpsys package com.carassistant.v10 | grep -E 'versionName=|versionCode=|enabled='"}
+        };
+        append("DEVICE_SNAPSHOT_BEGIN phase=" + phase);
+        for (String[] item : commands) {
+            Process process = null;
+            try {
+                process = new ProcessBuilder("su", "-c", item[1])
+                        .redirectErrorStream(true).start();
+                BufferedReader reader = new BufferedReader(new InputStreamReader(
+                        process.getInputStream(), StandardCharsets.UTF_8));
+                append("SNAPSHOT_SECTION " + item[0]);
+                String line;
+                int count = 0;
+                while ((line = reader.readLine()) != null && count < 100) {
+                    if (capturing) append("SNAPSHOT[" + item[0] + "] " + line);
+                    count++;
+                }
+                reader.close();
+                if (!process.waitFor(8, java.util.concurrent.TimeUnit.SECONDS)) {
+                    process.destroy();
+                    append("SNAPSHOT_TIMEOUT " + item[0]);
+                }
+                append("SNAPSHOT_RESULT " + item[0] + " exit=" + safeExitCode(process)
+                        + " lines=" + count);
+            } catch (Throwable error) {
+                append("SNAPSHOT_ERROR " + item[0] + " "
+                        + error.getClass().getSimpleName() + ":" + error.getMessage());
+                if (process != null) try { process.destroy(); } catch (Throwable ignored) { }
+            }
+        }
+        append("DEVICE_SNAPSHOT_END phase=" + phase);
     }
 
     /** Called only when Android Auto's CarActivity has actually resumed. */
@@ -132,7 +229,7 @@ public final class GeminiCommandLogCapture {
     }
 
     public static void stopByUser() {
-        finish("Người dùng chủ động dừng và xuất log");
+        finish("Người dùng chủ động dừng và xuất dữ liệu chẩn đoán");
     }
 
     private static int safeExitCode(Process process) {
@@ -141,7 +238,10 @@ public final class GeminiCommandLogCapture {
 
     private static boolean isRelevant(String line) {
         String s = line.toLowerCase(Locale.ROOT);
-        return s.contains("aacastgeminitrace")
+        return s.contains("carasistant")
+                || s.contains("carassistantsteering")
+                || s.contains("aacastautopen")
+                || s.contains("aacastgeminitrace")
                 || s.contains("aacastwynpopuptrace")
                 || s.contains("geminicommandtrace")
                 || s.contains("com.wynauto.wyn")
@@ -252,11 +352,30 @@ public final class GeminiCommandLogCapture {
                 }
             }
             stream.flush();
-            latestFile = output;
-            Log.i(TAG, "Unified diagnostic saved: " + output.getAbsolutePath()
-                    + "; bytes=" + output.length());
+            File bundle = new File(dir, "carassistant-diagnostic-" + stamp + ".zip");
+            try (ZipOutputStream zip = new ZipOutputStream(new FileOutputStream(bundle))) {
+                addFileToZip(zip, output, output.getName());
+                File[] images = dir.listFiles((d, name) -> name.startsWith("capture-wyn-") && name.endsWith(".jpg"));
+                if (images != null) {
+                    for (File image : images) addFileToZip(zip, image, "wyn-popup/" + image.getName());
+                }
+            }
+            latestFile = bundle;
+            Log.i(TAG, "Unified diagnostic bundle saved: " + bundle.getAbsolutePath()
+                    + "; bytes=" + bundle.length() + "; textBytes=" + output.length());
         } catch (Exception error) {
             Log.e(TAG, "Cannot save unified diagnostic log", error);
         }
+    }
+
+    private static void addFileToZip(ZipOutputStream zip, File file, String entryName)
+            throws java.io.IOException {
+        zip.putNextEntry(new ZipEntry(entryName));
+        try (java.io.FileInputStream in = new java.io.FileInputStream(file)) {
+            byte[] buffer = new byte[8192];
+            int count;
+            while ((count = in.read(buffer)) != -1) zip.write(buffer, 0, count);
+        }
+        zip.closeEntry();
     }
 }
