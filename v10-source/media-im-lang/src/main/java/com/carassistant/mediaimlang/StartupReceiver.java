@@ -11,6 +11,11 @@ public final class StartupReceiver extends BroadcastReceiver {
 
     @Override public void onReceive(Context context, Intent intent) {
         String action = intent == null ? "" : intent.getAction();
+        if ("com.carassistant.v10.ACTION_AA_DISCONNECTED".equals(action)) {
+            context.stopService(new Intent(context, SilentMediaBrowserService.class));
+            Log.i(TAG, "Stopped Media Im Lang after Android Auto disconnected");
+            return;
+        }
         if (!Intent.ACTION_BOOT_COMPLETED.equals(action)
                 && !Intent.ACTION_MY_PACKAGE_REPLACED.equals(action)
                 && !"com.carassistant.v10.ACTION_AA_CONNECTED".equals(action)) return;
