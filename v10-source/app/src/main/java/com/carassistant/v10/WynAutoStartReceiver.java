@@ -1,5 +1,6 @@
 package com.carassistant.v10;
 
+import android.app.Activity;
 import android.content.BroadcastReceiver;
 import android.content.Context;
 import android.content.Intent;
@@ -21,10 +22,10 @@ public final class WynAutoStartReceiver extends BroadcastReceiver {
             try {
                 String output = shell.run(15,
                         "am start --user 0 --display 0 -n 'com.wynauto.wyn/.MainActivity'");
-                pending.setResultCode(RESULT_OK);
+                pending.setResultCode(Activity.RESULT_OK);
                 Log.i(TAG, "WYN root launch accepted on phone display 0; auto-background armed; output=" + output);
             } catch (Throwable error) {
-                pending.setResultCode(RESULT_CANCELED);
+                pending.setResultCode(Activity.RESULT_CANCELED);
                 Log.e(TAG, "WYN root launch failed; auto-background remains armed for retry", error);
             } finally {
                 shell.destroy();
