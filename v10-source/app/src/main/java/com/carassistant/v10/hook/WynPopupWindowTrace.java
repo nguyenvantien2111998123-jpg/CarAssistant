@@ -336,7 +336,7 @@ public final class WynPopupWindowTrace {
                 if (!seen && distinct < colors.length) colors[distinct++] = color;
             }
         }
-        return visible >= 8 && distinct >= 3;
+        return visible >= 8 && distinct >= 2;
     }
 
     /** Hash every popup pixel so text-only speed-limit/alert changes are never missed. */
