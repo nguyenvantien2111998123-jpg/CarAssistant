@@ -75,7 +75,7 @@ public final class MediaAutoRestoreService extends Service {
                     .getBoolean("aa_connected", false);
             if (!connected) {
                 Log.i(TAG, "AA notification did not remain present for stabilization window");
-                    stopForeground(true);
+                stopForeground(true);
                 stopSelf();
                 return;
             }
@@ -307,7 +307,6 @@ public final class MediaAutoRestoreService extends Service {
             handler.removeCallbacks(restoreAttempt);
             handler.removeCallbacks(disconnectMonitor);
             handler.removeCallbacks(connectionStabilizer);
-            HeadlessProjectionHost.releaseIfHeadless(this);
             stopForeground(true);
             stopSelf(startId);
             return START_NOT_STICKY;
