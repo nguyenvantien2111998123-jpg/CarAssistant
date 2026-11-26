@@ -65,6 +65,17 @@ public final class MediaSessionBridge extends NotificationListenerService {
         MediaSessionBridge service = instance;
         if (service != null) MAIN.post(() -> service.updateMirrorSession(snapshot));
     }
+
+    public static void onWynDisplaySettingsChanged() {
+        MediaSessionBridge service = instance;
+        if (service != null) MAIN.post(() -> service.updateMirrorSession(snapshot));
+    }
+
+    private int getWynMediaOverlayPercent() {
+        return Math.max(20, Math.min(80, getSharedPreferences(
+                "wyn_display_settings", Context.MODE_PRIVATE)
+                .getInt("media_overlay_percent", 52)));
+    }
     private static volatile MediaController activeController;
     private static volatile MediaController checkpointController;
     private static volatile long lastCheckpointPosition;
@@ -763,7 +774,7 @@ public final class MediaSessionBridge extends NotificationListenerService {
                 .putString(MediaMetadata.METADATA_KEY_ALBUM, state.packageName)
                 .putLong(MediaMetadata.METADATA_KEY_DURATION, Math.max(0L, state.duration));
         Bitmap warning = WynWarningStore.getWarning();
-        Bitmap artwork = safeMirrorArtwork(WynWarningStore.composeMediaArtwork(state.artwork));
+        Bitmap artwork = safeMirrorArtwork(WynWarningStore.composeMediaArtwork(state.artwork, getWynMediaOverlayPercent()));
         if (artwork != null) metadata.putBitmap(MediaMetadata.METADATA_KEY_ALBUM_ART, artwork);
         if (warning != null) {
             // Keep the widget/icon channels dedicated to the full WYN popup. The
