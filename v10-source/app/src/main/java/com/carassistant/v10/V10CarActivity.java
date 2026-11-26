@@ -8,6 +8,7 @@ import android.content.Context;
 import android.content.IntentFilter;
 import android.content.SharedPreferences;
 import android.os.SystemClock;
+import android.os.Build;
 import android.view.MotionEvent;
 import android.view.ViewConfiguration;
 import android.view.ViewGroup;
@@ -226,8 +227,14 @@ public final class V10CarActivity
         V10SessionStore
                 .setCurrentActivity(this);
 
-        registerReceiver(wynDisplaySettingsReceiver,
-                new IntentFilter("com.carassistant.v10.ACTION_WYN_DISPLAY_SETTINGS_CHANGED"));
+        IntentFilter wynSettingsFilter =
+                new IntentFilter("com.carassistant.v10.ACTION_WYN_DISPLAY_SETTINGS_CHANGED");
+        if (Build.VERSION.SDK_INT >= 33) {
+            registerReceiver(wynDisplaySettingsReceiver, wynSettingsFilter,
+                    Context.RECEIVER_NOT_EXPORTED);
+        } else {
+            registerReceiver(wynDisplaySettingsReceiver, wynSettingsFilter);
+        }
 
         applyChrome();
 
