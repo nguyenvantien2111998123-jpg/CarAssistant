@@ -31,7 +31,11 @@ public final class WynPopupAccessibilityService extends AccessibilityService {
         AccessibilityNodeInfo root = null;
         try {
             root = getRootInActiveWindow();
-            boolean foreground = root != null && root.getPackageName() != null
+            if (root == null) {
+                Log.d(TAG, "WYN active-window root not ready; waiting for the next real event");
+                return;
+            }
+            boolean foreground = root.getPackageName() != null
                     && WYN_PACKAGE.contentEquals(root.getPackageName());
             long elapsed = wynFirstSeenAt == 0L ? 0L
                     : System.currentTimeMillis() - wynFirstSeenAt;
