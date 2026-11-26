@@ -654,11 +654,6 @@ public final class MediaSessionBridge extends NotificationListenerService {
         }, MAIN);
     }
 
-    private boolean isAndroidAutoConnected() {
-        return getSharedPreferences(RESUME_PREFS, Context.MODE_PRIVATE)
-                .getBoolean(AA_CONNECTED_PREF, false);
-    }
-
     private void updateMirrorSession(Snapshot state) {
         MediaSession session = mirrorSession;
         if (session == null) return;
@@ -937,8 +932,7 @@ public final class MediaSessionBridge extends NotificationListenerService {
                         .remove(AA_NOTIFICATION_ID_PREF)
                         .remove(AA_NOTIFICATION_TAG_PREF)
                         .apply();
-                syncFallbackPlayer(false);
-                Log.i(TAG, "Android Auto connection notification removed; headless restore stop requested");
+                Log.i(TAG, "Android Auto connection notification removed; media restore stop requested");
             }
         }
         refreshFromManager();
