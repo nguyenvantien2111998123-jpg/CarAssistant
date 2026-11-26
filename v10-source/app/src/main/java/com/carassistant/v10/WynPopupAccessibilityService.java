@@ -20,7 +20,7 @@ public final class WynPopupAccessibilityService extends AccessibilityService {
     private static final long CHECK_INTERVAL_MS = 1500L;
     private static final long MAX_WAIT_MS = 60000L;
     private static final int MIN_CONTENT_EVENTS = 8;
-    private static final int MIN_ACCESSIBILITY_NODES = 3;
+    private static final int MIN_ACCESSIBILITY_NODES = 1;
     private static final int MAX_TREE_NODES = 300;
 
     private final Handler main = new Handler(Looper.getMainLooper());
@@ -137,8 +137,12 @@ public final class WynPopupAccessibilityService extends AccessibilityService {
         String descriptionValue = description == null ? "" : description.toString();
         String classValue = className == null ? "" : className.toString();
 
-        signature.append(classValue).append('|').append(textValue).append('|')
-                .append(descriptionValue).append('|').append(node.getChildCount()).append(';');
+        // Fingerprint structure rather than live text values: WYN's speed display
+        // can change continuously even after its Home/data layer is ready.
+        signature.append(classValue).append('|').append(node.isClickable()).append('|')
+                .append(node.isScrollable()).append('|').append(!textValue.isEmpty()).append('|')
+                .append(!descriptionValue.isEmpty()).append('|')
+                .append(node.getChildCount()).append(';');
         if (containsLoadingText(textValue) || containsLoadingText(descriptionValue)
                 || classValue.contains("ProgressBar")) loading[0] = true;
 
@@ -172,8 +176,10 @@ public final class WynPopupAccessibilityService extends AccessibilityService {
         long now = System.currentTimeMillis();
         if (wynFirstSeenAt == 0L && isPending()) wynFirstSeenAt = now;
         int type = event.getEventType();
-        if (type == AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED
-                || type == AccessibilityEvent.TYPE_WINDOWS_CHANGED) contentEvents++;
+        // Count all WYN UI lifecycle/content events delivered by the declared service
+        // filter, not just content changes; Flutter may report readiness through
+        // window-state events while its SurfaceView owns most visual rendering.
+        contentEvents++;
 
         if (now - lastEventLog >= 2000L) {
             lastEventLog = now;
