@@ -21,13 +21,14 @@ public final class WynPopupAccessibilityService extends AccessibilityService {
 
     private final Runnable backgroundCheck = new Runnable() {
         @Override public void run() {
-            if (!isAutoBackgroundPending()) { homeCheckScheduled = false; return; }
+            if (!isPending()) { homeCheckScheduled = false; return; }
             AccessibilityNodeInfo root = null;
             try {
                 root = getRootInActiveWindow();
                 boolean foreground = root != null && root.getPackageName() != null
                         && WYN_PACKAGE.contentEquals(root.getPackageName());
-                long elapsed = System.currentTimeMillis() - wynFirstSeenAt;
+                long elapsed = wynFirstSeenAt == 0L ? 0L
+                        : System.currentTimeMillis() - wynFirstSeenAt;
                 if (foreground && contentEvents >= 2 && elapsed >= HOME_WAIT_MS) {
                     boolean accepted = performGlobalAction(GLOBAL_ACTION_HOME);
                     Log.i(TAG, "WYN Home stabilized; background request accepted=" + accepted
