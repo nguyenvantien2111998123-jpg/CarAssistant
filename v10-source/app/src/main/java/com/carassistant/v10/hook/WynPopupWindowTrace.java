@@ -97,8 +97,9 @@ public final class WynPopupWindowTrace {
                         Log.i(TAG, action + " view=" + view.getClass().getName());
                         return;
                     }
-                    logWindow(action, view, findLayoutParams(p.args));
-                    if ("ADD".equals(action)) startCapture(view);
+                    WindowManager.LayoutParams attrs = findLayoutParams(p.args);
+                    logWindow(action, view, attrs);
+                    if (isWynWarningPopup(view, attrs)) startCapture(view);
                 }
             });
         } catch (Throwable error) {
@@ -115,6 +116,38 @@ public final class WynPopupWindowTrace {
             return (WindowManager.LayoutParams) arg;
         return null;
     }
+    /**
+     * WYN's confirmed warning popup is a separate TYPE_APPLICATION_OVERLAY window
+     * (2038), class jm.n, roughly 230x507. Never capture the Activity window or
+     * another Flutter SurfaceView: that was the source of startup-screen crops.
+     */
+    private static boolean isWynWarningPopup(View view, WindowManager.LayoutParams attrs) {
+        if (view == null || attrs == null
+                || attrs.type != WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY) return false;
+        try {
+            if (!"com.wynauto.wyn".equals(view.getContext().getPackageName())) return false;
+            String className = view.getClass().getName();
+            if ("jm.n".equals(className) || containsPopupClass(view)) return true;
+            int width = view.getWidth() > 0 ? view.getWidth() : attrs.width;
+            int height = view.getHeight() > 0 ? view.getHeight() : attrs.height;
+            return width >= 80 && height >= 120 && height >= width * 1.35f;
+        } catch (Throwable ignored) {
+            return false;
+        }
+    }
+
+    private static boolean containsPopupClass(View view) {
+        if ("jm.n".equals(view.getClass().getName())) return true;
+        if (view instanceof ViewGroup) {
+            ViewGroup group = (ViewGroup) view;
+            for (int i = 0; i < group.getChildCount(); i++) {
+                View child = group.getChildAt(i);
+                if (child != null && containsPopupClass(child)) return true;
+            }
+        }
+        return false;
+    }
+
     private static void startCapture(View root) {
         synchronized (LOOPS) {
             if (LOOPS.containsKey(root)) return;
@@ -134,6 +167,7 @@ public final class WynPopupWindowTrace {
         final WeakReference<View> root;
         long lastHash = Long.MIN_VALUE;
         long lastRequest;
+        boolean captureInFlight;
         boolean stopped;
         CaptureLoop(View view) { root = new WeakReference<>(view); }
         void stop() { stopped = true; MAIN.removeCallbacks(this); }
@@ -145,12 +179,14 @@ public final class WynPopupWindowTrace {
                 return;
             }
             long now = SystemClock.elapsedRealtime();
-            if (view.getVisibility() == View.VISIBLE && view.getWidth() >= 80
-                    && view.getHeight() >= 80 && now - lastRequest >= 450L) {
+            if (view.getVisibility() == View.VISIBLE && view.isShown()
+                    && view.getWidth() >= 80 && view.getHeight() >= 120
+                    && !captureInFlight && now - lastRequest >= 600L) {
                 lastRequest = now;
+                captureInFlight = true;
                 capture(view, this);
             }
-            MAIN.postDelayed(this, 450L);
+            MAIN.postDelayed(this, 600L);
         }
     }
 
@@ -163,7 +199,11 @@ public final class WynPopupWindowTrace {
             PixelCopy.request(surface, bitmap, result -> {
                 if (result == PixelCopy.SUCCESS) publish(root.getContext(), bitmap, loop,
                         "SurfaceView:" + surface.getClass().getName());
-                else { bitmap.recycle(); Log.d(TAG, "PixelCopy result=" + result); }
+                else {
+                    bitmap.recycle();
+                    loop.captureInFlight = false;
+                    Log.d(TAG, "Popup PixelCopy result=" + result);
+                }
             }, MAIN);
             return;
         }
@@ -207,6 +247,13 @@ public final class WynPopupWindowTrace {
 
     private static void publish(Context context, Bitmap bitmap, CaptureLoop loop, String source) {
         try {
+            loop.captureInFlight = false;
+            if (bitmap.getWidth() < 80 || bitmap.getHeight() < 120
+                    || bitmap.getHeight() < bitmap.getWidth() * 1.2f) {
+                Log.d(TAG, "Ignoring non-popup WYN frame " + bitmap.getWidth()
+                        + "x" + bitmap.getHeight());
+                return;
+            }
             long hash=sampleHash(bitmap);
             if(hash==loop.lastHash)return;
             loop.lastHash=hash;
@@ -222,7 +269,10 @@ public final class WynPopupWindowTrace {
             Log.i(TAG,"WARNING_FRAME_SENT source="+source+" size="+bitmap.getWidth()+"x"+bitmap.getHeight()
                     +" bytes="+png.length+" format=PNG_ALPHA");
         } catch(Throwable error) { Log.w(TAG,"Could not publish popup frame",error); }
-        finally { if(!bitmap.isRecycled())bitmap.recycle(); }
+        finally {
+            loop.captureInFlight = false;
+            if(!bitmap.isRecycled())bitmap.recycle();
+        }
     }
 
     /** Preserve popup transparency; downscale only as much as needed for broadcast size. */
