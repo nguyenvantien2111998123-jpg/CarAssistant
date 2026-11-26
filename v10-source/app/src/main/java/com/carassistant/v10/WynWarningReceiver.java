@@ -16,22 +16,23 @@ public final class WynWarningReceiver extends BroadcastReceiver {
 
     @Override public void onReceive(Context context, Intent intent) {
         if (intent == null || !ACTION.equals(intent.getAction())) return;
-        byte[] jpeg = intent.getByteArrayExtra("jpeg");
-        if (jpeg == null || jpeg.length == 0 || jpeg.length > 512 * 1024) {
+        byte[] frame = intent.getByteArrayExtra("png");
+        if (frame == null) frame = intent.getByteArrayExtra("jpeg"); // accept older diagnostic senders
+        if (frame == null || frame.length == 0 || frame.length > 1024 * 1024) {
             Log.w(TAG, "Rejected empty or oversized WYN popup frame");
             return;
         }
         CRC32 crc = new CRC32();
-        crc.update(jpeg);
+        crc.update(frame);
         long hash = crc.getValue();
         if (hash == lastFrameHash) return;
-        Bitmap bitmap = BitmapFactory.decodeByteArray(jpeg, 0, jpeg.length);
+        Bitmap bitmap = BitmapFactory.decodeByteArray(frame, 0, frame.length);
         if (bitmap == null) { Log.w(TAG, "Could not decode WYN popup frame"); return; }
         lastFrameHash = hash;
         GeminiCommandLogCapture.saveWynPopupSnapshot(bitmap);
         WynWarningStore.setWarning(bitmap);
         Log.i(TAG, "WYN_WARNING_UPDATED size=" + bitmap.getWidth() + "x" + bitmap.getHeight()
-                + " bytes=" + jpeg.length);
+                + " bytes=" + frame.length + " alpha=" + bitmap.hasAlpha());
         bitmap.recycle();
     }
 }
