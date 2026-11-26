@@ -4,7 +4,7 @@ import android.util.Log;
 import de.robv.android.xposed.IXposedHookLoadPackage;
 import de.robv.android.xposed.callbacks.XC_LoadPackage;
 
-/** Runs the Car Activity trace and auto-open detector inside Gearhead's actual process. */
+/** Runs passive Car Activity diagnostics inside Gearhead; automatic app launch is disabled. */
 public final class GearheadAutoOpenEntry implements IXposedHookLoadPackage {
     @Override public void handleLoadPackage(XC_LoadPackage.LoadPackageParam param) {
         if (!"com.google.android.projection.gearhead".equals(param.packageName)) return;
@@ -12,6 +12,5 @@ public final class GearheadAutoOpenEntry implements IXposedHookLoadPackage {
                 + " process=" + param.processName
                 + " loader=" + (param.classLoader == null ? "null" : param.classLoader.getClass().getName()));
         GearheadCarActivityTrace.install(param.classLoader);
-        GearheadAutoOpen.install();
     }
 }
