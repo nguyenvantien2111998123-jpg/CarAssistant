@@ -15,7 +15,7 @@ import android.view.accessibility.AccessibilityNodeInfo;
 public final class WynPopupAccessibilityService extends AccessibilityService {
     private static final String WYN_PACKAGE = "com.wynauto.wyn";
     private static final String TAG = "CarAsistantWYN";
-    private static final long HOME_STABLE_MS = 3000L;
+    private static final long HOME_STABLE_MS = 4000L;
     private static final long HOME_MAX_WAIT_MS = 25000L;
     private final Handler main = new Handler(Looper.getMainLooper());
     private boolean homeCheckScheduled;
@@ -43,7 +43,7 @@ public final class WynPopupAccessibilityService extends AccessibilityService {
                 return;
             }
 
-            if (contentEvents >= 3 && elapsed >= HOME_STABLE_MS) {
+            if (contentEvents >= 4 && elapsed >= HOME_STABLE_MS) {
                 homeActionRequested = true;
                 boolean accepted = performGlobalAction(GLOBAL_ACTION_HOME);
                 Log.i(TAG, "WYN UI stable; single HOME action accepted=" + accepted
