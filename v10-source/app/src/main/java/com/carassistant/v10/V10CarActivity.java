@@ -923,7 +923,7 @@ public final class V10CarActivity
             mediaTitle.setText("Chưa có media đang phát");
             mediaArtist.setText("Mở YouTube, Zing MP3 hoặc ứng dụng nghe nhạc");
             if (mediaArtwork != null) {
-                Bitmap warningOnly = WynWarningStore.composeMediaArtwork(null);
+                Bitmap warningOnly = WynWarningStore.composeMediaArtwork(null, getConfiguredMediaOverlayPercent());
                 if (warningOnly != null) mediaArtwork.setImageBitmap(warningOnly);
                 else mediaArtwork.setImageDrawable(null);
             }
