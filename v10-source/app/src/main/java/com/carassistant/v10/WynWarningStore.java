@@ -19,9 +19,9 @@ public final class WynWarningStore {
 
     public static synchronized void setWarning(Bitmap value) {
         if (value == null || value.isRecycled()) return;
-        Bitmap previous = warning;
+        // Keep the previous immutable frame alive for any MediaSession/UI consumer
+        // still holding its reference; the replacement is reclaimed by normal GC.
         warning = value.copy(Bitmap.Config.ARGB_8888, true);
-        if (previous != null && previous != warning && !previous.isRecycled()) previous.recycle();
         MediaSessionBridge.onWynWarningChanged();
         V10CarActivity.notifyWynWarningChanged();
     }
