@@ -16,10 +16,11 @@ public final class WynWarningReceiver extends BroadcastReceiver {
 
     @Override public void onReceive(Context context, Intent intent) {
         if (intent == null || !ACTION.equals(intent.getAction())) return;
+        // Accept only the new transparent PNG emitted by the verified WYN overlay
+        // capture hook. Legacy JPEG/screen-crop senders are intentionally rejected.
         byte[] frame = intent.getByteArrayExtra("png");
-        if (frame == null) frame = intent.getByteArrayExtra("jpeg"); // accept older diagnostic senders
         if (frame == null || frame.length == 0 || frame.length > 1024 * 1024) {
-            Log.w(TAG, "Rejected empty or oversized WYN popup frame");
+            Log.w(TAG, "Rejected missing, legacy, empty or oversized WYN popup PNG");
             return;
         }
         CRC32 crc = new CRC32();
@@ -28,6 +29,13 @@ public final class WynWarningReceiver extends BroadcastReceiver {
         if (hash == lastFrameHash) return;
         Bitmap bitmap = BitmapFactory.decodeByteArray(frame, 0, frame.length);
         if (bitmap == null) { Log.w(TAG, "Could not decode WYN popup frame"); return; }
+        if (bitmap.getWidth() < 80 || bitmap.getHeight() < 120
+                || bitmap.getHeight() < bitmap.getWidth() * 1.2f) {
+            Log.w(TAG, "Rejected non-popup WYN frame "
+                    + bitmap.getWidth() + "x" + bitmap.getHeight());
+            bitmap.recycle();
+            return;
+        }
         lastFrameHash = hash;
         GeminiCommandLogCapture.saveWynPopupSnapshot(bitmap);
         WynWarningStore.setWarning(bitmap);
