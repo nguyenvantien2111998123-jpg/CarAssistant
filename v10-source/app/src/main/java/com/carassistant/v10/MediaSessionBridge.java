@@ -996,6 +996,31 @@ public final class MediaSessionBridge extends NotificationListenerService {
                 && isUsableMirrorSession(controller);
     }
 
+    /**
+     * Silent Media is a transport/keepalive target, not a checkpoint source.
+     * Its session may legitimately omit track identity because it plays one
+     * bundled silent clip; require a live playback state, not title metadata.
+     */
+    private static boolean isUsableSilentMediaSession(MediaController controller) {
+        if (controller == null || !SILENT_MEDIA_PACKAGE.equals(controller.getPackageName())) {
+            return false;
+        }
+        try {
+            PlaybackState state = controller.getPlaybackState();
+            if (state == null) return false;
+            int value = state.getState();
+            return value == PlaybackState.STATE_PLAYING
+                    || value == PlaybackState.STATE_PAUSED
+                    || value == PlaybackState.STATE_BUFFERING
+                    || value == PlaybackState.STATE_CONNECTING
+                    || value == PlaybackState.STATE_FAST_FORWARDING
+                    || value == PlaybackState.STATE_REWINDING;
+        } catch (RuntimeException error) {
+            Log.w(TAG, "Could not inspect Silent Media session", error);
+            return false;
+        }
+    }
+
     private void refreshControllers(List<MediaController> controllers) {
         MediaController chosen = null;
         MediaController savedCandidate = null;
@@ -1013,8 +1038,10 @@ public final class MediaSessionBridge extends NotificationListenerService {
                 if (isInternalMediaPackage(candidate.getPackageName())) {
                     // Silent Media is a legitimate transport target for CarAsistant Media,
                     // but it must never become a durable source/checkpoint or restore target.
-                    if (silentMediaCandidate == null && isUsableMirrorSession(candidate)) {
+                    if (silentMediaCandidate == null && isUsableSilentMediaSession(candidate)) {
                         silentMediaCandidate = candidate;
+                        Log.i(TAG, "Silent Media accepted as active transport target; "
+                                + "excluded from media checkpoint/restore");
                     }
                     continue;
                 }
