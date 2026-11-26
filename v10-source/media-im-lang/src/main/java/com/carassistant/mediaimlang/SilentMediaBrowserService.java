@@ -3,13 +3,11 @@ package com.carassistant.mediaimlang;
 import android.app.Notification;
 import android.app.NotificationChannel;
 import android.app.NotificationManager;
-import android.app.Service;
-import android.content.Intent;
 import android.content.ComponentName;
+import android.content.Intent;
 import android.media.AudioAttributes;
 import android.media.MediaPlayer;
 import android.media.browse.MediaBrowser;
-import android.service.media.MediaBrowserService;
 import android.media.session.MediaSession;
 import android.media.session.PlaybackState;
 import android.os.Build;
@@ -17,12 +15,17 @@ import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
 import android.os.SystemClock;
+import android.service.media.MediaBrowserService;
 import android.util.Log;
 
 import java.io.File;
 import java.util.Collections;
 import java.util.List;
 
+/**
+ * A persistent Android Auto MediaSession with a one-shot 3-second silent bootstrap.
+ * The MP4 is not a keep-alive loop: after it pauses, the MediaSession remains active.
+ */
 public final class SilentMediaBrowserService extends MediaBrowserService {
     private static final String TAG = "MediaImLang";
     private static final String CHANNEL = "media_im_lang";
@@ -34,8 +37,9 @@ public final class SilentMediaBrowserService extends MediaBrowserService {
     private final Handler handler = new Handler(Looper.getMainLooper());
     private MediaSession session;
     private MediaPlayer player;
-    private boolean externalPlaying;
+    private boolean externalSessionPresent;
     private boolean windowRunning;
+    private boolean silentWindowAttempted;
     private long playbackStartedAt;
 
     private final Runnable pauseAfterWindow = () -> pauseSilent("three-second window elapsed");
@@ -46,17 +50,21 @@ public final class SilentMediaBrowserService extends MediaBrowserService {
         createChannel();
         session = new MediaSession(this, "MediaImLangSession");
         session.setCallback(new MediaSession.Callback() {
-            @Override public void onPlay() { startSilentWindow(); }
+            @Override public void onPlay() {
+                // Android Auto may repeat PLAY while showing a paused card. Never
+                // turn that into an endless sequence of 3-second playback windows.
+                requestSilentWindow("Android Auto play command");
+            }
             @Override public void onPlayFromMediaId(String mediaId, Bundle extras) {
-                if ("silent_3s".equals(mediaId)) startSilentWindow();
+                if ("silent_3s".equals(mediaId)) requestSilentWindow("Android Auto selected silent item");
             }
             @Override public void onPrepareFromMediaId(String mediaId, Bundle extras) {
                 Log.i(TAG, "Android Auto prepared media item=" + mediaId);
             }
             @Override public void onPause() { pauseSilent("Android Auto pause command"); }
             @Override public void onStop() { pauseSilent("Android Auto stop command"); }
-            @Override public void onSkipToNext() { startSilentWindow(); }
-            @Override public void onSkipToPrevious() { startSilentWindow(); }
+            @Override public void onSkipToNext() { Log.i(TAG, "Next ignored: silent fallback has no playlist"); }
+            @Override public void onSkipToPrevious() { Log.i(TAG, "Previous ignored: silent fallback has no playlist"); }
         });
         session.setFlags(MediaSession.FLAG_HANDLES_MEDIA_BUTTONS
                 | MediaSession.FLAG_HANDLES_TRANSPORT_CONTROLS);
@@ -68,8 +76,9 @@ public final class SilentMediaBrowserService extends MediaBrowserService {
                 .build());
         session.setActive(true);
         setSessionToken(session.getSessionToken());
-        startForeground(NOTIFICATION_ID, buildNotification("Sẵn sàng theo dõi MediaSession"));
-        Log.i(TAG, "MediaBrowserService created; Android Auto media session is active");
+        setPausedState();
+        startForeground(NOTIFICATION_ID, buildNotification("MediaSession đang hoạt động"));
+        Log.i(TAG, "Persistent MediaSession created; silent bootstrap is one-shot");
     }
 
     @Override public int onStartCommand(Intent intent, int flags, int startId) {
@@ -79,7 +88,9 @@ public final class SilentMediaBrowserService extends MediaBrowserService {
             stopSelf();
             return Service.START_NOT_STICKY;
         }
-        if (!externalPlaying && !windowRunning) startSilentWindow();
+        if (!externalSessionPresent && !silentWindowAttempted) {
+            requestSilentWindow("service started");
+        }
         return Service.START_STICKY;
     }
 
@@ -105,13 +116,15 @@ public final class SilentMediaBrowserService extends MediaBrowserService {
     static void onSessionAccessReady() {
         SilentMediaBrowserService service = instance;
         if (service != null) service.handler.post(() -> {
-            if (!service.externalPlaying && !service.windowRunning) service.startSilentWindow();
+            if (!service.externalSessionPresent && !service.silentWindowAttempted) {
+                service.requestSilentWindow("media-session access ready");
+            }
         });
     }
 
-    static void setExternalMediaPlaying(boolean playing) {
+    static void setExternalMediaSessionPresent(boolean present) {
         SilentMediaBrowserService service = instance;
-        if (service != null) service.onExternalPlaybackChanged(playing);
+        if (service != null) service.onExternalSessionChanged(present);
     }
 
     private boolean hasSessionAccess() {
@@ -121,26 +134,34 @@ public final class SilentMediaBrowserService extends MediaBrowserService {
                 new ComponentName(this, MediaSessionWatcherService.class));
     }
 
-    private void onExternalPlaybackChanged(boolean playing) {
-        if (externalPlaying == playing) return;
-        externalPlaying = playing;
-        Log.i(TAG, "External media playing=" + playing);
-        if (playing) {
-            pauseSilent("real media session became active");
-        } else {
-            handler.postDelayed(() -> {
-                if (!externalPlaying && !windowRunning) startSilentWindow();
-            }, 500L);
-        }
-    }
-
-    private void startSilentWindow() {
-        if (externalPlaying || windowRunning) return;
-        if (!hasSessionAccess()) {
-            updateNotification("Cần bật quyền Truy cập thông báo để tránh tranh media thật");
-            Log.w(TAG, "Fallback playback withheld because Notification Access is not granted");
+    private void onExternalSessionChanged(boolean present) {
+        if (externalSessionPresent == present) return;
+        externalSessionPresent = present;
+        Log.i(TAG, "External media session present=" + present);
+        if (present) {
+            pauseSilent("real media session has priority");
             return;
         }
+
+        // A real app session disappeared. Allow exactly one new 3-second bootstrap.
+        silentWindowAttempted = false;
+        handler.postDelayed(() -> {
+            if (!externalSessionPresent && !windowRunning) {
+                requestSilentWindow("last external media session disappeared");
+            }
+        }, 700L);
+    }
+
+    private void requestSilentWindow(String reason) {
+        if (externalSessionPresent || windowRunning || silentWindowAttempted) return;
+        if (!hasSessionAccess()) {
+            updateNotification("Cần bật quyền Truy cập thông báo");
+            Log.w(TAG, "Silent bootstrap withheld: Notification Access is not granted");
+            return;
+        }
+
+        // Latch before preparing to prevent duplicate PLAY/start requests racing.
+        silentWindowAttempted = true;
         try {
             File mp4 = SilentMp4Factory.getOrCreate(this);
             releasePlayer();
@@ -152,12 +173,13 @@ public final class SilentMediaBrowserService extends MediaBrowserService {
             player.setVolume(0f, 0f);
             player.setDataSource(mp4.getAbsolutePath());
             player.setOnPreparedListener(mediaPlayer -> {
-                if (externalPlaying) {
-                    pauseSilent("external media took priority before silent start");
+                if (externalSessionPresent) {
+                    pauseSilent("external media session appeared before silent start");
                     return;
                 }
                 windowRunning = true;
                 playbackStartedAt = SystemClock.elapsedRealtime();
+                session.setActive(true);
                 session.setPlaybackState(new PlaybackState.Builder()
                         .setActions(PlaybackState.ACTION_PLAY | PlaybackState.ACTION_PAUSE
                                 | PlaybackState.ACTION_PLAY_PAUSE | PlaybackState.ACTION_STOP
@@ -165,10 +187,9 @@ public final class SilentMediaBrowserService extends MediaBrowserService {
                         .setState(PlaybackState.STATE_PLAYING, 0L, 1f)
                         .build());
                 mediaPlayer.start();
-                updateNotification("Đang chạy MP4 im lặng trong 3 giây");
                 handler.removeCallbacks(pauseAfterWindow);
                 handler.postDelayed(pauseAfterWindow, SILENT_WINDOW_MS);
-                Log.i(TAG, "Silent MP4 started; volume=0, durationWindowMs=" + SILENT_WINDOW_MS);
+                Log.i(TAG, "Silent MP4 started once; volume=0; reason=" + reason);
             });
             player.setOnCompletionListener(mediaPlayer -> pauseSilent("silent MP4 completed"));
             player.setOnErrorListener((mediaPlayer, what, extra) -> {
@@ -186,18 +207,22 @@ public final class SilentMediaBrowserService extends MediaBrowserService {
 
     private void pauseSilent(String reason) {
         handler.removeCallbacks(pauseAfterWindow);
+        boolean wasRunning = windowRunning;
         if (player != null) {
             try { if (player.isPlaying()) player.pause(); } catch (RuntimeException ignored) { }
         }
         windowRunning = false;
-        setPausedState();
-        updateNotification(externalPlaying ? "Đang nhường quyền cho media thật" : "Đã tạm dừng MP4 im lặng");
-        Log.i(TAG, "Silent media paused: " + reason + ", elapsedMs="
-                + (playbackStartedAt == 0L ? 0L : SystemClock.elapsedRealtime() - playbackStartedAt));
+        if (wasRunning) {
+            setPausedState();
+            Log.i(TAG, "Silent MP4 paused: " + reason + ", elapsedMs="
+                    + (playbackStartedAt == 0L ? 0L : SystemClock.elapsedRealtime() - playbackStartedAt));
+        }
+        // Do not rewrite the persistent notification on every PLAY/PAUSE transition.
     }
 
     private void setPausedState() {
         if (session != null) {
+            session.setActive(true);
             session.setPlaybackState(new PlaybackState.Builder()
                     .setActions(PlaybackState.ACTION_PLAY | PlaybackState.ACTION_PAUSE
                             | PlaybackState.ACTION_PLAY_PAUSE | PlaybackState.ACTION_STOP)
@@ -255,5 +280,4 @@ public final class SilentMediaBrowserService extends MediaBrowserService {
         instance = null;
         super.onDestroy();
     }
-
 }
