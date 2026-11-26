@@ -1639,6 +1639,7 @@ private void hideApps() {
     private void updateFloatingTouchWarningIcon() {
         if (floatingTouchKey == null) return;
         Bitmap icon = WynWarningStore.makeTouchIcon();
+        ViewGroup.LayoutParams raw = floatingTouchKey.getLayoutParams();
         if (icon == null) {
             GradientDrawable base = new GradientDrawable();
             base.setShape(GradientDrawable.OVAL);
@@ -1646,19 +1647,39 @@ private void hideApps() {
             base.setStroke(dp(2), Color.rgb(80, 170, 230));
             floatingTouchKey.setBackground(base);
             floatingTouchKey.setText("●");
+            if (raw instanceof FrameLayout.LayoutParams) {
+                FrameLayout.LayoutParams params = (FrameLayout.LayoutParams) raw;
+                params.width = dp(58);
+                params.height = dp(58);
+                floatingTouchKey.setLayoutParams(params);
+            }
             return;
         }
-        GradientDrawable base = new GradientDrawable();
-        base.setShape(GradientDrawable.OVAL);
-        base.setColor(Color.rgb(25, 35, 45));
-        base.setStroke(dp(2), Color.rgb(80, 170, 230));
+
+        // Use the original popup's complete aspect ratio. No circular mask, crop,
+        // opaque plate or border is applied, so transparent popup pixels stay transparent.
         BitmapDrawable image = new BitmapDrawable(getResources(), icon);
-        LayerDrawable layers = new LayerDrawable(new Drawable[]{base, image});
-        // Keep only a minimal inset for the outline; the WYN warning fills the existing Touch button.
-        layers.setLayerInset(1, dp(2), dp(2), dp(2), dp(2));
-        floatingTouchKey.setBackground(layers);
+        image.setGravity(Gravity.FILL);
+        floatingTouchKey.setBackground(image);
         floatingTouchKey.setText("");
-        floatingTouchKey.setContentDescription("Cảnh báo tốc độ WYN; giữ để về Home, kéo để di chuyển");
+        floatingTouchKey.setContentDescription(
+                "Popup cảnh báo WYN đầy đủ; giữ để về Home, kéo để di chuyển");
+
+        if (raw instanceof FrameLayout.LayoutParams) {
+            int width = dp(78);
+            float ratio = icon.getHeight() / (float) Math.max(1, icon.getWidth());
+            int height = Math.max(dp(76), Math.min(dp(178), Math.round(width * ratio)));
+            FrameLayout.LayoutParams params = (FrameLayout.LayoutParams) raw;
+            params.width = width;
+            params.height = height;
+            if (root != null && root.getWidth() > 0 && root.getHeight() > 0) {
+                params.rightMargin = Math.max(0, Math.min(params.rightMargin,
+                        Math.max(0, root.getWidth() - width)));
+                params.topMargin = Math.max(0, Math.min(params.topMargin,
+                        Math.max(0, root.getHeight() - height)));
+            }
+            floatingTouchKey.setLayoutParams(params);
+        }
     }
 
     private void createFloatingTouchKey() {
@@ -1674,13 +1695,13 @@ private void hideApps() {
     bg.setStroke(dp(2), Color.rgb(80, 170, 230));
     floatingTouchKey.setBackground(bg);
     floatingTouchKey.setElevation(dp(60));
-    updateFloatingTouchWarningIcon();
     SharedPreferences prefs = getSharedPreferences("v10_floating_key", MODE_PRIVATE);
     FrameLayout.LayoutParams params = new FrameLayout.LayoutParams(dp(58), dp(58), Gravity.TOP | Gravity.END);
     int savedX = prefs.getInt("x", dp(18));
     int savedY = prefs.getInt("y", dp(120));
     params.setMargins(0, savedY, savedX, 0);
     root.addView(floatingTouchKey, params);
+    updateFloatingTouchWarningIcon();
     floatingTouchKey.setOnTouchListener(
                 (view, event) -> {
                     switch (event.getActionMasked()) {
@@ -1710,11 +1731,12 @@ private void hideApps() {
                                 // against the same coordinate space used by its FrameLayout.LayoutParams.
                                 int width = root.getWidth();
                                 int height = root.getHeight();
-                                int keySize = dp(58);
+                                int keyWidth = view.getWidth() > 0 ? view.getWidth() : dp(58);
+                                int keyHeight = view.getHeight() > 0 ? view.getHeight() : dp(58);
                                 int right = Math.round(floatingStartX - dx);
                                 int top = Math.round(floatingStartY + dy);
-                                right = Math.max(0, Math.min(Math.max(0, width - keySize), right));
-                                top = Math.max(0, Math.min(Math.max(0, height - keySize), top));
+                                right = Math.max(0, Math.min(Math.max(0, width - keyWidth), right));
+                                top = Math.max(0, Math.min(Math.max(0, height - keyHeight), top));
                                 FrameLayout.LayoutParams fp =
                                         (FrameLayout.LayoutParams) view.getLayoutParams();
                                 fp.rightMargin = right;
