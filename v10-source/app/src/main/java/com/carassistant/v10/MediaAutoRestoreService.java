@@ -51,6 +51,7 @@ public final class MediaAutoRestoreService extends Service {
     private boolean launchAccepted;
     private boolean completed;
     private boolean connectionStabilized;
+    private boolean wynStartupRequested;
 
     private final Runnable disconnectMonitor = new Runnable() {
         @Override public void run() {
@@ -103,8 +104,22 @@ public final class MediaAutoRestoreService extends Service {
                     MediaAutoRestoreService.this, expectedPackage)) {
                 boolean autoplay = getSharedPreferences("media_autoplay", MODE_PRIVATE)
                         .getBoolean("enabled", true);
-                if (MediaSessionBridge.applyCheckpoint(
+                boolean positionRestoreComplete = MediaSessionBridge.applyCheckpoint(
+                        MediaAutoRestoreService.this, expectedPackage, autoplay);
+
+                // Start WYN immediately when the exact saved item reports the requested
+                // PLAY/PAUSE state. Do not make WYN wait for the seek position tolerance;
+                // position verification continues independently in the next retries.
+                if (!wynStartupRequested && MediaSessionBridge.isCheckpointPlaybackStateReached(
                         MediaAutoRestoreService.this, expectedPackage, autoplay)) {
+                    wynStartupRequested = true;
+                    requestWynAfterSuccessfulRestore();
+                    updateForegroundStatus("Media đã phát; đang mở WYN");
+                    Log.i(TAG, "WYN_START_TRIGGERED_AFTER_PLAYBACK_STATE source=" + expectedPackage
+                            + ", state=" + (autoplay ? "PLAYING" : "PAUSED"));
+                }
+
+                if (positionRestoreComplete) {
                     completed = true;
                     getSharedPreferences("media_autoplay", MODE_PRIVATE).edit()
                             .putString("phase", "verified_phone_background_restore")
@@ -118,14 +133,13 @@ public final class MediaAutoRestoreService extends Service {
                             .remove("youtube_history_stage")
                             .apply();
 
-                    // Do not send HOME for the source app here. WYN owns the only
-                    // foreground transition and will return to Home once its real popup
-                    // window has been observed and its Home screen has settled.
-                    requestWynAfterSuccessfulRestore();
-                    updateForegroundStatus("Đã khôi phục media; đang mở WYN");
+                    if (!wynStartupRequested) {
+                        wynStartupRequested = true;
+                        requestWynAfterSuccessfulRestore();
+                    }
                     Log.i(TAG, "VERIFIED_PHONE_RESTORE source=" + expectedPackage
                             + ", requestedState=" + (autoplay ? "PLAY" : "PAUSE")
-                            + ", wynStartupRequested=true");
+                            + ", wynStartupRequested=" + wynStartupRequested);
                     handler.removeCallbacks(restoreAttempt);
                     return;
                 }
@@ -304,6 +318,7 @@ public final class MediaAutoRestoreService extends Service {
         handler.removeCallbacks(connectionStabilizer);
         completed = false;
         connectionStabilized = false;
+        wynStartupRequested = false;
         launchInFlight = false;
         launchAccepted = false;
         launchAttempts = 0;
