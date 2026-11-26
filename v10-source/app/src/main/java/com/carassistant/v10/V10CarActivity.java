@@ -3,8 +3,12 @@ package com.carassistant.v10;
 
 import android.Manifest;
 import android.content.ComponentName;
+import android.content.BroadcastReceiver;
+import android.content.Context;
+import android.content.IntentFilter;
 import android.content.SharedPreferences;
 import android.os.SystemClock;
+import android.os.Build;
 import android.view.MotionEvent;
 import android.view.ViewConfiguration;
 import android.view.ViewGroup;
@@ -14,8 +18,11 @@ import android.content.pm.ResolveInfo;
 import android.content.pm.ApplicationInfo;
 import android.content.pm.PackageManager;
 import android.graphics.Color;
+import android.graphics.Bitmap;
 import android.graphics.drawable.GradientDrawable;
 import android.graphics.drawable.Drawable;
+import android.graphics.drawable.BitmapDrawable;
+import android.graphics.drawable.LayerDrawable;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
@@ -50,6 +57,27 @@ import java.util.Locale;
 
 public final class V10CarActivity
         extends CarActivity {
+    private static volatile V10CarActivity activeCarActivity;
+
+    private final BroadcastReceiver wynDisplaySettingsReceiver = new BroadcastReceiver() {
+        @Override public void onReceive(Context context, Intent intent) {
+            if (!resumed) return;
+            updateMediaCard(MediaSessionBridge.getSnapshot());
+            updateFloatingTouchWarningIcon();
+            MediaSessionBridge.onWynDisplaySettingsChanged();
+        }
+    };
+
+    public static void notifyWynWarningChanged() {
+        V10CarActivity activity = activeCarActivity;
+        if (activity != null) activity.handler.post(activity::updateWynWarningViews);
+    }
+
+    private void updateWynWarningViews() {
+        if (!resumed) return;
+        updateMediaCard(MediaSessionBridge.getSnapshot());
+        updateFloatingTouchWarningIcon();
+    }
 
     private final Handler handler =
             new Handler(Looper.getMainLooper());
@@ -199,6 +227,15 @@ public final class V10CarActivity
         V10SessionStore
                 .setCurrentActivity(this);
 
+        IntentFilter wynSettingsFilter =
+                new IntentFilter("com.carassistant.v10.ACTION_WYN_DISPLAY_SETTINGS_CHANGED");
+        if (Build.VERSION.SDK_INT >= 33) {
+            registerReceiver(wynDisplaySettingsReceiver, wynSettingsFilter,
+                    Context.RECEIVER_NOT_EXPORTED);
+        } else {
+            registerReceiver(wynDisplaySettingsReceiver, wynSettingsFilter);
+        }
+
         applyChrome();
 
     }
@@ -209,6 +246,7 @@ public final class V10CarActivity
         super.onResume();
 
         resumed = true;
+        activeCarActivity = this;
         Log.i("GeminiCommandTrace", "V10CarActivity.onResume - Android Auto CarAsistant entry active");
         GeminiCommandLogCapture.onCarActivityResumed();
 
@@ -881,19 +919,28 @@ public final class V10CarActivity
         if (!MediaSessionBridge.hasAccess(this)) {
             mediaTitle.setText("Bật quyền media");
             mediaArtist.setText("Chạm để cấp quyền đồng bộ trình phát");
-            if (mediaArtwork != null) mediaArtwork.setImageDrawable(null);
+            if (mediaArtwork != null) {
+                Bitmap warningOnly = WynWarningStore.composeMediaArtwork(null, getConfiguredMediaOverlayPercent());
+                if (warningOnly != null) mediaArtwork.setImageBitmap(warningOnly);
+                else mediaArtwork.setImageDrawable(null);
+            }
             return;
         }
         if (state == null || TextUtils.isEmpty(state.packageName)) {
             mediaTitle.setText("Chưa có media đang phát");
             mediaArtist.setText("Mở YouTube, Zing MP3 hoặc ứng dụng nghe nhạc");
-            if (mediaArtwork != null) mediaArtwork.setImageDrawable(null);
+            if (mediaArtwork != null) {
+                Bitmap warningOnly = WynWarningStore.composeMediaArtwork(null, getConfiguredMediaOverlayPercent());
+                if (warningOnly != null) mediaArtwork.setImageBitmap(warningOnly);
+                else mediaArtwork.setImageDrawable(null);
+            }
             return;
         }
         mediaTitle.setText(TextUtils.isEmpty(state.title) ? "Đang phát media" : state.title);
         mediaArtist.setText(TextUtils.isEmpty(state.artist) ? state.packageName : state.artist);
         if (mediaArtwork != null) {
-            if (state.artwork != null) mediaArtwork.setImageBitmap(state.artwork);
+            Bitmap artwork = WynWarningStore.composeMediaArtwork(state.artwork, getConfiguredMediaOverlayPercent());
+            if (artwork != null) mediaArtwork.setImageBitmap(artwork);
             else mediaArtwork.setImageDrawable(null);
         }
     }
@@ -1610,6 +1657,66 @@ private void hideApps() {
     returnToLauncher();
 }
 
+
+    private int getConfiguredTouchWidthPx() {
+        int widthDp = getSharedPreferences("wyn_display_settings", MODE_PRIVATE)
+                .getInt("touch_width_dp", 78);
+        widthDp = Math.max(48, Math.min(120, widthDp));
+        return dp(widthDp);
+    }
+
+    private int getConfiguredMediaOverlayPercent() {
+        return Math.max(20, Math.min(80, getSharedPreferences(
+                "wyn_display_settings", MODE_PRIVATE).getInt("media_overlay_percent", 52)));
+    }
+
+    private void updateFloatingTouchWarningIcon() {
+        if (floatingTouchKey == null) return;
+        Bitmap icon = WynWarningStore.makeTouchIcon();
+        int configuredWidth = getConfiguredTouchWidthPx();
+        ViewGroup.LayoutParams raw = floatingTouchKey.getLayoutParams();
+        if (icon == null) {
+            GradientDrawable base = new GradientDrawable();
+            base.setShape(GradientDrawable.OVAL);
+            base.setColor(Color.rgb(25, 35, 45));
+            base.setStroke(dp(2), Color.rgb(80, 170, 230));
+            floatingTouchKey.setBackground(base);
+            floatingTouchKey.setText("●");
+            if (raw instanceof FrameLayout.LayoutParams) {
+                FrameLayout.LayoutParams params = (FrameLayout.LayoutParams) raw;
+                params.width = configuredWidth;
+                params.height = configuredWidth;
+                floatingTouchKey.setLayoutParams(params);
+            }
+            return;
+        }
+
+        // Use the original popup's complete aspect ratio. No circular mask, crop,
+        // opaque plate or border is applied, so transparent popup pixels stay transparent.
+        BitmapDrawable image = new BitmapDrawable(getResources(), icon);
+        image.setGravity(Gravity.FILL);
+        floatingTouchKey.setBackground(image);
+        floatingTouchKey.setText("");
+        floatingTouchKey.setContentDescription(
+                "Popup cảnh báo WYN đầy đủ; giữ để về Home, kéo để di chuyển");
+
+        if (raw instanceof FrameLayout.LayoutParams) {
+            int width = configuredWidth;
+            float ratio = icon.getHeight() / (float) Math.max(1, icon.getWidth());
+            int height = Math.max(dp(48), Math.round(width * ratio));
+            FrameLayout.LayoutParams params = (FrameLayout.LayoutParams) raw;
+            params.width = width;
+            params.height = height;
+            if (root != null && root.getWidth() > 0 && root.getHeight() > 0) {
+                params.rightMargin = Math.max(0, Math.min(params.rightMargin,
+                        Math.max(0, root.getWidth() - width)));
+                params.topMargin = Math.max(0, Math.min(params.topMargin,
+                        Math.max(0, root.getHeight() - height)));
+            }
+            floatingTouchKey.setLayoutParams(params);
+        }
+    }
+
     private void createFloatingTouchKey() {
     if (floatingTouchKey != null) return;
     floatingTouchKey = new TextView(this);
@@ -1624,11 +1731,14 @@ private void hideApps() {
     floatingTouchKey.setBackground(bg);
     floatingTouchKey.setElevation(dp(60));
     SharedPreferences prefs = getSharedPreferences("v10_floating_key", MODE_PRIVATE);
-    FrameLayout.LayoutParams params = new FrameLayout.LayoutParams(dp(58), dp(58), Gravity.TOP | Gravity.END);
+    int initialTouchSize = getConfiguredTouchWidthPx();
+    FrameLayout.LayoutParams params = new FrameLayout.LayoutParams(
+            initialTouchSize, initialTouchSize, Gravity.TOP | Gravity.END);
     int savedX = prefs.getInt("x", dp(18));
     int savedY = prefs.getInt("y", dp(120));
     params.setMargins(0, savedY, savedX, 0);
     root.addView(floatingTouchKey, params);
+    updateFloatingTouchWarningIcon();
     floatingTouchKey.setOnTouchListener(
                 (view, event) -> {
                     switch (event.getActionMasked()) {
@@ -1658,11 +1768,12 @@ private void hideApps() {
                                 // against the same coordinate space used by its FrameLayout.LayoutParams.
                                 int width = root.getWidth();
                                 int height = root.getHeight();
-                                int keySize = dp(58);
+                                int keyWidth = view.getWidth() > 0 ? view.getWidth() : dp(58);
+                                int keyHeight = view.getHeight() > 0 ? view.getHeight() : dp(58);
                                 int right = Math.round(floatingStartX - dx);
                                 int top = Math.round(floatingStartY + dy);
-                                right = Math.max(0, Math.min(Math.max(0, width - keySize), right));
-                                top = Math.max(0, Math.min(Math.max(0, height - keySize), top));
+                                right = Math.max(0, Math.min(Math.max(0, width - keyWidth), right));
+                                top = Math.max(0, Math.min(Math.max(0, height - keyHeight), top));
                                 FrameLayout.LayoutParams fp =
                                         (FrameLayout.LayoutParams) view.getLayoutParams();
                                 fp.rightMargin = right;
@@ -2208,6 +2319,7 @@ private void hideTaskSwitcher() {
     public void onPause() {
 
         MediaSessionBridge.removeListener(mediaSessionListener);
+        if (activeCarActivity == this) activeCarActivity = null;
 
         if (keyboardController != null) keyboardController.hide();
         if (voiceAssistantController != null) voiceAssistantController.cancelListening();
@@ -2241,6 +2353,8 @@ private void hideTaskSwitcher() {
     @Override
     public void onDestroy() {
 
+        try { unregisterReceiver(wynDisplaySettingsReceiver); }
+        catch (IllegalArgumentException ignored) { }
         hideTaskSwitcher();
         hideFloatingMenu();
         if (miniAccessEngine != null) {

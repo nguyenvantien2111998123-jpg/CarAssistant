@@ -17,6 +17,7 @@ import android.view.View;
 import android.widget.LinearLayout;
 import android.widget.Switch;
 import android.widget.ScrollView;
+import android.widget.SeekBar;
 import android.widget.TextView;
 import androidx.core.content.FileProvider;
 
@@ -223,7 +224,59 @@ public final class V10SettingsActivity extends Activity {
             body.addView(autoplayHint, params(-1, -2));
         });
 
-        addSection("GHI LOG GEMINI + WYN", "Ghi chung luồng Gemini mở CarAsistant và dấu vết popup cảnh báo WYN vào một file", body -> {
+        addSection("HIỂN THỊ WYN", "Tùy chỉnh kích thước nút Touch và popup WYN trên thẻ media", body -> {
+            android.content.SharedPreferences wynPrefs =
+                    getSharedPreferences("wyn_display_settings", MODE_PRIVATE);
+
+            TextView touchLabel = text("", 14, Color.WHITE);
+            touchLabel.setPadding(dp(4), dp(8), dp(4), dp(2));
+            body.addView(touchLabel, params(-1, -2));
+            SeekBar touchSize = new SeekBar(this);
+            touchSize.setMax(72); // 48..120 dp
+            int savedTouchSize = Math.max(48, Math.min(120,
+                    wynPrefs.getInt("touch_width_dp", 78)));
+            touchSize.setProgress(savedTouchSize - 48);
+            body.addView(touchSize, params(-1, dp(42)));
+            touchLabel.setText("Kích thước nút Touch: " + savedTouchSize + " dp");
+            touchSize.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
+                @Override public void onProgressChanged(SeekBar seekBar, int progress, boolean fromUser) {
+                    touchLabel.setText("Kích thước nút Touch: " + (48 + progress) + " dp");
+                }
+                @Override public void onStartTrackingTouch(SeekBar seekBar) { }
+                @Override public void onStopTrackingTouch(SeekBar seekBar) {
+                    saveWynDisplaySetting("touch_width_dp", 48 + seekBar.getProgress());
+                }
+            });
+
+            TextView overlayLabel = text("", 14, Color.WHITE);
+            overlayLabel.setPadding(dp(4), dp(14), dp(4), dp(2));
+            body.addView(overlayLabel, params(-1, -2));
+            SeekBar overlaySize = new SeekBar(this);
+            overlaySize.setMax(60); // 20..80 percent
+            int savedOverlay = Math.max(20, Math.min(80,
+                    wynPrefs.getInt("media_overlay_percent", 52)));
+            overlaySize.setProgress(savedOverlay - 20);
+            body.addView(overlaySize, params(-1, dp(42)));
+            overlayLabel.setText("Kích thước popup WYN trên thẻ media: " + savedOverlay + "%");
+            overlaySize.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
+                @Override public void onProgressChanged(SeekBar seekBar, int progress, boolean fromUser) {
+                    overlayLabel.setText("Kích thước popup WYN trên thẻ media: "
+                            + (20 + progress) + "%");
+                }
+                @Override public void onStartTrackingTouch(SeekBar seekBar) { }
+                @Override public void onStopTrackingTouch(SeekBar seekBar) {
+                    saveWynDisplaySetting("media_overlay_percent", 20 + seekBar.getProgress());
+                }
+            });
+
+            TextView hint = text(
+                    "Nút Touch tự giữ tỷ lệ ảnh popup WYN. Thanh thứ hai điều chỉnh độ lớn popup phủ lên ảnh bìa trong thẻ media và MediaSession; widget vẫn hiển thị toàn bộ popup WYN riêng.",
+                    12, Color.LTGRAY);
+            hint.setPadding(dp(4), dp(8), dp(4), dp(6));
+            body.addView(hint, params(-1, -2));
+        });
+
+        addSection("THU DỮ LIỆU TỰ ĐỘNG", "Một lần bấm thu log hệ thống, sự kiện vô lăng, WYN và trạng thái thiết bị vào cùng một file", body -> {
             geminiLogStatus = text("", 13, Color.LTGRAY);
             geminiLogStatus.setPadding(dp(6), dp(6), dp(6), dp(10));
             body.addView(geminiLogStatus, params(-1, -2));
@@ -231,21 +284,21 @@ public final class V10SettingsActivity extends Activity {
             TextView scopeHint = text(
                     "LSPosed cần bật module trong các scope: android (system_server), "
                     + "com.google.android.projection.gearhead (Android Auto), "
-                    + "com.carassistant.v10 (CarAsistant) và com.wynauto.wyn (nếu thu WYN). "
-                    + "Không cần bật Google Search. Cấp quyền root/su cho CarAsistant để đọc log hệ thống.",
+                    + "com.carassistant.v10 (CarAsistant) và com.wynauto.wyn (WYN). "
+                    + "Không cần bật Google Search. Cấp quyền root/su cho CarAsistant để đọc log và chụp trạng thái hệ thống. Bật Trợ năng WYN của CarAsistant để ghi nhận Popup và tọa độ cửa sổ.",
                     12, Color.LTGRAY);
             scopeHint.setPadding(dp(6), 0, dp(6), dp(10));
             body.addView(scopeHint, params(-1, -2));
 
-            addButton(body, "BẮT ĐẦU THU LOG TỔNG HỢP", () -> {
+            addButton(body, "BẮT ĐẦU THU DỮ LIỆU TỰ ĐỘNG", () -> {
                 boolean started = GeminiCommandLogCapture.start(this);
                 if (started) {
-                    geminiLogStatus.setText("ĐANG THU LOG TỔNG HỢP (tối đa 300 giây). Hãy kết nối/ngắt-kết nối Android Auto, nói với Gemini “Mở app CarAsistant”, chờ CarAsistant mở, sau đó để WYN chạy nền và chờ cảnh báo thay đổi. Không vuốt bỏ WYN khỏi màn hình ứng dụng gần đây.");
+                    geminiLogStatus.setText("ĐANG THU DỮ LIỆU TỰ ĐỘNG (tối đa 300 giây). Bộ thu đã lấy trạng thái màn hình/đầu vào/trợ năng và đang ghi log. Hãy lần lượt kết nối Android Auto, thử mở CarAsistant, để WYN tải xong và thử 2 cảnh báo, sau đó thử đúp Next khi không phát nhạc. Không vuốt bỏ WYN khỏi ứng dụng gần đây.");
                 } else {
-                    geminiLogStatus.setText("Bộ thu log đang chạy. Hãy tiếp tục thực hiện các bước kiểm tra; không cần bấm bắt đầu lần nữa.");
+                    geminiLogStatus.setText("Bộ thu dữ liệu đang chạy. Tiếp tục các bước kiểm tra; không cần bấm bắt đầu lần nữa.");
                 }
             });
-            addButton(body, "DỪNG VÀ XUẤT FILE LOG DUY NHẤT", this::stopAndShareGeminiLog);
+            addButton(body, "DỪNG VÀ CHIA SẺ FILE CHẨN ĐOÁN", this::stopAndShareGeminiLog);
             refreshGeminiLogStatus();
         });
 
@@ -281,6 +334,14 @@ public final class V10SettingsActivity extends Activity {
 
         addButton(list, "QUAY LẠI", this::finish);
         refreshStatus();
+    }
+
+    private void saveWynDisplaySetting(String key, int value) {
+        getSharedPreferences("wyn_display_settings", MODE_PRIVATE).edit()
+                .putInt(key, value).apply();
+        Intent changed = new Intent("com.carassistant.v10.ACTION_WYN_DISPLAY_SETTINGS_CHANGED");
+        changed.setPackage(getPackageName());
+        sendBroadcast(changed);
     }
 
     /** Every setup section starts collapsed and toggles when its header is tapped. */
@@ -530,12 +591,12 @@ public final class V10SettingsActivity extends Activity {
         if (GeminiCommandLogCapture.isCapturing()) {
             geminiLogStatus.setText("ĐANG THU LOG TỔNG HỢP. Thời gian đã thu: "
                     + GeminiCommandLogCapture.getCaptureDurationSeconds()
-                    + " giây / tối đa 300 giây. Khi hoàn tất, bấm “DỪNG VÀ XUẤT FILE LOG DUY NHẤT”.");
+                    + " giây / tối đa 300 giây. Khi hoàn tất, bấm “DỪNG VÀ CHIA SẺ FILE CHẨN ĐOÁN”.");
             return;
         }
         java.io.File latest = GeminiCommandLogCapture.getLatestFile(this);
         geminiLogStatus.setText(latest == null
-                ? "Chưa có file log tổng hợp. Cần cấp quyền root/su cho CarAsistant để đọc log hệ thống và bật scope LSPosed cho Android Auto/Gearhead, WYN nếu kiểm tra WYN."
+                ? "Chưa có file chẩn đoán. Cấp root/su và bật scope LSPosed cho android, Android Auto, CarAsistant và WYN."
                 : "File log tổng hợp mới nhất đã lưu:\n" + latest.getAbsolutePath()
                     + "\nChạm “DỪNG VÀ XUẤT FILE LOG DUY NHẤT” để gửi file.");
     }
@@ -558,12 +619,12 @@ public final class V10SettingsActivity extends Activity {
             android.net.Uri uri = FileProvider.getUriForFile(
                     this, getPackageName() + ".diagnostic-files", file);
             Intent share = new Intent(Intent.ACTION_SEND);
-            share.setType("text/plain");
+            share.setType(file.getName().endsWith(".zip") ? "application/zip" : "text/plain");
             share.putExtra(Intent.EXTRA_STREAM, uri);
-            share.putExtra(Intent.EXTRA_SUBJECT, "CarAsistant - Gemini + WYN diagnostic log");
+            share.putExtra(Intent.EXTRA_SUBJECT, "CarAsistant - unified diagnostic bundle");
             share.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
             share.setClipData(android.content.ClipData.newUri(getContentResolver(), "Gemini command log", uri));
-            startActivity(Intent.createChooser(share, "Chia sẻ log Gemini + WYN"));
+            startActivity(Intent.createChooser(share, "Chia sẻ dữ liệu chẩn đoán CarAsistant"));
         } catch (RuntimeException error) {
             android.widget.Toast.makeText(this, "Không thể xuất file log: " + error.getMessage(), android.widget.Toast.LENGTH_LONG).show();
         }
