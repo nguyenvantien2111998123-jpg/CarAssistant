@@ -31,6 +31,10 @@ public final class WynWarningStore {
      * place the complete, aspect-preserved WYN popup as a compact top-left overlay.
      */
     public static Bitmap composeMediaArtwork(Bitmap media) {
+        return composeMediaArtwork(media, 52);
+    }
+
+    public static Bitmap composeMediaArtwork(Bitmap media, int overlayPercent) {
         Bitmap alert = getWarning();
         if (alert == null) return media;
         final int size = 512;
@@ -44,8 +48,9 @@ public final class WynWarningStore {
         }
 
         float margin = 14f;
-        float maxWidth = size * 0.52f;
-        float maxHeight = size * 0.52f;
+        float fraction = Math.max(0.20f, Math.min(0.80f, overlayPercent / 100f));
+        float maxWidth = size * fraction;
+        float maxHeight = size * fraction;
         float scale = Math.min(maxWidth / alert.getWidth(), maxHeight / alert.getHeight());
         float width = Math.max(1f, alert.getWidth() * scale);
         float height = Math.max(1f, alert.getHeight() * scale);
