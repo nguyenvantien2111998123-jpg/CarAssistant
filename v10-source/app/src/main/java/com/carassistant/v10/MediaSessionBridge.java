@@ -296,7 +296,7 @@ public final class MediaSessionBridge extends NotificationListenerService {
         return TextUtils.isEmpty(value) || isInternalMediaPackage(value) ? null : value;
     }
 
-    /** Internal synthetic media apps are never eligible as a restored source. */
+    /** Silent Media is a valid live transport target, but never a real-media restore source. */
     public static boolean isInternalMediaPackage(String packageName) {
         return SILENT_MEDIA_PACKAGE.equals(packageName);
     }
@@ -637,8 +637,8 @@ public final class MediaSessionBridge extends NotificationListenerService {
                     @Override public void onSeekBackward() { MediaSessionBridge.seekBy(-15000L); }
                     @Override public void onVoiceAssistant() {
                         MediaController source = activeController;
-                        if (source == null || isInternalMediaPackage(source.getPackageName())) {
-                            Log.i(TAG, "STEERING double-NEXT ignored: no real media source is active");
+                        if (source == null) {
+                            Log.i(TAG, "STEERING double-NEXT ignored: no active media session is available");
                             return;
                         }
                         Intent intent = new Intent("com.carassistant.v10.STEERING_VOICE")

@@ -27,7 +27,6 @@ public final class GearheadMediaSessionFilter {
     private static final String GEARHEAD = "com.google.android.projection.gearhead";
     private static volatile boolean installed;
     private static volatile MediaController lastV10Controller;
-    private static final String KEEPALIVE_EXTRA = "com.carassistant.v10.internal.KEEPALIVE_SESSION";
 
     private GearheadMediaSessionFilter() { }
 
@@ -114,8 +113,7 @@ public final class GearheadMediaSessionFilter {
         for (Object item : sessions) {
             if (!(item instanceof MediaController)) continue;
             MediaController controller = (MediaController) item;
-            if (V10_PACKAGE.equals(controller.getPackageName())
-                    && !isKeepAliveSession(controller)) {
+            if (V10_PACKAGE.equals(controller.getPackageName())) {
                 lastV10Controller = controller;
                 result.add(controller);
             }
@@ -150,8 +148,7 @@ public final class GearheadMediaSessionFilter {
                 try {
                     MediaController controller = new MediaController(
                             context, (MediaSession.Token) item);
-                    if (V10_PACKAGE.equals(controller.getPackageName())
-                            && !isKeepAliveSession(controller)) {
+                    if (V10_PACKAGE.equals(controller.getPackageName())) {
                         lastV10Controller = controller;
                         result.add((MediaSession.Token) item);
                     }
@@ -177,17 +174,6 @@ public final class GearheadMediaSessionFilter {
                     + tokens.size() + " competing tokens");
         }
         return result;
-    }
-
-    private static boolean isKeepAliveSession(MediaController controller) {
-        if (controller == null) return false;
-        try {
-            android.os.Bundle extras = controller.getExtras();
-            return extras != null && extras.getBoolean(KEEPALIVE_EXTRA, false);
-        } catch (Throwable error) {
-            XposedBridge.log(TAG + " could not inspect session extras: " + error);
-            return false;
-        }
     }
 
     private static MediaController getReachableCachedController() {
