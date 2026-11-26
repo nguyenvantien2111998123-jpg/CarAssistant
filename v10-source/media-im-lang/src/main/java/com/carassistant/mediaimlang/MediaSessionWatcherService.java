@@ -1,29 +1,50 @@
 package com.carassistant.mediaimlang;
 
 import android.content.ComponentName;
+import android.media.MediaMetadata;
 import android.media.session.MediaController;
 import android.media.session.MediaSessionManager;
+import android.media.session.PlaybackState;
 import android.service.notification.NotificationListenerService;
 import android.service.notification.StatusBarNotification;
 import android.util.Log;
 
 import java.util.List;
 
+/**
+ * Observes real third-party media sessions. A paused session with metadata is still
+ * a real media app session and must retain priority over the silent fallback.
+ */
 public final class MediaSessionWatcherService extends NotificationListenerService {
     private static final String TAG = "MediaImLangWatcher";
     private MediaSessionManager manager;
     private final android.os.Handler handler = new android.os.Handler(android.os.Looper.getMainLooper());
+    private boolean lastExternalSessionPresent;
+
     private final Runnable poll = new Runnable() {
         @Override public void run() {
-            boolean externalPlaying = false;
+            boolean externalSessionPresent = false;
             try {
                 List<MediaController> sessions = manager.getActiveSessions(
                         new ComponentName(MediaSessionWatcherService.this, MediaSessionWatcherService.class));
                 for (MediaController controller : sessions) {
                     if (getPackageName().equals(controller.getPackageName())) continue;
-                    android.media.session.PlaybackState state = controller.getPlaybackState();
-                    if (state != null && state.getState() == android.media.session.PlaybackState.STATE_PLAYING) {
-                        externalPlaying = true;
+                    PlaybackState state = controller.getPlaybackState();
+                    if (state == null) continue;
+                    int playback = state.getState();
+                    boolean liveState = playback == PlaybackState.STATE_PLAYING
+                            || playback == PlaybackState.STATE_PAUSED
+                            || playback == PlaybackState.STATE_BUFFERING
+                            || playback == PlaybackState.STATE_CONNECTING
+                            || playback == PlaybackState.STATE_FAST_FORWARDING
+                            || playback == PlaybackState.STATE_REWINDING;
+                    MediaMetadata metadata = controller.getMetadata();
+                    boolean hasMediaData = metadata != null
+                            && (metadata.containsKey(MediaMetadata.METADATA_KEY_TITLE)
+                            || metadata.containsKey(MediaMetadata.METADATA_KEY_ARTIST)
+                            || metadata.containsKey(MediaMetadata.METADATA_KEY_MEDIA_ID));
+                    if (liveState && hasMediaData) {
+                        externalSessionPresent = true;
                         break;
                     }
                 }
@@ -32,14 +53,20 @@ public final class MediaSessionWatcherService extends NotificationListenerServic
             } catch (RuntimeException error) {
                 Log.w(TAG, "Unable to inspect active media sessions", error);
             }
-            SilentMediaBrowserService.setExternalMediaPlaying(externalPlaying);
-            handler.postDelayed(this, 1000L);
+
+            if (externalSessionPresent != lastExternalSessionPresent) {
+                lastExternalSessionPresent = externalSessionPresent;
+                Log.i(TAG, "External media session present=" + externalSessionPresent);
+                SilentMediaBrowserService.setExternalMediaSessionPresent(externalSessionPresent);
+            }
+            handler.postDelayed(this, 1500L);
         }
     };
 
     @Override public void onListenerConnected() {
         super.onListenerConnected();
         manager = getSystemService(MediaSessionManager.class);
+        lastExternalSessionPresent = false;
         handler.removeCallbacks(poll);
         SilentMediaBrowserService.onSessionAccessReady();
         handler.post(poll);
@@ -48,12 +75,13 @@ public final class MediaSessionWatcherService extends NotificationListenerServic
 
     @Override public void onListenerDisconnected() {
         handler.removeCallbacks(poll);
-        SilentMediaBrowserService.setExternalMediaPlaying(false);
+        lastExternalSessionPresent = false;
+        SilentMediaBrowserService.setExternalMediaSessionPresent(false);
         super.onListenerDisconnected();
     }
 
     @Override public void onNotificationPosted(StatusBarNotification sbn) {
-        // Polling is intentionally centralized; notifications are not treated as proof of playback.
+        // Session state, not notification churn, is the source of truth.
     }
 
     @Override public void onDestroy() {
