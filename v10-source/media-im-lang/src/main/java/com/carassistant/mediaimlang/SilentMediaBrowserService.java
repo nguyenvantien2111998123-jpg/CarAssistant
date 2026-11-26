@@ -89,7 +89,13 @@ public final class SilentMediaBrowserService extends MediaBrowserService {
             return Service.START_NOT_STICKY;
         }
         if (!externalSessionPresent && !silentWindowAttempted) {
-            requestSilentWindow("service started");
+            // Give NotificationListenerService a moment to enumerate existing app sessions
+            // after boot/AA reconnect, avoiding a race with YouTube or another real player.
+            handler.postDelayed(() -> {
+                if (!externalSessionPresent && !silentWindowAttempted) {
+                    requestSilentWindow("service started");
+                }
+            }, 1800L);
         }
         return Service.START_STICKY;
     }
@@ -210,6 +216,7 @@ public final class SilentMediaBrowserService extends MediaBrowserService {
         boolean wasRunning = windowRunning;
         if (player != null) {
             try { if (player.isPlaying()) player.pause(); } catch (RuntimeException ignored) { }
+            releasePlayer();
         }
         windowRunning = false;
         if (wasRunning) {
