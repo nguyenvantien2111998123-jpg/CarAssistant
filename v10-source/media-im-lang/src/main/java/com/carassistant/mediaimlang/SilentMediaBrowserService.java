@@ -9,7 +9,7 @@ import android.content.ComponentName;
 import android.media.AudioAttributes;
 import android.media.MediaPlayer;
 import android.media.browse.MediaBrowser;
-import android.media.browse.MediaBrowserService;
+import android.service.media.MediaBrowserService;
 import android.media.session.MediaSession;
 import android.media.session.PlaybackState;
 import android.os.Build;
