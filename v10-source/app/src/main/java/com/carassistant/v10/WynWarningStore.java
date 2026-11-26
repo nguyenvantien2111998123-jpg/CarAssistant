@@ -63,11 +63,41 @@ public final class WynWarningStore {
         return output;
     }
 
-    /** Full popup bitmap for Android Auto's small widget artwork; no media cover and no crop. */
+    /**
+     * Square Android Auto widget artwork. The complete portrait popup is contained
+     * inside a dark, softly framed square so Gearhead cannot center-crop its top
+     * and bottom when it renders the small artwork slot.
+     */
     public static Bitmap makeWidgetIcon() {
         Bitmap alert = getWarning();
         if (alert == null) return null;
-        return alert.copy(Bitmap.Config.ARGB_8888, true);
+        final int size = 512;
+        final float margin = 28f;
+        Bitmap output = Bitmap.createBitmap(size, size, Bitmap.Config.ARGB_8888);
+        Canvas canvas = new Canvas(output);
+        canvas.drawColor(Color.rgb(17, 22, 28));
+
+        float scale = Math.min((size - margin * 2f) / alert.getWidth(),
+                (size - margin * 2f) / alert.getHeight());
+        float width = alert.getWidth() * scale;
+        float height = alert.getHeight() * scale;
+        float left = (size - width) / 2f;
+        float top = (size - height) / 2f;
+
+        Paint panel = new Paint(Paint.ANTI_ALIAS_FLAG);
+        panel.setColor(Color.argb(210, 8, 12, 16));
+        RectF frame = new RectF(left - 9f, top - 9f, left + width + 9f, top + height + 9f);
+        canvas.drawRoundRect(frame, 18f, 18f, panel);
+
+        Paint border = new Paint(Paint.ANTI_ALIAS_FLAG);
+        border.setStyle(Paint.Style.STROKE);
+        border.setStrokeWidth(2f);
+        border.setColor(Color.argb(185, 125, 170, 205));
+        canvas.drawRoundRect(frame, 18f, 18f, border);
+
+        Paint image = new Paint(Paint.ANTI_ALIAS_FLAG | Paint.FILTER_BITMAP_FLAG);
+        canvas.drawBitmap(alert, null, new RectF(left, top, left + width, top + height), image);
+        return output;
     }
 
     /** Full popup bitmap for the existing draggable Touch surface; preserve alpha and aspect. */
