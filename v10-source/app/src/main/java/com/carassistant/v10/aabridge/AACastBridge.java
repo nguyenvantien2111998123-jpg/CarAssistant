@@ -9,6 +9,7 @@ import com.carassistant.v10.hook.GearheadAllow;
 import com.carassistant.v10.hook.GearheadCarActivityTrace;
 import com.carassistant.v10.hook.GearheadDockPatcher;
 import com.carassistant.v10.hook.GearheadMediaSessionFilter;
+import com.carassistant.v10.hook.GearheadAutoOpen;
 import com.carassistant.v10.hook.InputHooks;
 import com.carassistant.v10.hook.OrientationHooks;
 import com.carassistant.v10.hook.PolicyMediaKeyHooks;
@@ -67,6 +68,7 @@ public final class AACastBridge implements IXposedHookLoadPackage {
             InstallerSpoof.hookLegacy(param.classLoader, PLAY);
 
             if (GEARHEAD.equals(packageName)) {
+                GearheadAutoOpen.install();
                 Log.i("AACastGeminiTrace", "GEARHEAD_PACKAGE_LOAD package=" + packageName
                         + "; process=" + param.processName + "; pid=" + android.os.Process.myPid()
                         + "; module=CarAsistant");

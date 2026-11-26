@@ -1,7 +1,6 @@
 package com.carassistant.v10.hook;
 
 import android.content.ComponentName;
-import android.content.Intent;
 import android.content.Context;
 import android.media.session.MediaSession;
 import android.provider.Settings;
@@ -66,20 +65,12 @@ public final class SystemMediaKeyHooks {
 
                             Context context = (Context) XposedHelpers.getObjectField(
                                     service, "mContext");
-                            if (!hasMediaAccess(context)) {
-                                observeFallbackGesture(context, event);
-                                return;
-                            }
+                            if (!hasMediaAccess(context)) return;
 
                             MediaSession.Token token = findCarAsistantSessionToken(service);
                             if (token == null) {
-                                // Notification Access may be disabled or the mirror session may
-                                // not have been published yet. Observe the raw key stream in the
-                                // app process so double-Next can still invoke voice, while leaving
-                                // normal framework media routing untouched.
-                                observeFallbackGesture(context, event);
                                 XposedBridge.log(TAG + " no active CarAsistant MediaSession; "
-                                        + "observing gesture and allowing framework fallback");
+                                        + "leaving the event to normal framework routing");
                                 return;
                             }
 
@@ -219,24 +210,6 @@ public final class SystemMediaKeyHooks {
             }
         }
         return null;
-    }
-
-    /**
-     * Sends a copy of the raw key event to CarAsistant only for gesture observation.
-     * The original event is not consumed, so Android keeps its normal media routing.
-     */
-    private static void observeFallbackGesture(Context context, KeyEvent event) {
-        if (context == null || event == null) return;
-        try {
-            Intent intent = new Intent("com.carassistant.v10.STEERING_RAW_MEDIA_KEY")
-                    .setPackage(SELF)
-                    .putExtra(Intent.EXTRA_KEY_EVENT, new KeyEvent(event));
-            context.sendBroadcast(intent);
-            XposedBridge.log(TAG + " observed fallback " + describe(event)
-                    + " through CarAsistant receiver");
-        } catch (Throwable error) {
-            XposedBridge.log(TAG + " fallback gesture observation failed: " + error);
-        }
     }
 
     private static boolean hasMediaAccess(Context context) {

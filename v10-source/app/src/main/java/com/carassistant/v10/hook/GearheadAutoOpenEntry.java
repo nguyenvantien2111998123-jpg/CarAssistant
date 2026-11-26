@@ -1,9 +1,17 @@
 package com.carassistant.v10.hook;
+
+import android.util.Log;
 import de.robv.android.xposed.IXposedHookLoadPackage;
 import de.robv.android.xposed.callbacks.XC_LoadPackage;
-/** Separate LSPosed entry so auto-open remains isolated from media and steering hooks. */
+
+/** Runs the Car Activity trace and auto-open detector inside Gearhead's actual process. */
 public final class GearheadAutoOpenEntry implements IXposedHookLoadPackage {
- @Override public void handleLoadPackage(XC_LoadPackage.LoadPackageParam p){
-  if("com.google.android.projection.gearhead".equals(p.packageName)) GearheadAutoOpen.install();
- }
+    @Override public void handleLoadPackage(XC_LoadPackage.LoadPackageParam param) {
+        if (!"com.google.android.projection.gearhead".equals(param.packageName)) return;
+        Log.i("AACastAutoOpen", "XPOSED_ENTRY package=" + param.packageName
+                + " process=" + param.processName
+                + " loader=" + (param.classLoader == null ? "null" : param.classLoader.getClass().getName()));
+        GearheadCarActivityTrace.install(param.classLoader);
+        GearheadAutoOpen.install();
+    }
 }

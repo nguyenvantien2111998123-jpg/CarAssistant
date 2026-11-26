@@ -46,6 +46,7 @@ public final class MediaSessionBridge extends NotificationListenerService {
     private static final String CHECKPOINT_SPEED = "checkpoint_speed";
     private static final String CHECKPOINT_ELAPSED_REALTIME = "checkpoint_elapsed_realtime";
     private static final String GEARHEAD_PACKAGE = "com.google.android.projection.gearhead";
+    private static final String SILENT_MEDIA_PACKAGE = "com.carassistant.mediaimlang";
     private static final String AA_TRIGGER_PREF = "last_aa_notification_restore";
     private static final String AA_TRIGGER_ELAPSED_PREF = "last_aa_notification_restore_elapsed";
     private static final String AA_CONNECTED_PREF = "aa_connected";
@@ -230,7 +231,7 @@ public final class MediaSessionBridge extends NotificationListenerService {
         if (context == null) return null;
         String value = context.getSharedPreferences(RESUME_PREFS, Context.MODE_PRIVATE)
                 .getString(LAST_PACKAGE, null);
-        return TextUtils.isEmpty(value) ? null : value;
+        return TextUtils.isEmpty(value) || isInternalMediaPackage(value) ? null : value;
     }
 
     /** Exact app Activity previously projected by V10, when it belongs to the saved media package. */
@@ -238,7 +239,9 @@ public final class MediaSessionBridge extends NotificationListenerService {
         if (context == null) return null;
         String value = context.getSharedPreferences(RESUME_PREFS, Context.MODE_PRIVATE)
                 .getString(CHECKPOINT_TASK_COMPONENT, null);
-        return TextUtils.isEmpty(value) ? null : ComponentName.unflattenFromString(value);
+        if (TextUtils.isEmpty(value)) return null;
+        ComponentName component = ComponentName.unflattenFromString(value);
+        return component == null || isInternalMediaPackage(component.getPackageName()) ? null : component;
     }
 
     /** Stable content identifier supplied by the source MediaSession, when available. */
@@ -285,7 +288,12 @@ public final class MediaSessionBridge extends NotificationListenerService {
         if (context == null) return null;
         String value = context.getSharedPreferences(RESUME_PREFS, Context.MODE_PRIVATE)
                 .getString(CHECKPOINT_PACKAGE, null);
-        return TextUtils.isEmpty(value) ? null : value;
+        return TextUtils.isEmpty(value) || isInternalMediaPackage(value) ? null : value;
+    }
+
+    /** Internal synthetic media apps are never eligible as a restored source. */
+    public static boolean isInternalMediaPackage(String packageName) {
+        return SILENT_MEDIA_PACKAGE.equals(packageName);
     }
 
     /**
@@ -348,7 +356,7 @@ public final class MediaSessionBridge extends NotificationListenerService {
 
     /** True only when the saved source package is publishing the exact saved media item. */
     public static boolean isCheckpointMediaReady(Context context, String expectedPackage) {
-        if (context == null || TextUtils.isEmpty(expectedPackage)) return false;
+        if (context == null || TextUtils.isEmpty(expectedPackage) || isInternalMediaPackage(expectedPackage)) return false;
         MediaController controller = checkpointController;
         if (controller == null || !expectedPackage.equals(controller.getPackageName())) {
             controller = activeController;
@@ -370,7 +378,7 @@ public final class MediaSessionBridge extends NotificationListenerService {
      * Return true only after the source session reports the requested state and position.
      */
     public static boolean applyCheckpoint(Context context, String expectedPackage, boolean autoplay) {
-        if (context == null || TextUtils.isEmpty(expectedPackage)) return false;
+        if (context == null || TextUtils.isEmpty(expectedPackage) || isInternalMediaPackage(expectedPackage)) return false;
         MediaController controller = checkpointController;
         if (controller == null || !expectedPackage.equals(controller.getPackageName())) {
             controller = activeController;
@@ -447,7 +455,7 @@ public final class MediaSessionBridge extends NotificationListenerService {
      * player that happened to become active while Android Auto was reconnecting.
      */
     public static boolean resumePackage(String expectedPackage) {
-        if (TextUtils.isEmpty(expectedPackage)) return false;
+        if (TextUtils.isEmpty(expectedPackage) || isInternalMediaPackage(expectedPackage)) return false;
         MediaController controller = activeController;
         if (controller == null || !expectedPackage.equals(controller.getPackageName())) return false;
         PlaybackState state = controller.getPlaybackState();
@@ -595,6 +603,11 @@ public final class MediaSessionBridge extends NotificationListenerService {
                     @Override public void onSeekForward() { MediaSessionBridge.seekBy(15000L); }
                     @Override public void onSeekBackward() { MediaSessionBridge.seekBy(-15000L); }
                     @Override public void onVoiceAssistant() {
+                        MediaController source = activeController;
+                        if (source == null || isInternalMediaPackage(source.getPackageName())) {
+                            Log.i(TAG, "STEERING double-NEXT ignored: no real media source is active");
+                            return;
+                        }
                         Intent intent = new Intent("com.carassistant.v10.STEERING_VOICE")
                                 .setPackage(getPackageName());
                         sendBroadcast(intent);
@@ -695,9 +708,9 @@ public final class MediaSessionBridge extends NotificationListenerService {
         if (!hasPlayer) {
             // After a phone reboot the source app has no MediaSession yet. Publish the
             // durable checkpoint so Android Auto still sees CarAsistant and the last item.
-            String savedTitle = getCheckpointTitle(this);
-            String savedArtist = getCheckpointArtist(this);
             String savedPackage = getCheckpointPackage(this);
+            String savedTitle = savedPackage == null ? null : getCheckpointTitle(this);
+            String savedArtist = savedPackage == null ? null : getCheckpointArtist(this);
             android.content.SharedPreferences prefs =
                     getSharedPreferences(RESUME_PREFS, Context.MODE_PRIVATE);
             long savedDuration = Math.max(0L, prefs.getLong(CHECKPOINT_DURATION, 0L));
@@ -1000,7 +1013,7 @@ public final class MediaSessionBridge extends NotificationListenerService {
     }
 
     private static boolean isUsableExternalSession(MediaController controller) {
-        if (controller == null) return false;
+        if (controller == null || isInternalMediaPackage(controller.getPackageName())) return false;
         try {
             PlaybackState state = controller.getPlaybackState();
             if (state == null || !hasMediaIdentity(controller.getMetadata())) return false;
@@ -1034,7 +1047,8 @@ public final class MediaSessionBridge extends NotificationListenerService {
         String lastPackage = getLastKnownPackage(this);
         if (controllers != null) {
             for (MediaController candidate : controllers) {
-                if (candidate == null || getPackageName().equals(candidate.getPackageName())) continue;
+                if (candidate == null || getPackageName().equals(candidate.getPackageName())
+                        || isInternalMediaPackage(candidate.getPackageName())) continue;
                 if (checkpointPackage != null && checkpointPackage.equals(candidate.getPackageName())) {
                     checkpointCandidate = candidate;
                 }
