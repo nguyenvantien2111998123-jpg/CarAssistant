@@ -456,6 +456,34 @@ public final class MediaSessionBridge extends NotificationListenerService {
     }
 
     /**
+     * True as soon as the exact checkpointed item reports the requested PLAY/PAUSE
+     * state. WYN can start at this point while seek-position verification continues.
+     */
+    public static boolean isCheckpointPlaybackStateReached(
+            Context context, String expectedPackage, boolean autoplay) {
+        if (context == null || TextUtils.isEmpty(expectedPackage)
+                || isInternalMediaPackage(expectedPackage)) return false;
+        MediaController controller = checkpointController;
+        if (controller == null || !expectedPackage.equals(controller.getPackageName())) {
+            controller = activeController;
+        }
+        if (controller == null || !expectedPackage.equals(controller.getPackageName())) return false;
+        try {
+            android.content.SharedPreferences prefs =
+                    context.getSharedPreferences(RESUME_PREFS, Context.MODE_PRIVATE);
+            if (!matchesSavedMediaIdentity(prefs, controller.getMetadata())) return false;
+            PlaybackState state = controller.getPlaybackState();
+            if (state == null) return false;
+            return autoplay
+                    ? state.getState() == PlaybackState.STATE_PLAYING
+                    : state.getState() == PlaybackState.STATE_PAUSED;
+        } catch (RuntimeException error) {
+            Log.w(TAG, "Could not verify checkpoint playback state", error);
+            return false;
+        }
+    }
+
+    /**
      * Resume only the saved media app's session. Never send Play to an unrelated
      * player that happened to become active while Android Auto was reconnecting.
      */
