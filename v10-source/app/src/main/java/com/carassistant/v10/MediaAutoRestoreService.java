@@ -60,6 +60,7 @@ public final class MediaAutoRestoreService extends Service {
                 handler.removeCallbacks(restoreAttempt);
                 handler.removeCallbacks(connectionStabilizer);
                 HeadlessProjectionHost.releaseIfHeadless(MediaAutoRestoreService.this);
+                notifyMediaImLang("com.carassistant.v10.ACTION_AA_DISCONNECTED");
                 stopForeground(true);
                 stopSelf();
                 Log.i(TAG, "AA connected notification removed; phone-side recovery stopped");
@@ -81,6 +82,7 @@ public final class MediaAutoRestoreService extends Service {
                 return;
             }
             connectionStabilized = true;
+            notifyMediaImLang("com.carassistant.v10.ACTION_AA_CONNECTED");
             boolean displayReady = HeadlessProjectionHost.start(MediaAutoRestoreService.this);
             Log.i(TAG, "AA connection stable for " + INITIAL_SETTLE_MS
                     + " ms; headless Display 2 standby ready=" + displayReady
@@ -145,6 +147,16 @@ public final class MediaAutoRestoreService extends Service {
             }
         }
     };
+
+    private void notifyMediaImLang(String action) {
+        try {
+            Intent intent = new Intent(action).setPackage("com.carassistant.mediaimlang");
+            sendBroadcast(intent);
+            Log.i(TAG, "Sent Media Im Lang lifecycle event: " + action);
+        } catch (RuntimeException error) {
+            Log.w(TAG, "Unable to notify Media Im Lang: " + action, error);
+        }
+    }
 
     @Override public void onCreate() {
         super.onCreate();
