@@ -81,20 +81,10 @@ public final class MediaSessionBridge extends NotificationListenerService {
     private static volatile long lastCheckpointPosition;
     private static volatile long lastCheckpointDuration;
     private MediaSession mirrorSession;
-    private KeepAliveMediaSession keepAliveMediaSession;
     private SteeringWheelMediaKeyHandler steeringKeyHandler;
     private MediaSessionManager manager;
     private MediaSessionManager.OnActiveSessionsChangedListener sessionsListener;
     private MediaController.Callback controllerCallback;
-    private MediaFallbackPlayer fallbackPlayer;
-    private static final long FALLBACK_START_GRACE_MS = 3500L;
-    private final Runnable fallbackStartTask = () -> {
-        if (!isAndroidAutoConnected() || activeController != null || mirrorSession == null) return;
-        if (fallbackPlayer == null) {
-            fallbackPlayer = new MediaFallbackPlayer(this::publishFallbackPlaybackState);
-        }
-        fallbackPlayer.start(this);
-    };
     private final Runnable checkpointTask = new Runnable() {
         @Override public void run() {
             saveCurrentCheckpoint();
@@ -669,57 +659,10 @@ public final class MediaSessionBridge extends NotificationListenerService {
                 .getBoolean(AA_CONNECTED_PREF, false);
     }
 
-    /**
-     * Start the silent video-only player only after Android Auto is connected and
-     * no valid external source is mirrored. The player never writes metadata or
-     * checkpoint preferences and never creates a MediaSession.
-     */
-    private void syncFallbackPlayer(boolean hasExternalSource) {
-        MAIN.removeCallbacks(fallbackStartTask);
-        if (hasExternalSource || !isAndroidAutoConnected() || mirrorSession == null) {
-            stopFallbackPlayer();
-            return;
-        }
-        MAIN.postDelayed(fallbackStartTask, FALLBACK_START_GRACE_MS);
-    }
-
-    private void stopFallbackPlayer() {
-        if (fallbackPlayer != null) {
-            fallbackPlayer.stop();
-            fallbackPlayer = null;
-        }
-        // A disconnect during the 350 ms play window must not leave the mirror
-        // session advertising PLAYING after its silent player has been released.
-        if (activeController == null && mirrorSession != null) {
-            android.content.SharedPreferences prefs =
-                    getSharedPreferences(RESUME_PREFS, Context.MODE_PRIVATE);
-            long duration = Math.max(0L, prefs.getLong(CHECKPOINT_DURATION, 0L));
-            long position = getAdjustedCheckpointPosition(this);
-            mirrorSession.setPlaybackState(buildMirrorPlaybackState(false, position, duration));
-            mirrorSession.setActive(true);
-        }
-    }
-
-    /**
-     * Reflect the short fallback playback transition through the one existing
-     * CarAsistant MediaSession, without changing its checkpoint metadata.
-     */
-    private void publishFallbackPlaybackState(boolean playing) {
-        MediaSession session = mirrorSession;
-        if (session == null || activeController != null || !isAndroidAutoConnected()) return;
-        android.content.SharedPreferences prefs =
-                getSharedPreferences(RESUME_PREFS, Context.MODE_PRIVATE);
-        long duration = Math.max(0L, prefs.getLong(CHECKPOINT_DURATION, 0L));
-        long position = getAdjustedCheckpointPosition(this);
-        session.setPlaybackState(buildMirrorPlaybackState(playing, position, duration));
-        session.setActive(true);
-    }
-
     private void updateMirrorSession(Snapshot state) {
         MediaSession session = mirrorSession;
         if (session == null) return;
         boolean hasPlayer = state != null && !TextUtils.isEmpty(state.packageName);
-        syncFallbackPlayer(hasPlayer);
         if (!hasPlayer) {
             // After a phone reboot the source app has no MediaSession yet. Publish the
             // durable checkpoint so Android Auto still sees CarAsistant and the last item.
@@ -829,7 +772,6 @@ public final class MediaSessionBridge extends NotificationListenerService {
         super.onListenerConnected();
         instance = this;
         ensureMirrorSession();
-        ensureKeepAliveMediaSession();
         // Publish the CarAsistant controller before querying source sessions. This closes
         // the startup race in which Gearhead discovers a phone player before our mirror.
         updateMirrorSession(snapshot);
@@ -885,12 +827,6 @@ public final class MediaSessionBridge extends NotificationListenerService {
     @Override
     public void onDestroy() {
         MAIN.removeCallbacks(checkpointTask);
-        MAIN.removeCallbacks(fallbackStartTask);
-        stopFallbackPlayer();
-        if (keepAliveMediaSession != null) {
-            keepAliveMediaSession.release();
-            keepAliveMediaSession = null;
-        }
         releaseMirrorSession();
         if (instance == this) instance = null;
         super.onDestroy();
@@ -954,7 +890,6 @@ public final class MediaSessionBridge extends NotificationListenerService {
                 .putInt(AA_NOTIFICATION_ID_PREF, sbn.getId())
                 .putString(AA_NOTIFICATION_TAG_PREF, sbn.getTag() == null ? "" : sbn.getTag())
                 .apply();
-        syncFallbackPlayer(!TextUtils.isEmpty(snapshot.packageName));
         long now = System.currentTimeMillis();
         long nowElapsed = android.os.SystemClock.elapsedRealtime();
         long previous = prefs.getLong(AA_TRIGGER_PREF, 0L);
@@ -1003,24 +938,10 @@ public final class MediaSessionBridge extends NotificationListenerService {
                         .remove(AA_NOTIFICATION_TAG_PREF)
                         .apply();
                 syncFallbackPlayer(false);
-                syncKeepAliveMediaSession(false, false);
                 Log.i(TAG, "Android Auto connection notification removed; headless restore stop requested");
             }
         }
         refreshFromManager();
-    }
-
-    private void ensureKeepAliveMediaSession() {
-        if (keepAliveMediaSession == null) {
-            keepAliveMediaSession = new KeepAliveMediaSession(this);
-        }
-        // Do not start the MP4 until refreshControllers has inspected every
-        // external session; otherwise a live player could be interrupted briefly.
-    }
-
-    private void syncKeepAliveMediaSession(boolean connected, boolean externalPlaying) {
-        if (keepAliveMediaSession == null) return;
-        keepAliveMediaSession.update(connected, externalPlaying);
     }
 
     private void refreshFromManager() {
@@ -1074,7 +995,6 @@ public final class MediaSessionBridge extends NotificationListenerService {
         MediaController playingCandidate = null;
         MediaController activeMetadataCandidate = null;
         MediaController silentMediaCandidate = null;
-        boolean hasAnyExternalPlayingSession = false;
         String checkpointPackage = getCheckpointPackage(this);
         if (checkpointPackage == null) checkpointPackage = getLastKnownPackage(this);
         String lastPackage = getLastKnownPackage(this);
@@ -1082,10 +1002,6 @@ public final class MediaSessionBridge extends NotificationListenerService {
             for (MediaController candidate : controllers) {
                 if (candidate == null || getPackageName().equals(candidate.getPackageName())) continue;
                 PlaybackState candidateState = candidate.getPlaybackState();
-                if (candidateState != null
-                        && candidateState.getState() == PlaybackState.STATE_PLAYING) {
-                    hasAnyExternalPlayingSession = true;
-                }
                 if (isInternalMediaPackage(candidate.getPackageName())) {
                     // Silent Media is a legitimate transport target for CarAsistant Media,
                     // but it must never become a durable source/checkpoint or restore target.
@@ -1107,11 +1023,6 @@ public final class MediaSessionBridge extends NotificationListenerService {
                 if (activeMetadataCandidate == null) activeMetadataCandidate = candidate;
             }
         }
-        // Keep the independent phone-side keepalive session active only while AA is
-        // connected and no external source is actually PLAYING. A paused YouTube/Zing
-        // session remains the mirror/transport target but does not block keepalive.
-        syncKeepAliveMediaSession(isAndroidAutoConnected(), hasAnyExternalPlayingSession);
-
         // Only a session with both meaningful item identity and a live playback state
         // may become the command target. Keep checkpointCandidate separately so the
         // exact saved item can still be verified/restored when its session reappears.
