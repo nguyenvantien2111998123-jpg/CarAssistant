@@ -14,7 +14,6 @@ import android.media.session.PlaybackState;
 import android.os.Build;
 import android.os.Bundle;
 import android.os.Handler;
-import android.os.IBinder;
 import android.os.Looper;
 import android.os.SystemClock;
 import android.util.Log;
@@ -67,6 +66,12 @@ public final class SilentMediaBrowserService extends MediaBrowserService {
     }
 
     @Override public int onStartCommand(Intent intent, int flags, int startId) {
+        if (intent != null && "com.carassistant.v10.ACTION_AA_DISCONNECTED".equals(intent.getAction())) {
+            pauseSilent("Android Auto disconnected");
+            stopForeground(true);
+            stopSelf();
+            return Service.START_NOT_STICKY;
+        }
         if (!externalPlaying && !windowRunning) startSilentWindow();
         return Service.START_STICKY;
     }
@@ -225,5 +230,4 @@ public final class SilentMediaBrowserService extends MediaBrowserService {
         super.onDestroy();
     }
 
-    @Override public IBinder onBind(Intent intent) { return super.onBind(intent); }
 }
