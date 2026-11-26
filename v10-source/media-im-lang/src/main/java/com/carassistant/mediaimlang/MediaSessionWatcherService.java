@@ -68,8 +68,9 @@ public final class MediaSessionWatcherService extends NotificationListenerServic
         manager = getSystemService(MediaSessionManager.class);
         lastExternalSessionPresent = false;
         handler.removeCallbacks(poll);
+        // Inspect existing real sessions before allowing the silent fallback to start.
+        poll.run();
         SilentMediaBrowserService.onSessionAccessReady();
-        handler.post(poll);
         Log.i(TAG, "Notification listener connected; external MediaSession monitoring started");
     }
 
