@@ -678,10 +678,16 @@ public final class MediaSessionBridge extends NotificationListenerService {
                                 TextUtils.isEmpty(savedPackage) ? "CarAsistant" : savedPackage)
                         .putLong(MediaMetadata.METADATA_KEY_DURATION, savedDuration);
                 if (warning != null) {
-                    Bitmap widgetIcon = safeMirrorArtwork(warning);
-                    saved.putBitmap(MediaMetadata.METADATA_KEY_ALBUM_ART, widgetIcon)
-                            .putBitmap(MediaMetadata.METADATA_KEY_ART, widgetIcon)
-                            .putBitmap(MediaMetadata.METADATA_KEY_DISPLAY_ICON, widgetIcon);
+                    Bitmap cardArtwork = safeMirrorArtwork(WynWarningStore.composeMediaArtwork(
+                            null, getWynMediaOverlayPercent()));
+                    Bitmap widgetIcon = safeMirrorArtwork(WynWarningStore.makeWidgetIcon());
+                    if (cardArtwork != null) {
+                        saved.putBitmap(MediaMetadata.METADATA_KEY_ALBUM_ART, cardArtwork);
+                    }
+                    if (widgetIcon != null) {
+                        saved.putBitmap(MediaMetadata.METADATA_KEY_ART, widgetIcon)
+                                .putBitmap(MediaMetadata.METADATA_KEY_DISPLAY_ICON, widgetIcon);
+                    }
                 }
                 session.setMetadata(saved.build());
                 // Show the saved item as paused until its source session is verified.
@@ -692,10 +698,16 @@ public final class MediaSessionBridge extends NotificationListenerService {
                         .putString(MediaMetadata.METADATA_KEY_ARTIST, "Trình điều khiển media")
                         .putString(MediaMetadata.METADATA_KEY_ALBUM, "CarAsistant");
                 if (warning != null) {
-                    Bitmap widgetIcon = safeMirrorArtwork(warning);
-                    empty.putBitmap(MediaMetadata.METADATA_KEY_ALBUM_ART, widgetIcon)
-                            .putBitmap(MediaMetadata.METADATA_KEY_ART, widgetIcon)
-                            .putBitmap(MediaMetadata.METADATA_KEY_DISPLAY_ICON, widgetIcon);
+                    Bitmap cardArtwork = safeMirrorArtwork(WynWarningStore.composeMediaArtwork(
+                            null, getWynMediaOverlayPercent()));
+                    Bitmap widgetIcon = safeMirrorArtwork(WynWarningStore.makeWidgetIcon());
+                    if (cardArtwork != null) {
+                        empty.putBitmap(MediaMetadata.METADATA_KEY_ALBUM_ART, cardArtwork);
+                    }
+                    if (widgetIcon != null) {
+                        empty.putBitmap(MediaMetadata.METADATA_KEY_ART, widgetIcon)
+                                .putBitmap(MediaMetadata.METADATA_KEY_DISPLAY_ICON, widgetIcon);
+                    }
                 }
                 session.setMetadata(empty.build());
                 session.setPlaybackState(buildMirrorPlaybackState(false, 0L, 0L));
@@ -717,9 +729,11 @@ public final class MediaSessionBridge extends NotificationListenerService {
         if (warning != null) {
             // Keep the widget/icon channels dedicated to the full WYN popup. The
             // combined media-cover overlay is reserved for the larger media artwork.
-            Bitmap widgetIcon = safeMirrorArtwork(warning);
-            metadata.putBitmap(MediaMetadata.METADATA_KEY_ART, widgetIcon)
-                    .putBitmap(MediaMetadata.METADATA_KEY_DISPLAY_ICON, widgetIcon);
+            Bitmap widgetIcon = safeMirrorArtwork(WynWarningStore.makeWidgetIcon());
+            if (widgetIcon != null) {
+                metadata.putBitmap(MediaMetadata.METADATA_KEY_ART, widgetIcon)
+                        .putBitmap(MediaMetadata.METADATA_KEY_DISPLAY_ICON, widgetIcon);
+            }
         }
         session.setMetadata(metadata.build());
 
