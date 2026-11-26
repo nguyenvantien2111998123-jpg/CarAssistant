@@ -47,6 +47,12 @@ public final class SilentMediaBrowserService extends MediaBrowserService {
         session = new MediaSession(this, "MediaImLangSession");
         session.setCallback(new MediaSession.Callback() {
             @Override public void onPlay() { startSilentWindow(); }
+            @Override public void onPlayFromMediaId(String mediaId, Bundle extras) {
+                if ("silent_3s".equals(mediaId)) startSilentWindow();
+            }
+            @Override public void onPrepareFromMediaId(String mediaId, Bundle extras) {
+                Log.i(TAG, "Android Auto prepared media item=" + mediaId);
+            }
             @Override public void onPause() { pauseSilent("Android Auto pause command"); }
             @Override public void onStop() { pauseSilent("Android Auto stop command"); }
             @Override public void onSkipToNext() { startSilentWindow(); }
