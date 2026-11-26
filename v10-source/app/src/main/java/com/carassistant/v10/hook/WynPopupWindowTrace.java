@@ -19,6 +19,7 @@ import android.view.View;
 import android.view.ViewGroup;
 import android.view.WindowManager;
 import java.io.ByteArrayOutputStream;
+import java.nio.ByteBuffer;
 import java.lang.ref.WeakReference;
 import java.util.Collections;
 import java.util.Map;
@@ -250,13 +251,12 @@ public final class WynPopupWindowTrace {
         }
     }
 
+    /** Hash every popup pixel so text-only speed-limit/alert changes are never missed. */
     private static long sampleHash(Bitmap bitmap) {
-        CRC32 crc=new CRC32(); int w=bitmap.getWidth(),h=bitmap.getHeight();
-        for(int y=0;y<8;y++)for(int x=0;x<8;x++) {
-            int color=bitmap.getPixel(Math.min(w-1,x*w/8),Math.min(h-1,y*h/8));
-            crc.update(color>>>24&255); crc.update(color>>>16&255);
-            crc.update(color>>>8&255); crc.update(color&255);
-        }
+        CRC32 crc = new CRC32();
+        ByteBuffer pixels = ByteBuffer.allocate(bitmap.getByteCount());
+        bitmap.copyPixelsToBuffer(pixels);
+        crc.update(pixels.array());
         return crc.getValue();
     }
 
