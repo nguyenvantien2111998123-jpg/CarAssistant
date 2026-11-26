@@ -223,6 +223,7 @@ public final class WynPopupWindowTrace {
             root.draw(new Canvas(bitmap));
             publish(root.getContext(), bitmap, loop, "View.draw:" + root.getClass().getName());
         } catch (Throwable error) {
+            loop.captureInFlight = false;
             bitmap.recycle();
             Log.w(TAG, "View draw fallback failed", error);
         }
@@ -258,6 +259,10 @@ public final class WynPopupWindowTrace {
                     || bitmap.getHeight() < bitmap.getWidth() * 1.2f) {
                 Log.d(TAG, "Ignoring non-popup WYN frame " + bitmap.getWidth()
                         + "x" + bitmap.getHeight());
+                return;
+            }
+            if (!hasVisualContent(bitmap)) {
+                Log.d(TAG, "Ignoring blank/unrendered WYN popup surface");
                 return;
             }
             long hash=sampleHash(bitmap);
@@ -310,6 +315,28 @@ public final class WynPopupWindowTrace {
         } finally {
             if (current != source && !current.isRecycled()) current.recycle();
         }
+    }
+
+    /** Reject transparent/blank surfaces captured before WYN has rendered its warning. */
+    private static boolean hasVisualContent(Bitmap bitmap) {
+        int width = bitmap.getWidth();
+        int height = bitmap.getHeight();
+        int center = bitmap.getPixel(width / 2, height / 2);
+        int visible = 0;
+        int distinct = 0;
+        int[] colors = new int[12];
+        for (int row = 0; row < 12; row++) {
+            int y = Math.min(height - 1, (row * height) / 12);
+            for (int col = 0; col < 8; col++) {
+                int x = Math.min(width - 1, (col * width) / 8);
+                int color = bitmap.getPixel(x, y);
+                if (((color >>> 24) & 0xff) > 24) visible++;
+                boolean seen = color == center;
+                for (int i = 0; i < distinct && !seen; i++) seen = colors[i] == color;
+                if (!seen && distinct < colors.length) colors[distinct++] = color;
+            }
+        }
+        return visible >= 8 && distinct >= 3;
     }
 
     /** Hash every popup pixel so text-only speed-limit/alert changes are never missed. */
