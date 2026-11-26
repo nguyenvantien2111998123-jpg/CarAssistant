@@ -17,6 +17,7 @@ import android.view.View;
 import android.widget.LinearLayout;
 import android.widget.Switch;
 import android.widget.ScrollView;
+import android.widget.SeekBar;
 import android.widget.TextView;
 import androidx.core.content.FileProvider;
 
@@ -223,6 +224,58 @@ public final class V10SettingsActivity extends Activity {
             body.addView(autoplayHint, params(-1, -2));
         });
 
+        addSection("HIỂN THỊ WYN", "Tùy chỉnh kích thước nút Touch và popup WYN trên thẻ media", body -> {
+            android.content.SharedPreferences wynPrefs =
+                    getSharedPreferences("wyn_display_settings", MODE_PRIVATE);
+
+            TextView touchLabel = text("", 14, Color.WHITE);
+            touchLabel.setPadding(dp(4), dp(8), dp(4), dp(2));
+            body.addView(touchLabel, params(-1, -2));
+            SeekBar touchSize = new SeekBar(this);
+            touchSize.setMax(72); // 48..120 dp
+            int savedTouchSize = Math.max(48, Math.min(120,
+                    wynPrefs.getInt("touch_width_dp", 78)));
+            touchSize.setProgress(savedTouchSize - 48);
+            body.addView(touchSize, params(-1, dp(42)));
+            touchLabel.setText("Kích thước nút Touch: " + savedTouchSize + " dp");
+            touchSize.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
+                @Override public void onProgressChanged(SeekBar seekBar, int progress, boolean fromUser) {
+                    touchLabel.setText("Kích thước nút Touch: " + (48 + progress) + " dp");
+                }
+                @Override public void onStartTrackingTouch(SeekBar seekBar) { }
+                @Override public void onStopTrackingTouch(SeekBar seekBar) {
+                    saveWynDisplaySetting("touch_width_dp", 48 + seekBar.getProgress());
+                }
+            });
+
+            TextView overlayLabel = text("", 14, Color.WHITE);
+            overlayLabel.setPadding(dp(4), dp(14), dp(4), dp(2));
+            body.addView(overlayLabel, params(-1, -2));
+            SeekBar overlaySize = new SeekBar(this);
+            overlaySize.setMax(60); // 20..80 percent
+            int savedOverlay = Math.max(20, Math.min(80,
+                    wynPrefs.getInt("media_overlay_percent", 52)));
+            overlaySize.setProgress(savedOverlay - 20);
+            body.addView(overlaySize, params(-1, dp(42)));
+            overlayLabel.setText("Kích thước popup WYN trên thẻ media: " + savedOverlay + "%");
+            overlaySize.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
+                @Override public void onProgressChanged(SeekBar seekBar, int progress, boolean fromUser) {
+                    overlayLabel.setText("Kích thước popup WYN trên thẻ media: "
+                            + (20 + progress) + "%");
+                }
+                @Override public void onStartTrackingTouch(SeekBar seekBar) { }
+                @Override public void onStopTrackingTouch(SeekBar seekBar) {
+                    saveWynDisplaySetting("media_overlay_percent", 20 + seekBar.getProgress());
+                }
+            });
+
+            TextView hint = text(
+                    "Nút Touch tự giữ tỷ lệ ảnh popup WYN. Thanh thứ hai điều chỉnh độ lớn popup phủ lên ảnh bìa trong thẻ media và MediaSession; widget vẫn hiển thị toàn bộ popup WYN riêng.",
+                    12, Color.LTGRAY);
+            hint.setPadding(dp(4), dp(8), dp(4), dp(6));
+            body.addView(hint, params(-1, -2));
+        });
+
         addSection("THU DỮ LIỆU TỰ ĐỘNG", "Một lần bấm thu log hệ thống, sự kiện vô lăng, WYN và trạng thái thiết bị vào cùng một file", body -> {
             geminiLogStatus = text("", 13, Color.LTGRAY);
             geminiLogStatus.setPadding(dp(6), dp(6), dp(6), dp(10));
@@ -281,6 +334,14 @@ public final class V10SettingsActivity extends Activity {
 
         addButton(list, "QUAY LẠI", this::finish);
         refreshStatus();
+    }
+
+    private void saveWynDisplaySetting(String key, int value) {
+        getSharedPreferences("wyn_display_settings", MODE_PRIVATE).edit()
+                .putInt(key, value).apply();
+        Intent changed = new Intent("com.carassistant.v10.ACTION_WYN_DISPLAY_SETTINGS_CHANGED");
+        changed.setPackage(getPackageName());
+        sendBroadcast(changed);
     }
 
     /** Every setup section starts collapsed and toggles when its header is tapped. */
