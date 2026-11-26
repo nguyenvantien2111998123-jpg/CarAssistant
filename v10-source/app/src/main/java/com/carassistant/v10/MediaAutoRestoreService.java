@@ -125,12 +125,14 @@ public final class MediaAutoRestoreService extends Service {
                     boolean sentToBackground =
                             MediaPlaybackAccessibilityService.requestBackgroundSourceApp(
                                     expectedPackage);
+                    requestWynAfterSuccessfulRestore();
                     updateForegroundStatus(sentToBackground
-                            ? "Đã khôi phục media và đưa ứng dụng về nền"
-                            : "Đã khôi phục media; chưa xác nhận ẩn giao diện nguồn");
+                            ? "Đã khôi phục media; đang mở WYN và chờ trang chủ"
+                            : "Đã khôi phục media; đang mở WYN sau khôi phục");
                     Log.i(TAG, "VERIFIED_PHONE_RESTORE source=" + expectedPackage
                             + ", requestedState=" + (autoplay ? "PLAY" : "PAUSE")
-                            + ", backgroundRequested=" + sentToBackground);
+                            + ", backgroundRequested=" + sentToBackground
+                            + ", wynStartupRequested=true");
                     handler.removeCallbacks(restoreAttempt);
                     return;
                 }
@@ -188,6 +190,22 @@ public final class MediaAutoRestoreService extends Service {
     private void updateForegroundStatus(String message) {
         NotificationManager manager = (NotificationManager) getSystemService(NOTIFICATION_SERVICE);
         if (manager != null) manager.notify(NOTIFICATION_ID, buildNotification(message));
+    }
+
+    /**
+     * WYN is launched only after the saved real-media item has been verified and restored.
+     * Its Accessibility service waits for the WYN Home screen to stabilize, then returns
+     * the phone to Home without finishing WYN's task.
+     */
+    private void requestWynAfterSuccessfulRestore() {
+        try {
+            Intent startWyn = new Intent("com.carassistant.v10.ACTION_AUTO_BACKGROUND_WYN")
+                    .setComponent(new ComponentName(this, WynAutoStartReceiver.class));
+            sendBroadcast(startWyn);
+            Log.i(TAG, "WYN startup broadcast sent after verified media restore");
+        } catch (RuntimeException error) {
+            Log.w(TAG, "Could not request WYN after media restore", error);
+        }
     }
 
     private void launchSourceAppOnPhone() {
