@@ -209,26 +209,45 @@ public final class WynPopupWindowTrace {
             long hash=sampleHash(bitmap);
             if(hash==loop.lastHash)return;
             loop.lastHash=hash;
-            ByteArrayOutputStream out=new ByteArrayOutputStream();
-            bitmap.compress(Bitmap.CompressFormat.JPEG,88,out);
-            byte[] jpeg=out.toByteArray();
-            if(jpeg.length>450*1024) {
-                Bitmap small=Bitmap.createScaledBitmap(bitmap,Math.max(1,bitmap.getWidth()/2),
-                        Math.max(1,bitmap.getHeight()/2),true);
-                out.reset(); small.compress(Bitmap.CompressFormat.JPEG,82,out);
-                jpeg=out.toByteArray(); small.recycle();
-            }
+            byte[] png = encodeTransparentPng(bitmap);
+            if (png == null || png.length == 0) return;
             Context app=context.getApplicationContext();
             if(app==null)app=context;
             Intent intent=new Intent(WARNING_ACTION);
             intent.setComponent(new ComponentName("com.carassistant.v10","com.carassistant.v10.WynWarningReceiver"));
             intent.setPackage("com.carassistant.v10");
-            intent.putExtra("jpeg",jpeg);
+            intent.putExtra("png",png);
             app.sendBroadcast(intent);
             Log.i(TAG,"WARNING_FRAME_SENT source="+source+" size="+bitmap.getWidth()+"x"+bitmap.getHeight()
-                    +" bytes="+jpeg.length);
+                    +" bytes="+png.length+" format=PNG_ALPHA");
         } catch(Throwable error) { Log.w(TAG,"Could not publish popup frame",error); }
         finally { if(!bitmap.isRecycled())bitmap.recycle(); }
+    }
+
+    /** Preserve popup transparency; downscale only as much as needed for broadcast size. */
+    private static byte[] encodeTransparentPng(Bitmap source) {
+        Bitmap current = source;
+        try {
+            for (int attempt = 0; attempt < 8; attempt++) {
+                ByteArrayOutputStream out = new ByteArrayOutputStream();
+                current.compress(Bitmap.CompressFormat.PNG, 100, out);
+                byte[] bytes = out.toByteArray();
+                if (bytes.length <= 900 * 1024
+                        || (current.getWidth() <= 180 && current.getHeight() <= 180)) {
+                    return bytes;
+                }
+                Bitmap smaller = Bitmap.createScaledBitmap(current,
+                        Math.max(1, Math.round(current.getWidth() * 0.82f)),
+                        Math.max(1, Math.round(current.getHeight() * 0.82f)), true);
+                if (current != source && !current.isRecycled()) current.recycle();
+                current = smaller;
+            }
+            ByteArrayOutputStream out = new ByteArrayOutputStream();
+            current.compress(Bitmap.CompressFormat.PNG, 100, out);
+            return out.toByteArray();
+        } finally {
+            if (current != source && !current.isRecycled()) current.recycle();
+        }
     }
 
     private static long sampleHash(Bitmap bitmap) {
