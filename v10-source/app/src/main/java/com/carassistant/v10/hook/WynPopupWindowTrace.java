@@ -166,6 +166,7 @@ public final class WynPopupWindowTrace {
     private static final class CaptureLoop implements Runnable {
         final WeakReference<View> root;
         long lastHash = Long.MIN_VALUE;
+        long lastPublishedAt;
         long lastRequest;
         boolean captureInFlight;
         boolean stopped;
@@ -184,7 +185,12 @@ public final class WynPopupWindowTrace {
                     && !captureInFlight && now - lastRequest >= 600L) {
                 lastRequest = now;
                 captureInFlight = true;
-                capture(view, this);
+                try {
+                    capture(view, this);
+                } catch (Throwable error) {
+                    captureInFlight = false;
+                    Log.w(TAG, "Popup capture request failed", error);
+                }
             }
             MAIN.postDelayed(this, 600L);
         }
@@ -256,7 +262,12 @@ public final class WynPopupWindowTrace {
             }
             long hash=sampleHash(bitmap);
             if(hash==loop.lastHash)return;
+            long now = SystemClock.elapsedRealtime();
+            // Flutter popup surfaces may animate. Limit MediaSession artwork updates
+            // to at most one per second so Gearhead keeps the media card stable.
+            if (loop.lastPublishedAt > 0L && now - loop.lastPublishedAt < 1000L) return;
             loop.lastHash=hash;
+            loop.lastPublishedAt=now;
             byte[] png = encodeTransparentPng(bitmap);
             if (png == null || png.length == 0) return;
             Context app=context.getApplicationContext();
