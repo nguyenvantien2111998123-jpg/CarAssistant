@@ -5,6 +5,7 @@ import android.app.NotificationChannel;
 import android.app.NotificationManager;
 import android.app.Service;
 import android.content.Intent;
+import android.content.ComponentName;
 import android.media.AudioAttributes;
 import android.media.MediaPlayer;
 import android.media.browse.MediaBrowser;
@@ -95,9 +96,23 @@ public final class SilentMediaBrowserService extends MediaBrowserService {
                 new MediaBrowser.MediaItem(description, MediaBrowser.MediaItem.FLAG_PLAYABLE)));
     }
 
+    static void onSessionAccessReady() {
+        SilentMediaBrowserService service = instance;
+        if (service != null) service.handler.post(() -> {
+            if (!service.externalPlaying && !service.windowRunning) service.startSilentWindow();
+        });
+    }
+
     static void setExternalMediaPlaying(boolean playing) {
         SilentMediaBrowserService service = instance;
         if (service != null) service.onExternalPlaybackChanged(playing);
+    }
+
+    private boolean hasSessionAccess() {
+        if (Build.VERSION.SDK_INT < 27) return false;
+        NotificationManager manager = getSystemService(NotificationManager.class);
+        return manager != null && manager.isNotificationListenerAccessGranted(
+                new ComponentName(this, MediaSessionWatcherService.class));
     }
 
     private void onExternalPlaybackChanged(boolean playing) {
@@ -115,6 +130,11 @@ public final class SilentMediaBrowserService extends MediaBrowserService {
 
     private void startSilentWindow() {
         if (externalPlaying || windowRunning) return;
+        if (!hasSessionAccess()) {
+            updateNotification("Cần bật quyền Truy cập thông báo để tránh tranh media thật");
+            Log.w(TAG, "Fallback playback withheld because Notification Access is not granted");
+            return;
+        }
         try {
             File mp4 = SilentMp4Factory.getOrCreate(this);
             releasePlayer();
