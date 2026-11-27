@@ -81,8 +81,6 @@ public final class MediaAutoRestoreService extends Service {
                 return;
             }
             connectionStabilized = true;
-            boolean paneWarm = V10PaneWarmupHost.start(MediaAutoRestoreService.this);
-            Log.i(TAG, "Visible media pane prewarm=" + paneWarm);
             Log.i(TAG, "AA connection stable for " + INITIAL_SETTLE_MS
                     + " ms; phone-side media recovery may begin (no headless display)");
             if (TextUtils.isEmpty(expectedPackage)) finishMediaRecovery("no_real_media_checkpoint");
@@ -339,6 +337,7 @@ public final class MediaAutoRestoreService extends Service {
             handler.removeCallbacks(restoreAttempt);
             handler.removeCallbacks(disconnectMonitor);
             handler.removeCallbacks(connectionStabilizer);
+            V10PaneWarmupHost.releaseIfHeadless(this);
             stopForeground(true);
             stopSelf(startId);
             return START_NOT_STICKY;
@@ -350,6 +349,13 @@ public final class MediaAutoRestoreService extends Service {
         completed = false;
         connectionStabilized = false;
         mediaRecoveryFinished = false;
+        boolean paneWarm = V10PaneWarmupHost.start(this);
+        Log.i(TAG, "Visible media pane prewarm at AA connect=" + paneWarm);
+        getSharedPreferences("media_autoplay", MODE_PRIVATE).edit()
+                .putBoolean("media_projection_ready", false)
+                .remove("media_projection_package")
+                .remove("media_projection_component")
+                .apply();
         launchInFlight = false;
         launchAccepted = false;
         launchAttempts = 0;
