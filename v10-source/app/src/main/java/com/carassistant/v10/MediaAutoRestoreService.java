@@ -35,7 +35,7 @@ public final class MediaAutoRestoreService extends Service {
     private static final long INITIAL_SETTLE_MS = 2500L;
     private static final long AA_CONNECTION_POLL_MS = 1000L;
     private static final long SESSION_RETRY_MS = 500L;
-    private static final long VERIFY_WINDOW_MS = 45000L;
+    private static final long VERIFY_WINDOW_MS = 15000L;
     private static final int MAX_LAUNCH_ATTEMPTS = 3;
 
     private static volatile MediaAutoRestoreService instance;
@@ -112,10 +112,17 @@ public final class MediaAutoRestoreService extends Service {
                         .getBoolean("enabled", true);
                 boolean positionRestoreComplete = MediaSessionBridge.applyCheckpoint(
                         MediaAutoRestoreService.this, expectedPackage, autoplay);
+                boolean playbackStateReached = MediaSessionBridge.isCheckpointPlaybackStateReached(
+                        MediaAutoRestoreService.this, expectedPackage, autoplay);
 
-                // Do not start WYN merely because PLAY/PAUSE changed. Wait until the
-                // existing verifier confirms the restored item, state and seek position.
-                if (positionRestoreComplete) {
+                // Once the exact saved item reports the requested PLAY/PAUSE state,
+                // return the phone to Home immediately. Seek-position verification may
+                // still be settling; it must not hold WYN behind the old 45-second gate.
+                if (positionRestoreComplete || playbackStateReached) {
+                    if (!positionRestoreComplete) {
+                        Log.i(TAG, "Exact media item reached requested playback state; "
+                                + "finishing phone recovery without waiting for seek-position tolerance");
+                    }
                     completed = true;
                     getSharedPreferences("media_autoplay", MODE_PRIVATE).edit()
                             .putString("phase", "verified_phone_background_restore")
