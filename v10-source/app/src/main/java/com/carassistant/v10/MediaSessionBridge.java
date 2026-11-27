@@ -1067,8 +1067,10 @@ public final class MediaSessionBridge extends NotificationListenerService {
         MediaController chosen = null;
         MediaController savedCandidate = null;
         MediaController checkpointCandidate = null;
-        MediaController playingCandidate = null;
-        MediaController activeMetadataCandidate = null;
+        MediaController playingExternalCandidate = null;
+        MediaController playingSilentCandidate = null;
+        MediaController activeExternalCandidate = null;
+        MediaController activeSilentCandidate = null;
         String checkpointPackage = getCheckpointPackage(this);
         if (checkpointPackage == null) checkpointPackage = getLastKnownPackage(this);
         String lastPackage = getLastKnownPackage(this);
@@ -1094,20 +1096,31 @@ public final class MediaSessionBridge extends NotificationListenerService {
                     }
                 }
                 PlaybackState state = candidateState;
-                if (playingCandidate == null && state != null
-                        && state.getState() == PlaybackState.STATE_PLAYING) {
-                    playingCandidate = candidate;
+                if (state != null && state.getState() == PlaybackState.STATE_PLAYING) {
+                    if (silentMedia) {
+                        if (playingSilentCandidate == null) playingSilentCandidate = candidate;
+                    } else if (playingExternalCandidate == null) {
+                        playingExternalCandidate = candidate;
+                    }
                 }
-                if (activeMetadataCandidate == null) activeMetadataCandidate = candidate;
+                if (silentMedia) {
+                    if (activeSilentCandidate == null) activeSilentCandidate = candidate;
+                } else if (activeExternalCandidate == null) {
+                    activeExternalCandidate = candidate;
+                }
             }
         }
         // Only a session with both meaningful item identity and a live playback state
         // may become the command target. Keep checkpointCandidate separately so the
         // exact saved item can still be verified/restored when its session reappears.
         // This prevents an idle YouTube process/session from swallowing Next/Prev routing.
-        if (playingCandidate != null) chosen = playingCandidate;
-        else if (activeMetadataCandidate != null) chosen = activeMetadataCandidate;
+        // A real player that has resumed playback must take ownership back from
+        // the always-on Silent Media session, regardless of MediaSessionManager list order.
+        if (playingExternalCandidate != null) chosen = playingExternalCandidate;
+        else if (playingSilentCandidate != null) chosen = playingSilentCandidate;
+        else if (activeExternalCandidate != null) chosen = activeExternalCandidate;
         else if (savedCandidate != null) chosen = savedCandidate;
+        else if (activeSilentCandidate != null) chosen = activeSilentCandidate;
 
         MediaController previous = activeController;
         if (previous != chosen) {
