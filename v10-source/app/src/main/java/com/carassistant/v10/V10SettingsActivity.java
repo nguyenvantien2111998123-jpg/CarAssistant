@@ -269,6 +269,46 @@ public final class V10SettingsActivity extends Activity {
                 }
             });
 
+            TextView overlayXLabel = text("", 14, Color.WHITE);
+            overlayXLabel.setPadding(dp(4), dp(10), dp(4), dp(2));
+            body.addView(overlayXLabel, params(-1, -2));
+            SeekBar overlayX = new SeekBar(this);
+            overlayX.setMax(100);
+            int savedOverlayX = Math.max(0, Math.min(100,
+                    wynPrefs.getInt("media_overlay_x_percent", 50)));
+            overlayX.setProgress(savedOverlayX);
+            body.addView(overlayX, params(-1, dp(42)));
+            overlayXLabel.setText("Vị trí ngang popup WYN: " + savedOverlayX + "%");
+            overlayX.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
+                @Override public void onProgressChanged(SeekBar seekBar, int progress, boolean fromUser) {
+                    overlayXLabel.setText("Vị trí ngang popup WYN: " + progress + "%");
+                }
+                @Override public void onStartTrackingTouch(SeekBar seekBar) { }
+                @Override public void onStopTrackingTouch(SeekBar seekBar) {
+                    saveWynDisplaySetting("media_overlay_x_percent", seekBar.getProgress());
+                }
+            });
+
+            TextView overlayYLabel = text("", 14, Color.WHITE);
+            overlayYLabel.setPadding(dp(4), dp(10), dp(4), dp(2));
+            body.addView(overlayYLabel, params(-1, -2));
+            SeekBar overlayY = new SeekBar(this);
+            overlayY.setMax(100);
+            int savedOverlayY = Math.max(0, Math.min(100,
+                    wynPrefs.getInt("media_overlay_y_percent", 50)));
+            overlayY.setProgress(savedOverlayY);
+            body.addView(overlayY, params(-1, dp(42)));
+            overlayYLabel.setText("Vị trí dọc popup WYN: " + savedOverlayY + "%");
+            overlayY.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
+                @Override public void onProgressChanged(SeekBar seekBar, int progress, boolean fromUser) {
+                    overlayYLabel.setText("Vị trí dọc popup WYN: " + progress + "%");
+                }
+                @Override public void onStartTrackingTouch(SeekBar seekBar) { }
+                @Override public void onStopTrackingTouch(SeekBar seekBar) {
+                    saveWynDisplaySetting("media_overlay_y_percent", seekBar.getProgress());
+                }
+            });
+
             TextView hint = text(
                     "Nút Touch tự giữ tỷ lệ ảnh popup WYN. Thanh thứ hai điều chỉnh độ lớn popup phủ lên ảnh bìa trong thẻ media và MediaSession; widget vẫn hiển thị toàn bộ popup WYN riêng.",
                     12, Color.LTGRAY);

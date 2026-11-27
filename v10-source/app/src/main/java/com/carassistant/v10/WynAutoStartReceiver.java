@@ -15,7 +15,8 @@ public final class WynAutoStartReceiver extends BroadcastReceiver {
         if (intent == null || !ACTION.equals(intent.getAction())) return;
         context.getSharedPreferences("wyn_auto_start", Context.MODE_PRIVATE).edit()
                 .putBoolean("background_after_load", true)
-                .putLong("requested_at", System.currentTimeMillis()).commit();
+                .putLong("requested_at", System.currentTimeMillis())
+                .putLong("home_at", System.currentTimeMillis() + 30000L).commit();
         final PendingResult pending = goAsync();
         RootShellSession.EXEC.execute(() -> {
             RootShellSession shell = new RootShellSession();

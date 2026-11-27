@@ -26,7 +26,7 @@ public final class MediaRestoreCompleteReceiver extends BroadcastReceiver {
             try {
                 String output = "";
                 try {
-                    output = shell.run(8, "input keyevent 3; sleep 0.35");
+                    output = shell.run(8, "input keyevent 3; sleep 1.0");
                 } catch (Throwable homeError) {
                     // Recovery is already complete. Still allow WYN to start; its own
                     // readiness gate will return the phone to Home after its data loads.

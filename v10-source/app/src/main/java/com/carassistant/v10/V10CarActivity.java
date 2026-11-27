@@ -973,7 +973,7 @@ public final class V10CarActivity
             mediaTitle.setText("Bật quyền media");
             mediaArtist.setText("Chạm để cấp quyền đồng bộ trình phát");
             if (mediaArtwork != null) {
-                Bitmap warningOnly = WynWarningStore.composeMediaArtwork(null, getConfiguredMediaOverlayPercent());
+                Bitmap warningOnly = WynWarningStore.composeMediaArtwork(null, getConfiguredMediaOverlayPercent(), getConfiguredMediaOverlayXPercent(), getConfiguredMediaOverlayYPercent());
                 if (warningOnly != null) mediaArtwork.setImageBitmap(warningOnly);
                 else mediaArtwork.setImageDrawable(null);
             }
@@ -983,7 +983,7 @@ public final class V10CarActivity
             mediaTitle.setText("Chưa có media đang phát");
             mediaArtist.setText("Mở YouTube, Zing MP3 hoặc ứng dụng nghe nhạc");
             if (mediaArtwork != null) {
-                Bitmap warningOnly = WynWarningStore.composeMediaArtwork(null, getConfiguredMediaOverlayPercent());
+                Bitmap warningOnly = WynWarningStore.composeMediaArtwork(null, getConfiguredMediaOverlayPercent(), getConfiguredMediaOverlayXPercent(), getConfiguredMediaOverlayYPercent());
                 if (warningOnly != null) mediaArtwork.setImageBitmap(warningOnly);
                 else mediaArtwork.setImageDrawable(null);
             }
@@ -992,7 +992,7 @@ public final class V10CarActivity
         mediaTitle.setText(TextUtils.isEmpty(state.title) ? "Đang phát media" : state.title);
         mediaArtist.setText(TextUtils.isEmpty(state.artist) ? state.packageName : state.artist);
         if (mediaArtwork != null) {
-            Bitmap artwork = WynWarningStore.composeMediaArtwork(state.artwork, getConfiguredMediaOverlayPercent());
+            Bitmap artwork = WynWarningStore.composeMediaArtwork(state.artwork, getConfiguredMediaOverlayPercent(), getConfiguredMediaOverlayXPercent(), getConfiguredMediaOverlayYPercent());
             if (artwork != null) mediaArtwork.setImageBitmap(artwork);
             else mediaArtwork.setImageDrawable(null);
         }
@@ -1721,6 +1721,16 @@ private void hideApps() {
     private int getConfiguredMediaOverlayPercent() {
         return Math.max(20, Math.min(80, getSharedPreferences(
                 "wyn_display_settings", MODE_PRIVATE).getInt("media_overlay_percent", 52)));
+    }
+
+    private int getConfiguredMediaOverlayXPercent() {
+        return Math.max(0, Math.min(100, getSharedPreferences(
+                "wyn_display_settings", MODE_PRIVATE).getInt("media_overlay_x_percent", 50)));
+    }
+
+    private int getConfiguredMediaOverlayYPercent() {
+        return Math.max(0, Math.min(100, getSharedPreferences(
+                "wyn_display_settings", MODE_PRIVATE).getInt("media_overlay_y_percent", 50)));
     }
 
     private void updateFloatingTouchWarningIcon() {

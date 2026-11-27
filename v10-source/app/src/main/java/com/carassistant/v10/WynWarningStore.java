@@ -6,10 +6,9 @@ import android.graphics.Color;
 import android.graphics.Paint;
 import android.graphics.RectF;
 
-/** Shared WYN warning bitmap cache and independent Touch/card/widget artwork renderers. */
+/** WYN sign crop and popup-over-media artwork shared by the AA card and widget. */
 public final class WynWarningStore {
     private static volatile Bitmap warning;
-
     private WynWarningStore() { }
 
     public static Bitmap getWarning() {
@@ -19,22 +18,22 @@ public final class WynWarningStore {
 
     public static synchronized void setWarning(Bitmap value) {
         if (value == null || value.isRecycled()) return;
-        // Keep the previous immutable frame alive for any MediaSession/UI consumer
-        // still holding its reference; the replacement is reclaimed by normal GC.
-        warning = cropPopupHeaderAndTicker(value);
+        warning = cropLowerSignHalf(value);
         MediaSessionBridge.onWynWarningChanged();
         V10CarActivity.notifyWynWarningChanged();
     }
 
-    /**
-     * Media card artwork: warning occupies a centered full-width top band (one third);
-     * the media cover remains visible in the lower two thirds.
-     */
     public static Bitmap composeMediaArtwork(Bitmap media) {
-        return composeMediaArtwork(media, 52);
+        return composeMediaArtwork(media, 52, 50, 50);
     }
 
     public static Bitmap composeMediaArtwork(Bitmap media, int overlayPercent) {
+        return composeMediaArtwork(media, overlayPercent, 50, 50);
+    }
+
+    /** Draw the sign-only popup over the media cover, with user-adjustable size and position. */
+    public static Bitmap composeMediaArtwork(
+            Bitmap media, int overlayPercent, int xPercent, int yPercent) {
         Bitmap alert = getWarning();
         if (alert == null) return media;
         final int size = 512;
@@ -46,50 +45,39 @@ public final class WynWarningStore {
         } else {
             canvas.drawColor(Color.rgb(17, 22, 28));
         }
-        final float bandHeight = size / 3f;
-        final float margin = 12f;
-        Paint panel = new Paint(Paint.ANTI_ALIAS_FLAG);
-        panel.setColor(Color.argb(238, 8, 12, 16));
-        canvas.drawRect(0, 0, size, bandHeight, panel);
-        float scale = Math.min((size - margin * 2f) / alert.getWidth(),
-                (bandHeight - margin * 2f) / alert.getHeight());
+        int percent = Math.max(20, Math.min(80, overlayPercent));
+        float maxWidth = size * percent / 100f;
+        float maxHeight = size * 0.82f;
+        float scale = Math.min(maxWidth / alert.getWidth(), maxHeight / alert.getHeight());
         float width = Math.max(1f, alert.getWidth() * scale);
         float height = Math.max(1f, alert.getHeight() * scale);
-        float left = (size - width) / 2f;
-        float top = (bandHeight - height) / 2f;
+        float x = Math.max(0, Math.min(100, xPercent)) / 100f;
+        float y = Math.max(0, Math.min(100, yPercent)) / 100f;
+        float left = (size - width) * x;
+        float top = (size - height) * y;
         canvas.drawBitmap(alert, null, new RectF(left, top, left + width, top + height), paint);
         return output;
     }
 
-    /** Widget uses the full warning bitmap in its original aspect ratio, not card art. */
-    public static Bitmap makeWidgetIcon() {
+    /** The existing draggable Touch button keeps the sign-only warning image. */
+    public static Bitmap makeTouchIcon() {
         Bitmap alert = getWarning();
         return alert == null ? null : alert.copy(Bitmap.Config.ARGB_8888, true);
     }
 
-    /** Remove WYN's branded top header and scrolling footer from the captured popup. */
-    private static Bitmap cropPopupHeaderAndTicker(Bitmap source) {
+    /** The speed display is above the warning sign in WYN's popup: keep only the lower half. */
+    private static Bitmap cropLowerSignHalf(Bitmap source) {
         if (source == null || source.isRecycled()) return null;
         int width = source.getWidth();
         int height = source.getHeight();
-        if (width < 80 || height < 120 || height < width * 1.2f) {
-            return source.copy(Bitmap.Config.ARGB_8888, true);
-        }
-        int top = Math.round(height * 0.12f);
-        int bottom = Math.round(height * 0.10f);
+        if (width < 80 || height < 120) return source.copy(Bitmap.Config.ARGB_8888, true);
+        int top = height / 2;
         try {
-            return Bitmap.createBitmap(source, 0, top, width, Math.max(1, height - top - bottom))
+            return Bitmap.createBitmap(source, 0, top, width, height - top)
                     .copy(Bitmap.Config.ARGB_8888, true);
         } catch (RuntimeException error) {
             return source.copy(Bitmap.Config.ARGB_8888, true);
         }
-    }
-
-    /** Full popup bitmap for the existing draggable Touch surface; preserve alpha and aspect. */
-    public static Bitmap makeTouchIcon() {
-        Bitmap alert = getWarning();
-        if (alert == null) return null;
-        return alert.copy(Bitmap.Config.ARGB_8888, true);
     }
 
     private static void drawCenterCrop(Canvas canvas, Bitmap bitmap, RectF destination, Paint paint) {

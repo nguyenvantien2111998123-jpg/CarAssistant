@@ -46,7 +46,6 @@ public final class MediaSessionBridge extends NotificationListenerService {
     private static final String CHECKPOINT_SPEED = "checkpoint_speed";
     private static final String CHECKPOINT_ELAPSED_REALTIME = "checkpoint_elapsed_realtime";
     private static final String GEARHEAD_PACKAGE = "com.google.android.projection.gearhead";
-    private static final String SILENT_MEDIA_PACKAGE = "com.carassistant.mediaimlang";
     private static final String AA_TRIGGER_PREF = "last_aa_notification_restore";
     private static final String AA_TRIGGER_ELAPSED_PREF = "last_aa_notification_restore_elapsed";
     private static final String AA_CONNECTED_PREF = "aa_connected";
@@ -73,8 +72,17 @@ public final class MediaSessionBridge extends NotificationListenerService {
 
     private int getWynMediaOverlayPercent() {
         return Math.max(20, Math.min(80, getSharedPreferences(
-                "wyn_display_settings", Context.MODE_PRIVATE)
-                .getInt("media_overlay_percent", 52)));
+                "wyn_display_settings", Context.MODE_PRIVATE).getInt("media_overlay_percent", 52)));
+    }
+
+    private int getWynMediaOverlayXPercent() {
+        return Math.max(0, Math.min(100, getSharedPreferences(
+                "wyn_display_settings", Context.MODE_PRIVATE).getInt("media_overlay_x_percent", 50)));
+    }
+
+    private int getWynMediaOverlayYPercent() {
+        return Math.max(0, Math.min(100, getSharedPreferences(
+                "wyn_display_settings", Context.MODE_PRIVATE).getInt("media_overlay_y_percent", 50)));
     }
     private static volatile MediaController activeController;
     private static volatile MediaController checkpointController;
@@ -157,10 +165,6 @@ public final class MediaSessionBridge extends NotificationListenerService {
             MediaMetadata metadata = controller.getMetadata();
             PlaybackState state = controller.getPlaybackState();
             String packageName = controller.getPackageName();
-            if (isInternalMediaPackage(packageName)) {
-                Log.d(TAG, "Silent Media is a mirror/keepalive source only; checkpoint unchanged");
-                return;
-            }
             String savedPackage = getCheckpointPackage(this);
             boolean sameSavedSource = TextUtils.isEmpty(savedPackage)
                     || savedPackage.equals(packageName);
@@ -247,7 +251,7 @@ public final class MediaSessionBridge extends NotificationListenerService {
         if (context == null) return null;
         String value = context.getSharedPreferences(RESUME_PREFS, Context.MODE_PRIVATE)
                 .getString(LAST_PACKAGE, null);
-        return TextUtils.isEmpty(value) || isInternalMediaPackage(value) ? null : value;
+        return TextUtils.isEmpty(value) ? null : value;
     }
 
     /** Exact app Activity previously projected by V10, when it belongs to the saved media package. */
@@ -257,7 +261,7 @@ public final class MediaSessionBridge extends NotificationListenerService {
                 .getString(CHECKPOINT_TASK_COMPONENT, null);
         if (TextUtils.isEmpty(value)) return null;
         ComponentName component = ComponentName.unflattenFromString(value);
-        return component == null || isInternalMediaPackage(component.getPackageName()) ? null : component;
+        return component;
     }
 
     /** Stable content identifier supplied by the source MediaSession, when available. */
@@ -304,12 +308,7 @@ public final class MediaSessionBridge extends NotificationListenerService {
         if (context == null) return null;
         String value = context.getSharedPreferences(RESUME_PREFS, Context.MODE_PRIVATE)
                 .getString(CHECKPOINT_PACKAGE, null);
-        return TextUtils.isEmpty(value) || isInternalMediaPackage(value) ? null : value;
-    }
-
-    /** Silent Media is a valid live transport target, but never a real-media restore source. */
-    public static boolean isInternalMediaPackage(String packageName) {
-        return SILENT_MEDIA_PACKAGE.equals(packageName);
+        return TextUtils.isEmpty(value) ? null : value;
     }
 
     /**
@@ -372,7 +371,7 @@ public final class MediaSessionBridge extends NotificationListenerService {
 
     /** True only when the saved source package is publishing the exact saved media item. */
     public static boolean isCheckpointMediaReady(Context context, String expectedPackage) {
-        if (context == null || TextUtils.isEmpty(expectedPackage) || isInternalMediaPackage(expectedPackage)) return false;
+        if (context == null || TextUtils.isEmpty(expectedPackage)) return false;
         MediaController controller = checkpointController;
         if (controller == null || !expectedPackage.equals(controller.getPackageName())) {
             controller = activeController;
@@ -394,7 +393,7 @@ public final class MediaSessionBridge extends NotificationListenerService {
      * Return true only after the source session reports the requested state and position.
      */
     public static boolean applyCheckpoint(Context context, String expectedPackage, boolean autoplay) {
-        if (context == null || TextUtils.isEmpty(expectedPackage) || isInternalMediaPackage(expectedPackage)) return false;
+        if (context == null || TextUtils.isEmpty(expectedPackage)) return false;
         MediaController controller = checkpointController;
         if (controller == null || !expectedPackage.equals(controller.getPackageName())) {
             controller = activeController;
@@ -473,7 +472,7 @@ public final class MediaSessionBridge extends NotificationListenerService {
     public static boolean isCheckpointPlaybackStateReached(
             Context context, String expectedPackage, boolean autoplay) {
         if (context == null || TextUtils.isEmpty(expectedPackage)
-                || isInternalMediaPackage(expectedPackage)) return false;
+                ) return false;
         MediaController controller = checkpointController;
         if (controller == null || !expectedPackage.equals(controller.getPackageName())) {
             controller = activeController;
@@ -499,7 +498,7 @@ public final class MediaSessionBridge extends NotificationListenerService {
      * player that happened to become active while Android Auto was reconnecting.
      */
     public static boolean resumePackage(String expectedPackage) {
-        if (TextUtils.isEmpty(expectedPackage) || isInternalMediaPackage(expectedPackage)) return false;
+        if (TextUtils.isEmpty(expectedPackage)) return false;
         MediaController controller = activeController;
         if (controller == null || !expectedPackage.equals(controller.getPackageName())) return false;
         PlaybackState state = controller.getPlaybackState();
@@ -716,15 +715,13 @@ public final class MediaSessionBridge extends NotificationListenerService {
                                 TextUtils.isEmpty(savedPackage) ? "CarAsistant" : savedPackage)
                         .putLong(MediaMetadata.METADATA_KEY_DURATION, savedDuration);
                 if (warning != null) {
-                    Bitmap cardArtwork = safeMirrorArtwork(WynWarningStore.composeMediaArtwork(
-                            null, getWynMediaOverlayPercent()));
-                    Bitmap widgetIcon = WynWarningStore.makeWidgetIcon();
-                    if (cardArtwork != null) {
-                        saved.putBitmap(MediaMetadata.METADATA_KEY_ALBUM_ART, cardArtwork);
-                    }
-                    if (widgetIcon != null) {
-                        saved.putBitmap(MediaMetadata.METADATA_KEY_ART, widgetIcon)
-                                .putBitmap(MediaMetadata.METADATA_KEY_DISPLAY_ICON, widgetIcon);
+                    Bitmap combinedArtwork = safeMirrorArtwork(WynWarningStore.composeMediaArtwork(
+                            null, getWynMediaOverlayPercent(),
+                            getWynMediaOverlayXPercent(), getWynMediaOverlayYPercent()));
+                    if (combinedArtwork != null) {
+                        saved.putBitmap(MediaMetadata.METADATA_KEY_ALBUM_ART, combinedArtwork)
+                                .putBitmap(MediaMetadata.METADATA_KEY_ART, combinedArtwork)
+                                .putBitmap(MediaMetadata.METADATA_KEY_DISPLAY_ICON, combinedArtwork);
                     }
                 }
                 session.setMetadata(saved.build());
@@ -736,15 +733,13 @@ public final class MediaSessionBridge extends NotificationListenerService {
                         .putString(MediaMetadata.METADATA_KEY_ARTIST, "Trình điều khiển media")
                         .putString(MediaMetadata.METADATA_KEY_ALBUM, "CarAsistant");
                 if (warning != null) {
-                    Bitmap cardArtwork = safeMirrorArtwork(WynWarningStore.composeMediaArtwork(
-                            null, getWynMediaOverlayPercent()));
-                    Bitmap widgetIcon = WynWarningStore.makeWidgetIcon();
-                    if (cardArtwork != null) {
-                        empty.putBitmap(MediaMetadata.METADATA_KEY_ALBUM_ART, cardArtwork);
-                    }
-                    if (widgetIcon != null) {
-                        empty.putBitmap(MediaMetadata.METADATA_KEY_ART, widgetIcon)
-                                .putBitmap(MediaMetadata.METADATA_KEY_DISPLAY_ICON, widgetIcon);
+                    Bitmap combinedArtwork = safeMirrorArtwork(WynWarningStore.composeMediaArtwork(
+                            null, getWynMediaOverlayPercent(),
+                            getWynMediaOverlayXPercent(), getWynMediaOverlayYPercent()));
+                    if (combinedArtwork != null) {
+                        empty.putBitmap(MediaMetadata.METADATA_KEY_ALBUM_ART, combinedArtwork)
+                                .putBitmap(MediaMetadata.METADATA_KEY_ART, combinedArtwork)
+                                .putBitmap(MediaMetadata.METADATA_KEY_DISPLAY_ICON, combinedArtwork);
                     }
                 }
                 session.setMetadata(empty.build());
@@ -761,17 +756,14 @@ public final class MediaSessionBridge extends NotificationListenerService {
                         TextUtils.isEmpty(state.artist) ? state.packageName : state.artist)
                 .putString(MediaMetadata.METADATA_KEY_ALBUM, state.packageName)
                 .putLong(MediaMetadata.METADATA_KEY_DURATION, Math.max(0L, state.duration));
-        Bitmap warning = WynWarningStore.getWarning();
-        Bitmap artwork = safeMirrorArtwork(WynWarningStore.composeMediaArtwork(state.artwork, getWynMediaOverlayPercent()));
-        if (artwork != null) metadata.putBitmap(MediaMetadata.METADATA_KEY_ALBUM_ART, artwork);
-        if (warning != null) {
-            // Keep the widget/icon channels dedicated to the full WYN popup. The
-            // combined media-cover overlay is reserved for the larger media artwork.
-            Bitmap widgetIcon = WynWarningStore.makeWidgetIcon();
-            if (widgetIcon != null) {
-                metadata.putBitmap(MediaMetadata.METADATA_KEY_ART, widgetIcon)
-                        .putBitmap(MediaMetadata.METADATA_KEY_DISPLAY_ICON, widgetIcon);
-            }
+        Bitmap artwork = safeMirrorArtwork(WynWarningStore.composeMediaArtwork(
+                state.artwork, getWynMediaOverlayPercent(),
+                getWynMediaOverlayXPercent(), getWynMediaOverlayYPercent()));
+        if (artwork != null) {
+            // AA media card and horizontal widget share the same popup-over-cover image.
+            metadata.putBitmap(MediaMetadata.METADATA_KEY_ALBUM_ART, artwork)
+                    .putBitmap(MediaMetadata.METADATA_KEY_ART, artwork)
+                    .putBitmap(MediaMetadata.METADATA_KEY_DISPLAY_ICON, artwork);
         }
         session.setMetadata(metadata.build());
 
@@ -1032,45 +1024,17 @@ public final class MediaSessionBridge extends NotificationListenerService {
         }
     }
 
-    /** Real media sources may be checkpointed and restored; Silent Media may not. */
+    /** All external players follow one uniform MediaSession selection path. */
     private static boolean isUsableExternalSession(MediaController controller) {
-        return controller != null && !isInternalMediaPackage(controller.getPackageName())
-                && isUsableMirrorSession(controller);
-    }
-
-    /**
-     * Silent Media is a first-class live media source. Like any player it must
-     * expose a live playback state; unlike content players it is excluded only
-     * from durable real-content checkpoint/restore.
-     */
-    private static boolean isUsableSilentMediaSession(MediaController controller) {
-        if (controller == null || !SILENT_MEDIA_PACKAGE.equals(controller.getPackageName())) {
-            return false;
-        }
-        try {
-            PlaybackState state = controller.getPlaybackState();
-            if (state == null) return false;
-            int value = state.getState();
-            return value == PlaybackState.STATE_PLAYING
-                    || value == PlaybackState.STATE_PAUSED
-                    || value == PlaybackState.STATE_BUFFERING
-                    || value == PlaybackState.STATE_CONNECTING
-                    || value == PlaybackState.STATE_FAST_FORWARDING
-                    || value == PlaybackState.STATE_REWINDING;
-        } catch (RuntimeException error) {
-            Log.w(TAG, "Could not inspect Silent Media session", error);
-            return false;
-        }
+        return controller != null && isUsableMirrorSession(controller);
     }
 
     private void refreshControllers(List<MediaController> controllers) {
         MediaController chosen = null;
         MediaController savedCandidate = null;
         MediaController checkpointCandidate = null;
-        MediaController playingExternalCandidate = null;
-        MediaController playingSilentCandidate = null;
-        MediaController activeExternalCandidate = null;
-        MediaController activeSilentCandidate = null;
+        MediaController playingCandidate = null;
+        MediaController activeCandidate = null;
         String checkpointPackage = getCheckpointPackage(this);
         if (checkpointPackage == null) checkpointPackage = getLastKnownPackage(this);
         String lastPackage = getLastKnownPackage(this);
@@ -1078,49 +1042,27 @@ public final class MediaSessionBridge extends NotificationListenerService {
             for (MediaController candidate : controllers) {
                 if (candidate == null || getPackageName().equals(candidate.getPackageName())) continue;
                 PlaybackState candidateState = candidate.getPlaybackState();
-                boolean silentMedia = isInternalMediaPackage(candidate.getPackageName());
-                // Silent Media participates in exactly the same live-session selection
-                // as third-party players. The only exception is persistence: it is not
-                // a real content source and must never replace a YouTube/Zing checkpoint.
-                if (silentMedia) {
-                    if (!isUsableSilentMediaSession(candidate)) continue;
-                } else {
-                    if (checkpointPackage != null
-                            && checkpointPackage.equals(candidate.getPackageName())) {
-                        checkpointCandidate = candidate;
-                    }
-                    if (!isUsableExternalSession(candidate)) continue;
-                    if (savedCandidate == null && lastPackage != null
-                            && lastPackage.equals(candidate.getPackageName())) {
-                        savedCandidate = candidate;
-                    }
+                if (checkpointPackage != null
+                        && checkpointPackage.equals(candidate.getPackageName())) {
+                    checkpointCandidate = candidate;
                 }
-                PlaybackState state = candidateState;
-                if (state != null && state.getState() == PlaybackState.STATE_PLAYING) {
-                    if (silentMedia) {
-                        if (playingSilentCandidate == null) playingSilentCandidate = candidate;
-                    } else if (playingExternalCandidate == null) {
-                        playingExternalCandidate = candidate;
-                    }
+                if (!isUsableExternalSession(candidate)) continue;
+                if (savedCandidate == null && lastPackage != null
+                        && lastPackage.equals(candidate.getPackageName())) {
+                    savedCandidate = candidate;
                 }
-                if (silentMedia) {
-                    if (activeSilentCandidate == null) activeSilentCandidate = candidate;
-                } else if (activeExternalCandidate == null) {
-                    activeExternalCandidate = candidate;
+                if (candidateState != null
+                        && candidateState.getState() == PlaybackState.STATE_PLAYING
+                        && playingCandidate == null) {
+                    playingCandidate = candidate;
                 }
+                if (activeCandidate == null) activeCandidate = candidate;
             }
         }
-        // Only a session with both meaningful item identity and a live playback state
-        // may become the command target. Keep checkpointCandidate separately so the
-        // exact saved item can still be verified/restored when its session reappears.
-        // This prevents an idle YouTube process/session from swallowing Next/Prev routing.
-        // A real player that has resumed playback must take ownership back from
-        // the always-on Silent Media session, regardless of MediaSessionManager list order.
-        if (playingExternalCandidate != null) chosen = playingExternalCandidate;
-        else if (playingSilentCandidate != null) chosen = playingSilentCandidate;
-        else if (activeExternalCandidate != null) chosen = activeExternalCandidate;
+        // No app-specific exception: the currently playing external app owns the mirror.
+        if (playingCandidate != null) chosen = playingCandidate;
+        else if (activeCandidate != null) chosen = activeCandidate;
         else if (savedCandidate != null) chosen = savedCandidate;
-        else if (activeSilentCandidate != null) chosen = activeSilentCandidate;
 
         MediaController previous = activeController;
         if (previous != chosen) {
@@ -1164,10 +1106,8 @@ public final class MediaSessionBridge extends NotificationListenerService {
             snapshot = Snapshot.empty();
         } else {
             try {
-                if (!isInternalMediaPackage(controller.getPackageName())) {
-                    getSharedPreferences(RESUME_PREFS, Context.MODE_PRIVATE).edit()
-                            .putString(LAST_PACKAGE, controller.getPackageName()).apply();
-                }
+                getSharedPreferences(RESUME_PREFS, Context.MODE_PRIVATE).edit()
+                        .putString(LAST_PACKAGE, controller.getPackageName()).apply();
             } catch (RuntimeException error) {
                 Log.d(TAG, "Could not persist last media package", error);
             }
