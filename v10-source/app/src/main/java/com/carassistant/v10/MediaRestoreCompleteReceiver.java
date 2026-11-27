@@ -24,18 +24,25 @@ public final class MediaRestoreCompleteReceiver extends BroadcastReceiver {
         RootShellSession.EXEC.execute(() -> {
             RootShellSession shell = new RootShellSession();
             try {
-                String output = shell.run(8, "input keyevent 3; sleep 0.35");
+                String output = "";
+                try {
+                    output = shell.run(8, "input keyevent 3; sleep 0.35");
+                } catch (Throwable homeError) {
+                    // Recovery is already complete. Still allow WYN to start; its own
+                    // readiness gate will return the phone to Home after its data loads.
+                    Log.w(TAG, "Could not send Home to the media app; continue independent WYN startup",
+                            homeError);
+                }
                 Intent startWyn = new Intent("com.carassistant.v10.ACTION_AUTO_BACKGROUND_WYN")
                         .setComponent(new ComponentName(context, WynAutoStartReceiver.class))
                         .putExtra("restore_result", result);
                 context.sendBroadcast(startWyn);
                 pending.setResultCode(Activity.RESULT_OK);
-                Log.i(TAG, "Media app sent to phone background; independent WYN flow signalled; "
-                        + "restoreResult=" + result + "; output=" + output);
+                Log.i(TAG, "Media recovery completion handled; independent WYN flow signalled; "
+                        + "restoreResult=" + result + "; homeOutput=" + output);
             } catch (Throwable error) {
                 pending.setResultCode(Activity.RESULT_CANCELED);
-                Log.e(TAG, "Could not background phone media app after recovery", error);
-                // Do not start WYN over a media app that may still be foreground.
+                Log.e(TAG, "Could not signal independent WYN startup after media recovery", error);
             } finally {
                 shell.destroy();
                 pending.finish();
