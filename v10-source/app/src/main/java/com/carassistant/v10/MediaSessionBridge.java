@@ -636,11 +636,10 @@ public final class MediaSessionBridge extends NotificationListenerService {
                     @Override public void onSeekForward() { MediaSessionBridge.seekBy(15000L); }
                     @Override public void onSeekBackward() { MediaSessionBridge.seekBy(-15000L); }
                     @Override public void onVoiceAssistant() {
-                        MediaController source = activeController;
-                        if (source == null) {
-                            Log.i(TAG, "STEERING double-NEXT ignored: no active media session is available");
-                            return;
-                        }
+                        // Double-NEXT is a CarAsistant assistant gesture, not a media
+                        // transport command. It must remain available even during the brief
+                        // gap where Silent Media or a source app has no selected controller.
+                        Log.i(TAG, "STEERING double-NEXT -> CarAsistant voice assistant");
                         Intent intent = new Intent("com.carassistant.v10.STEERING_VOICE")
                                 .setPackage(getPackageName());
                         sendBroadcast(intent);
