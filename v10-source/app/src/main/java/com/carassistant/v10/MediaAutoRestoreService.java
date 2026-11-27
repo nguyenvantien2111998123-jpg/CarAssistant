@@ -51,7 +51,7 @@ public final class MediaAutoRestoreService extends Service {
     private boolean launchAccepted;
     private boolean completed;
     private boolean connectionStabilized;
-    private boolean wynStartupRequested;
+    private boolean mediaRecoveryFinished;
 
     private final Runnable disconnectMonitor = new Runnable() {
         @Override public void run() {
@@ -60,6 +60,7 @@ public final class MediaAutoRestoreService extends Service {
             if (!connected) {
                 handler.removeCallbacks(restoreAttempt);
                 handler.removeCallbacks(connectionStabilizer);
+                V10PaneWarmupHost.releaseIfHeadless(MediaAutoRestoreService.this);
                 stopForeground(true);
                 stopSelf();
                 Log.i(TAG, "AA connected notification removed; phone-side recovery stopped");
@@ -80,9 +81,11 @@ public final class MediaAutoRestoreService extends Service {
                 return;
             }
             connectionStabilized = true;
+            boolean paneWarm = V10PaneWarmupHost.start(MediaAutoRestoreService.this);
+            Log.i(TAG, "Visible media pane prewarm=" + paneWarm);
             Log.i(TAG, "AA connection stable for " + INITIAL_SETTLE_MS
                     + " ms; phone-side media recovery may begin (no headless display)");
-            if (TextUtils.isEmpty(expectedPackage)) finishRestoreAndStartWyn("no_real_media_checkpoint");
+            if (TextUtils.isEmpty(expectedPackage)) finishMediaRecovery("no_real_media_checkpoint");
             else handler.post(restoreAttempt);
         }
     };
@@ -91,7 +94,7 @@ public final class MediaAutoRestoreService extends Service {
         @Override public void run() {
             if (completed || !connectionStabilized) return;
             if (TextUtils.isEmpty(expectedPackage)) {
-                finishRestoreAndStartWyn("no_real_media_checkpoint");
+                finishMediaRecovery("no_real_media_checkpoint");
                 return;
             }
             if (!getSharedPreferences("carassistant_media_resume", MODE_PRIVATE)
@@ -128,10 +131,10 @@ public final class MediaAutoRestoreService extends Service {
                             .remove("youtube_history_stage")
                             .apply();
 
-                    finishRestoreAndStartWyn("restore_success");
+                    finishMediaRecovery("restore_success");
                     Log.i(TAG, "VERIFIED_PHONE_RESTORE source=" + expectedPackage
                             + ", requestedState=" + (autoplay ? "PLAY" : "PAUSE")
-                            + ", wynStartupRequested=" + wynStartupRequested);
+                            + ", mediaRecoveryFinished=" + mediaRecoveryFinished);
                     handler.removeCallbacks(restoreAttempt);
                     return;
                 }
@@ -143,7 +146,7 @@ public final class MediaAutoRestoreService extends Service {
             } else {
                 Log.w(TAG, "Phone-side restore verification expired; checkpoint retained; "
                         + "continue to Home then WYN");
-                finishRestoreAndStartWyn("restore_verification_timeout");
+                finishMediaRecovery("restore_verification_timeout");
             }
         }
     };
@@ -193,31 +196,60 @@ public final class MediaAutoRestoreService extends Service {
     }
 
     /**
-     * End media recovery on success or bounded failure. Receiver sends Home first,
-     * then launches WYN; WYN is backgrounded only after its Home surface is detected.
+     * Finish only the media-recovery workflow. Persist the app task for immediate
+     * projection when V10 opens, then publish a completion event. A separate
+     * receiver backgrounds the phone task and starts the independent WYN flow.
      */
-    private void finishRestoreAndStartWyn(String reason) {
-        if (wynStartupRequested) return;
-        wynStartupRequested = true;
+    private void finishMediaRecovery(String reason) {
+        if (mediaRecoveryFinished) return;
+        mediaRecoveryFinished = true;
         completed = true;
         handler.removeCallbacks(restoreAttempt);
-        updateForegroundStatus("Đã kết thúc khôi phục media; đang mở WYN");
+
+        android.content.SharedPreferences.Editor projection =
+                getSharedPreferences("media_autoplay", MODE_PRIVATE).edit()
+                        .putBoolean("media_projection_ready", !TextUtils.isEmpty(expectedPackage))
+                        .putString("media_projection_result", reason)
+                        .putLong("media_projection_ready_at", System.currentTimeMillis())
+                        .putBoolean("pending_projection_restore", false)
+                        .putBoolean("content_restore_requested", false);
+        if (!TextUtils.isEmpty(expectedPackage)) {
+            ComponentName component = expectedComponent;
+            if (component == null) {
+                Intent launch = getPackageManager().getLaunchIntentForPackage(expectedPackage);
+                component = launch == null ? null : launch.getComponent();
+            }
+            projection.putString("media_projection_package", expectedPackage);
+            if (component != null && expectedPackage.equals(component.getPackageName())) {
+                projection.putString("media_projection_component", component.flattenToString());
+            } else {
+                projection.remove("media_projection_component");
+            }
+        } else {
+            projection.remove("media_projection_package")
+                    .remove("media_projection_component");
+        }
+        projection.commit();
+
+        updateForegroundStatus("Đã kết thúc khôi phục media");
+        V10CarActivity.notifyMediaProjectionReady();
         try {
-            Intent startWyn = new Intent("com.carassistant.v10.ACTION_AUTO_BACKGROUND_WYN")
-                    .setComponent(new ComponentName(this, WynAutoStartReceiver.class))
+            Intent finished = new Intent(MediaRestoreCompleteReceiver.ACTION)
+                    .setComponent(new ComponentName(this, MediaRestoreCompleteReceiver.class))
                     .putExtra("restore_result", reason);
-            sendBroadcast(startWyn);
-            Log.i(TAG, "WYN_START_TRIGGERED_AFTER_RESTORE_END reason=" + reason
-                    + "; homeBeforeWyn=true");
+            sendBroadcast(finished);
+            Log.i(TAG, "MEDIA_RECOVERY_FINISHED reason=" + reason
+                    + "; projectionReady=" + !TextUtils.isEmpty(expectedPackage)
+                    + "; WYN is handled by a separate completion receiver");
         } catch (RuntimeException error) {
-            Log.e(TAG, "Could not request WYN after media recovery ended: " + reason, error);
+            Log.e(TAG, "Could not publish media recovery completion: " + reason, error);
         }
     }
 
     private void launchSourceAppOnPhone() {
         if (launchAttempts >= MAX_LAUNCH_ATTEMPTS) {
             Log.e(TAG, "Phone source launch exhausted retries for " + expectedPackage);
-            finishRestoreAndStartWyn("source_launch_retries_exhausted");
+            finishMediaRecovery("source_launch_retries_exhausted");
             return;
         }
 
@@ -229,7 +261,7 @@ public final class MediaAutoRestoreService extends Service {
         if (expectedComponent == null
                 || !expectedPackage.equals(expectedComponent.getPackageName())) {
             Log.e(TAG, "No launchable source Activity for " + expectedPackage);
-            finishRestoreAndStartWyn("source_activity_unavailable");
+            finishMediaRecovery("source_activity_unavailable");
             return;
         }
 
@@ -286,7 +318,7 @@ public final class MediaAutoRestoreService extends Service {
                     handler.postDelayed(restoreAttempt, delay);
                 } else {
                     Log.e(TAG, "Source app launch failed after all retries; checkpoint retained");
-                    finishRestoreAndStartWyn("source_launch_failed");
+                    finishMediaRecovery("source_launch_failed");
                 }
             });
         });
@@ -317,7 +349,7 @@ public final class MediaAutoRestoreService extends Service {
         handler.removeCallbacks(connectionStabilizer);
         completed = false;
         connectionStabilized = false;
-        wynStartupRequested = false;
+        mediaRecoveryFinished = false;
         launchInFlight = false;
         launchAccepted = false;
         launchAttempts = 0;
@@ -331,11 +363,11 @@ public final class MediaAutoRestoreService extends Service {
 
         if (TextUtils.isEmpty(expectedPackage) || getPackageName().equals(expectedPackage)
                 || !expectedPackage.matches("[A-Za-z0-9_]+(\\.[A-Za-z0-9_]+)+")) {
-            // No real checkpoint: do not synthesize playback, but still open WYN
-            // after the AA connection has stabilized.
+            // No real checkpoint: do not synthesize playback. End this workflow
+            // cleanly; the independent completion receiver handles WYN afterward.
             expectedPackage = null;
-            Log.i(TAG, "No real media checkpoint; will continue Home -> WYN");
-            updateForegroundStatus("Không có media cần khôi phục; chuẩn bị mở WYN");
+            Log.i(TAG, "No real media checkpoint; media recovery has nothing to restore");
+            updateForegroundStatus("Không có media cần khôi phục");
             handler.post(disconnectMonitor);
             handler.postDelayed(connectionStabilizer, INITIAL_SETTLE_MS);
             return START_STICKY;
