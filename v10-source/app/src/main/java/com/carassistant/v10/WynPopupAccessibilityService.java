@@ -173,6 +173,9 @@ public final class WynPopupAccessibilityService extends AccessibilityService {
     @Override public void onServiceConnected() {
         super.onServiceConnected();
         Log.i(TAG, "WYN Accessibility connected; readiness requires a settled Home tree, not Activity resume");
+        // Accessibility may bind after WYN has already emitted its first window events.
+        // Start observing the active root immediately instead of waiting for another event.
+        if (isPending()) scheduleCheck(150L);
     }
 
     @Override public void onAccessibilityEvent(AccessibilityEvent event) {
