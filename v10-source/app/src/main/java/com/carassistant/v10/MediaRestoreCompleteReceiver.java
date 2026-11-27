@@ -26,12 +26,18 @@ public final class MediaRestoreCompleteReceiver extends BroadcastReceiver {
             try {
                 String output = "";
                 try {
-                    output = shell.run(8, "input keyevent 3; sleep 1.0");
+                    output = shell.run(5, "input keyevent 3");
+                    Log.i(TAG, "HOME key sent immediately after media recovery; output=" + output);
                 } catch (Throwable homeError) {
                     // Recovery is already complete. Still allow WYN to start; its own
                     // readiness gate will return the phone to Home after its data loads.
                     Log.w(TAG, "Could not send Home to the media app; continue independent WYN startup",
                             homeError);
+                }
+                try {
+                    Thread.sleep(1000L);
+                } catch (InterruptedException interrupted) {
+                    Thread.currentThread().interrupt();
                 }
                 Intent startWyn = new Intent("com.carassistant.v10.ACTION_AUTO_BACKGROUND_WYN")
                         .setComponent(new ComponentName(context, WynAutoStartReceiver.class))
