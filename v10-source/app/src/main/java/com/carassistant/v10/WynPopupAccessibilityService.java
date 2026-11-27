@@ -15,11 +15,11 @@ import android.view.accessibility.AccessibilityNodeInfo;
 public final class WynPopupAccessibilityService extends AccessibilityService {
     private static final String WYN_PACKAGE = "com.wynauto.wyn";
     private static final String TAG = "CarAsistantWYN";
-    private static final long READY_STABLE_MS = 600L;
+    private static final long READY_STABLE_MS = 900L;
     private static final long CHECK_INTERVAL_MS = 350L;
     private static final long MAX_WAIT_MS = 60000L;
     private static final int MIN_CONTENT_EVENTS = 3;
-    private static final int MIN_ACCESSIBILITY_NODES = 1;
+    private static final int MIN_ACCESSIBILITY_NODES = 3;
     private static final int MAX_TREE_NODES = 300;
 
     private final Handler main = new Handler(Looper.getMainLooper());
@@ -55,7 +55,8 @@ public final class WynPopupAccessibilityService extends AccessibilityService {
                 TreeState tree = inspectTree(root);
                 boolean readyCandidate = contentEvents >= MIN_CONTENT_EVENTS
                         && tree.nodeCount >= MIN_ACCESSIBILITY_NODES
-                        && tree.hasWynSurface
+                        // Flutter's SurfaceView is frequently absent from Accessibility's
+                        // exposed tree; a stable, populated, non-loading Home tree is the gate.
                         && !tree.loading;
 
                 if (readyCandidate) {
