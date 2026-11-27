@@ -20,11 +20,10 @@ public final class WynAutoStartReceiver extends BroadcastReceiver {
         RootShellSession.EXEC.execute(() -> {
             RootShellSession shell = new RootShellSession();
             try {
-                String output = shell.run(15,
-                        "input keyevent 3; sleep 0.6; "
-                                + "am start --user 0 --display 0 -n 'com.wynauto.wyn/.MainActivity'");
+                String output = shell.run(12,
+                        "am start --user 0 --display 0 -n 'com.wynauto.wyn/.MainActivity'");
                 pending.setResultCode(Activity.RESULT_OK);
-                Log.i(TAG, "Phone sent Home before WYN launch on display 0; restoreResult="
+                Log.i(TAG, "WYN launched independently after media recovery backgrounded its source; restoreResult="
                         + intent.getStringExtra("restore_result")
                         + "; auto-background armed; output=" + output);
             } catch (Throwable error) {
