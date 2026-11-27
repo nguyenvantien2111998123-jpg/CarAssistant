@@ -72,6 +72,7 @@ public final class WynPopupAccessibilityService extends AccessibilityService {
 
     /** Called by WynAutoStartReceiver after am start has returned successfully. */
     public static void onWynLaunchAccepted() {
+        Log.i(TAG, "WYN launch accepted; 30-second Home deadline armed from launch acceptance");
         WynPopupAccessibilityService service = instance;
         if (service != null) {
             service.main.post(() -> service.scheduleCheck(1L));
