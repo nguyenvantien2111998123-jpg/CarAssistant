@@ -13,8 +13,9 @@ public final class WynAutoStartReceiver extends BroadcastReceiver {
 
     @Override public void onReceive(Context context, Intent intent) {
         if (intent == null || !ACTION.equals(intent.getAction())) return;
+        // Do not arm the timer until am start has accepted WYN below.
         context.getSharedPreferences("wyn_auto_start", Context.MODE_PRIVATE).edit()
-                .putBoolean("background_after_load", true)
+                .putBoolean("background_after_load", false)
                 .remove("requested_at")
                 .remove("home_at").commit();
         final PendingResult pending = goAsync();
@@ -25,8 +26,10 @@ public final class WynAutoStartReceiver extends BroadcastReceiver {
                         "am start --user 0 --display 0 -n 'com.wynauto.wyn/.MainActivity'");
                 long launchedAt = System.currentTimeMillis();
                 context.getSharedPreferences("wyn_auto_start", Context.MODE_PRIVATE).edit()
+                        .putBoolean("background_after_load", true)
                         .putLong("requested_at", launchedAt)
                         .putLong("home_at", launchedAt + 30000L).commit();
+                WynPopupAccessibilityService.onWynLaunchAccepted();
                 pending.setResultCode(Activity.RESULT_OK);
                 Log.i(TAG, "WYN launched independently after media recovery backgrounded its source; restoreResult="
                         + intent.getStringExtra("restore_result")
