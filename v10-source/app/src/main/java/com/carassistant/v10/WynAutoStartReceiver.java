@@ -30,7 +30,7 @@ public final class WynAutoStartReceiver extends BroadcastReceiver {
                 pending.setResultCode(Activity.RESULT_OK);
                 Log.i(TAG, "WYN launched independently after media recovery backgrounded its source; restoreResult="
                         + intent.getStringExtra("restore_result")
-                        + "; auto-background armed; output=" + output);
+                        + "; auto-background armed; homeDeadlineMs=30000; output=" + output);
             } catch (Throwable error) {
                 pending.setResultCode(Activity.RESULT_CANCELED);
                 Log.e(TAG, "WYN root launch failed; auto-background remains armed for retry", error);
