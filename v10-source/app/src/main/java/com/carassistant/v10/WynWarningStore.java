@@ -21,14 +21,14 @@ public final class WynWarningStore {
         if (value == null || value.isRecycled()) return;
         // Keep the previous immutable frame alive for any MediaSession/UI consumer
         // still holding its reference; the replacement is reclaimed by normal GC.
-        warning = value.copy(Bitmap.Config.ARGB_8888, true);
+        warning = cropPopupHeaderAndTicker(value);
         MediaSessionBridge.onWynWarningChanged();
         V10CarActivity.notifyWynWarningChanged();
     }
 
     /**
-     * CarAsistant's square media artwork: keep the media cover as the background and
-     * place the complete, aspect-preserved WYN popup as a compact top-left overlay.
+     * Media card artwork: warning occupies a centered full-width top band (one third);
+     * the media cover remains visible in the lower two thirds.
      */
     public static Bitmap composeMediaArtwork(Bitmap media) {
         return composeMediaArtwork(media, 52);
@@ -44,60 +44,45 @@ public final class WynWarningStore {
         if (media != null && !media.isRecycled()) {
             drawCenterCrop(canvas, media, new RectF(0, 0, size, size), paint);
         } else {
-            canvas.drawColor(Color.rgb(28, 34, 40));
+            canvas.drawColor(Color.rgb(17, 22, 28));
         }
-
-        float margin = 14f;
-        float fraction = Math.max(0.20f, Math.min(0.80f, overlayPercent / 100f));
-        float maxWidth = size * fraction;
-        float maxHeight = size * fraction;
-        float scale = Math.min(maxWidth / alert.getWidth(), maxHeight / alert.getHeight());
+        final float bandHeight = size / 3f;
+        final float margin = 12f;
+        Paint panel = new Paint(Paint.ANTI_ALIAS_FLAG);
+        panel.setColor(Color.argb(238, 8, 12, 16));
+        canvas.drawRect(0, 0, size, bandHeight, panel);
+        float scale = Math.min((size - margin * 2f) / alert.getWidth(),
+                (bandHeight - margin * 2f) / alert.getHeight());
         float width = Math.max(1f, alert.getWidth() * scale);
         float height = Math.max(1f, alert.getHeight() * scale);
-        RectF destination = new RectF(margin, margin, margin + width, margin + height);
-        Paint panel = new Paint(Paint.ANTI_ALIAS_FLAG);
-        panel.setColor(Color.argb(170, 10, 14, 18));
-        canvas.drawRoundRect(new RectF(destination.left - 5f, destination.top - 5f,
-                destination.right + 5f, destination.bottom + 5f), 10f, 10f, panel);
-        canvas.drawBitmap(alert, null, destination, paint);
+        float left = (size - width) / 2f;
+        float top = (bandHeight - height) / 2f;
+        canvas.drawBitmap(alert, null, new RectF(left, top, left + width, top + height), paint);
         return output;
     }
 
-    /**
-     * Square Android Auto widget artwork. The complete portrait popup is contained
-     * inside a dark, softly framed square so Gearhead cannot center-crop its top
-     * and bottom when it renders the small artwork slot.
-     */
+    /** Widget uses the full warning bitmap in its original aspect ratio, not card art. */
     public static Bitmap makeWidgetIcon() {
         Bitmap alert = getWarning();
-        if (alert == null) return null;
-        final int size = 512;
-        final float margin = 28f;
-        Bitmap output = Bitmap.createBitmap(size, size, Bitmap.Config.ARGB_8888);
-        Canvas canvas = new Canvas(output);
-        canvas.drawColor(Color.rgb(17, 22, 28));
+        return alert == null ? null : alert.copy(Bitmap.Config.ARGB_8888, true);
+    }
 
-        float scale = Math.min((size - margin * 2f) / alert.getWidth(),
-                (size - margin * 2f) / alert.getHeight());
-        float width = alert.getWidth() * scale;
-        float height = alert.getHeight() * scale;
-        float left = (size - width) / 2f;
-        float top = (size - height) / 2f;
-
-        Paint panel = new Paint(Paint.ANTI_ALIAS_FLAG);
-        panel.setColor(Color.argb(210, 8, 12, 16));
-        RectF frame = new RectF(left - 9f, top - 9f, left + width + 9f, top + height + 9f);
-        canvas.drawRoundRect(frame, 18f, 18f, panel);
-
-        Paint border = new Paint(Paint.ANTI_ALIAS_FLAG);
-        border.setStyle(Paint.Style.STROKE);
-        border.setStrokeWidth(2f);
-        border.setColor(Color.argb(185, 125, 170, 205));
-        canvas.drawRoundRect(frame, 18f, 18f, border);
-
-        Paint image = new Paint(Paint.ANTI_ALIAS_FLAG | Paint.FILTER_BITMAP_FLAG);
-        canvas.drawBitmap(alert, null, new RectF(left, top, left + width, top + height), image);
-        return output;
+    /** Remove WYN's branded top header and scrolling footer from the captured popup. */
+    private static Bitmap cropPopupHeaderAndTicker(Bitmap source) {
+        if (source == null || source.isRecycled()) return null;
+        int width = source.getWidth();
+        int height = source.getHeight();
+        if (width < 80 || height < 120 || height < width * 1.2f) {
+            return source.copy(Bitmap.Config.ARGB_8888, true);
+        }
+        int top = Math.round(height * 0.12f);
+        int bottom = Math.round(height * 0.10f);
+        try {
+            return Bitmap.createBitmap(source, 0, top, width, Math.max(1, height - top - bottom))
+                    .copy(Bitmap.Config.ARGB_8888, true);
+        } catch (RuntimeException error) {
+            return source.copy(Bitmap.Config.ARGB_8888, true);
+        }
     }
 
     /** Full popup bitmap for the existing draggable Touch surface; preserve alpha and aspect. */

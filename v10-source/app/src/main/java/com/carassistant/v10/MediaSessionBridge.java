@@ -708,7 +708,7 @@ public final class MediaSessionBridge extends NotificationListenerService {
                 if (warning != null) {
                     Bitmap cardArtwork = safeMirrorArtwork(WynWarningStore.composeMediaArtwork(
                             null, getWynMediaOverlayPercent()));
-                    Bitmap widgetIcon = safeMirrorArtwork(WynWarningStore.makeWidgetIcon());
+                    Bitmap widgetIcon = WynWarningStore.makeWidgetIcon();
                     if (cardArtwork != null) {
                         saved.putBitmap(MediaMetadata.METADATA_KEY_ALBUM_ART, cardArtwork);
                     }
@@ -728,7 +728,7 @@ public final class MediaSessionBridge extends NotificationListenerService {
                 if (warning != null) {
                     Bitmap cardArtwork = safeMirrorArtwork(WynWarningStore.composeMediaArtwork(
                             null, getWynMediaOverlayPercent()));
-                    Bitmap widgetIcon = safeMirrorArtwork(WynWarningStore.makeWidgetIcon());
+                    Bitmap widgetIcon = WynWarningStore.makeWidgetIcon();
                     if (cardArtwork != null) {
                         empty.putBitmap(MediaMetadata.METADATA_KEY_ALBUM_ART, cardArtwork);
                     }
@@ -757,7 +757,7 @@ public final class MediaSessionBridge extends NotificationListenerService {
         if (warning != null) {
             // Keep the widget/icon channels dedicated to the full WYN popup. The
             // combined media-cover overlay is reserved for the larger media artwork.
-            Bitmap widgetIcon = safeMirrorArtwork(WynWarningStore.makeWidgetIcon());
+            Bitmap widgetIcon = WynWarningStore.makeWidgetIcon();
             if (widgetIcon != null) {
                 metadata.putBitmap(MediaMetadata.METADATA_KEY_ART, widgetIcon)
                         .putBitmap(MediaMetadata.METADATA_KEY_DISPLAY_ICON, widgetIcon);

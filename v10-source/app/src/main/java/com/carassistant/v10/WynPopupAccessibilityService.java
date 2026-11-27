@@ -15,11 +15,10 @@ import android.view.accessibility.AccessibilityNodeInfo;
 public final class WynPopupAccessibilityService extends AccessibilityService {
     private static final String WYN_PACKAGE = "com.wynauto.wyn";
     private static final String TAG = "CarAsistantWYN";
-    private static final long MIN_READY_MS = 12000L;
-    private static final long READY_STABLE_MS = 2500L;
-    private static final long CHECK_INTERVAL_MS = 1500L;
+    private static final long READY_STABLE_MS = 600L;
+    private static final long CHECK_INTERVAL_MS = 350L;
     private static final long MAX_WAIT_MS = 60000L;
-    private static final int MIN_CONTENT_EVENTS = 8;
+    private static final int MIN_CONTENT_EVENTS = 3;
     private static final int MIN_ACCESSIBILITY_NODES = 1;
     private static final int MAX_TREE_NODES = 300;
 
@@ -55,8 +54,8 @@ public final class WynPopupAccessibilityService extends AccessibilityService {
                 long elapsed = wynFirstSeenAt == 0L ? 0L : now - wynFirstSeenAt;
                 TreeState tree = inspectTree(root);
                 boolean readyCandidate = contentEvents >= MIN_CONTENT_EVENTS
-                        && elapsed >= MIN_READY_MS
                         && tree.nodeCount >= MIN_ACCESSIBILITY_NODES
+                        && tree.hasWynSurface
                         && !tree.loading;
 
                 if (readyCandidate) {
@@ -73,6 +72,7 @@ public final class WynPopupAccessibilityService extends AccessibilityService {
                                 + "; elapsedMs=" + elapsed
                                 + "; contentEvents=" + contentEvents
                                 + "; accessibilityNodes=" + tree.nodeCount
+                                + "; wynSurface=" + tree.hasWynSurface
                                 + "; loadingIndicator=false");
                         clearPending();
                         return;
@@ -109,10 +109,12 @@ public final class WynPopupAccessibilityService extends AccessibilityService {
     private static final class TreeState {
         final int nodeCount;
         final boolean loading;
+        final boolean hasWynSurface;
         final String fingerprint;
-        TreeState(int nodeCount, boolean loading, String fingerprint) {
+        TreeState(int nodeCount, boolean loading, boolean hasWynSurface, String fingerprint) {
             this.nodeCount = nodeCount;
             this.loading = loading;
+            this.hasWynSurface = hasWynSurface;
             this.fingerprint = fingerprint;
         }
     }
@@ -121,13 +123,14 @@ public final class WynPopupAccessibilityService extends AccessibilityService {
         StringBuilder signature = new StringBuilder(512);
         int[] count = new int[] { 0 };
         boolean[] loading = new boolean[] { false };
-        appendNode(root, signature, count, loading);
-        return new TreeState(count[0], loading[0],
+        boolean[] surface = new boolean[] { false };
+        appendNode(root, signature, count, loading, surface);
+        return new TreeState(count[0], loading[0], surface[0],
                 Integer.toHexString(signature.toString().hashCode()));
     }
 
     private void appendNode(AccessibilityNodeInfo node, StringBuilder signature,
-                            int[] count, boolean[] loading) {
+                            int[] count, boolean[] loading, boolean[] surface) {
         if (node == null || count[0] >= MAX_TREE_NODES) return;
         count[0]++;
         CharSequence text = node.getText();
@@ -136,6 +139,7 @@ public final class WynPopupAccessibilityService extends AccessibilityService {
         String textValue = text == null ? "" : text.toString();
         String descriptionValue = description == null ? "" : description.toString();
         String classValue = className == null ? "" : className.toString();
+        if (classValue.contains("SurfaceView") || "ul.j".equals(classValue)) surface[0] = true;
 
         // Fingerprint structure rather than live text values: WYN's speed display
         // can change continuously even after its Home/data layer is ready.
@@ -150,7 +154,7 @@ public final class WynPopupAccessibilityService extends AccessibilityService {
         for (int i = 0; i < children && count[0] < MAX_TREE_NODES; i++) {
             AccessibilityNodeInfo child = node.getChild(i);
             if (child != null) {
-                try { appendNode(child, signature, count, loading); }
+                try { appendNode(child, signature, count, loading, surface); }
                 finally { child.recycle(); }
             }
         }
@@ -194,7 +198,7 @@ public final class WynPopupAccessibilityService extends AccessibilityService {
         if (type == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED
                 || type == AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED
                 || type == AccessibilityEvent.TYPE_WINDOWS_CHANGED) {
-            scheduleCheck(CHECK_INTERVAL_MS);
+            scheduleCheck(100L);
         }
     }
 
