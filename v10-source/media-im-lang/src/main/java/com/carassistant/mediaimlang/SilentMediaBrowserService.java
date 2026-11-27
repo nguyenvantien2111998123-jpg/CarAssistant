@@ -33,6 +33,9 @@ public final class SilentMediaBrowserService extends MediaBrowserService {
     private static final int NOTIFICATION_ID = 6103;
     private static final String ROOT_ID = "media_im_lang_root";
     private static final long SILENT_WINDOW_MS = 3000L;
+    private static final long DOUBLE_NEXT_WINDOW_MS = 350L;
+    private static final String CARASSISTANT_VOICE_ACTION =
+            "com.carassistant.v10.STEERING_VOICE";
 
     private static volatile SilentMediaBrowserService instance;
     private final Handler handler = new Handler(Looper.getMainLooper());
@@ -42,6 +45,7 @@ public final class SilentMediaBrowserService extends MediaBrowserService {
     private boolean windowRunning;
     private boolean silentWindowAttempted;
     private long playbackStartedAt;
+    private long lastNextCallbackAt;
 
     private final Runnable pauseAfterWindow = () -> pauseSilent("three-second window elapsed");
 
@@ -64,7 +68,25 @@ public final class SilentMediaBrowserService extends MediaBrowserService {
             }
             @Override public void onPause() { pauseSilent("Android Auto pause command"); }
             @Override public void onStop() { pauseSilent("Android Auto stop command"); }
-            @Override public void onSkipToNext() { Log.i(TAG, "Next ignored: silent fallback has no playlist"); }
+            @Override public void onSkipToNext() {
+                long now = SystemClock.uptimeMillis();
+                if (lastNextCallbackAt > 0L
+                        && now - lastNextCallbackAt <= DOUBLE_NEXT_WINDOW_MS) {
+                    lastNextCallbackAt = 0L;
+                    Intent voice = new Intent(CARASSISTANT_VOICE_ACTION)
+                            .setPackage("com.carassistant.v10");
+                    sendBroadcast(voice);
+                    Log.i(TAG, "STEERING double-NEXT -> CarAsistant voice assistant");
+                    return;
+                }
+
+                lastNextCallbackAt = now;
+                final long firstTapAt = now;
+                handler.postDelayed(() -> {
+                    if (lastNextCallbackAt == firstTapAt) lastNextCallbackAt = 0L;
+                }, DOUBLE_NEXT_WINDOW_MS + 50L);
+                Log.i(TAG, "Single NEXT ignored: waiting for possible double-NEXT");
+            }
             @Override public void onSkipToPrevious() { Log.i(TAG, "Previous ignored: silent fallback has no playlist"); }
         });
         session.setFlags(MediaSession.FLAG_HANDLES_MEDIA_BUTTONS
