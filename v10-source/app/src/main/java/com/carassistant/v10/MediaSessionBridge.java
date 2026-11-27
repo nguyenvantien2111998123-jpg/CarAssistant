@@ -92,6 +92,17 @@ public final class MediaSessionBridge extends NotificationListenerService {
         }
     };
 
+    // Session state can change without an active-session-list callback (for example,
+    // YouTube starts playing while Silent Media remains published). Poll the manager
+    // briefly so the mirror switches to the newly playing source without AA Home/reopen.
+    private final Runnable activeSessionRefreshTask = new Runnable() {
+        @Override public void run() {
+            if (manager == null) return;
+            refreshFromManager();
+            MAIN.postDelayed(this, 1000L);
+        }
+    };
+
     public interface Listener {
         void onMediaChanged(Snapshot snapshot);
     }
@@ -833,8 +844,10 @@ public final class MediaSessionBridge extends NotificationListenerService {
                 Log.w(TAG, "Could not inspect active Android Auto notifications", error);
             }
             MAIN.removeCallbacks(checkpointTask);
+            MAIN.removeCallbacks(activeSessionRefreshTask);
             saveCurrentCheckpoint();
             MAIN.postDelayed(checkpointTask, CHECKPOINT_INTERVAL_MS);
+            MAIN.postDelayed(activeSessionRefreshTask, 1000L);
             Log.i(TAG, "Notification access connected; durable media checkpoint scheduled every 5 seconds");
         } catch (SecurityException error) {
             Log.w(TAG, "Notification access is not granted", error);
@@ -846,6 +859,7 @@ public final class MediaSessionBridge extends NotificationListenerService {
     @Override
     public void onListenerDisconnected() {
         MAIN.removeCallbacks(checkpointTask);
+        MAIN.removeCallbacks(activeSessionRefreshTask);
         if (manager != null && sessionsListener != null) {
             try { manager.removeOnActiveSessionsChangedListener(sessionsListener); }
             catch (RuntimeException ignored) { }
@@ -863,6 +877,7 @@ public final class MediaSessionBridge extends NotificationListenerService {
     @Override
     public void onDestroy() {
         MAIN.removeCallbacks(checkpointTask);
+        MAIN.removeCallbacks(activeSessionRefreshTask);
         releaseMirrorSession();
         if (instance == this) instance = null;
         super.onDestroy();
