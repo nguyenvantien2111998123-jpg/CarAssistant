@@ -72,8 +72,11 @@ public final class WynWarningStore {
         int height = source.getHeight();
         if (width < 80 || height < 120) return source.copy(Bitmap.Config.ARGB_8888, true);
         int top = height / 2;
+        // The bottom edge of WYN's popup contains a scrolling ticker unrelated
+        // to the warning sign. Exclude that strip from the captured artwork.
+        int bottom = Math.max(top + 1, Math.round(height * 0.84f));
         try {
-            return Bitmap.createBitmap(source, 0, top, width, height - top)
+            return Bitmap.createBitmap(source, 0, top, width, bottom - top)
                     .copy(Bitmap.Config.ARGB_8888, true);
         } catch (RuntimeException error) {
             return source.copy(Bitmap.Config.ARGB_8888, true);
