@@ -214,6 +214,9 @@ public final class MediaAutoRestoreService extends Service {
         if (!TextUtils.isEmpty(expectedPackage)) {
             ComponentName component = expectedComponent;
             if (component == null) {
+                component = MediaSessionBridge.getCheckpointTaskComponent(this);
+            }
+            if (component == null) {
                 Intent launch = getPackageManager().getLaunchIntentForPackage(expectedPackage);
                 component = launch == null ? null : launch.getComponent();
             }
