@@ -115,8 +115,9 @@ public final class WynPopupAccessibilityService extends AccessibilityService {
     }
 
     @Override public void onInterrupt() {
-        main.removeCallbacks(homeTimer);
-        checkScheduled = false;
+        // Accessibility event delivery may be interrupted while the service process
+        // remains alive. Do not cancel the independent 30-second Home deadline.
+        Log.w(TAG, "Accessibility event stream interrupted; keep WYN Home timer armed");
     }
 
     @Override public void onDestroy() {
