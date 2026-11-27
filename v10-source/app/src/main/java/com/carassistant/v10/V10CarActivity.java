@@ -73,6 +73,50 @@ public final class V10CarActivity
         if (activity != null) activity.handler.post(activity::updateWynWarningViews);
     }
 
+    /** Called when phone-side media recovery has a task ready for the AA projection pane. */
+    public static void notifyMediaProjectionReady() {
+        V10CarActivity activity = activeCarActivity;
+        if (activity != null) activity.handler.post(activity::projectReadyMediaOnSecondaryDisplay);
+    }
+
+    private boolean projectReadyMediaOnSecondaryDisplay() {
+        if (!resumed || rightPaneSession == null) return false;
+        android.content.SharedPreferences prefs =
+                getSharedPreferences("media_autoplay", MODE_PRIVATE);
+        if (!prefs.getBoolean("media_projection_ready", false)) return false;
+
+        String packageName = prefs.getString("media_projection_package",
+                MediaSessionBridge.getCheckpointPackage(this));
+        if (TextUtils.isEmpty(packageName)) return false;
+
+        ComponentName component = ComponentName.unflattenFromString(
+                prefs.getString("media_projection_component", ""));
+        if (component == null || !packageName.equals(component.getPackageName())) {
+            component = MediaSessionBridge.getCheckpointTaskComponent(this);
+        }
+        if (component == null || !packageName.equals(component.getPackageName())) {
+            Intent launch = getPackageManager().getLaunchIntentForPackage(packageName);
+            component = launch == null ? null : launch.getComponent();
+        }
+        if (component == null || !packageName.equals(component.getPackageName())) {
+            Log.w("CarAssistantMediaResume",
+                    "Media recovery is ready but no launchable task component exists for " + packageName);
+            return false;
+        }
+
+        // The visible pane was prewarmed on AA connection. Move the existing phone
+        // task into that already-created display instead of showing a blank cold-start pane.
+        launchActiveMediaProjection(component);
+        prefs.edit().putBoolean("media_projection_ready", false)
+                .remove("media_projection_package")
+                .remove("media_projection_component")
+                .apply();
+        Log.i("CarAssistantMediaResume", "READY_MEDIA_PROJECTED_ON_V10 package="
+                + packageName + "; display=" + rightPaneSession.getDisplayId()
+                + "; result=" + prefs.getString("media_projection_result", "unknown"));
+        return true;
+    }
+
     private void updateWynWarningViews() {
         if (!resumed) return;
         updateMediaCard(MediaSessionBridge.getSnapshot());
@@ -508,6 +552,8 @@ public final class V10CarActivity
                 "headless_media_applied".equals(restorePrefs.getString("phase", ""));
         boolean headlessContentRestoreRequested =
                 restorePrefs.getBoolean("content_restore_requested", false);
+        boolean mediaProjectionReady =
+                restorePrefs.getBoolean("media_projection_ready", false);
         boolean mediaCardLaunch = getIntent() != null
                 && getIntent().getBooleanExtra("com.carassistant.v10.OPEN_ACTIVE_MEDIA", false);
         if (mediaCardLaunch && getIntent() != null) {
@@ -520,6 +566,13 @@ public final class V10CarActivity
             // A media-card click must resolve the active/checkpointed source package,
             // rather than blindly reopening a stale app-picker target.
             openActiveMediaOnProjection();
+        } else if (mediaProjectionReady) {
+            // Recovery has already restored the app on phone display 0. Move that
+            // same task into the prewarmed right pane as soon as CarAsistant opens.
+            if (!projectReadyMediaOnSecondaryDisplay()) {
+                Log.w("CarAssistantMediaResume",
+                        "Media projection readiness is pending; retain it for the next V10 attach");
+            }
         } else if (pendingMediaRestore && checkpointTask != null
                 && checkpointPackage != null
                 && checkpointPackage.equals(checkpointTask.getPackageName())) {
