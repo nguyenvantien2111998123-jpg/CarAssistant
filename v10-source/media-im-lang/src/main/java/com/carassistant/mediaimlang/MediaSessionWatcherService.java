@@ -28,7 +28,9 @@ public final class MediaSessionWatcherService extends NotificationListenerServic
                 List<MediaController> sessions = manager.getActiveSessions(
                         new ComponentName(MediaSessionWatcherService.this, MediaSessionWatcherService.class));
                 for (MediaController controller : sessions) {
-                    if (getPackageName().equals(controller.getPackageName())) continue;
+                    if (getPackageName().equals(controller.getPackageName())
+                            || "com.carassistant.v10".equals(controller.getPackageName())
+                            || "com.google.android.projection.gearhead".equals(controller.getPackageName())) continue;
                     PlaybackState state = controller.getPlaybackState();
                     if (state == null) continue;
                     int playback = state.getState();

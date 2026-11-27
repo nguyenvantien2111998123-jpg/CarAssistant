@@ -232,8 +232,11 @@ public final class SilentMediaBrowserService extends MediaBrowserService {
         if (session != null) {
             session.setActive(true);
             session.setPlaybackState(new PlaybackState.Builder()
-                    .setActions(PlaybackState.ACTION_PLAY | PlaybackState.ACTION_PAUSE
-                            | PlaybackState.ACTION_PLAY_PAUSE | PlaybackState.ACTION_STOP)
+                     .setActions(PlaybackState.ACTION_PLAY | PlaybackState.ACTION_PAUSE
+                            | PlaybackState.ACTION_PLAY_PAUSE | PlaybackState.ACTION_STOP
+                            | PlaybackState.ACTION_SKIP_TO_NEXT | PlaybackState.ACTION_SKIP_TO_PREVIOUS
+                            | PlaybackState.ACTION_FAST_FORWARD | PlaybackState.ACTION_REWIND
+                            | PlaybackState.ACTION_SEEK_TO)
                     .setState(PlaybackState.STATE_PAUSED, SILENT_WINDOW_MS, 0f)
                     .build());
         }
