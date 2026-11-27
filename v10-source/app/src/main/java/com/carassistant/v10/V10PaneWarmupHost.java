@@ -42,7 +42,6 @@ public final class V10PaneWarmupHost {
             thread = new HandlerThread("CarAsistant-V10-Pane-Warmup");
             thread.start();
             Handler handler = new Handler(thread.getLooper());
-            ImageReader listenerReader = reader;
             reader.setOnImageAvailableListener(source -> {
                 Image frame = null;
                 try {
