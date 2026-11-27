@@ -6,7 +6,7 @@ import android.content.Context;
 import android.content.Intent;
 import android.util.Log;
 
-/** Arms WYN auto-background and starts its Home Activity on phone display 0 using root. */
+/** Starts WYN on phone display 0 and begins its fixed 30-second Home timer after launch is accepted. */
 public final class WynAutoStartReceiver extends BroadcastReceiver {
     private static final String ACTION = "com.carassistant.v10.ACTION_AUTO_BACKGROUND_WYN";
     private static final String TAG = "CarAsistantWYN";
