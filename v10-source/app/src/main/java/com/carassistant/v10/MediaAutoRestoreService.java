@@ -35,7 +35,7 @@ public final class MediaAutoRestoreService extends Service {
     private static final long INITIAL_SETTLE_MS = 2500L;
     private static final long AA_CONNECTION_POLL_MS = 1000L;
     private static final long SESSION_RETRY_MS = 500L;
-    private static final long VERIFY_WINDOW_MS = 15000L;
+    private static final long RESTORE_DEADLINE_MS = 20000L;
     private static final int MAX_LAUNCH_ATTEMPTS = 3;
 
     private static volatile MediaAutoRestoreService instance;
@@ -44,7 +44,7 @@ public final class MediaAutoRestoreService extends Service {
 
     private String expectedPackage;
     private ComponentName expectedComponent;
-    private long verifyStartedAt;
+    private long restoreStartedAt;
     private long lastLaunchAt;
     private int launchAttempts;
     private boolean launchInFlight;
@@ -53,6 +53,14 @@ public final class MediaAutoRestoreService extends Service {
     private boolean connectionStabilized;
     private boolean mediaRecoveryFinished;
     private boolean homeWynRequested;
+
+    private final Runnable restoreDeadline = () -> {
+        if (mediaRecoveryFinished || restoreStartedAt == 0L) return;
+        long elapsed = SystemClock.elapsedRealtime() - restoreStartedAt;
+        Log.w(TAG, "MEDIA_RESTORE_DEADLINE elapsedMs=" + elapsed
+                + "; sending Home and continuing to WYN without further verification");
+        finishMediaRecovery("restore_deadline_20s");
+    };
 
     private final Runnable disconnectMonitor = new Runnable() {
         @Override public void run() {
@@ -107,22 +115,19 @@ public final class MediaAutoRestoreService extends Service {
                 return;
             }
 
-            boolean playbackStateReached = false;
             if (MediaSessionBridge.isCheckpointMediaReady(
                     MediaAutoRestoreService.this, expectedPackage)) {
                 boolean autoplay = getSharedPreferences("media_autoplay", MODE_PRIVATE)
                         .getBoolean("enabled", true);
                 boolean positionRestoreComplete = MediaSessionBridge.applyCheckpoint(
                         MediaAutoRestoreService.this, expectedPackage, autoplay);
-                playbackStateReached = MediaSessionBridge.isCheckpointPlaybackStateReached(
-                        MediaAutoRestoreService.this, expectedPackage, autoplay);
 
-                // Home is allowed only after BOTH requested PLAY/PAUSE state and
-                // saved seek position are verified by applyCheckpoint().
+                // Return Home immediately once the saved item, seek position and
+                // requested PLAY/PAUSE state are all restored. No background verifier.
                 if (positionRestoreComplete) {
                     completed = true;
                     getSharedPreferences("media_autoplay", MODE_PRIVATE).edit()
-                            .putString("phase", "verified_phone_background_restore")
+                            .putString("phase", "verified_phone_restore_complete")
                             .putBoolean("content_restore_requested", false)
                             .putBoolean("pending_projection_restore", false)
                             .remove("target_package")
@@ -132,34 +137,21 @@ public final class MediaAutoRestoreService extends Service {
                             .remove("search_submitted_at")
                             .remove("youtube_history_stage")
                             .apply();
-
                     finishMediaRecovery("restore_success");
                     Log.i(TAG, "VERIFIED_PHONE_RESTORE source=" + expectedPackage
                             + ", requestedState=" + (autoplay ? "PLAY" : "PAUSE")
-                            + ", mediaRecoveryFinished=" + mediaRecoveryFinished);
-                    handler.removeCallbacks(restoreAttempt);
+                            + "; Home sent immediately after checkpoint restore");
                     return;
                 }
             }
 
-            if (playbackStateReached) {
-                // Stop the phone AccessibilityService's search/play retry state before
-                // sending Home. Keep this service's MediaSession seek verification alive,
-                // but do not let stale UI automation continue touching the source app.
-                markAccessibilityRestoreComplete("playback_state_reached");
-                if (requestHomeThenWyn("playback_state_reached")) {
-                    Log.i(TAG, "MEDIA_PLAYBACK_STATE_READY source=" + expectedPackage
-                            + "; Home requested immediately; seek verification continues "
-                            + "without foreground accessibility retries");
-                }
-            }
-            if (verifyStartedAt == 0L) verifyStartedAt = SystemClock.elapsedRealtime();
-            if (SystemClock.elapsedRealtime() - verifyStartedAt < VERIFY_WINDOW_MS) {
-                handler.postDelayed(this, SESSION_RETRY_MS);
+            long elapsed = restoreStartedAt == 0L ? 0L
+                    : SystemClock.elapsedRealtime() - restoreStartedAt;
+            long remaining = RESTORE_DEADLINE_MS - elapsed;
+            if (remaining > 0L) {
+                handler.postDelayed(this, Math.min(SESSION_RETRY_MS, remaining));
             } else {
-                Log.w(TAG, "Phone-side restore verification expired; checkpoint retained; "
-                        + "continue to Home then WYN");
-                finishMediaRecovery("restore_verification_timeout");
+                finishMediaRecovery("restore_deadline_20s");
             }
         }
     };
@@ -209,10 +201,8 @@ public final class MediaAutoRestoreService extends Service {
     }
 
     /**
-     * Cancel stale phone-side search/play automation as soon as playback is confirmed
-     * (or recovery terminates). The service may continue verifying the saved seek
-     * position through MediaSession, but the AccessibilityService must not keep
-     * interacting with the source app after the Home handoff.
+     * Stop phone-side search/play automation when the restore finishes or the
+     * 20-second deadline expires. No background checkpoint verification continues.
      */
     private void markAccessibilityRestoreComplete(String reason) {
         getSharedPreferences("media_autoplay", MODE_PRIVATE).edit()
@@ -229,7 +219,7 @@ public final class MediaAutoRestoreService extends Service {
                 .remove("youtube_history_stage")
                 .apply();
         Log.i(TAG, "PHONE_AUTOMATION_STOPPED reason=" + reason
-                + "; background MediaSession verification may continue");
+                + "; checkpoint recovery is finished");
     }
 
     /**
@@ -242,6 +232,7 @@ public final class MediaAutoRestoreService extends Service {
         mediaRecoveryFinished = true;
         completed = true;
         handler.removeCallbacks(restoreAttempt);
+        handler.removeCallbacks(restoreDeadline);
         markAccessibilityRestoreComplete(reason);
 
         android.content.SharedPreferences.Editor projection =
@@ -300,6 +291,13 @@ public final class MediaAutoRestoreService extends Service {
     }
 
     private void launchSourceAppOnPhone() {
+        if (restoreStartedAt == 0L) {
+            restoreStartedAt = SystemClock.elapsedRealtime();
+            handler.removeCallbacks(restoreDeadline);
+            handler.postDelayed(restoreDeadline, RESTORE_DEADLINE_MS);
+            Log.i(TAG, "MEDIA_RESTORE_TIMER_STARTED maxMs=" + RESTORE_DEADLINE_MS
+                    + "; source=" + expectedPackage);
+        }
         if (launchAttempts >= MAX_LAUNCH_ATTEMPTS) {
             Log.e(TAG, "Phone source launch exhausted retries for " + expectedPackage);
             finishMediaRecovery("source_launch_retries_exhausted");
@@ -416,7 +414,8 @@ public final class MediaAutoRestoreService extends Service {
         launchAccepted = false;
         launchAttempts = 0;
         lastLaunchAt = 0L;
-        verifyStartedAt = 0L;
+        restoreStartedAt = 0L;
+        handler.removeCallbacks(restoreDeadline);
 
         expectedPackage = MediaSessionBridge.getCheckpointPackage(this);
         // The standalone silent session exists only to keep Android Auto's media
