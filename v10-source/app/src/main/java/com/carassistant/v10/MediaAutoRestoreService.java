@@ -147,9 +147,10 @@ public final class MediaAutoRestoreService extends Service {
                 // reports the requested PLAY/PAUSE state, return the phone to Home and
                 // start WYN after one second. Seek-position verification continues in
                 // the background and does not hold the phone on the media app.
-                requestHomeThenWyn("playback_state_reached");
-                Log.i(TAG, "MEDIA_PLAYBACK_STATE_READY source=" + expectedPackage
-                        + "; Home requested immediately; seek verification continues");
+                if (requestHomeThenWyn("playback_state_reached")) {
+                    Log.i(TAG, "MEDIA_PLAYBACK_STATE_READY source=" + expectedPackage
+                            + "; Home requested immediately; seek verification continues");
+                }
             }
             if (verifyStartedAt == 0L) verifyStartedAt = SystemClock.elapsedRealtime();
             if (SystemClock.elapsedRealtime() - verifyStartedAt < VERIFY_WINDOW_MS) {
@@ -254,8 +255,8 @@ public final class MediaAutoRestoreService extends Service {
     }
 
     /** One-shot handoff: Home now, then WYN exactly one second after Home command. */
-    private void requestHomeThenWyn(String reason) {
-        if (homeWynRequested) return;
+    private boolean requestHomeThenWyn(String reason) {
+        if (homeWynRequested) return false;
         homeWynRequested = true;
         try {
             Intent finished = new Intent(MediaRestoreCompleteReceiver.ACTION)
@@ -264,9 +265,11 @@ public final class MediaAutoRestoreService extends Service {
                     .putExtra("source_package", expectedPackage == null ? "" : expectedPackage);
             sendBroadcast(finished);
             Log.i(TAG, "MEDIA_HOME_WYN_HANDOFF reason=" + reason);
+            return true;
         } catch (RuntimeException error) {
             homeWynRequested = false;
             Log.e(TAG, "Could not publish Home/WYN handoff: " + reason, error);
+            return false;
         }
     }
 
