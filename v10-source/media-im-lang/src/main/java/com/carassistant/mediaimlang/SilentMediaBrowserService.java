@@ -143,6 +143,17 @@ public final class SilentMediaBrowserService extends MediaBrowserService {
         if (service != null) service.onExternalSessionChanged(present);
     }
 
+    static void onSessionAccessLost() {
+        SilentMediaBrowserService service = instance;
+        if (service != null) service.handler.post(() -> {
+            service.externalSessionPresent = false;
+            service.pauseSilent("notification access disconnected");
+            if (service.session != null) service.session.setActive(false);
+            service.updateNotification("Cần bật quyền Truy cập thông báo");
+            Log.w(TAG, "Media session monitoring unavailable; fallback session deactivated");
+        });
+    }
+
     private boolean hasSessionAccess() {
         if (Build.VERSION.SDK_INT < 27) return false;
         NotificationManager manager = getSystemService(NotificationManager.class);
