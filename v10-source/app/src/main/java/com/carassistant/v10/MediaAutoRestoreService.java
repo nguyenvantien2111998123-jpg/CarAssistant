@@ -52,6 +52,7 @@ public final class MediaAutoRestoreService extends Service {
     private boolean completed;
     private boolean connectionStabilized;
     private boolean mediaRecoveryFinished;
+    private boolean homeWynRequested;
 
     private final Runnable disconnectMonitor = new Runnable() {
         @Override public void run() {
@@ -142,7 +143,13 @@ public final class MediaAutoRestoreService extends Service {
             }
 
             if (playbackStateReached) {
-                Log.d(TAG, "Requested playback state reached; still waiting for saved position tolerance");
+                // Match the previously validated sequence: once the exact saved item
+                // reports the requested PLAY/PAUSE state, return the phone to Home and
+                // start WYN after one second. Seek-position verification continues in
+                // the background and does not hold the phone on the media app.
+                requestHomeThenWyn("playback_state_reached");
+                Log.i(TAG, "MEDIA_PLAYBACK_STATE_READY source=" + expectedPackage
+                        + "; Home requested immediately; seek verification continues");
             }
             if (verifyStartedAt == 0L) verifyStartedAt = SystemClock.elapsedRealtime();
             if (SystemClock.elapsedRealtime() - verifyStartedAt < VERIFY_WINDOW_MS) {
@@ -240,17 +247,26 @@ public final class MediaAutoRestoreService extends Service {
 
         updateForegroundStatus("Đã kết thúc khôi phục media");
         V10CarActivity.notifyMediaProjectionReady();
+        requestHomeThenWyn(reason);
+        Log.i(TAG, "MEDIA_RECOVERY_FINISHED reason=" + reason
+                + "; projectionReady=" + !TextUtils.isEmpty(expectedPackage)
+                + "; homeWynRequested=" + homeWynRequested);
+    }
+
+    /** One-shot handoff: Home now, then WYN exactly one second after Home command. */
+    private void requestHomeThenWyn(String reason) {
+        if (homeWynRequested) return;
+        homeWynRequested = true;
         try {
             Intent finished = new Intent(MediaRestoreCompleteReceiver.ACTION)
                     .setComponent(new ComponentName(this, MediaRestoreCompleteReceiver.class))
                     .putExtra("restore_result", reason)
                     .putExtra("source_package", expectedPackage == null ? "" : expectedPackage);
             sendBroadcast(finished);
-            Log.i(TAG, "MEDIA_RECOVERY_FINISHED reason=" + reason
-                    + "; projectionReady=" + !TextUtils.isEmpty(expectedPackage)
-                    + "; WYN is handled by a separate completion receiver");
+            Log.i(TAG, "MEDIA_HOME_WYN_HANDOFF reason=" + reason);
         } catch (RuntimeException error) {
-            Log.e(TAG, "Could not publish media recovery completion: " + reason, error);
+            homeWynRequested = false;
+            Log.e(TAG, "Could not publish Home/WYN handoff: " + reason, error);
         }
     }
 
@@ -359,6 +375,7 @@ public final class MediaAutoRestoreService extends Service {
         completed = false;
         connectionStabilized = false;
         mediaRecoveryFinished = false;
+        homeWynRequested = false;
         boolean paneWarm = V10PaneWarmupHost.start(this);
         Log.i(TAG, "Visible media pane prewarm at AA connect=" + paneWarm);
         getSharedPreferences("media_autoplay", MODE_PRIVATE).edit()
