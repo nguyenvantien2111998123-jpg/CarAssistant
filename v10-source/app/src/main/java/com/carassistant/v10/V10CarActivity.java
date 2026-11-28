@@ -145,6 +145,9 @@ public final class V10CarActivity
     private ComponentName activeBackgroundTarget;
     private TextView dashboardVoiceButton;
     private ImageView mediaArtwork;
+    private Bitmap mediaArtworkBitmap;
+    private boolean mediaArtworkBitmapOwned;
+    private Bitmap floatingTouchIconBitmap;
     private TextView mediaTitle;
     private TextView mediaArtist;
     private LinearLayout mediaCard;
@@ -972,6 +975,25 @@ public final class V10CarActivity
         return false;
     }
 
+    /** Replace the card image first, then release only the bitmap owned by this Activity. */
+    private void replaceMediaArtwork(Bitmap replacement, boolean replacementOwned) {
+        if (mediaArtwork == null) return;
+        Bitmap previous = mediaArtworkBitmap;
+        boolean previousOwned = mediaArtworkBitmapOwned;
+        if (replacement != null && !replacement.isRecycled()) {
+            mediaArtwork.setImageBitmap(replacement);
+            mediaArtworkBitmap = replacement;
+            mediaArtworkBitmapOwned = replacementOwned;
+        } else {
+            mediaArtwork.setImageDrawable(null);
+            mediaArtworkBitmap = null;
+            mediaArtworkBitmapOwned = false;
+        }
+        if (previousOwned && previous != null && previous != replacement && !previous.isRecycled()) {
+            previous.recycle();
+        }
+    }
+
     private void updateMediaCard(MediaSessionBridge.Snapshot state) {
         if (mediaTitle == null || mediaArtist == null) return;
         if (!MediaSessionBridge.hasAccess(this)) {
@@ -979,8 +1001,7 @@ public final class V10CarActivity
             mediaArtist.setText("Chạm để cấp quyền đồng bộ trình phát");
             if (mediaArtwork != null) {
                 Bitmap warningOnly = WynWarningStore.composeMediaArtwork(null, getConfiguredMediaOverlayPercent(), getConfiguredMediaOverlayXPercent(), getConfiguredMediaOverlayYPercent());
-                if (warningOnly != null) mediaArtwork.setImageBitmap(warningOnly);
-                else mediaArtwork.setImageDrawable(null);
+                replaceMediaArtwork(warningOnly, warningOnly != null);
             }
             return;
         }
@@ -998,8 +1019,7 @@ public final class V10CarActivity
         mediaArtist.setText(TextUtils.isEmpty(state.artist) ? state.packageName : state.artist);
         if (mediaArtwork != null) {
             Bitmap artwork = WynWarningStore.composeMediaArtwork(state.artwork, getConfiguredMediaOverlayPercent(), getConfiguredMediaOverlayXPercent(), getConfiguredMediaOverlayYPercent());
-            if (artwork != null) mediaArtwork.setImageBitmap(artwork);
-            else mediaArtwork.setImageDrawable(null);
+            replaceMediaArtwork(artwork, artwork != null && artwork != state.artwork);
         }
     }
 
@@ -1741,6 +1761,7 @@ private void hideApps() {
     private void updateFloatingTouchWarningIcon() {
         if (floatingTouchKey == null) return;
         Bitmap icon = WynWarningStore.makeTouchIcon();
+        Bitmap previousIcon = floatingTouchIconBitmap;
         int configuredWidth = getConfiguredTouchWidthPx();
         ViewGroup.LayoutParams raw = floatingTouchKey.getLayoutParams();
         if (icon == null) {
@@ -1750,6 +1771,8 @@ private void hideApps() {
             base.setStroke(dp(2), Color.rgb(80, 170, 230));
             floatingTouchKey.setBackground(base);
             floatingTouchKey.setText("●");
+            floatingTouchIconBitmap = null;
+            if (previousIcon != null && !previousIcon.isRecycled()) previousIcon.recycle();
             if (raw instanceof FrameLayout.LayoutParams) {
                 FrameLayout.LayoutParams params = (FrameLayout.LayoutParams) raw;
                 params.width = configuredWidth;
@@ -1764,6 +1787,10 @@ private void hideApps() {
         BitmapDrawable image = new BitmapDrawable(getResources(), icon);
         image.setGravity(Gravity.FILL);
         floatingTouchKey.setBackground(image);
+        floatingTouchIconBitmap = icon;
+        if (previousIcon != null && previousIcon != icon && !previousIcon.isRecycled()) {
+            previousIcon.recycle();
+        }
         floatingTouchKey.setText("");
         floatingTouchKey.setContentDescription(
                 "Popup cảnh báo WYN đầy đủ; giữ để về Home, kéo để di chuyển");
@@ -2423,6 +2450,16 @@ private void hideTaskSwitcher() {
 
         try { unregisterReceiver(wynDisplaySettingsReceiver); }
         catch (IllegalArgumentException ignored) { }
+        if (mediaArtwork != null) mediaArtwork.setImageDrawable(null);
+        if (mediaArtworkBitmapOwned && mediaArtworkBitmap != null
+                && !mediaArtworkBitmap.isRecycled()) mediaArtworkBitmap.recycle();
+        mediaArtworkBitmap = null;
+        mediaArtworkBitmapOwned = false;
+        if (floatingTouchKey != null) floatingTouchKey.setBackground(null);
+        if (floatingTouchIconBitmap != null && !floatingTouchIconBitmap.isRecycled()) {
+            floatingTouchIconBitmap.recycle();
+        }
+        floatingTouchIconBitmap = null;
         hideTaskSwitcher();
         hideFloatingMenu();
         if (miniAccessEngine != null) {
