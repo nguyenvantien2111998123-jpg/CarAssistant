@@ -19,7 +19,7 @@ public final class WynAutoStartReceiver extends BroadcastReceiver {
                 .remove("requested_at")
                 .remove("home_at").commit();
         final PendingResult pending = goAsync();
-        RootShellSession.EXEC.execute(() -> {
+        new Thread(() -> {
             RootShellSession shell = new RootShellSession();
             try {
                 String output = shell.run(12,
@@ -41,6 +41,6 @@ public final class WynAutoStartReceiver extends BroadcastReceiver {
                 shell.destroy();
                 pending.finish();
             }
-        });
+        }, "CarAsistant-WYN-Launch").start();
     }
 }
