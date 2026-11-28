@@ -119,8 +119,13 @@ public final class V10ControlReceiver
         if ("com.carassistant.v10.STEERING_VOICE".equals(action)) {
             Log.i("CarAssistantSteering", "DIAG_STEERING_VOICE received");
             V10CarActivity activity = V10SessionStore.getCurrentActivity();
-            if (activity != null) activity.handleSteeringVoice();
-            else Log.w("CarAssistantSteering", "DIAG_STEERING_VOICE_NO_CAR_ACTIVITY; voice request cannot use current UI");
+            if (activity != null) {
+                activity.handleSteeringVoice();
+            } else {
+                V10SessionStore.requestPendingSteeringVoice();
+                Log.w("CarAssistantSteering", "DIAG_STEERING_VOICE_QUEUED_NO_CAR_ACTIVITY; "
+                        + "will deliver when CarAsistant AA activity resumes");
+            }
             return;
         }
         if ("com.carassistant.v10.STEERING_MEDIA_NEXT".equals(action)) {
