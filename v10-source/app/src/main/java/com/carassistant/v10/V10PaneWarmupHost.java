@@ -8,6 +8,7 @@ import android.os.Handler;
 import android.os.HandlerThread;
 import android.util.Log;
 import android.view.Surface;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
  * Pre-creates the visible right-hand V10 projection display while Android Auto
@@ -42,15 +43,23 @@ public final class V10PaneWarmupHost {
             thread = new HandlerThread("CarAsistant-V10-Pane-Warmup");
             thread.start();
             Handler handler = new Handler(thread.getLooper());
+            AtomicBoolean drainScheduled = new AtomicBoolean(false);
             reader.setOnImageAvailableListener(source -> {
-                Image frame = null;
-                try {
-                    frame = source.acquireLatestImage();
-                } catch (IllegalStateException error) {
-                    Log.w(TAG, "Warmup frame drain stopped", error);
-                } finally {
-                    if (frame != null) frame.close();
-                }
+                // The warmup surface only needs to stay alive until V10 attaches.
+                // Drain at a bounded rate instead of allocating/closing a frame at
+                // the display refresh rate (typically 60 frames per second).
+                if (!drainScheduled.compareAndSet(false, true)) return;
+                handler.postDelayed(() -> {
+                    Image frame = null;
+                    try {
+                        frame = source.acquireLatestImage();
+                    } catch (IllegalStateException error) {
+                        Log.w(TAG, "Warmup frame drain stopped", error);
+                    } finally {
+                        if (frame != null) frame.close();
+                        drainScheduled.set(false);
+                    }
+                }, 250L);
             }, handler);
 
             Surface surface = reader.getSurface();
