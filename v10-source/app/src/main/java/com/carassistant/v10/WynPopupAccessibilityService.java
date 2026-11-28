@@ -40,7 +40,9 @@ public final class WynPopupAccessibilityService extends AccessibilityService {
 
             long remaining = homeAt - now;
             if (remaining > 0L) {
-                scheduleCheck(Math.min(POLL_MS, remaining));
+                // One deadline timer, not 100-ms polling: keep the requested 30-second
+                // interval measured from the accepted WYN launch timestamp.
+                scheduleCheck(remaining);
                 return;
             }
 
