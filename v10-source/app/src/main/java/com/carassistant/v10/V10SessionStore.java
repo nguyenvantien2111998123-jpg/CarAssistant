@@ -21,6 +21,7 @@ public final class V10SessionStore {
     private static final String DEFAULT_TV = "voice_default_tv";
 
     private static volatile V10CarActivity currentActivity;
+    private static volatile boolean pendingSteeringVoice;
 
     private V10SessionStore() { }
 
@@ -170,6 +171,13 @@ public final class V10SessionStore {
 
     public static void clearTarget(Context context) {
         prefs(context).edit().remove(TARGET).apply();
+    }
+
+    public static void requestPendingSteeringVoice() { pendingSteeringVoice = true; }
+    public static boolean consumePendingSteeringVoice() {
+        boolean pending = pendingSteeringVoice;
+        pendingSteeringVoice = false;
+        return pending;
     }
 
     public static void setCurrentActivity(V10CarActivity activity) { currentActivity = activity; }
