@@ -596,7 +596,7 @@ public final class MediaSessionBridge extends NotificationListenerService {
     }
 
     public static void skipNext() {
-        MediaController controller = activeController;
+        MediaController controller = getSteeringController();
         logSteeringTarget("NEXT", controller);
         if (controller != null) {
             try {
@@ -608,7 +608,7 @@ public final class MediaSessionBridge extends NotificationListenerService {
     }
 
     public static void skipPrevious() {
-        MediaController controller = activeController;
+        MediaController controller = getSteeringController();
         logSteeringTarget("PREVIOUS", controller);
         if (controller != null) {
             try {
@@ -638,9 +638,30 @@ public final class MediaSessionBridge extends NotificationListenerService {
         }
     }
 
-    /** Seek the active media session to an absolute position in milliseconds. */
-    public static void seekTo(long positionMs) {
+    /**
+     * Resolve a real content session for steering actions. The silent keepalive
+     * session is deliberately excluded: it has no playlist and no seekable content.
+     */
+    private static MediaController getSteeringController() {
         MediaController controller = activeController;
+        if (controller != null && !SILENT_MEDIA_PACKAGE.equals(controller.getPackageName())) {
+            return controller;
+        }
+        MediaController checkpoint = checkpointController;
+        if (checkpoint != null && !SILENT_MEDIA_PACKAGE.equals(checkpoint.getPackageName())) {
+            Log.i(TAG, "Steering bypassed silent keepalive and selected checkpoint source="
+                    + checkpoint.getPackageName());
+            return checkpoint;
+        }
+        if (controller != null && SILENT_MEDIA_PACKAGE.equals(controller.getPackageName())) {
+            Log.w(TAG, "Steering gesture recognized; no real media source exists behind silent keepalive");
+        }
+        return null;
+    }
+
+    /** Seek the active real media session to an absolute position in milliseconds. */
+    public static void seekTo(long positionMs) {
+        MediaController controller = getSteeringController();
         if (controller == null) return;
         long target = Math.max(0L, positionMs);
         MediaMetadata metadata = controller.getMetadata();
