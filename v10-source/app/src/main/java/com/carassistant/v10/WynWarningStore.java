@@ -11,14 +11,24 @@ public final class WynWarningStore {
     private static volatile Bitmap warning;
     private WynWarningStore() { }
 
-    public static Bitmap getWarning() {
+    public static synchronized Bitmap getWarning() {
         Bitmap value = warning;
         return value != null && !value.isRecycled() ? value : null;
     }
 
+    /**
+     * Replace the single retained WYN frame. All consumers draw/copy while holding
+     * this class monitor, so the previous frame can be released immediately after swap.
+     */
     public static synchronized void setWarning(Bitmap value) {
         if (value == null || value.isRecycled()) return;
-        warning = cropLowerSignHalf(value);
+        Bitmap replacement = cropLowerSignHalf(value);
+        if (replacement == null || replacement.isRecycled()) return;
+        Bitmap previous = warning;
+        warning = replacement;
+        if (previous != null && previous != replacement && !previous.isRecycled()) {
+            previous.recycle();
+        }
         MediaSessionBridge.onWynWarningChanged();
         V10CarActivity.notifyWynWarningChanged();
     }
@@ -32,7 +42,7 @@ public final class WynWarningStore {
     }
 
     /** Draw the sign-only popup over the media cover, with user-adjustable size and position. */
-    public static Bitmap composeMediaArtwork(
+    public static synchronized Bitmap composeMediaArtwork(
             Bitmap media, int overlayPercent, int xPercent, int yPercent) {
         Bitmap alert = getWarning();
         if (alert == null) return media;
@@ -60,7 +70,7 @@ public final class WynWarningStore {
     }
 
     /** The existing draggable Touch button keeps the sign-only warning image. */
-    public static Bitmap makeTouchIcon() {
+    public static synchronized Bitmap makeTouchIcon() {
         Bitmap alert = getWarning();
         return alert == null ? null : alert.copy(Bitmap.Config.ARGB_8888, true);
     }
@@ -75,11 +85,16 @@ public final class WynWarningStore {
         // The bottom edge of WYN's popup contains a scrolling ticker unrelated
         // to the warning sign. Exclude that strip from the captured artwork.
         int bottom = Math.max(top + 1, Math.round(height * 0.84f));
+        Bitmap cropped = null;
         try {
-            return Bitmap.createBitmap(source, 0, top, width, bottom - top)
-                    .copy(Bitmap.Config.ARGB_8888, true);
+            cropped = Bitmap.createBitmap(source, 0, top, width, bottom - top);
+            return cropped.copy(Bitmap.Config.ARGB_8888, true);
         } catch (RuntimeException error) {
             return source.copy(Bitmap.Config.ARGB_8888, true);
+        } finally {
+            if (cropped != null && cropped != source && !cropped.isRecycled()) {
+                cropped.recycle();
+            }
         }
     }
 
