@@ -69,6 +69,7 @@ public final class MediaAutoRestoreService extends Service {
             if (!connected) {
                 handler.removeCallbacks(restoreAttempt);
                 handler.removeCallbacks(connectionStabilizer);
+                handler.removeCallbacks(restoreDeadline);
                 V10PaneWarmupHost.releaseIfHeadless(MediaAutoRestoreService.this);
                 stopForeground(true);
                 stopSelf();
@@ -390,6 +391,7 @@ public final class MediaAutoRestoreService extends Service {
             handler.removeCallbacks(restoreAttempt);
             handler.removeCallbacks(disconnectMonitor);
             handler.removeCallbacks(connectionStabilizer);
+            handler.removeCallbacks(restoreDeadline);
             V10PaneWarmupHost.releaseIfHeadless(this);
             stopForeground(true);
             stopSelf(startId);
@@ -468,6 +470,7 @@ public final class MediaAutoRestoreService extends Service {
         handler.removeCallbacks(restoreAttempt);
         handler.removeCallbacks(disconnectMonitor);
         handler.removeCallbacks(connectionStabilizer);
+        handler.removeCallbacks(restoreDeadline);
         launchShell.destroy();
         if (instance == this) instance = null;
         super.onDestroy();
