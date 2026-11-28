@@ -732,6 +732,7 @@ public final class MediaSessionBridge extends NotificationListenerService {
                     getSharedPreferences(RESUME_PREFS, Context.MODE_PRIVATE);
             long savedDuration = Math.max(0L, prefs.getLong(CHECKPOINT_DURATION, 0L));
             long savedPosition = getAdjustedCheckpointPosition(this);
+            Bitmap previousArtwork = lastMirrorArtwork;
             Bitmap warning = WynWarningStore.getWarning();
             Bitmap artwork = warning == null ? null : getCachedMirrorArtwork(null, warning);
             String title = !TextUtils.isEmpty(savedTitle) ? savedTitle : "CarAsistant Media";
@@ -753,6 +754,7 @@ public final class MediaSessionBridge extends NotificationListenerService {
                 }
                 session.setMetadata(metadata.build());
                 lastMirrorMetadataKey = metadataKey;
+                retireReplacedMirrorArtwork(previousArtwork);
             }
             String playbackKey = "false|" + savedPosition + "|" + savedDuration;
             if (!playbackKey.equals(lastMirrorPlaybackKey)) {
@@ -763,6 +765,7 @@ public final class MediaSessionBridge extends NotificationListenerService {
             return;
         }
 
+        Bitmap previousArtwork = lastMirrorArtwork;
         Bitmap artwork = getCachedMirrorArtwork(state.artwork, WynWarningStore.getWarning());
         String title = TextUtils.isEmpty(state.title) ? "Đang phát media" : state.title;
         String artist = TextUtils.isEmpty(state.artist) ? state.packageName : state.artist;
@@ -782,6 +785,7 @@ public final class MediaSessionBridge extends NotificationListenerService {
             }
             session.setMetadata(metadata.build());
             lastMirrorMetadataKey = metadataKey;
+            retireReplacedMirrorArtwork(previousArtwork);
         }
 
         long position = Math.max(0L, state.position);
@@ -803,7 +807,13 @@ public final class MediaSessionBridge extends NotificationListenerService {
                 + "|" + overlay + "|" + x + "|" + y;
         if (key.equals(lastMirrorArtworkKey)) return lastMirrorArtwork;
         Bitmap composed = WynWarningStore.composeMediaArtwork(media, overlay, x, y);
-        lastMirrorArtwork = safeMirrorArtwork(composed);
+        Bitmap replacement = safeMirrorArtwork(composed);
+        // composeMediaArtwork returns the source media bitmap unchanged when there is
+        // no WYN overlay. Never recycle that caller-owned media artwork.
+        if (composed != null && composed != media && !composed.isRecycled()) {
+            composed.recycle();
+        }
+        lastMirrorArtwork = replacement;
         lastMirrorArtworkKey = key;
         return lastMirrorArtwork;
     }
@@ -830,7 +840,9 @@ public final class MediaSessionBridge extends NotificationListenerService {
         try {
             int width = source.getWidth();
             int height = source.getHeight();
-            if (width <= 384 && height <= 384) return source;
+            if (width <= 384 && height <= 384) {
+                return source.copy(Bitmap.Config.ARGB_8888, true);
+            }
             float scale = Math.min(384f / width, 384f / height);
             return Bitmap.createScaledBitmap(source,
                     Math.max(1, Math.round(width * scale)),
@@ -839,6 +851,20 @@ public final class MediaSessionBridge extends NotificationListenerService {
             Log.w(TAG, "Could not prepare mirrored media artwork", error);
             return null;
         }
+    }
+
+    /**
+     * Keep the previous MediaSession artwork alive briefly after publishing its
+     * replacement, then release it. This bounds retained frames without recycling
+     * a bitmap while Gearhead may still be reading the just-replaced metadata.
+     */
+    private void retireReplacedMirrorArtwork(Bitmap previous) {
+        if (previous == null || previous == lastMirrorArtwork || previous.isRecycled()) return;
+        MAIN.postDelayed(() -> {
+            if (previous != lastMirrorArtwork && !previous.isRecycled()) {
+                previous.recycle();
+            }
+        }, 2000L);
     }
 
     @Override
@@ -920,6 +946,7 @@ public final class MediaSessionBridge extends NotificationListenerService {
         lastMirrorMetadataKey = null;
         lastMirrorPlaybackKey = null;
         lastMirrorArtworkKey = null;
+        Bitmap artworkToRelease = lastMirrorArtwork;
         lastMirrorArtwork = null;
         if (session != null) {
             try {
@@ -928,6 +955,11 @@ public final class MediaSessionBridge extends NotificationListenerService {
             } catch (RuntimeException error) {
                 Log.w(TAG, "Could not release mirrored media session", error);
             }
+        }
+        if (artworkToRelease != null && !artworkToRelease.isRecycled()) {
+            MAIN.postDelayed(() -> {
+                if (!artworkToRelease.isRecycled()) artworkToRelease.recycle();
+            }, 2000L);
         }
     }
 
