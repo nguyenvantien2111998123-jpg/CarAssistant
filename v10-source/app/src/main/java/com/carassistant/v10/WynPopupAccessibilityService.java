@@ -3,18 +3,16 @@ package com.carassistant.v10;
 import android.accessibilityservice.AccessibilityService;
 import android.os.Handler;
 import android.os.Looper;
+import android.os.SystemClock;
 import android.util.Log;
-import android.view.accessibility.AccessibilityEvent;
 
 /**
- * Sends the phone to Home 30 seconds after the WYN launch command is accepted.
- * The timer deliberately does not depend on getRootInActiveWindow(): WYN's Flutter
- * SurfaceView and popup overlays do not always expose WYN as the active root.
+ * Owns only the fixed 30-second WYN background deadline.
+ * No Flutter readiness polling, UI-tree inspection or repeated event-driven checks.
  */
 public final class WynPopupAccessibilityService extends AccessibilityService {
-    private static final String WYN_PACKAGE = "com.wynauto.wyn";
     private static final String TAG = "CarAsistantWYN";
-    private static final long POLL_MS = 100L;
+    private static final long HOME_DELAY_MS = 30000L;
 
     private static volatile WynPopupAccessibilityService instance;
     private final Handler main = new Handler(Looper.getMainLooper());
@@ -28,20 +26,20 @@ public final class WynPopupAccessibilityService extends AccessibilityService {
 
             android.content.SharedPreferences prefs =
                     getSharedPreferences("wyn_auto_start", MODE_PRIVATE);
-            long requestedAt = prefs.getLong("requested_at", 0L);
-            long homeAt = prefs.getLong("home_at", requestedAt + 30000L);
-            long now = System.currentTimeMillis();
+            long acceptedAt = prefs.getLong("launch_accepted_elapsed", 0L);
+            long homeDeadline = prefs.getLong("home_deadline_elapsed", 0L);
+            long now = SystemClock.elapsedRealtime();
 
-            // Wait for the receiver to persist the accepted launch timestamp.
-            if (requestedAt <= 0L || homeAt <= 0L) {
-                scheduleCheck(POLL_MS);
+            // The receiver writes both timestamps and the pending flag in one commit.
+            // Missing/invalid timestamps indicate stale state, not a reason to poll.
+            if (acceptedAt <= 0L || homeDeadline <= 0L || now < acceptedAt) {
+                Log.e(TAG, "Invalid WYN deadline state; clearing stale timer");
+                clearPending();
                 return;
             }
 
-            long remaining = homeAt - now;
+            long remaining = homeDeadline - now;
             if (remaining > 0L) {
-                // One deadline timer, not 100-ms polling: keep the requested 30-second
-                // interval measured from the accepted WYN launch timestamp.
                 scheduleCheck(remaining);
                 return;
             }
@@ -51,60 +49,47 @@ public final class WynPopupAccessibilityService extends AccessibilityService {
             try {
                 accepted = performGlobalAction(GLOBAL_ACTION_HOME);
             } catch (Throwable error) {
-                Log.w(TAG, "Accessibility HOME action failed; trying root keyevent", error);
+                Log.w(TAG, "Accessibility HOME action failed; trying dedicated root thread", error);
             }
-            if (!accepted) {
-                RootShellSession.EXEC.execute(() -> {
-                    RootShellSession shell = new RootShellSession();
-                    try {
-                        shell.run(5, "input keyevent 3");
-                        Log.i(TAG, "WYN_HOME root fallback accepted");
-                    } catch (Throwable error) {
-                        Log.e(TAG, "WYN_HOME root fallback failed", error);
-                    } finally {
-                        shell.destroy();
-                    }
-                });
+
+            if (accepted) {
+                Log.i(TAG, "WYN_HOME_30S accessibilityAccepted=true; elapsedSinceAcceptedLaunchMs="
+                        + (now - acceptedAt));
+                clearPending();
+                return;
             }
-            Log.i(TAG, "WYN_30_SECOND_HOME; accessibilityAccepted=" + accepted
-                    + "; elapsedSinceAcceptedLaunchMs=" + (now - requestedAt));
-            clearPending();
+
+            // Do not queue the fallback behind the shared single-thread shell executor.
+            new Thread(() -> {
+                RootShellSession shell = new RootShellSession();
+                try {
+                    shell.run(5, "input keyevent 3");
+                    Log.i(TAG, "WYN_HOME_30S rootFallbackAccepted; elapsedSinceAcceptedLaunchMs="
+                            + (SystemClock.elapsedRealtime() - acceptedAt));
+                } catch (Throwable error) {
+                    Log.e(TAG, "WYN_HOME_30S root fallback failed", error);
+                } finally {
+                    shell.destroy();
+                    main.post(this::clearPending);
+                }
+            }, "CarAsistant-WYN-Home").start();
         }
     };
 
-    /** Immediate Home request used when media restoration finishes before WYN starts. */
-    public static boolean requestPhoneHome() {
-        WynPopupAccessibilityService service = instance;
-        if (service == null) return false;
-        try {
-            boolean accepted = service.performGlobalAction(GLOBAL_ACTION_HOME);
-            Log.i(TAG, "MEDIA_RECOVERY_HOME via WYN Accessibility accepted=" + accepted);
-            return accepted;
-        } catch (RuntimeException error) {
-            Log.w(TAG, "MEDIA_RECOVERY_HOME via WYN Accessibility failed", error);
-            return false;
-        }
-    }
-
-    /** Called by WynAutoStartReceiver after am start has returned successfully. */
+    /** Called after am start has returned successfully and the 30-second deadline is saved. */
     public static void onWynLaunchAccepted() {
-        Log.i(TAG, "WYN launch accepted; 30-second Home deadline armed from launch acceptance");
         WynPopupAccessibilityService service = instance;
         if (service != null) {
             service.main.post(() -> service.scheduleCheck(1L));
+        } else {
+            Log.i(TAG, "WYN launch accepted; deadline persisted for Accessibility service reconnect");
         }
     }
 
     @Override public void onServiceConnected() {
         super.onServiceConnected();
         instance = this;
-        Log.i(TAG, "WYN 30-second auto-Home service connected");
-        if (isPending()) scheduleCheck(1L);
-    }
-
-    @Override public void onAccessibilityEvent(AccessibilityEvent event) {
-        if (event == null || event.getPackageName() == null
-                || !WYN_PACKAGE.contentEquals(event.getPackageName())) return;
+        Log.i(TAG, "WYN fixed 30-second Home timer service connected");
         if (isPending()) scheduleCheck(1L);
     }
 
@@ -126,14 +111,14 @@ public final class WynPopupAccessibilityService extends AccessibilityService {
                 .putBoolean("background_after_load", false)
                 .remove("requested_at")
                 .remove("home_at")
+                .remove("launch_accepted_elapsed")
+                .remove("home_deadline_elapsed")
                 .commit();
         homeActionRequested = false;
     }
 
     @Override public void onInterrupt() {
-        // Accessibility event delivery may be interrupted while the service process
-        // remains alive. Do not cancel the independent 30-second Home deadline.
-        Log.w(TAG, "Accessibility event stream interrupted; keep WYN Home timer armed");
+        // Keep the independently scheduled deadline intact.
     }
 
     @Override public void onDestroy() {
