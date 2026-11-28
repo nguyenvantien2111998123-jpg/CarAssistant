@@ -654,7 +654,11 @@ public final class MediaSessionBridge extends NotificationListenerService {
             return checkpoint;
         }
         if (controller != null && SILENT_MEDIA_PACKAGE.equals(controller.getPackageName())) {
-            Log.w(TAG, "Steering gesture recognized; no real media source exists behind silent keepalive");
+            // The silent helper now exposes a real three-item playlist with seek support.
+            // Use it only when no real source/checkpoint controller is available.
+            Log.i(TAG, "Steering fallback selected silent playlist source="
+                    + controller.getPackageName());
+            return controller;
         }
         return null;
     }
