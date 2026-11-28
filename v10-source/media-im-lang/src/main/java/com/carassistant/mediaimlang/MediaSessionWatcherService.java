@@ -79,7 +79,7 @@ public final class MediaSessionWatcherService extends NotificationListenerServic
     @Override public void onListenerDisconnected() {
         handler.removeCallbacks(poll);
         lastExternalSessionPresent = false;
-        SilentMediaBrowserService.setExternalMediaSessionPresent(false);
+        SilentMediaBrowserService.onSessionAccessLost();
         super.onListenerDisconnected();
     }
 
