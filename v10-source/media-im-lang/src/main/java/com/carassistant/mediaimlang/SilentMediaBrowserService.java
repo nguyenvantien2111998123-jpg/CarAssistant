@@ -226,9 +226,10 @@ public final class SilentMediaBrowserService extends MediaBrowserService {
                 playbackStartedAt = SystemClock.elapsedRealtime();
                 session.setActive(true);
                 session.setPlaybackState(new PlaybackState.Builder()
+                        // This helper has no playlist. Do not advertise fake skip actions;
+                        // physical steering keys are intercepted centrally by CarAsistant.
                         .setActions(PlaybackState.ACTION_PLAY | PlaybackState.ACTION_PAUSE
-                                | PlaybackState.ACTION_PLAY_PAUSE | PlaybackState.ACTION_STOP
-                                | PlaybackState.ACTION_SKIP_TO_NEXT | PlaybackState.ACTION_SKIP_TO_PREVIOUS)
+                                | PlaybackState.ACTION_PLAY_PAUSE | PlaybackState.ACTION_STOP)
                         .setState(PlaybackState.STATE_PLAYING, 0L, 1f)
                         .build());
                 showMediaNotification();
@@ -274,11 +275,10 @@ public final class SilentMediaBrowserService extends MediaBrowserService {
     private void setPausedState() {
         if (session != null) {
             session.setPlaybackState(new PlaybackState.Builder()
+                     // No playlist or seekable content exists in this keepalive session.
+                     // Steering events are routed by CarAsistant's system-level key hook.
                      .setActions(PlaybackState.ACTION_PLAY | PlaybackState.ACTION_PAUSE
-                            | PlaybackState.ACTION_PLAY_PAUSE | PlaybackState.ACTION_STOP
-                            | PlaybackState.ACTION_SKIP_TO_NEXT | PlaybackState.ACTION_SKIP_TO_PREVIOUS
-                            | PlaybackState.ACTION_FAST_FORWARD | PlaybackState.ACTION_REWIND
-                            | PlaybackState.ACTION_SEEK_TO)
+                            | PlaybackState.ACTION_PLAY_PAUSE | PlaybackState.ACTION_STOP)
                     .setState(PlaybackState.STATE_PAUSED, SILENT_WINDOW_MS, 0f)
                     .build());
             if (!externalSessionPresent) showMediaNotification();
