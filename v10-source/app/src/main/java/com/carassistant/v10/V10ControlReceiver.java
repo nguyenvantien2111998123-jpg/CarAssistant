@@ -69,11 +69,12 @@ public final class V10ControlReceiver
                 Context app = context.getApplicationContext();
                 rawKeyObserver = new SteeringWheelMediaKeyHandler(
                         new SteeringWheelMediaKeyHandler.Actions() {
-                            // The observer must not duplicate normal framework media routing.
-                            @Override public void onNext() { }
-                            @Override public void onPrevious() { }
-                            @Override public void onSeekForward() { }
-                            @Override public void onSeekBackward() { }
+                            // SystemMediaKeyHooks consumes the original event after
+                            // relaying it here, so this is the single owner for all gestures.
+                            @Override public void onNext() { MediaSessionBridge.skipNext(); }
+                            @Override public void onPrevious() { MediaSessionBridge.skipPrevious(); }
+                            @Override public void onSeekForward() { MediaSessionBridge.seekBy(15000L); }
+                            @Override public void onSeekBackward() { MediaSessionBridge.seekBy(-15000L); }
                             @Override public void onVoiceAssistant() {
                                 Intent voice = new Intent("com.carassistant.v10.STEERING_VOICE")
                                         .setPackage(app.getPackageName());

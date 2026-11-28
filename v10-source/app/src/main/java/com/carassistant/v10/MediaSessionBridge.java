@@ -596,7 +596,7 @@ public final class MediaSessionBridge extends NotificationListenerService {
     }
 
     public static void skipNext() {
-        MediaController controller = activeController;
+        MediaController controller = getSteeringController();
         logSteeringTarget("NEXT", controller);
         if (controller != null) {
             try {
@@ -608,7 +608,7 @@ public final class MediaSessionBridge extends NotificationListenerService {
     }
 
     public static void skipPrevious() {
-        MediaController controller = activeController;
+        MediaController controller = getSteeringController();
         logSteeringTarget("PREVIOUS", controller);
         if (controller != null) {
             try {
@@ -638,9 +638,34 @@ public final class MediaSessionBridge extends NotificationListenerService {
         }
     }
 
-    /** Seek the active media session to an absolute position in milliseconds. */
-    public static void seekTo(long positionMs) {
+    /**
+     * Prefer a real content session for steering actions. If no real app or
+     * checkpoint session exists, fall back to Media Im Lang's playable silent playlist.
+     */
+    private static MediaController getSteeringController() {
         MediaController controller = activeController;
+        if (controller != null && !SILENT_MEDIA_PACKAGE.equals(controller.getPackageName())) {
+            return controller;
+        }
+        MediaController checkpoint = checkpointController;
+        if (checkpoint != null && !SILENT_MEDIA_PACKAGE.equals(checkpoint.getPackageName())) {
+            Log.i(TAG, "Steering bypassed silent keepalive and selected checkpoint source="
+                    + checkpoint.getPackageName());
+            return checkpoint;
+        }
+        if (controller != null && SILENT_MEDIA_PACKAGE.equals(controller.getPackageName())) {
+            // The silent helper now exposes a real three-item playlist with seek support.
+            // Use it only when no real source/checkpoint controller is available.
+            Log.i(TAG, "Steering fallback selected silent playlist source="
+                    + controller.getPackageName());
+            return controller;
+        }
+        return null;
+    }
+
+    /** Seek the active real media session to an absolute position in milliseconds. */
+    public static void seekTo(long positionMs) {
+        MediaController controller = getSteeringController();
         if (controller == null) return;
         long target = Math.max(0L, positionMs);
         MediaMetadata metadata = controller.getMetadata();
@@ -656,7 +681,7 @@ public final class MediaSessionBridge extends NotificationListenerService {
 
     /** Seek the active media session by a relative offset in milliseconds. */
     public static void seekBy(long offsetMs) {
-        MediaController controller = activeController;
+        MediaController controller = getSteeringController();
         if (controller == null || offsetMs == 0L) return;
         PlaybackState state = controller.getPlaybackState();
         if (state == null) return;
@@ -693,12 +718,16 @@ public final class MediaSessionBridge extends NotificationListenerService {
             @Override public void onPlay() { MediaSessionBridge.play(); }
             @Override public void onPause() { MediaSessionBridge.pause(); }
             @Override public void onSkipToNext() {
-                Log.i(TAG, "CarAsistant MediaSession callback: onSkipToNext");
-                MediaSessionBridge.skipNext();
+                Log.i(TAG, "CarAsistant MediaSession callback: onSkipToNext -> unified gesture handler");
+                if (steeringKeyHandler != null) {
+                    steeringKeyHandler.handleTransportTap(android.view.KeyEvent.KEYCODE_MEDIA_NEXT);
+                }
             }
             @Override public void onSkipToPrevious() {
-                Log.i(TAG, "CarAsistant MediaSession callback: onSkipToPrevious");
-                MediaSessionBridge.skipPrevious();
+                Log.i(TAG, "CarAsistant MediaSession callback: onSkipToPrevious -> unified gesture handler");
+                if (steeringKeyHandler != null) {
+                    steeringKeyHandler.handleTransportTap(android.view.KeyEvent.KEYCODE_MEDIA_PREVIOUS);
+                }
             }
             @Override public void onFastForward() {
                 Log.i(TAG, "CarAsistant MediaSession callback: onFastForward");
