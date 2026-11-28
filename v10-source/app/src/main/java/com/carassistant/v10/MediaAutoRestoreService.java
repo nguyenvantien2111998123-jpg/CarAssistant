@@ -106,13 +106,14 @@ public final class MediaAutoRestoreService extends Service {
                 return;
             }
 
+            boolean playbackStateReached = false;
             if (MediaSessionBridge.isCheckpointMediaReady(
                     MediaAutoRestoreService.this, expectedPackage)) {
                 boolean autoplay = getSharedPreferences("media_autoplay", MODE_PRIVATE)
                         .getBoolean("enabled", true);
                 boolean positionRestoreComplete = MediaSessionBridge.applyCheckpoint(
                         MediaAutoRestoreService.this, expectedPackage, autoplay);
-                boolean playbackStateReached = MediaSessionBridge.isCheckpointPlaybackStateReached(
+                playbackStateReached = MediaSessionBridge.isCheckpointPlaybackStateReached(
                         MediaAutoRestoreService.this, expectedPackage, autoplay);
 
                 // Home is allowed only after BOTH requested PLAY/PAUSE state and
