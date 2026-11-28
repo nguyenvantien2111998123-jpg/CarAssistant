@@ -70,6 +70,20 @@ public final class WynPopupAccessibilityService extends AccessibilityService {
         }
     };
 
+    /** Immediate Home request used when media restoration finishes before WYN starts. */
+    public static boolean requestPhoneHome() {
+        WynPopupAccessibilityService service = instance;
+        if (service == null) return false;
+        try {
+            boolean accepted = service.performGlobalAction(GLOBAL_ACTION_HOME);
+            Log.i(TAG, "MEDIA_RECOVERY_HOME via WYN Accessibility accepted=" + accepted);
+            return accepted;
+        } catch (RuntimeException error) {
+            Log.w(TAG, "MEDIA_RECOVERY_HOME via WYN Accessibility failed", error);
+            return false;
+        }
+    }
+
     /** Called by WynAutoStartReceiver after am start has returned successfully. */
     public static void onWynLaunchAccepted() {
         Log.i(TAG, "WYN launch accepted; 30-second Home deadline armed from launch acceptance");
