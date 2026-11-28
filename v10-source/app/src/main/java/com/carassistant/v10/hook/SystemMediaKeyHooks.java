@@ -60,11 +60,12 @@ public final class SystemMediaKeyHooks {
                         if (!isTargetKey(event)) return;
 
                         logRawEvent(param, event);
+                        Context context = null;
                         try {
                             Object service = getOuterService(param.thisObject);
                             if (service == null) return;
 
-                            Context context = (Context) XposedHelpers.getObjectField(
+                            context = (Context) XposedHelpers.getObjectField(
                                     service, "mContext");
                             if (!hasMediaAccess(context)) {
                                 relayRawKeyToCarAsistant(context, event,
@@ -97,9 +98,11 @@ public final class SystemMediaKeyHooks {
                                         + "relayed observer event and allowing framework fallback");
                             }
                         } catch (Throwable error) {
-                            // Fail open: never disable the steering controls of other players.
-                            XposedBridge.log(TAG + " route failed; allowing framework fallback: "
-                                    + error);
+                            // Fail open for the active player, but preserve the assistant gesture
+                            // observer even when vendor MediaSession internals differ.
+                            relayRawKeyToCarAsistant(context, event, "system hook exception");
+                            XposedBridge.log(TAG + " route failed; relayed observer when possible "
+                                    + "and allowing framework fallback: " + error);
                         }
                     }
                 });
