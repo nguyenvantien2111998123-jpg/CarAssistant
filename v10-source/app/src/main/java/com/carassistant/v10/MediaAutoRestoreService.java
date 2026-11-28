@@ -373,8 +373,18 @@ public final class MediaAutoRestoreService extends Service {
         verifyStartedAt = 0L;
 
         expectedPackage = MediaSessionBridge.getCheckpointPackage(this);
+        // The standalone silent session exists only to keep Android Auto's media
+        // surface discoverable. It is never a user content source to restore.
+        if ("com.carassistant.mediaimlang".equals(expectedPackage)) {
+            Log.i(TAG, "Ignoring non-restorable Silent Media checkpoint; preserving last real player");
+            expectedPackage = null;
+        }
         if (TextUtils.isEmpty(expectedPackage)) {
             expectedPackage = MediaSessionBridge.getLastKnownPackage(this);
+        }
+        if ("com.carassistant.mediaimlang".equals(expectedPackage)) {
+            Log.i(TAG, "Ignoring Silent Media last-known package; no real source to relaunch");
+            expectedPackage = null;
         }
 
         if (TextUtils.isEmpty(expectedPackage) || getPackageName().equals(expectedPackage)
