@@ -23,18 +23,6 @@ import java.util.Locale;
 public final class MediaPlaybackAccessibilityService extends AccessibilityService {
     private static volatile MediaPlaybackAccessibilityService activeService;
 
-    /** Immediately send the phone to Home through Android's Accessibility API. */
-    static boolean requestPhoneHome() {
-        MediaPlaybackAccessibilityService service = activeService;
-        if (service == null) return false;
-        try {
-            return service.performGlobalAction(GLOBAL_ACTION_HOME);
-        } catch (RuntimeException error) {
-            Log.w(TAG, "Could not send phone Home through Accessibility", error);
-            return false;
-        }
-    }
-
     /** Return the source app to the background only if it is still the foreground app. */
     static boolean requestBackgroundSourceApp(String packageName) {
         MediaPlaybackAccessibilityService service = activeService;
