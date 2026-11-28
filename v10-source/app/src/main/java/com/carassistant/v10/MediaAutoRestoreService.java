@@ -115,14 +115,9 @@ public final class MediaAutoRestoreService extends Service {
                 boolean playbackStateReached = MediaSessionBridge.isCheckpointPlaybackStateReached(
                         MediaAutoRestoreService.this, expectedPackage, autoplay);
 
-                // Once the exact saved item reports the requested PLAY/PAUSE state,
-                // return the phone to Home immediately. Seek-position verification may
-                // still be settling; it must not hold WYN behind the old 45-second gate.
-                if (positionRestoreComplete || playbackStateReached) {
-                    if (!positionRestoreComplete) {
-                        Log.i(TAG, "Exact media item reached requested playback state; "
-                                + "finishing phone recovery without waiting for seek-position tolerance");
-                    }
+                // Home is allowed only after BOTH requested PLAY/PAUSE state and
+                // saved seek position are verified by applyCheckpoint().
+                if (positionRestoreComplete) {
                     completed = true;
                     getSharedPreferences("media_autoplay", MODE_PRIVATE).edit()
                             .putString("phase", "verified_phone_background_restore")
@@ -145,6 +140,9 @@ public final class MediaAutoRestoreService extends Service {
                 }
             }
 
+            if (playbackStateReached) {
+                Log.d(TAG, "Requested playback state reached; still waiting for saved position tolerance");
+            }
             if (verifyStartedAt == 0L) verifyStartedAt = SystemClock.elapsedRealtime();
             if (SystemClock.elapsedRealtime() - verifyStartedAt < VERIFY_WINDOW_MS) {
                 handler.postDelayed(this, SESSION_RETRY_MS);
