@@ -81,6 +81,20 @@ final class SteeringWheelMediaKeyHandler {
         return false;
     }
 
+    /** Treat a MediaSession transport callback as one tap through the same gesture state. */
+    void handleTransportTap(int keyCode) {
+        long now = SystemClock.uptimeMillis();
+        KeyEvent down = new KeyEvent(now, now, KeyEvent.ACTION_DOWN, keyCode, 0);
+        KeyEvent up = new KeyEvent(now, now + 1L, KeyEvent.ACTION_UP, keyCode, 0);
+        if (keyCode == KeyEvent.KEYCODE_MEDIA_NEXT) {
+            handleNext(down);
+            handleNext(up);
+        } else if (keyCode == KeyEvent.KEYCODE_MEDIA_PREVIOUS) {
+            handlePrevious(down);
+            handlePrevious(up);
+        }
+    }
+
     private void handleNext(KeyEvent event) {
         if (event.getAction() == KeyEvent.ACTION_DOWN) {
             if (event.getRepeatCount() != 0) return;
