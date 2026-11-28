@@ -33,9 +33,6 @@ public final class SilentMediaBrowserService extends MediaBrowserService {
     private static final int NOTIFICATION_ID = 6103;
     private static final String ROOT_ID = "media_im_lang_root";
     private static final long SILENT_WINDOW_MS = 3000L;
-    private static final long DOUBLE_NEXT_WINDOW_MS = 350L;
-    private static final String CARASSISTANT_VOICE_ACTION =
-            "com.carassistant.v10.STEERING_VOICE";
 
     private static volatile SilentMediaBrowserService instance;
     private final Handler handler = new Handler(Looper.getMainLooper());
@@ -45,7 +42,6 @@ public final class SilentMediaBrowserService extends MediaBrowserService {
     private boolean windowRunning;
     private boolean silentWindowAttempted;
     private long playbackStartedAt;
-    private long lastNextCallbackAt;
 
     private final Runnable pauseAfterWindow = () -> pauseSilent("three-second window elapsed");
 
@@ -69,25 +65,14 @@ public final class SilentMediaBrowserService extends MediaBrowserService {
             @Override public void onPause() { pauseSilent("Android Auto pause command"); }
             @Override public void onStop() { pauseSilent("Android Auto stop command"); }
             @Override public void onSkipToNext() {
-                long now = SystemClock.uptimeMillis();
-                if (lastNextCallbackAt > 0L
-                        && now - lastNextCallbackAt <= DOUBLE_NEXT_WINDOW_MS) {
-                    lastNextCallbackAt = 0L;
-                    Intent voice = new Intent(CARASSISTANT_VOICE_ACTION)
-                            .setPackage("com.carassistant.v10");
-                    sendBroadcast(voice);
-                    Log.i(TAG, "STEERING double-NEXT -> CarAsistant voice assistant");
-                    return;
-                }
-
-                lastNextCallbackAt = now;
-                final long firstTapAt = now;
-                handler.postDelayed(() -> {
-                    if (lastNextCallbackAt == firstTapAt) lastNextCallbackAt = 0L;
-                }, DOUBLE_NEXT_WINDOW_MS + 50L);
-                Log.i(TAG, "Single NEXT ignored: waiting for possible double-NEXT");
+                // Do not implement a second double-NEXT detector here. Hardware steering
+                // keys are handled centrally by CarAsistant's existing MediaSession hook,
+                // exactly as they are for YouTube/Zing. This fallback has no playlist.
+                Log.d(TAG, "NEXT received by fallback session; steering gesture belongs to CarAsistant");
             }
-            @Override public void onSkipToPrevious() { Log.i(TAG, "Previous ignored: silent fallback has no playlist"); }
+            @Override public void onSkipToPrevious() {
+                Log.d(TAG, "PREVIOUS ignored: silent fallback has no playlist");
+            }
         });
         session.setFlags(MediaSession.FLAG_HANDLES_MEDIA_BUTTONS
                 | MediaSession.FLAG_HANDLES_TRANSPORT_CONTROLS);
@@ -97,7 +82,9 @@ public final class SilentMediaBrowserService extends MediaBrowserService {
                 .putString(android.media.MediaMetadata.METADATA_KEY_ALBUM, "Media nền")
                 .putLong(android.media.MediaMetadata.METADATA_KEY_DURATION, SILENT_WINDOW_MS)
                 .build());
-        session.setActive(true);
+        // Keep the helper invisible to Android Auto until monitoring confirms that
+        // no real phone media session is PLAYING or PAUSED.
+        session.setActive(false);
         setSessionToken(session.getSessionToken());
         setPausedState();
         startForeground(NOTIFICATION_ID, buildNotification("MediaSession đang hoạt động"));
@@ -169,6 +156,9 @@ public final class SilentMediaBrowserService extends MediaBrowserService {
         Log.i(TAG, "External media session present=" + present);
         if (present) {
             pauseSilent("real media session has priority");
+            // A paused helper session must not compete with a real app's paused
+            // session in Android Auto's media source selection.
+            if (session != null) session.setActive(false);
             return;
         }
 
@@ -247,12 +237,15 @@ public final class SilentMediaBrowserService extends MediaBrowserService {
             Log.i(TAG, "Silent MP4 paused: " + reason + ", elapsedMs="
                     + (playbackStartedAt == 0L ? 0L : SystemClock.elapsedRealtime() - playbackStartedAt));
         }
+        if (session != null) {
+            // Keep the fallback session active/PAUSED only while no real player exists.
+            session.setActive(!externalSessionPresent && hasSessionAccess());
+        }
         // Do not rewrite the persistent notification on every PLAY/PAUSE transition.
     }
 
     private void setPausedState() {
         if (session != null) {
-            session.setActive(true);
             session.setPlaybackState(new PlaybackState.Builder()
                      .setActions(PlaybackState.ACTION_PLAY | PlaybackState.ACTION_PAUSE
                             | PlaybackState.ACTION_PLAY_PAUSE | PlaybackState.ACTION_STOP
