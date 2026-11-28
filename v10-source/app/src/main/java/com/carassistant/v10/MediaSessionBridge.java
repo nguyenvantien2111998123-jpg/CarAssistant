@@ -677,7 +677,7 @@ public final class MediaSessionBridge extends NotificationListenerService {
 
     /** Seek the active media session by a relative offset in milliseconds. */
     public static void seekBy(long offsetMs) {
-        MediaController controller = activeController;
+        MediaController controller = getSteeringController();
         if (controller == null || offsetMs == 0L) return;
         PlaybackState state = controller.getPlaybackState();
         if (state == null) return;
