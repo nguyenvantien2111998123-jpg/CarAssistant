@@ -31,6 +31,7 @@ public final class MediaSessionBridge extends NotificationListenerService {
     private static final String TAG = "CarAssistantMedia";
     private static final String RESUME_PREFS = "carassistant_media_resume";
     private static final String LAST_PACKAGE = "last_media_package";
+    private static final String SILENT_MEDIA_PACKAGE = "com.carassistant.mediaimlang";
     // A single rolling checkpoint: frequent durable writes keep abrupt-power-loss recovery close to real time.
     private static final long CHECKPOINT_INTERVAL_MS = 5_000L;
     private static final String CHECKPOINT_PACKAGE = "checkpoint_package";
@@ -165,7 +166,7 @@ public final class MediaSessionBridge extends NotificationListenerService {
             MediaMetadata metadata = controller.getMetadata();
             PlaybackState state = controller.getPlaybackState();
             String packageName = controller.getPackageName();
-            if ("com.carassistant.mediaimlang".equals(packageName)) {
+            if (SILENT_MEDIA_PACKAGE.equals(packageName)) {
                 Log.d(TAG, "Skipping durable restore checkpoint for Silent Media helper session");
                 return;
             }
@@ -255,6 +256,10 @@ public final class MediaSessionBridge extends NotificationListenerService {
         if (context == null) return null;
         String value = context.getSharedPreferences(RESUME_PREFS, Context.MODE_PRIVATE)
                 .getString(LAST_PACKAGE, null);
+        if (SILENT_MEDIA_PACKAGE.equals(value)) {
+            Log.i(TAG, "Ignoring legacy Silent Media value in last-known package preference");
+            return null;
+        }
         return TextUtils.isEmpty(value) ? null : value;
     }
 
@@ -312,6 +317,10 @@ public final class MediaSessionBridge extends NotificationListenerService {
         if (context == null) return null;
         String value = context.getSharedPreferences(RESUME_PREFS, Context.MODE_PRIVATE)
                 .getString(CHECKPOINT_PACKAGE, null);
+        if (SILENT_MEDIA_PACKAGE.equals(value)) {
+            Log.i(TAG, "Ignoring legacy Silent Media value in durable checkpoint; it is not restorable");
+            return null;
+        }
         return TextUtils.isEmpty(value) ? null : value;
     }
 
@@ -1110,8 +1119,12 @@ public final class MediaSessionBridge extends NotificationListenerService {
             snapshot = Snapshot.empty();
         } else {
             try {
-                getSharedPreferences(RESUME_PREFS, Context.MODE_PRIVATE).edit()
-                        .putString(LAST_PACKAGE, controller.getPackageName()).apply();
+                if (!SILENT_MEDIA_PACKAGE.equals(controller.getPackageName())) {
+                    getSharedPreferences(RESUME_PREFS, Context.MODE_PRIVATE).edit()
+                            .putString(LAST_PACKAGE, controller.getPackageName()).apply();
+                } else {
+                    Log.d(TAG, "Silent Media is a live AA session, not the last real media app");
+                }
             } catch (RuntimeException error) {
                 Log.d(TAG, "Could not persist last media package", error);
             }
