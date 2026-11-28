@@ -23,6 +23,8 @@ import android.util.Log;
 import java.io.File;
 import java.util.Collections;
 import java.util.List;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 
 /**
  * A persistent silent MediaSession backed by three 30-minute MP4 playlist items.
@@ -42,12 +44,14 @@ public final class SilentMediaBrowserService extends MediaBrowserService {
 
     private static volatile SilentMediaBrowserService instance;
     private final Handler handler = new Handler(Looper.getMainLooper());
+    private final ExecutorService playlistExecutor = Executors.newSingleThreadExecutor();
     private MediaSession session;
     private MediaPlayer player;
     private List<File> playlist = Collections.emptyList();
     private int currentTrackIndex;
     private boolean externalSessionPresent;
     private boolean windowRunning;
+    private boolean playlistPreparing;
     private boolean playlistStartAttempted;
     private long playbackStartedAt;
 
@@ -237,8 +241,30 @@ public final class SilentMediaBrowserService extends MediaBrowserService {
             updateNotification("Cần bật quyền Truy cập thông báo");
             return;
         }
+        if (playlist.isEmpty()) {
+            if (playlistPreparing) return;
+            playlistPreparing = true;
+            playlistStartAttempted = true;
+            playlistExecutor.execute(() -> {
+                try {
+                    List<File> generated = SilentMp4Factory.getPlaylist(this);
+                    handler.post(() -> {
+                        playlist = generated;
+                        playlistPreparing = false;
+                        if (!externalSessionPresent) playTrack(index, positionMs, reason);
+                    });
+                } catch (Exception error) {
+                    Log.e(TAG, "Unable to prepare silent MP4 playlist", error);
+                    handler.post(() -> {
+                        playlistPreparing = false;
+                        playlistStartAttempted = false;
+                        updateNotification("Không tạo được playlist MP4 im lặng");
+                    });
+                }
+            });
+            return;
+        }
         try {
-            if (playlist.isEmpty()) playlist = SilentMp4Factory.getPlaylist(this);
             if (playlist.isEmpty()) throw new IllegalStateException("Silent playlist is empty");
             currentTrackIndex = Math.floorMod(index, playlist.size());
             File source = playlist.get(currentTrackIndex);
@@ -453,6 +479,7 @@ public final class SilentMediaBrowserService extends MediaBrowserService {
 
     @Override public void onDestroy() {
         handler.removeCallbacksAndMessages(null);
+        playlistExecutor.shutdownNow();
         releasePlayer();
         if (session != null) {
             session.setActive(false);
