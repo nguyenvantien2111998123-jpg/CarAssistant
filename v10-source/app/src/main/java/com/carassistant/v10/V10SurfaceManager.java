@@ -20,6 +20,7 @@ public final class V10SurfaceManager {
             // The new TextureView Surface is now bound; only now may the headless
             // ImageReader producer be closed.
             HeadlessProjectionHost.onV10SurfaceAttached(displayController);
+            V10PaneWarmupHost.onV10SurfaceAttached(displayController);
         }
         return attached;
     }
