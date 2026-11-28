@@ -1052,6 +1052,7 @@ public final class MediaSessionBridge extends NotificationListenerService {
         MediaController checkpointCandidate = null;
         MediaController playingCandidate = null;
         MediaController activeCandidate = null;
+        MediaController silentFallbackCandidate = null;
         String checkpointPackage = getCheckpointPackage(this);
         if (checkpointPackage == null) checkpointPackage = getLastKnownPackage(this);
         String lastPackage = getLastKnownPackage(this);
@@ -1059,14 +1060,22 @@ public final class MediaSessionBridge extends NotificationListenerService {
             for (MediaController candidate : controllers) {
                 if (candidate == null || getPackageName().equals(candidate.getPackageName())) continue;
                 PlaybackState candidateState = candidate.getPlaybackState();
-                if (!SILENT_MEDIA_PACKAGE.equals(candidate.getPackageName())
-                        && checkpointPackage != null
-                        && checkpointPackage.equals(candidate.getPackageName())) {
-                    checkpointCandidate = candidate;
+                String candidatePackage = candidate.getPackageName();
+                if (SILENT_MEDIA_PACKAGE.equals(candidatePackage)) {
+                    // Media Im Lang is a real live fallback player, but only when no
+                    // real phone media app has a usable PLAYING/PAUSED session.
+                    if (silentFallbackCandidate == null && isUsableMirrorSession(candidate)) {
+                        silentFallbackCandidate = candidate;
+                    }
+                    continue;
                 }
                 if (!isUsableExternalSession(candidate)) continue;
+                if (checkpointPackage != null
+                        && checkpointPackage.equals(candidatePackage)) {
+                    checkpointCandidate = candidate;
+                }
                 if (savedCandidate == null && lastPackage != null
-                        && lastPackage.equals(candidate.getPackageName())) {
+                        && lastPackage.equals(candidatePackage)) {
                     savedCandidate = candidate;
                 }
                 if (candidateState != null
@@ -1077,12 +1086,14 @@ public final class MediaSessionBridge extends NotificationListenerService {
                 if (activeCandidate == null) activeCandidate = candidate;
             }
         }
-        // Silent Media is intentionally absent from all candidates above. If it is
-        // the only published session, keep the CarAsistant mirror session alive but
-        // publish an empty content snapshot rather than treating the keepalive as media.
+        // Prefer every usable real player (including PAUSED sessions). Media Im Lang
+        // is selected only as the final fallback, so its MP4 behaves like an ordinary
+        // media item without ever replacing a real app that is still playing/paused.
         if (playingCandidate != null) chosen = playingCandidate;
         else if (savedCandidate != null) chosen = savedCandidate;
+        else if (checkpointCandidate != null) chosen = checkpointCandidate;
         else if (activeCandidate != null) chosen = activeCandidate;
+        else if (silentFallbackCandidate != null) chosen = silentFallbackCandidate;
 
         MediaController previous = activeController;
         if (previous != chosen) {
