@@ -20,7 +20,24 @@ public final class MediaRestoreCompleteReceiver extends BroadcastReceiver {
     @Override public void onReceive(Context context, Intent intent) {
         if (intent == null || !ACTION.equals(intent.getAction())) return;
         final String result = intent.getStringExtra("restore_result");
+        // Prefer the non-blocking Accessibility global action. The old root command
+        // was queued behind other shell operations on a single-thread executor.
+        boolean homeAccepted = MediaPlaybackAccessibilityService.requestPhoneHome();
+        Log.i(TAG, "Immediate Accessibility HOME accepted=" + homeAccepted
+                + "; restoreResult=" + result);
         final PendingResult pending = goAsync();
+        if (homeAccepted) {
+            new android.os.Handler(android.os.Looper.getMainLooper()).postDelayed(() -> {
+                Intent startWyn = new Intent("com.carassistant.v10.ACTION_AUTO_BACKGROUND_WYN")
+                        .setComponent(new ComponentName(context, WynAutoStartReceiver.class))
+                        .putExtra("restore_result", result);
+                context.sendBroadcast(startWyn);
+                pending.setResultCode(Activity.RESULT_OK);
+                pending.finish();
+                Log.i(TAG, "WYN scheduled one second after immediate Accessibility HOME");
+            }, 1000L);
+            return;
+        }
         RootShellSession.EXEC.execute(() -> {
             RootShellSession shell = new RootShellSession();
             try {
