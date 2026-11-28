@@ -693,12 +693,16 @@ public final class MediaSessionBridge extends NotificationListenerService {
             @Override public void onPlay() { MediaSessionBridge.play(); }
             @Override public void onPause() { MediaSessionBridge.pause(); }
             @Override public void onSkipToNext() {
-                Log.i(TAG, "CarAsistant MediaSession callback: onSkipToNext");
-                MediaSessionBridge.skipNext();
+                Log.i(TAG, "CarAsistant MediaSession callback: onSkipToNext -> unified gesture handler");
+                if (steeringKeyHandler != null) {
+                    steeringKeyHandler.handleTransportTap(android.view.KeyEvent.KEYCODE_MEDIA_NEXT);
+                }
             }
             @Override public void onSkipToPrevious() {
-                Log.i(TAG, "CarAsistant MediaSession callback: onSkipToPrevious");
-                MediaSessionBridge.skipPrevious();
+                Log.i(TAG, "CarAsistant MediaSession callback: onSkipToPrevious -> unified gesture handler");
+                if (steeringKeyHandler != null) {
+                    steeringKeyHandler.handleTransportTap(android.view.KeyEvent.KEYCODE_MEDIA_PREVIOUS);
+                }
             }
             @Override public void onFastForward() {
                 Log.i(TAG, "CarAsistant MediaSession callback: onFastForward");
