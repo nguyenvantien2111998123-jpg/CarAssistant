@@ -67,35 +67,15 @@ public final class SystemMediaKeyHooks {
 
                             context = (Context) XposedHelpers.getObjectField(
                                     service, "mContext");
-                            if (!hasMediaAccess(context)) {
-                                relayRawKeyToCarAsistant(context, event,
-                                        "Notification Access unavailable");
-                                return;
-                            }
-
-                            MediaSession.Token token = findCarAsistantSessionToken(service);
-                            if (token == null) {
-                                XposedBridge.log(TAG + " no active CarAsistant MediaSession; "
-                                        + "relaying raw event to the app observer");
-                                relayRawKeyToCarAsistant(context, event, "no active mirror session");
-                                return;
-                            }
-
-                            if (dispatchToSession(service, event, token)) {
-                                // The mirror MediaSession owns gesture handling on this route.
-                                // Consume only after Android confirms direct session dispatch.
+                            // One global owner receives every DOWN/UP/repeat event before
+                            // Android routes it to whichever MediaSession happens to be active.
+                            // This keeps NEXT/ PREVIOUS / double-NEXT / hold identical for
+                            // YouTube, Zing and the silent keepalive session.
+                            if (relayRawKeyToCarAsistant(context, event,
+                                    "central steering gesture owner")) {
                                 param.setResult(null);
-                                XposedBridge.log(TAG + " routed " + describe(event)
-                                        + " to CarAsistant MediaSession");
-                            } else {
-                                // With a third-party fallback session (Media Im Lang), Android
-                                // may reject direct dispatch to the mirror. Relay the raw event
-                                // to V10ControlReceiver so double-NEXT still reaches the voice
-                                // assistant, while leaving normal framework routing untouched.
-                                relayRawKeyToCarAsistant(context, event,
-                                        "direct mirror dispatch rejected");
-                                XposedBridge.log(TAG + " direct session dispatch returned false; "
-                                        + "relayed observer event and allowing framework fallback");
+                                XposedBridge.log(TAG + " consumed and relayed " + describe(event)
+                                        + " to CarAsistant gesture handler");
                             }
                         } catch (Throwable error) {
                             // Fail open for the active player, but preserve the assistant gesture
@@ -247,8 +227,8 @@ public final class SystemMediaKeyHooks {
         return null;
     }
 
-    private static void relayRawKeyToCarAsistant(Context context, KeyEvent event, String reason) {
-        if (context == null || event == null) return;
+    private static boolean relayRawKeyToCarAsistant(Context context, KeyEvent event, String reason) {
+        if (context == null || event == null) return false;
         try {
             Intent relay = new Intent("com.carassistant.v10.STEERING_RAW_MEDIA_KEY")
                     .setPackage(SELF)
@@ -256,8 +236,10 @@ public final class SystemMediaKeyHooks {
             context.sendBroadcast(relay);
             XposedBridge.log(TAG + " relayed " + describe(event)
                     + " to CarAsistant raw-key observer; reason=" + reason);
+            return true;
         } catch (Throwable error) {
             XposedBridge.log(TAG + " raw-key observer relay failed: " + error);
+            return false;
         }
     }
 
