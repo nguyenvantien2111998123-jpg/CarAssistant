@@ -2,6 +2,7 @@ package com.carassistant.v10.hook;
 
 import android.content.ComponentName;
 import android.content.Context;
+import android.content.Intent;
 import android.media.session.MediaSession;
 import android.provider.Settings;
 import android.text.TextUtils;
@@ -65,24 +66,35 @@ public final class SystemMediaKeyHooks {
 
                             Context context = (Context) XposedHelpers.getObjectField(
                                     service, "mContext");
-                            if (!hasMediaAccess(context)) return;
+                            if (!hasMediaAccess(context)) {
+                                relayRawKeyToCarAsistant(context, event,
+                                        "Notification Access unavailable");
+                                return;
+                            }
 
                             MediaSession.Token token = findCarAsistantSessionToken(service);
                             if (token == null) {
                                 XposedBridge.log(TAG + " no active CarAsistant MediaSession; "
-                                        + "leaving the event to normal framework routing");
+                                        + "relaying raw event to the app observer");
+                                relayRawKeyToCarAsistant(context, event, "no active mirror session");
                                 return;
                             }
 
                             if (dispatchToSession(service, event, token)) {
-                                // dispatchMediaKeyEvent is void on Android 12.
-                                // Consume only after the framework confirms the target accepted it.
+                                // The mirror MediaSession owns gesture handling on this route.
+                                // Consume only after Android confirms direct session dispatch.
                                 param.setResult(null);
                                 XposedBridge.log(TAG + " routed " + describe(event)
                                         + " to CarAsistant MediaSession");
                             } else {
+                                // With a third-party fallback session (Media Im Lang), Android
+                                // may reject direct dispatch to the mirror. Relay the raw event
+                                // to V10ControlReceiver so double-NEXT still reaches the voice
+                                // assistant, while leaving normal framework routing untouched.
+                                relayRawKeyToCarAsistant(context, event,
+                                        "direct mirror dispatch rejected");
                                 XposedBridge.log(TAG + " direct session dispatch returned false; "
-                                        + "allowing framework fallback");
+                                        + "relayed observer event and allowing framework fallback");
                             }
                         } catch (Throwable error) {
                             // Fail open: never disable the steering controls of other players.
@@ -230,6 +242,20 @@ public final class SystemMediaKeyHooks {
             }
         }
         return null;
+    }
+
+    private static void relayRawKeyToCarAsistant(Context context, KeyEvent event, String reason) {
+        if (context == null || event == null) return;
+        try {
+            Intent relay = new Intent("com.carassistant.v10.STEERING_RAW_MEDIA_KEY")
+                    .setPackage(SELF)
+                    .putExtra(Intent.EXTRA_KEY_EVENT, new KeyEvent(event));
+            context.sendBroadcast(relay);
+            XposedBridge.log(TAG + " relayed " + describe(event)
+                    + " to CarAsistant raw-key observer; reason=" + reason);
+        } catch (Throwable error) {
+            XposedBridge.log(TAG + " raw-key observer relay failed: " + error);
+        }
     }
 
     private static boolean hasMediaAccess(Context context) {
