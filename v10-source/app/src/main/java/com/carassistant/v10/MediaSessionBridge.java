@@ -368,20 +368,31 @@ public final class MediaSessionBridge extends NotificationListenerService {
         String actualUri = safeMetadataString(current, MediaMetadata.METADATA_KEY_MEDIA_URI);
         String actualTitle = safeMetadataString(current, MediaMetadata.METADATA_KEY_TITLE);
         String actualArtist = safeMetadataString(current, MediaMetadata.METADATA_KEY_ARTIST);
-        if (!TextUtils.isEmpty(expectedId) && !TextUtils.isEmpty(actualId)) {
-            return expectedId.equals(actualId);
-        }
-        if (!TextUtils.isEmpty(expectedUri) && !TextUtils.isEmpty(actualUri)) {
-            return expectedUri.equals(actualUri);
-        }
-        if (!TextUtils.isEmpty(expectedTitle)) {
-            if (TextUtils.isEmpty(actualTitle)
-                    || !expectedTitle.trim().equalsIgnoreCase(actualTitle.trim())) return false;
-            if (!TextUtils.isEmpty(expectedArtist)) {
-                return !TextUtils.isEmpty(actualArtist)
-                        && expectedArtist.trim().equalsIgnoreCase(actualArtist.trim());
+        boolean exactIdMatch = !TextUtils.isEmpty(expectedId)
+                && !TextUtils.isEmpty(actualId) && expectedId.equals(actualId);
+        if (exactIdMatch) return true;
+
+        boolean exactUriMatch = !TextUtils.isEmpty(expectedUri)
+                && !TextUtils.isEmpty(actualUri) && expectedUri.equals(actualUri);
+        if (exactUriMatch) return true;
+
+        // Some players (notably alternate YouTube clients) regenerate media IDs/URIs
+        // when reopening the same item. Do not wait for the 15-second failure timeout
+        // when the restored title and artist still identify the saved content.
+        if (!TextUtils.isEmpty(expectedTitle)
+                && !TextUtils.isEmpty(actualTitle)
+                && expectedTitle.trim().equalsIgnoreCase(actualTitle.trim())) {
+            boolean artistMatches = TextUtils.isEmpty(expectedArtist)
+                    || (!TextUtils.isEmpty(actualArtist)
+                    && expectedArtist.trim().equalsIgnoreCase(actualArtist.trim()));
+            if (artistMatches) {
+                if ((!TextUtils.isEmpty(expectedId) && !TextUtils.isEmpty(actualId))
+                        || (!TextUtils.isEmpty(expectedUri) && !TextUtils.isEmpty(actualUri))) {
+                    Log.i(TAG, "Checkpoint media matched by title/artist fallback; "
+                            + "source regenerated media ID or URI");
+                }
+                return true;
             }
-            return true;
         }
         // An empty checkpoint identity must never match an arbitrary session.
         return false;
