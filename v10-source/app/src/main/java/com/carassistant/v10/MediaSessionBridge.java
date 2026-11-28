@@ -1039,7 +1039,11 @@ public final class MediaSessionBridge extends NotificationListenerService {
 
     /** All external players follow one uniform MediaSession selection path. */
     private static boolean isUsableExternalSession(MediaController controller) {
-        return controller != null && isUsableMirrorSession(controller);
+        // Silent Media is a keepalive session for Android Auto discovery only.
+        // It must never become the content source mirrored or checkpointed by CarAsistant.
+        if (controller == null) return false;
+        if (SILENT_MEDIA_PACKAGE.equals(controller.getPackageName())) return false;
+        return isUsableMirrorSession(controller);
     }
 
     private void refreshControllers(List<MediaController> controllers) {
@@ -1055,7 +1059,8 @@ public final class MediaSessionBridge extends NotificationListenerService {
             for (MediaController candidate : controllers) {
                 if (candidate == null || getPackageName().equals(candidate.getPackageName())) continue;
                 PlaybackState candidateState = candidate.getPlaybackState();
-                if (checkpointPackage != null
+                if (!SILENT_MEDIA_PACKAGE.equals(candidate.getPackageName())
+                        && checkpointPackage != null
                         && checkpointPackage.equals(candidate.getPackageName())) {
                     checkpointCandidate = candidate;
                 }
@@ -1072,10 +1077,12 @@ public final class MediaSessionBridge extends NotificationListenerService {
                 if (activeCandidate == null) activeCandidate = candidate;
             }
         }
-        // No app-specific exception: the currently playing external app owns the mirror.
+        // Silent Media is intentionally absent from all candidates above. If it is
+        // the only published session, keep the CarAsistant mirror session alive but
+        // publish an empty content snapshot rather than treating the keepalive as media.
         if (playingCandidate != null) chosen = playingCandidate;
-        else if (activeCandidate != null) chosen = activeCandidate;
         else if (savedCandidate != null) chosen = savedCandidate;
+        else if (activeCandidate != null) chosen = activeCandidate;
 
         MediaController previous = activeController;
         if (previous != chosen) {
