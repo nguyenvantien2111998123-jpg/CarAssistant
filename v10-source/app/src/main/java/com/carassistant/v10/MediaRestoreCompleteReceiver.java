@@ -8,67 +8,53 @@ import android.content.Intent;
 import android.util.Log;
 
 /**
- * Handles the boundary between media recovery and the independent WYN startup
- * flow. MediaAutoRestoreService reports only that recovery has ended; this
- * receiver backgrounds the phone-side player and then signals WYN startup.
+ * Deterministic handoff after media recovery:
+ * 1) send the phone to Home through the already-authorized root shell;
+ * 2) wait exactly one second;
+ * 3) launch WYN in its own receiver/process flow.
  */
 public final class MediaRestoreCompleteReceiver extends BroadcastReceiver {
     public static final String ACTION =
             "com.carassistant.v10.ACTION_MEDIA_RECOVERY_FINISHED";
     private static final String TAG = "CarAssistantMediaResume";
+    private static final long WYN_AFTER_HOME_MS = 1000L;
 
     @Override public void onReceive(Context context, Intent intent) {
         if (intent == null || !ACTION.equals(intent.getAction())) return;
         final String result = intent.getStringExtra("restore_result");
-        // Prefer the non-blocking Accessibility global action. The old root command
-        // was queued behind other shell operations on a single-thread executor.
-        boolean homeAccepted = MediaPlaybackAccessibilityService.requestPhoneHome();
-        if (!homeAccepted) homeAccepted = WynPopupAccessibilityService.requestPhoneHome();
-        Log.i(TAG, "Immediate Accessibility HOME accepted=" + homeAccepted
-                + "; restoreResult=" + result);
         final PendingResult pending = goAsync();
-        if (homeAccepted) {
-            new android.os.Handler(android.os.Looper.getMainLooper()).postDelayed(() -> {
-                Intent startWyn = new Intent("com.carassistant.v10.ACTION_AUTO_BACKGROUND_WYN")
-                        .setComponent(new ComponentName(context, WynAutoStartReceiver.class))
-                        .putExtra("restore_result", result);
-                context.sendBroadcast(startWyn);
-                pending.setResultCode(Activity.RESULT_OK);
-                pending.finish();
-                Log.i(TAG, "WYN scheduled one second after immediate Accessibility HOME");
-            }, 1000L);
-            return;
-        }
-        // Do not queue the Home command behind media-launch shell work. Run a
-        // dedicated fallback immediately after the Accessibility services decline.
+
+        // A dedicated shell thread avoids waiting behind unrelated root commands.
         new Thread(() -> {
             RootShellSession shell = new RootShellSession();
+            boolean homeAccepted = false;
             try {
                 String output = "";
                 try {
                     output = shell.run(5, "input keyevent 3");
-                    Log.i(TAG, "HOME key sent immediately after media recovery; output=" + output);
+                    homeAccepted = true;
+                    Log.i(TAG, "MEDIA_HOME_SENT immediately; output=" + output);
                 } catch (Throwable homeError) {
-                    // Recovery is already complete. Still allow WYN to start; its own
-                    // readiness gate will return the phone to Home after its data loads.
-                    Log.w(TAG, "Could not send Home to the media app; continue independent WYN startup",
-                            homeError);
+                    Log.e(TAG, "MEDIA_HOME root command failed; WYN will still start", homeError);
                 }
+
                 try {
-                    Thread.sleep(1000L);
+                    Thread.sleep(WYN_AFTER_HOME_MS);
                 } catch (InterruptedException interrupted) {
                     Thread.currentThread().interrupt();
                 }
+
                 Intent startWyn = new Intent("com.carassistant.v10.ACTION_AUTO_BACKGROUND_WYN")
                         .setComponent(new ComponentName(context, WynAutoStartReceiver.class))
-                        .putExtra("restore_result", result);
+                        .putExtra("restore_result", result)
+                        .putExtra("home_accepted", homeAccepted);
                 context.sendBroadcast(startWyn);
                 pending.setResultCode(Activity.RESULT_OK);
-                Log.i(TAG, "Media recovery completion handled; independent WYN flow signalled; "
-                        + "restoreResult=" + result + "; homeOutput=" + output);
+                Log.i(TAG, "WYN_HANDOFF_SENT delayAfterHomeMs=" + WYN_AFTER_HOME_MS
+                        + "; homeAccepted=" + homeAccepted + "; restoreResult=" + result);
             } catch (Throwable error) {
                 pending.setResultCode(Activity.RESULT_CANCELED);
-                Log.e(TAG, "Could not signal independent WYN startup after media recovery", error);
+                Log.e(TAG, "Could not hand off to WYN after media recovery", error);
             } finally {
                 shell.destroy();
                 pending.finish();
