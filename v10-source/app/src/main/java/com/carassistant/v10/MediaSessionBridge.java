@@ -165,6 +165,10 @@ public final class MediaSessionBridge extends NotificationListenerService {
             MediaMetadata metadata = controller.getMetadata();
             PlaybackState state = controller.getPlaybackState();
             String packageName = controller.getPackageName();
+            if ("com.carassistant.mediaimlang".equals(packageName)) {
+                Log.d(TAG, "Skipping durable restore checkpoint for Silent Media helper session");
+                return;
+            }
             String savedPackage = getCheckpointPackage(this);
             boolean sameSavedSource = TextUtils.isEmpty(savedPackage)
                     || savedPackage.equals(packageName);
