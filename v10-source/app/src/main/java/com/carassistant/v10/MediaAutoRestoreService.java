@@ -143,13 +143,14 @@ public final class MediaAutoRestoreService extends Service {
             }
 
             if (playbackStateReached) {
-                // Match the previously validated sequence: once the exact saved item
-                // reports the requested PLAY/PAUSE state, return the phone to Home and
-                // start WYN after one second. Seek-position verification continues in
-                // the background and does not hold the phone on the media app.
+                // Stop the phone AccessibilityService's search/play retry state before
+                // sending Home. Keep this service's MediaSession seek verification alive,
+                // but do not let stale UI automation continue touching the source app.
+                markAccessibilityRestoreComplete("playback_state_reached");
                 if (requestHomeThenWyn("playback_state_reached")) {
                     Log.i(TAG, "MEDIA_PLAYBACK_STATE_READY source=" + expectedPackage
-                            + "; Home requested immediately; seek verification continues");
+                            + "; Home requested immediately; seek verification continues "
+                            + "without foreground accessibility retries");
                 }
             }
             if (verifyStartedAt == 0L) verifyStartedAt = SystemClock.elapsedRealtime();
@@ -208,6 +209,30 @@ public final class MediaAutoRestoreService extends Service {
     }
 
     /**
+     * Cancel stale phone-side search/play automation as soon as playback is confirmed
+     * (or recovery terminates). The service may continue verifying the saved seek
+     * position through MediaSession, but the AccessibilityService must not keep
+     * interacting with the source app after the Home handoff.
+     */
+    private void markAccessibilityRestoreComplete(String reason) {
+        getSharedPreferences("media_autoplay", MODE_PRIVATE).edit()
+                .putString("phase", "restore_finished_" + reason)
+                .putBoolean("content_restore_requested", false)
+                .putBoolean("pending_projection_restore", false)
+                .putBoolean("mini_engine_active", false)
+                .putBoolean("accessibility_selection_done", true)
+                .remove("target_package")
+                .remove("query")
+                .remove("target_display_id")
+                .remove("started_at")
+                .remove("search_submitted_at")
+                .remove("youtube_history_stage")
+                .apply();
+        Log.i(TAG, "PHONE_AUTOMATION_STOPPED reason=" + reason
+                + "; background MediaSession verification may continue");
+    }
+
+    /**
      * Finish only the media-recovery workflow. Persist the app task for immediate
      * projection when V10 opens, then publish a completion event. A separate
      * receiver backgrounds the phone task and starts the independent WYN flow.
@@ -217,6 +242,7 @@ public final class MediaAutoRestoreService extends Service {
         mediaRecoveryFinished = true;
         completed = true;
         handler.removeCallbacks(restoreAttempt);
+        markAccessibilityRestoreComplete(reason);
 
         android.content.SharedPreferences.Editor projection =
                 getSharedPreferences("media_autoplay", MODE_PRIVATE).edit()
