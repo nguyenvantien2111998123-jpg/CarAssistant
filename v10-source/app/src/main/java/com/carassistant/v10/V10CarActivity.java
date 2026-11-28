@@ -526,6 +526,11 @@ public final class V10CarActivity
                     }));
         }
 
+        if (V10SessionStore.consumePendingSteeringVoice()) {
+            Log.i("CarAssistantSteering", "Delivering queued double-NEXT voice request after AA activity resume");
+            handleSteeringVoice();
+        }
+
         loadApps();
         refreshPaneAppChoices();
         rebuildDock();
