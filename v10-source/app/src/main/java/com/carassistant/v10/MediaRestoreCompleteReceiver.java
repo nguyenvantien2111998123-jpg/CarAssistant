@@ -23,6 +23,7 @@ public final class MediaRestoreCompleteReceiver extends BroadcastReceiver {
         // Prefer the non-blocking Accessibility global action. The old root command
         // was queued behind other shell operations on a single-thread executor.
         boolean homeAccepted = MediaPlaybackAccessibilityService.requestPhoneHome();
+        if (!homeAccepted) homeAccepted = WynPopupAccessibilityService.requestPhoneHome();
         Log.i(TAG, "Immediate Accessibility HOME accepted=" + homeAccepted
                 + "; restoreResult=" + result);
         final PendingResult pending = goAsync();
@@ -38,7 +39,9 @@ public final class MediaRestoreCompleteReceiver extends BroadcastReceiver {
             }, 1000L);
             return;
         }
-        RootShellSession.EXEC.execute(() -> {
+        // Do not queue the Home command behind media-launch shell work. Run a
+        // dedicated fallback immediately after the Accessibility services decline.
+        new Thread(() -> {
             RootShellSession shell = new RootShellSession();
             try {
                 String output = "";
@@ -70,6 +73,6 @@ public final class MediaRestoreCompleteReceiver extends BroadcastReceiver {
                 shell.destroy();
                 pending.finish();
             }
-        });
+        }, "CarAsistant-MediaRecovery-Home").start();
     }
 }
