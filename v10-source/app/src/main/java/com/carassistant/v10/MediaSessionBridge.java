@@ -639,8 +639,8 @@ public final class MediaSessionBridge extends NotificationListenerService {
     }
 
     /**
-     * Resolve a real content session for steering actions. The silent keepalive
-     * session is deliberately excluded: it has no playlist and no seekable content.
+     * Prefer a real content session for steering actions. If no real app or
+     * checkpoint session exists, fall back to Media Im Lang's playable silent playlist.
      */
     private static MediaController getSteeringController() {
         MediaController controller = activeController;
