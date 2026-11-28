@@ -22,7 +22,7 @@ public final class MainActivity extends Activity {
         root.addView(title);
 
         TextView detail = new TextView(this);
-        detail.setText("Ứng dụng media nền cho Android Auto. Cấp quyền Truy cập thông báo để ứng dụng nhận biết khi YouTube, YouTube Music, Zing MP3 hoặc ứng dụng media khác đang phát. File MP4 im lặng được tạo nội bộ bằng dữ liệu âm thanh số 0; không chứa tone hay tần số âm thanh.");
+        detail.setText("Ứng dụng media nền cho Android Auto. Cấp quyền Truy cập thông báo để ứng dụng nhận biết khi YouTube, YouTube Music, Zing MP3 hoặc ứng dụng media khác đang phát. Ứng dụng tạo playlist gồm 3 file MP4, mỗi file 30 phút. Dữ liệu AAC là số 0 (không có tone/tần số nghe được) và âm lượng MediaPlayer luôn bằng 0. Hỗ trợ Next, Previous, tua tiến/lùi và tự chuyển file.");
         detail.setTextSize(16);
         root.addView(detail);
 
