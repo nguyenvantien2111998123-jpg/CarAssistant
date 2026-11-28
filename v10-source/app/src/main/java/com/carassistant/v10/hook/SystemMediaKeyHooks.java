@@ -161,23 +161,41 @@ public final class SystemMediaKeyHooks {
             Object result = getActive.invoke(service, userId);
             if (!(result instanceof List)) return null;
             records = (List<?>) result;
+            MediaSession.Token soleActiveSelfToken = null;
+            MediaSession.Token exactTaggedToken = null;
+            int activeSelfCount = 0;
             for (Object record : records) {
                 if (record == null) continue;
                 Object packageName = XposedHelpers.callMethod(record, "getPackageName");
                 if (!SELF.equals(packageName)) continue;
-                // Route only to the one MediaSession that owns the double-Next
-                // gesture state machine. Never select a stale or auxiliary session.
-                Object sessionTag = null;
-                try { sessionTag = XposedHelpers.getObjectField(record, "mTag"); }
-                catch (Throwable ignored) { }
-                if (!"CarAsistant Media Controller".equals(String.valueOf(sessionTag))) continue;
                 Object active = XposedHelpers.callMethod(record, "isActive");
                 if (!(active instanceof Boolean) || !((Boolean) active)) continue;
                 Object token = XposedHelpers.callMethod(record, "getSessionToken");
-                if (token instanceof MediaSession.Token) {
-                    return (MediaSession.Token) token;
+                if (!(token instanceof MediaSession.Token)) continue;
+                activeSelfCount++;
+                soleActiveSelfToken = (MediaSession.Token) token;
+                Object sessionTag = null;
+                try { sessionTag = XposedHelpers.getObjectField(record, "mTag"); }
+                catch (Throwable ignored) {
+                    try { sessionTag = XposedHelpers.callMethod(record, "getTag"); }
+                    catch (Throwable ignoredAgain) { }
+                }
+                XposedBridge.log(TAG + " active self MediaSession tag=" + sessionTag);
+                if ("CarAsistant Media Controller".equals(String.valueOf(sessionTag))) {
+                    exactTaggedToken = (MediaSession.Token) token;
                 }
             }
+            // Android 12 vendor builds may expose the record tag through a different
+            // accessor. Prefer the exact mirror tag; if there is only one active session
+            // owned by CarAsistant, safely use it as the fallback instead of dropping
+            // all steering events on a tag-field mismatch.
+            if (exactTaggedToken != null) return exactTaggedToken;
+            if (activeSelfCount == 1) {
+                XposedBridge.log(TAG + " using sole active CarAsistant MediaSession fallback");
+                return soleActiveSelfToken;
+            }
+            XposedBridge.log(TAG + " no unique CarAsistant MediaSession; activeSelfCount="
+                    + activeSelfCount);
         }
         return null;
     }
