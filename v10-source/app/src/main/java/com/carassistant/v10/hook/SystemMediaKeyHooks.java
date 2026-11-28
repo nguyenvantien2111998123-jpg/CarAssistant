@@ -2,6 +2,7 @@ package com.carassistant.v10.hook;
 
 import android.content.ComponentName;
 import android.content.Context;
+import android.content.Intent;
 import android.media.session.MediaSession;
 import android.provider.Settings;
 import android.text.TextUtils;
@@ -59,35 +60,49 @@ public final class SystemMediaKeyHooks {
                         if (!isTargetKey(event)) return;
 
                         logRawEvent(param, event);
+                        Context context = null;
                         try {
                             Object service = getOuterService(param.thisObject);
                             if (service == null) return;
 
-                            Context context = (Context) XposedHelpers.getObjectField(
+                            context = (Context) XposedHelpers.getObjectField(
                                     service, "mContext");
-                            if (!hasMediaAccess(context)) return;
+                            if (!hasMediaAccess(context)) {
+                                relayRawKeyToCarAsistant(context, event,
+                                        "Notification Access unavailable");
+                                return;
+                            }
 
                             MediaSession.Token token = findCarAsistantSessionToken(service);
                             if (token == null) {
                                 XposedBridge.log(TAG + " no active CarAsistant MediaSession; "
-                                        + "leaving the event to normal framework routing");
+                                        + "relaying raw event to the app observer");
+                                relayRawKeyToCarAsistant(context, event, "no active mirror session");
                                 return;
                             }
 
                             if (dispatchToSession(service, event, token)) {
-                                // dispatchMediaKeyEvent is void on Android 12.
-                                // Consume only after the framework confirms the target accepted it.
+                                // The mirror MediaSession owns gesture handling on this route.
+                                // Consume only after Android confirms direct session dispatch.
                                 param.setResult(null);
                                 XposedBridge.log(TAG + " routed " + describe(event)
                                         + " to CarAsistant MediaSession");
                             } else {
+                                // With a third-party fallback session (Media Im Lang), Android
+                                // may reject direct dispatch to the mirror. Relay the raw event
+                                // to V10ControlReceiver so double-NEXT still reaches the voice
+                                // assistant, while leaving normal framework routing untouched.
+                                relayRawKeyToCarAsistant(context, event,
+                                        "direct mirror dispatch rejected");
                                 XposedBridge.log(TAG + " direct session dispatch returned false; "
-                                        + "allowing framework fallback");
+                                        + "relayed observer event and allowing framework fallback");
                             }
                         } catch (Throwable error) {
-                            // Fail open: never disable the steering controls of other players.
-                            XposedBridge.log(TAG + " route failed; allowing framework fallback: "
-                                    + error);
+                            // Fail open for the active player, but preserve the assistant gesture
+                            // observer even when vendor MediaSession internals differ.
+                            relayRawKeyToCarAsistant(context, event, "system hook exception");
+                            XposedBridge.log(TAG + " route failed; relayed observer when possible "
+                                    + "and allowing framework fallback: " + error);
                         }
                     }
                 });
@@ -161,21 +176,41 @@ public final class SystemMediaKeyHooks {
             Object result = getActive.invoke(service, userId);
             if (!(result instanceof List)) return null;
             records = (List<?>) result;
+            MediaSession.Token soleActiveSelfToken = null;
+            MediaSession.Token exactTaggedToken = null;
+            int activeSelfCount = 0;
             for (Object record : records) {
                 if (record == null) continue;
                 Object packageName = XposedHelpers.callMethod(record, "getPackageName");
                 if (!SELF.equals(packageName)) continue;
-                // The phone KeepAlive session is active for AA discovery but has no transport callback.
-                Object sessionTag = null;
-                try { sessionTag = XposedHelpers.getObjectField(record, "mTag"); } catch (Throwable ignored) { }
-                if (sessionTag != null && String.valueOf(sessionTag).toLowerCase(java.util.Locale.ROOT).contains("keepalive")) continue;
                 Object active = XposedHelpers.callMethod(record, "isActive");
                 if (!(active instanceof Boolean) || !((Boolean) active)) continue;
                 Object token = XposedHelpers.callMethod(record, "getSessionToken");
-                if (token instanceof MediaSession.Token) {
-                    return (MediaSession.Token) token;
+                if (!(token instanceof MediaSession.Token)) continue;
+                activeSelfCount++;
+                soleActiveSelfToken = (MediaSession.Token) token;
+                Object sessionTag = null;
+                try { sessionTag = XposedHelpers.getObjectField(record, "mTag"); }
+                catch (Throwable ignored) {
+                    try { sessionTag = XposedHelpers.callMethod(record, "getTag"); }
+                    catch (Throwable ignoredAgain) { }
+                }
+                XposedBridge.log(TAG + " active self MediaSession tag=" + sessionTag);
+                if ("CarAsistant Media Controller".equals(String.valueOf(sessionTag))) {
+                    exactTaggedToken = (MediaSession.Token) token;
                 }
             }
+            // Android 12 vendor builds may expose the record tag through a different
+            // accessor. Prefer the exact mirror tag; if there is only one active session
+            // owned by CarAsistant, safely use it as the fallback instead of dropping
+            // all steering events on a tag-field mismatch.
+            if (exactTaggedToken != null) return exactTaggedToken;
+            if (activeSelfCount == 1) {
+                XposedBridge.log(TAG + " using sole active CarAsistant MediaSession fallback");
+                return soleActiveSelfToken;
+            }
+            XposedBridge.log(TAG + " no unique CarAsistant MediaSession; activeSelfCount="
+                    + activeSelfCount);
         }
         return null;
     }
@@ -210,6 +245,20 @@ public final class SystemMediaKeyHooks {
             }
         }
         return null;
+    }
+
+    private static void relayRawKeyToCarAsistant(Context context, KeyEvent event, String reason) {
+        if (context == null || event == null) return;
+        try {
+            Intent relay = new Intent("com.carassistant.v10.STEERING_RAW_MEDIA_KEY")
+                    .setPackage(SELF)
+                    .putExtra(Intent.EXTRA_KEY_EVENT, new KeyEvent(event));
+            context.sendBroadcast(relay);
+            XposedBridge.log(TAG + " relayed " + describe(event)
+                    + " to CarAsistant raw-key observer; reason=" + reason);
+        } catch (Throwable error) {
+            XposedBridge.log(TAG + " raw-key observer relay failed: " + error);
+        }
     }
 
     private static boolean hasMediaAccess(Context context) {

@@ -3,111 +3,104 @@ package com.carassistant.v10;
 import android.accessibilityservice.AccessibilityService;
 import android.os.Handler;
 import android.os.Looper;
+import android.os.SystemClock;
 import android.util.Log;
-import android.view.accessibility.AccessibilityEvent;
-import android.view.accessibility.AccessibilityNodeInfo;
 
 /**
- * Event-driven WYN startup completion. Once WYN has emitted several real UI
- * content events and its window remains foreground for a short settle period,
- * send exactly one HOME action. No periodic root-window polling.
+ * Owns only the fixed 30-second WYN background deadline.
+ * No Flutter readiness polling, UI-tree inspection or repeated event-driven checks.
  */
 public final class WynPopupAccessibilityService extends AccessibilityService {
-    private static final String WYN_PACKAGE = "com.wynauto.wyn";
     private static final String TAG = "CarAsistantWYN";
-    private static final long HOME_STABLE_MS = 4000L;
-    private static final long HOME_MAX_WAIT_MS = 25000L;
+    private static final long HOME_DELAY_MS = 30000L;
+
+    private static volatile WynPopupAccessibilityService instance;
     private final Handler main = new Handler(Looper.getMainLooper());
-    private boolean homeCheckScheduled;
+    private boolean checkScheduled;
     private boolean homeActionRequested;
-    private long wynFirstSeenAt;
-    private long lastEventLog;
-    private int contentEvents;
 
-    private final Runnable backgroundCheck = () -> {
-        homeCheckScheduled = false;
-        if (!isPending() || homeActionRequested) return;
+    private final Runnable homeTimer = new Runnable() {
+        @Override public void run() {
+            checkScheduled = false;
+            if (!isPending() || homeActionRequested) return;
 
-        AccessibilityNodeInfo root = null;
-        try {
-            root = getRootInActiveWindow();
-            if (root == null) {
-                Log.d(TAG, "WYN active-window root not ready; waiting for the next real event");
-                return;
-            }
-            boolean foreground = root.getPackageName() != null
-                    && WYN_PACKAGE.contentEquals(root.getPackageName());
-            long elapsed = wynFirstSeenAt == 0L ? 0L
-                    : System.currentTimeMillis() - wynFirstSeenAt;
+            android.content.SharedPreferences prefs =
+                    getSharedPreferences("wyn_auto_start", MODE_PRIVATE);
+            long acceptedAt = prefs.getLong("launch_accepted_elapsed", 0L);
+            long homeDeadline = prefs.getLong("home_deadline_elapsed", 0L);
+            long now = SystemClock.elapsedRealtime();
 
-            if (!foreground) {
-                // Another app/system surface took foreground. Do not fight it.
-                Log.i(TAG, "WYN no longer foreground; cancel auto-Home without relaunching");
+            // The receiver writes both timestamps and the pending flag in one commit.
+            // Missing/invalid timestamps indicate stale state, not a reason to poll.
+            if (acceptedAt <= 0L || homeDeadline <= 0L || now < acceptedAt) {
+                Log.e(TAG, "Invalid WYN deadline state; clearing stale timer");
                 clearPending();
                 return;
             }
 
-            if (contentEvents >= 4 && elapsed >= HOME_STABLE_MS) {
-                homeActionRequested = true;
-                boolean accepted = performGlobalAction(GLOBAL_ACTION_HOME);
-                Log.i(TAG, "WYN UI stable; single HOME action accepted=" + accepted
-                        + "; elapsedMs=" + elapsed + "; contentEvents=" + contentEvents);
+            long remaining = homeDeadline - now;
+            if (remaining > 0L) {
+                scheduleCheck(remaining);
+                return;
+            }
+
+            homeActionRequested = true;
+            boolean accepted = false;
+            try {
+                accepted = performGlobalAction(GLOBAL_ACTION_HOME);
+            } catch (Throwable error) {
+                Log.w(TAG, "Accessibility HOME action failed; trying dedicated root thread", error);
+            }
+
+            if (accepted) {
+                Log.i(TAG, "WYN_HOME_30S accessibilityAccepted=true; elapsedSinceAcceptedLaunchMs="
+                        + (now - acceptedAt));
                 clearPending();
                 return;
             }
 
-            if (elapsed >= HOME_MAX_WAIT_MS) {
-                Log.w(TAG, "WYN Home readiness not confirmed within limit; leave WYN foreground");
-                clearPending();
-            }
-            // No timer loop: wait for the next real WYN accessibility event.
-        } catch (Throwable error) {
-            Log.w(TAG, "WYN auto-Home event check failed", error);
-            // Avoid repeated global actions. A later genuine event can schedule one retry.
-        } finally {
-            if (root != null) root.recycle();
+            // Do not queue the fallback behind the shared single-thread shell executor.
+            new Thread(() -> {
+                RootShellSession shell = new RootShellSession();
+                try {
+                    shell.run(5, "input keyevent 3");
+                    Log.i(TAG, "WYN_HOME_30S rootFallbackAccepted; elapsedSinceAcceptedLaunchMs="
+                            + (SystemClock.elapsedRealtime() - acceptedAt));
+                } catch (Throwable error) {
+                    Log.e(TAG, "WYN_HOME_30S root fallback failed", error);
+                } finally {
+                    shell.destroy();
+                    main.post(WynPopupAccessibilityService.this::clearPending);
+                }
+            }, "CarAsistant-WYN-Home").start();
         }
     };
 
+    /** Called after am start has returned successfully and the 30-second deadline is saved. */
+    public static void onWynLaunchAccepted() {
+        WynPopupAccessibilityService service = instance;
+        if (service != null) {
+            service.main.post(() -> service.scheduleCheck(1L));
+        } else {
+            Log.i(TAG, "WYN launch accepted; deadline persisted for Accessibility service reconnect");
+        }
+    }
+
     @Override public void onServiceConnected() {
         super.onServiceConnected();
-        Log.i(TAG, "WYN Accessibility connected; popup frames are captured only from WYN overlay");
+        instance = this;
+        Log.i(TAG, "WYN fixed 30-second Home timer service connected");
+        if (isPending()) scheduleCheck(1L);
     }
 
-    @Override public void onAccessibilityEvent(AccessibilityEvent event) {
-        if (event == null || event.getPackageName() == null
-                || !WYN_PACKAGE.contentEquals(event.getPackageName())) return;
-
-        long now = System.currentTimeMillis();
-        if (wynFirstSeenAt == 0L && isPending()) wynFirstSeenAt = now;
-        int type = event.getEventType();
-        if (type == AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED
-                || type == AccessibilityEvent.TYPE_WINDOWS_CHANGED) {
-            contentEvents++;
-        }
-
-        if (now - lastEventLog >= 2000L) {
-            lastEventLog = now;
-            Log.i(TAG, "DIAG_ACCESSIBILITY_EVENT type="
-                    + AccessibilityEvent.eventTypeToString(type)
-                    + " windowId=" + event.getWindowId()
-                    + " class=" + (event.getClassName() == null ? "" : event.getClassName())
-                    + " contentEvents=" + contentEvents
-                    + " autoBackgroundPending=" + isPending());
-        }
-
-        if (!isPending() || homeActionRequested) return;
-        if (type == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED
-                || type == AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED
-                || type == AccessibilityEvent.TYPE_WINDOWS_CHANGED) {
-            scheduleCheck();
-        }
+    private void scheduleCheck(long delayMs) {
+        if (checkScheduled || !isPending()) return;
+        checkScheduled = true;
+        main.postDelayed(homeTimer, Math.max(1L, delayMs));
     }
 
-    private void scheduleCheck() {
-        if (homeCheckScheduled || !isPending()) return;
-        homeCheckScheduled = true;
-        main.postDelayed(backgroundCheck, HOME_STABLE_MS);
+    @Override public void onAccessibilityEvent(android.view.accessibility.AccessibilityEvent event) {
+        // Deliberately unused: the WYN deadline is timer-driven, not UI-event-driven.
     }
 
     private boolean isPending() {
@@ -116,19 +109,26 @@ public final class WynPopupAccessibilityService extends AccessibilityService {
     }
 
     private void clearPending() {
-        main.removeCallbacks(backgroundCheck);
-        homeCheckScheduled = false;
+        main.removeCallbacks(homeTimer);
+        checkScheduled = false;
         getSharedPreferences("wyn_auto_start", MODE_PRIVATE).edit()
                 .putBoolean("background_after_load", false)
                 .remove("requested_at")
+                .remove("home_at")
+                .remove("launch_accepted_elapsed")
+                .remove("home_deadline_elapsed")
                 .commit();
-        wynFirstSeenAt = 0L;
-        contentEvents = 0;
         homeActionRequested = false;
     }
 
     @Override public void onInterrupt() {
-        main.removeCallbacks(backgroundCheck);
-        homeCheckScheduled = false;
+        // Keep the independently scheduled deadline intact.
+    }
+
+    @Override public void onDestroy() {
+        main.removeCallbacks(homeTimer);
+        checkScheduled = false;
+        if (instance == this) instance = null;
+        super.onDestroy();
     }
 }

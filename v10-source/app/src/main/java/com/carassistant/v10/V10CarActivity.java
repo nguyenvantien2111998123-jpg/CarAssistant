@@ -73,6 +73,50 @@ public final class V10CarActivity
         if (activity != null) activity.handler.post(activity::updateWynWarningViews);
     }
 
+    /** Called when phone-side media recovery has a task ready for the AA projection pane. */
+    public static void notifyMediaProjectionReady() {
+        V10CarActivity activity = activeCarActivity;
+        if (activity != null) activity.handler.post(activity::projectReadyMediaOnSecondaryDisplay);
+    }
+
+    private boolean projectReadyMediaOnSecondaryDisplay() {
+        if (!resumed || rightPaneSession == null) return false;
+        android.content.SharedPreferences prefs =
+                getSharedPreferences("media_autoplay", MODE_PRIVATE);
+        if (!prefs.getBoolean("media_projection_ready", false)) return false;
+
+        String packageName = prefs.getString("media_projection_package",
+                MediaSessionBridge.getCheckpointPackage(this));
+        if (TextUtils.isEmpty(packageName)) return false;
+
+        ComponentName component = ComponentName.unflattenFromString(
+                prefs.getString("media_projection_component", ""));
+        if (component == null || !packageName.equals(component.getPackageName())) {
+            component = MediaSessionBridge.getCheckpointTaskComponent(this);
+        }
+        if (component == null || !packageName.equals(component.getPackageName())) {
+            Intent launch = getPackageManager().getLaunchIntentForPackage(packageName);
+            component = launch == null ? null : launch.getComponent();
+        }
+        if (component == null || !packageName.equals(component.getPackageName())) {
+            Log.w("CarAssistantMediaResume",
+                    "Media recovery is ready but no launchable task component exists for " + packageName);
+            return false;
+        }
+
+        // The visible pane was prewarmed on AA connection. Move the existing phone
+        // task into that already-created display instead of showing a blank cold-start pane.
+        launchActiveMediaProjection(component);
+        prefs.edit().putBoolean("media_projection_ready", false)
+                .remove("media_projection_package")
+                .remove("media_projection_component")
+                .apply();
+        Log.i("CarAssistantMediaResume", "READY_MEDIA_PROJECTED_ON_V10 package="
+                + packageName + "; display=" + rightPaneSession.getDisplayId()
+                + "; result=" + prefs.getString("media_projection_result", "unknown"));
+        return true;
+    }
+
     private void updateWynWarningViews() {
         if (!resumed) return;
         updateMediaCard(MediaSessionBridge.getSnapshot());
@@ -101,6 +145,9 @@ public final class V10CarActivity
     private ComponentName activeBackgroundTarget;
     private TextView dashboardVoiceButton;
     private ImageView mediaArtwork;
+    private Bitmap mediaArtworkBitmap;
+    private boolean mediaArtworkBitmapOwned;
+    private Bitmap floatingTouchIconBitmap;
     private TextView mediaTitle;
     private TextView mediaArtist;
     private LinearLayout mediaCard;
@@ -482,6 +529,11 @@ public final class V10CarActivity
                     }));
         }
 
+        if (V10SessionStore.consumePendingSteeringVoice()) {
+            Log.i("CarAssistantSteering", "Delivering queued double-NEXT voice request after AA activity resume");
+            handleSteeringVoice();
+        }
+
         loadApps();
         refreshPaneAppChoices();
         rebuildDock();
@@ -508,6 +560,8 @@ public final class V10CarActivity
                 "headless_media_applied".equals(restorePrefs.getString("phase", ""));
         boolean headlessContentRestoreRequested =
                 restorePrefs.getBoolean("content_restore_requested", false);
+        boolean mediaProjectionReady =
+                restorePrefs.getBoolean("media_projection_ready", false);
         boolean mediaCardLaunch = getIntent() != null
                 && getIntent().getBooleanExtra("com.carassistant.v10.OPEN_ACTIVE_MEDIA", false);
         if (mediaCardLaunch && getIntent() != null) {
@@ -520,6 +574,13 @@ public final class V10CarActivity
             // A media-card click must resolve the active/checkpointed source package,
             // rather than blindly reopening a stale app-picker target.
             openActiveMediaOnProjection();
+        } else if (mediaProjectionReady) {
+            // Recovery has already restored the app on phone display 0. Move that
+            // same task into the prewarmed right pane as soon as CarAsistant opens.
+            if (!projectReadyMediaOnSecondaryDisplay()) {
+                Log.w("CarAssistantMediaResume",
+                        "Media projection readiness is pending; retain it for the next V10 attach");
+            }
         } else if (pendingMediaRestore && checkpointTask != null
                 && checkpointPackage != null
                 && checkpointPackage.equals(checkpointTask.getPackageName())) {
@@ -914,15 +975,33 @@ public final class V10CarActivity
         return false;
     }
 
+    /** Replace the card image first, then release only the bitmap owned by this Activity. */
+    private void replaceMediaArtwork(Bitmap replacement, boolean replacementOwned) {
+        if (mediaArtwork == null) return;
+        Bitmap previous = mediaArtworkBitmap;
+        boolean previousOwned = mediaArtworkBitmapOwned;
+        if (replacement != null && !replacement.isRecycled()) {
+            mediaArtwork.setImageBitmap(replacement);
+            mediaArtworkBitmap = replacement;
+            mediaArtworkBitmapOwned = replacementOwned;
+        } else {
+            mediaArtwork.setImageDrawable(null);
+            mediaArtworkBitmap = null;
+            mediaArtworkBitmapOwned = false;
+        }
+        if (previousOwned && previous != null && previous != replacement && !previous.isRecycled()) {
+            previous.recycle();
+        }
+    }
+
     private void updateMediaCard(MediaSessionBridge.Snapshot state) {
         if (mediaTitle == null || mediaArtist == null) return;
         if (!MediaSessionBridge.hasAccess(this)) {
             mediaTitle.setText("Bật quyền media");
             mediaArtist.setText("Chạm để cấp quyền đồng bộ trình phát");
             if (mediaArtwork != null) {
-                Bitmap warningOnly = WynWarningStore.composeMediaArtwork(null, getConfiguredMediaOverlayPercent());
-                if (warningOnly != null) mediaArtwork.setImageBitmap(warningOnly);
-                else mediaArtwork.setImageDrawable(null);
+                Bitmap warningOnly = WynWarningStore.composeMediaArtwork(null, getConfiguredMediaOverlayPercent(), getConfiguredMediaOverlayXPercent(), getConfiguredMediaOverlayYPercent());
+                replaceMediaArtwork(warningOnly, warningOnly != null);
             }
             return;
         }
@@ -930,7 +1009,7 @@ public final class V10CarActivity
             mediaTitle.setText("Chưa có media đang phát");
             mediaArtist.setText("Mở YouTube, Zing MP3 hoặc ứng dụng nghe nhạc");
             if (mediaArtwork != null) {
-                Bitmap warningOnly = WynWarningStore.composeMediaArtwork(null, getConfiguredMediaOverlayPercent());
+                Bitmap warningOnly = WynWarningStore.composeMediaArtwork(null, getConfiguredMediaOverlayPercent(), getConfiguredMediaOverlayXPercent(), getConfiguredMediaOverlayYPercent());
                 if (warningOnly != null) mediaArtwork.setImageBitmap(warningOnly);
                 else mediaArtwork.setImageDrawable(null);
             }
@@ -939,9 +1018,8 @@ public final class V10CarActivity
         mediaTitle.setText(TextUtils.isEmpty(state.title) ? "Đang phát media" : state.title);
         mediaArtist.setText(TextUtils.isEmpty(state.artist) ? state.packageName : state.artist);
         if (mediaArtwork != null) {
-            Bitmap artwork = WynWarningStore.composeMediaArtwork(state.artwork, getConfiguredMediaOverlayPercent());
-            if (artwork != null) mediaArtwork.setImageBitmap(artwork);
-            else mediaArtwork.setImageDrawable(null);
+            Bitmap artwork = WynWarningStore.composeMediaArtwork(state.artwork, getConfiguredMediaOverlayPercent(), getConfiguredMediaOverlayXPercent(), getConfiguredMediaOverlayYPercent());
+            replaceMediaArtwork(artwork, artwork != null && artwork != state.artwork);
         }
     }
 
@@ -1670,9 +1748,20 @@ private void hideApps() {
                 "wyn_display_settings", MODE_PRIVATE).getInt("media_overlay_percent", 52)));
     }
 
+    private int getConfiguredMediaOverlayXPercent() {
+        return Math.max(0, Math.min(100, getSharedPreferences(
+                "wyn_display_settings", MODE_PRIVATE).getInt("media_overlay_x_percent", 50)));
+    }
+
+    private int getConfiguredMediaOverlayYPercent() {
+        return Math.max(0, Math.min(100, getSharedPreferences(
+                "wyn_display_settings", MODE_PRIVATE).getInt("media_overlay_y_percent", 50)));
+    }
+
     private void updateFloatingTouchWarningIcon() {
         if (floatingTouchKey == null) return;
         Bitmap icon = WynWarningStore.makeTouchIcon();
+        Bitmap previousIcon = floatingTouchIconBitmap;
         int configuredWidth = getConfiguredTouchWidthPx();
         ViewGroup.LayoutParams raw = floatingTouchKey.getLayoutParams();
         if (icon == null) {
@@ -1682,6 +1771,8 @@ private void hideApps() {
             base.setStroke(dp(2), Color.rgb(80, 170, 230));
             floatingTouchKey.setBackground(base);
             floatingTouchKey.setText("●");
+            floatingTouchIconBitmap = null;
+            if (previousIcon != null && !previousIcon.isRecycled()) previousIcon.recycle();
             if (raw instanceof FrameLayout.LayoutParams) {
                 FrameLayout.LayoutParams params = (FrameLayout.LayoutParams) raw;
                 params.width = configuredWidth;
@@ -1696,6 +1787,10 @@ private void hideApps() {
         BitmapDrawable image = new BitmapDrawable(getResources(), icon);
         image.setGravity(Gravity.FILL);
         floatingTouchKey.setBackground(image);
+        floatingTouchIconBitmap = icon;
+        if (previousIcon != null && previousIcon != icon && !previousIcon.isRecycled()) {
+            previousIcon.recycle();
+        }
         floatingTouchKey.setText("");
         floatingTouchKey.setContentDescription(
                 "Popup cảnh báo WYN đầy đủ; giữ để về Home, kéo để di chuyển");
@@ -2355,6 +2450,16 @@ private void hideTaskSwitcher() {
 
         try { unregisterReceiver(wynDisplaySettingsReceiver); }
         catch (IllegalArgumentException ignored) { }
+        if (mediaArtwork != null) mediaArtwork.setImageDrawable(null);
+        if (mediaArtworkBitmapOwned && mediaArtworkBitmap != null
+                && !mediaArtworkBitmap.isRecycled()) mediaArtworkBitmap.recycle();
+        mediaArtworkBitmap = null;
+        mediaArtworkBitmapOwned = false;
+        if (floatingTouchKey != null) floatingTouchKey.setBackground(null);
+        if (floatingTouchIconBitmap != null && !floatingTouchIconBitmap.isRecycled()) {
+            floatingTouchIconBitmap.recycle();
+        }
+        floatingTouchIconBitmap = null;
         hideTaskSwitcher();
         hideFloatingMenu();
         if (miniAccessEngine != null) {
