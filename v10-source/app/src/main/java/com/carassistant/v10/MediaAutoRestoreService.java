@@ -244,7 +244,8 @@ public final class MediaAutoRestoreService extends Service {
         try {
             Intent finished = new Intent(MediaRestoreCompleteReceiver.ACTION)
                     .setComponent(new ComponentName(this, MediaRestoreCompleteReceiver.class))
-                    .putExtra("restore_result", reason);
+                    .putExtra("restore_result", reason)
+                    .putExtra("source_package", expectedPackage == null ? "" : expectedPackage);
             sendBroadcast(finished);
             Log.i(TAG, "MEDIA_RECOVERY_FINISHED reason=" + reason
                     + "; projectionReady=" + !TextUtils.isEmpty(expectedPackage)
