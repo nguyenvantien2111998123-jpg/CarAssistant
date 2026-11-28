@@ -23,30 +23,37 @@ import android.util.Log;
 import java.io.File;
 import java.util.Collections;
 import java.util.List;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 
 /**
- * A persistent Android Auto MediaSession with a one-shot 3-second silent bootstrap.
- * The MP4 is not a keep-alive loop: after it pauses, the MediaSession remains active.
+ * A persistent silent MediaSession backed by three 30-minute MP4 playlist items.
+ * The AAC stream contains digital zeroes only and the MediaPlayer output is muted.
  */
 public final class SilentMediaBrowserService extends MediaBrowserService {
     private static final String TAG = "MediaImLang";
     private static final String CHANNEL = "media_im_lang";
     private static final int NOTIFICATION_ID = 6103;
     private static final String ROOT_ID = "media_im_lang_root";
-    private static final long SILENT_WINDOW_MS = 3000L;
-    private static final String ACTION_NOTIFICATION_PLAY = "com.carassistant.mediaimlang.action.NOTIFICATION_PLAY";
-    private static final String ACTION_NOTIFICATION_PAUSE = "com.carassistant.mediaimlang.action.NOTIFICATION_PAUSE";
+    private static final long TRACK_DURATION_MS = 30L * 60L * 1000L;
+    private static final long SEEK_STEP_MS = 15000L;
+    private static final String ACTION_NOTIFICATION_PLAY =
+            "com.carassistant.mediaimlang.action.NOTIFICATION_PLAY";
+    private static final String ACTION_NOTIFICATION_PAUSE =
+            "com.carassistant.mediaimlang.action.NOTIFICATION_PAUSE";
 
     private static volatile SilentMediaBrowserService instance;
     private final Handler handler = new Handler(Looper.getMainLooper());
+    private final ExecutorService playlistExecutor = Executors.newSingleThreadExecutor();
     private MediaSession session;
     private MediaPlayer player;
+    private List<File> playlist = Collections.emptyList();
+    private int currentTrackIndex;
     private boolean externalSessionPresent;
     private boolean windowRunning;
-    private boolean silentWindowAttempted;
+    private boolean playlistPreparing;
+    private boolean playlistStartAttempted;
     private long playbackStartedAt;
-
-    private final Runnable pauseAfterWindow = () -> pauseSilent("three-second window elapsed");
 
     @Override public void onCreate() {
         super.onCreate();
@@ -55,26 +62,35 @@ public final class SilentMediaBrowserService extends MediaBrowserService {
         session = new MediaSession(this, "MediaImLangSession");
         session.setCallback(new MediaSession.Callback() {
             @Override public void onPlay() {
-                // Android Auto may repeat PLAY while showing a paused card. Never
-                // turn that into an endless sequence of 3-second playback windows.
-                requestSilentWindow("Android Auto play command");
+                handler.post(() -> resumeOrStart("Android Auto play command"));
             }
             @Override public void onPlayFromMediaId(String mediaId, Bundle extras) {
-                if ("silent_3s".equals(mediaId)) requestSilentWindow("Android Auto selected silent item");
+                if (mediaId != null && mediaId.startsWith("silent_")) {
+                    int index = parseTrackIndex(mediaId);
+                    handler.post(() -> playTrack(index, 0L, "Android Auto selected playlist item"));
+                }
             }
             @Override public void onPrepareFromMediaId(String mediaId, Bundle extras) {
-                Log.i(TAG, "Android Auto prepared media item=" + mediaId);
+                Log.i(TAG, "Android Auto prepared playlist item=" + mediaId);
             }
-            @Override public void onPause() { pauseSilent("Android Auto pause command"); }
-            @Override public void onStop() { pauseSilent("Android Auto stop command"); }
+            @Override public void onPause() { handler.post(() -> pauseSilent("Android Auto pause command")); }
+            @Override public void onStop() { handler.post(() -> pauseSilent("Android Auto stop command")); }
             @Override public void onSkipToNext() {
-                // Do not implement a second double-NEXT detector here. Hardware steering
-                // keys are handled centrally by CarAsistant's existing MediaSession hook,
-                // exactly as they are for YouTube/Zing. This fallback has no playlist.
-                Log.d(TAG, "NEXT received by fallback session; steering gesture belongs to CarAsistant");
+                handler.post(() -> playTrack((currentTrackIndex + 1) % playlistSize(),
+                        0L, "MediaSession NEXT"));
             }
             @Override public void onSkipToPrevious() {
-                Log.d(TAG, "PREVIOUS ignored: silent fallback has no playlist");
+                handler.post(() -> playTrack((currentTrackIndex + playlistSize() - 1)
+                        % playlistSize(), 0L, "MediaSession PREVIOUS"));
+            }
+            @Override public void onSeekTo(long position) {
+                handler.post(() -> seekTo(position));
+            }
+            @Override public void onFastForward() {
+                handler.post(() -> seekBy(SEEK_STEP_MS));
+            }
+            @Override public void onRewind() {
+                handler.post(() -> seekBy(-SEEK_STEP_MS));
             }
         });
         session.setFlags(MediaSession.FLAG_HANDLES_MEDIA_BUTTONS
@@ -82,41 +98,36 @@ public final class SilentMediaBrowserService extends MediaBrowserService {
         session.setMetadata(new android.media.MediaMetadata.Builder()
                 .putString(android.media.MediaMetadata.METADATA_KEY_TITLE, "Media Im Lặng")
                 .putString(android.media.MediaMetadata.METADATA_KEY_ARTIST, "CarAsistant")
-                .putString(android.media.MediaMetadata.METADATA_KEY_ALBUM, "Media nền")
-                .putLong(android.media.MediaMetadata.METADATA_KEY_DURATION, SILENT_WINDOW_MS)
+                .putString(android.media.MediaMetadata.METADATA_KEY_ALBUM, "Playlist media nền")
+                .putLong(android.media.MediaMetadata.METADATA_KEY_DURATION, TRACK_DURATION_MS)
                 .build());
-        // Keep the helper invisible to Android Auto until monitoring confirms that
-        // no real phone media session is PLAYING or PAUSED.
         session.setActive(false);
         setSessionToken(session.getSessionToken());
         setPausedState();
         startForeground(NOTIFICATION_ID, buildNotification());
-        Log.i(TAG, "Persistent MediaSession created; silent bootstrap is one-shot");
+        Log.i(TAG, "Persistent playlist MediaSession created; 3 x 30-minute silent MP4 tracks");
     }
 
     @Override public int onStartCommand(Intent intent, int flags, int startId) {
         String action = intent == null ? null : intent.getAction();
         if (ACTION_NOTIFICATION_PLAY.equals(action)) {
-            silentWindowAttempted = false;
-            requestSilentWindow("phone media notification play button");
+            handler.post(() -> resumeOrStart("phone media notification play button"));
             return Service.START_STICKY;
         }
         if (ACTION_NOTIFICATION_PAUSE.equals(action)) {
-            pauseSilent("phone media notification pause button");
+            handler.post(() -> pauseSilent("phone media notification pause button"));
             return Service.START_STICKY;
         }
-        if (intent != null && "com.carassistant.v10.ACTION_AA_DISCONNECTED".equals(intent.getAction())) {
+        if (intent != null && "com.carassistant.v10.ACTION_AA_DISCONNECTED".equals(action)) {
             pauseSilent("Android Auto disconnected");
             stopForeground(true);
             stopSelf();
             return Service.START_NOT_STICKY;
         }
-        if (!externalSessionPresent && !silentWindowAttempted) {
-            // Give NotificationListenerService a moment to enumerate existing app sessions
-            // after boot/AA reconnect, avoiding a race with YouTube or another real player.
+        if (!externalSessionPresent && !playlistStartAttempted) {
             handler.postDelayed(() -> {
-                if (!externalSessionPresent && !silentWindowAttempted) {
-                    requestSilentWindow("service started");
+                if (!externalSessionPresent && !playlistStartAttempted) {
+                    resumeOrStart("service started");
                 }
             }, 1800L);
         }
@@ -132,21 +143,24 @@ public final class SilentMediaBrowserService extends MediaBrowserService {
             result.sendResult(Collections.emptyList());
             return;
         }
-        android.media.MediaDescription description = new android.media.MediaDescription.Builder()
-                .setMediaId("silent_3s")
-                .setTitle("Media Im Lặng")
-                .setSubtitle("CarAsistant")
-                .setDescription("Media nền không phát âm thanh")
-                .build();
-        result.sendResult(Collections.singletonList(
-                new MediaBrowser.MediaItem(description, MediaBrowser.MediaItem.FLAG_PLAYABLE)));
+        java.util.ArrayList<MediaBrowser.MediaItem> items = new java.util.ArrayList<>(3);
+        for (int i = 1; i <= 3; i++) {
+            android.media.MediaDescription description = new android.media.MediaDescription.Builder()
+                    .setMediaId(String.format(java.util.Locale.US, "silent_%02d", i))
+                    .setTitle(String.format(java.util.Locale.US, "Media Im Lặng · %02d/03", i))
+                    .setSubtitle("30 phút · Không âm thanh")
+                    .setDescription("MP4 im lặng, dữ liệu số 0, không có tone hoặc tần số nghe được")
+                    .build();
+            items.add(new MediaBrowser.MediaItem(description, MediaBrowser.MediaItem.FLAG_PLAYABLE));
+        }
+        result.sendResult(items);
     }
 
     static void onSessionAccessReady() {
         SilentMediaBrowserService service = instance;
         if (service != null) service.handler.post(() -> {
-            if (!service.externalSessionPresent && !service.silentWindowAttempted) {
-                service.requestSilentWindow("media-session access ready");
+            if (!service.externalSessionPresent && !service.playlistStartAttempted) {
+                service.resumeOrStart("media-session access ready");
             }
         });
     }
@@ -161,6 +175,7 @@ public final class SilentMediaBrowserService extends MediaBrowserService {
         if (service != null) service.handler.post(() -> {
             service.externalSessionPresent = false;
             service.pauseSilent("notification access disconnected");
+            service.releasePlayer();
             if (service.session != null) service.session.setActive(false);
             service.updateNotification("Cần bật quyền Truy cập thông báo");
             Log.w(TAG, "Media session monitoring unavailable; fallback session deactivated");
@@ -180,35 +195,79 @@ public final class SilentMediaBrowserService extends MediaBrowserService {
         Log.i(TAG, "External media session present=" + present);
         if (present) {
             pauseSilent("real media session has priority");
-            // A paused helper session must not compete with a real app's paused
-            // session in Android Auto's media source selection.
+            releasePlayer();
             if (session != null) session.setActive(false);
             stopForeground(true);
             return;
         }
 
-        // A real app session disappeared. Allow exactly one new 3-second bootstrap.
-        silentWindowAttempted = false;
+        playlistStartAttempted = false;
         showMediaNotification();
         handler.postDelayed(() -> {
             if (!externalSessionPresent && !windowRunning) {
-                requestSilentWindow("last external media session disappeared");
+                resumeOrStart("last external media session disappeared");
             }
         }, 700L);
     }
 
-    private void requestSilentWindow(String reason) {
-        if (externalSessionPresent || windowRunning || silentWindowAttempted) return;
+    private void resumeOrStart(String reason) {
+        if (externalSessionPresent || windowRunning) return;
         if (!hasSessionAccess()) {
             updateNotification("Cần bật quyền Truy cập thông báo");
-            Log.w(TAG, "Silent bootstrap withheld: Notification Access is not granted");
+            Log.w(TAG, "Silent playlist withheld: Notification Access is not granted");
             return;
         }
+        if (player != null) {
+            try {
+                player.start();
+                windowRunning = true;
+                playbackStartedAt = SystemClock.elapsedRealtime();
+                publishPlaybackState(PlaybackState.STATE_PLAYING);
+                showMediaNotification();
+                Log.i(TAG, "Silent playlist resumed at track=" + (currentTrackIndex + 1)
+                        + ", positionMs=" + safeCurrentPosition());
+                return;
+            } catch (RuntimeException error) {
+                Log.w(TAG, "Unable to resume current silent track; preparing again", error);
+                releasePlayer();
+            }
+        }
+        playTrack(currentTrackIndex, 0L, reason);
+    }
 
-        // Latch before preparing to prevent duplicate PLAY/start requests racing.
-        silentWindowAttempted = true;
+    private void playTrack(int index, long positionMs, String reason) {
+        if (externalSessionPresent) return;
+        if (!hasSessionAccess()) {
+            updateNotification("Cần bật quyền Truy cập thông báo");
+            return;
+        }
+        if (playlist.isEmpty()) {
+            if (playlistPreparing) return;
+            playlistPreparing = true;
+            playlistStartAttempted = true;
+            playlistExecutor.execute(() -> {
+                try {
+                    List<File> generated = SilentMp4Factory.getPlaylist(this);
+                    handler.post(() -> {
+                        playlist = generated;
+                        playlistPreparing = false;
+                        if (!externalSessionPresent) playTrack(index, positionMs, reason);
+                    });
+                } catch (Exception error) {
+                    Log.e(TAG, "Unable to prepare silent MP4 playlist", error);
+                    handler.post(() -> {
+                        playlistPreparing = false;
+                        playlistStartAttempted = false;
+                        updateNotification("Không tạo được playlist MP4 im lặng");
+                    });
+                }
+            });
+            return;
+        }
         try {
-            File mp4 = SilentMp4Factory.getOrCreate(this);
+            if (playlist.isEmpty()) throw new IllegalStateException("Silent playlist is empty");
+            currentTrackIndex = Math.floorMod(index, playlist.size());
+            File source = playlist.get(currentTrackIndex);
             releasePlayer();
             player = new MediaPlayer();
             player.setAudioAttributes(new AudioAttributes.Builder()
@@ -216,81 +275,142 @@ public final class SilentMediaBrowserService extends MediaBrowserService {
                     .setContentType(AudioAttributes.CONTENT_TYPE_MUSIC)
                     .build());
             player.setVolume(0f, 0f);
-            player.setDataSource(mp4.getAbsolutePath());
+            player.setDataSource(source.getAbsolutePath());
             player.setOnPreparedListener(mediaPlayer -> {
                 if (externalSessionPresent) {
-                    pauseSilent("external media session appeared before silent start");
+                    releasePlayer();
                     return;
                 }
-                windowRunning = true;
-                playbackStartedAt = SystemClock.elapsedRealtime();
-                session.setActive(true);
-                session.setPlaybackState(new PlaybackState.Builder()
-                        .setActions(PlaybackState.ACTION_PLAY | PlaybackState.ACTION_PAUSE
-                                | PlaybackState.ACTION_PLAY_PAUSE | PlaybackState.ACTION_STOP
-                                | PlaybackState.ACTION_SKIP_TO_NEXT | PlaybackState.ACTION_SKIP_TO_PREVIOUS)
-                        .setState(PlaybackState.STATE_PLAYING, 0L, 1f)
-                        .build());
-                showMediaNotification();
+                long target = Math.max(0L, Math.min(positionMs, TRACK_DURATION_MS));
+                if (target > 0L) mediaPlayer.seekTo((int) target);
                 mediaPlayer.start();
-                handler.removeCallbacks(pauseAfterWindow);
-                handler.postDelayed(pauseAfterWindow, SILENT_WINDOW_MS);
-                Log.i(TAG, "Silent MP4 started once; volume=0; reason=" + reason);
+                windowRunning = true;
+                playlistStartAttempted = true;
+                playbackStartedAt = SystemClock.elapsedRealtime();
+                updateMetadata();
+                session.setActive(true);
+                publishPlaybackState(PlaybackState.STATE_PLAYING);
+                showMediaNotification();
+                Log.i(TAG, "Silent playlist track started index=" + (currentTrackIndex + 1)
+                        + "/" + playlist.size() + ", durationMs=" + TRACK_DURATION_MS
+                        + ", positionMs=" + target + ", reason=" + reason);
             });
-            player.setOnCompletionListener(mediaPlayer -> pauseSilent("silent MP4 completed"));
+            player.setOnCompletionListener(mediaPlayer -> {
+                Log.i(TAG, "Silent playlist track completed; advancing automatically");
+                playTrack((currentTrackIndex + 1) % playlistSize(), 0L, "automatic playlist advance");
+            });
             player.setOnErrorListener((mediaPlayer, what, extra) -> {
-                Log.e(TAG, "Silent MP4 playback error what=" + what + " extra=" + extra);
-                pauseSilent("player error");
+                Log.e(TAG, "Silent playlist playback error what=" + what + " extra=" + extra);
+                windowRunning = false;
+                playlistStartAttempted = false;
+                releasePlayer();
+                setPausedState();
                 return true;
             });
             player.prepareAsync();
         } catch (Exception error) {
-            Log.e(TAG, "Unable to create or play silent MP4", error);
-            updateNotification("Không tạo/phát được MP4 im lặng");
+            Log.e(TAG, "Unable to create or play silent playlist", error);
+            playlistStartAttempted = false;
+            updateNotification("Không tạo/phát được playlist MP4 im lặng");
             setPausedState();
         }
     }
 
     private void pauseSilent(String reason) {
-        handler.removeCallbacks(pauseAfterWindow);
         boolean wasRunning = windowRunning;
         if (player != null) {
             try { if (player.isPlaying()) player.pause(); } catch (RuntimeException ignored) { }
-            releasePlayer();
         }
         windowRunning = false;
         if (wasRunning) {
             setPausedState();
-            Log.i(TAG, "Silent MP4 paused: " + reason + ", elapsedMs="
-                    + (playbackStartedAt == 0L ? 0L : SystemClock.elapsedRealtime() - playbackStartedAt));
+            Log.i(TAG, "Silent playlist paused: " + reason + ", positionMs=" + safeCurrentPosition());
         }
-        if (session != null) {
-            // Keep the fallback session active/PAUSED only while no real player exists.
-            session.setActive(!externalSessionPresent && hasSessionAccess());
-        }
+        if (session != null) session.setActive(!externalSessionPresent && hasSessionAccess());
         if (!externalSessionPresent) showMediaNotification();
+    }
+
+    private void seekBy(long offsetMs) {
+        long target = Math.max(0L, Math.min(TRACK_DURATION_MS, safeCurrentPosition() + offsetMs));
+        seekTo(target);
+    }
+
+    private void seekTo(long positionMs) {
+        if (player == null) return;
+        long target = Math.max(0L, Math.min(TRACK_DURATION_MS, positionMs));
+        try {
+            player.seekTo((int) target);
+            publishPlaybackState(windowRunning
+                    ? PlaybackState.STATE_PLAYING : PlaybackState.STATE_PAUSED);
+            Log.i(TAG, "Silent playlist seek track=" + (currentTrackIndex + 1)
+                    + ", positionMs=" + target);
+        } catch (RuntimeException error) {
+            Log.w(TAG, "Silent playlist seek rejected", error);
+        }
+    }
+
+    private long safeCurrentPosition() {
+        if (player == null) return 0L;
+        try { return Math.max(0L, player.getCurrentPosition()); }
+        catch (RuntimeException ignored) { return 0L; }
+    }
+
+    private int playlistSize() { return playlist == null || playlist.isEmpty() ? 3 : playlist.size(); }
+
+    private int parseTrackIndex(String mediaId) {
+        try { return Math.max(0, Integer.parseInt(mediaId.substring("silent_".length())) - 1); }
+        catch (RuntimeException ignored) { return 0; }
+    }
+
+    private void updateMetadata() {
+        if (session == null) return;
+        String title = String.format(java.util.Locale.US, "Media Im Lặng · %02d/%02d",
+                currentTrackIndex + 1, playlistSize());
+        session.setMetadata(new android.media.MediaMetadata.Builder()
+                .putString(android.media.MediaMetadata.METADATA_KEY_TITLE, title)
+                .putString(android.media.MediaMetadata.METADATA_KEY_ARTIST, "CarAsistant")
+                .putString(android.media.MediaMetadata.METADATA_KEY_ALBUM, "Playlist media nền")
+                .putString(android.media.MediaMetadata.METADATA_KEY_MEDIA_ID,
+                        "silent_" + String.format(java.util.Locale.US, "%02d", currentTrackIndex + 1))
+                .putLong(android.media.MediaMetadata.METADATA_KEY_DURATION, TRACK_DURATION_MS)
+                .putLong(android.media.MediaMetadata.METADATA_KEY_TRACK_NUMBER, currentTrackIndex + 1)
+                .putLong(android.media.MediaMetadata.METADATA_KEY_NUM_TRACKS, playlistSize())
+                .build());
+    }
+
+    private void publishPlaybackState(int state) {
+        if (session == null) return;
+        long actions = PlaybackState.ACTION_PLAY | PlaybackState.ACTION_PAUSE
+                | PlaybackState.ACTION_PLAY_PAUSE | PlaybackState.ACTION_STOP
+                | PlaybackState.ACTION_SKIP_TO_NEXT | PlaybackState.ACTION_SKIP_TO_PREVIOUS
+                | PlaybackState.ACTION_SEEK_TO | PlaybackState.ACTION_FAST_FORWARD
+                | PlaybackState.ACTION_REWIND;
+        session.setPlaybackState(new PlaybackState.Builder()
+                .setActions(actions)
+                .setState(state, safeCurrentPosition(), state == PlaybackState.STATE_PLAYING ? 1f : 0f)
+                .setBufferedPosition(TRACK_DURATION_MS)
+                .setActiveQueueItemId(currentTrackIndex)
+                .build());
     }
 
     private void setPausedState() {
         if (session != null) {
-            session.setPlaybackState(new PlaybackState.Builder()
-                     .setActions(PlaybackState.ACTION_PLAY | PlaybackState.ACTION_PAUSE
-                            | PlaybackState.ACTION_PLAY_PAUSE | PlaybackState.ACTION_STOP
-                            | PlaybackState.ACTION_SKIP_TO_NEXT | PlaybackState.ACTION_SKIP_TO_PREVIOUS
-                            | PlaybackState.ACTION_FAST_FORWARD | PlaybackState.ACTION_REWIND
-                            | PlaybackState.ACTION_SEEK_TO)
-                    .setState(PlaybackState.STATE_PAUSED, SILENT_WINDOW_MS, 0f)
-                    .build());
+            updateMetadata();
+            publishPlaybackState(PlaybackState.STATE_PAUSED);
             if (!externalSessionPresent) showMediaNotification();
         }
     }
 
     private void releasePlayer() {
         if (player != null) {
+            try { player.setOnPreparedListener(null); } catch (RuntimeException ignored) { }
+            try { player.setOnCompletionListener(null); } catch (RuntimeException ignored) { }
+            try { player.setOnErrorListener(null); } catch (RuntimeException ignored) { }
             try { player.stop(); } catch (RuntimeException ignored) { }
-            player.release();
+            try { player.release(); } catch (RuntimeException ignored) { }
             player = null;
         }
+        windowRunning = false;
     }
 
     private void createChannel() {
@@ -322,7 +442,10 @@ public final class SilentMediaBrowserService extends MediaBrowserService {
                 : new Notification.Builder(this);
         builder.setSmallIcon(android.R.drawable.ic_media_play)
                 .setContentTitle("Media Im Lặng")
-                .setContentText(playing ? "Đang phát MP4 im lặng" : "Đã tạm dừng · Media nền")
+                .setContentText(playing
+                        ? String.format(java.util.Locale.US, "Đang phát playlist · %02d/03",
+                                currentTrackIndex + 1)
+                        : "Đã tạm dừng · Playlist media nền")
                 .setCategory(Notification.CATEGORY_TRANSPORT)
                 .setVisibility(Notification.VISIBILITY_PUBLIC)
                 .setOnlyAlertOnce(true)
@@ -356,6 +479,7 @@ public final class SilentMediaBrowserService extends MediaBrowserService {
 
     @Override public void onDestroy() {
         handler.removeCallbacksAndMessages(null);
+        playlistExecutor.shutdownNow();
         releasePlayer();
         if (session != null) {
             session.setActive(false);
