@@ -139,14 +139,17 @@ public final class SilentMediaBrowserService extends MediaBrowserService {
             result.sendResult(Collections.emptyList());
             return;
         }
-        android.media.MediaDescription description = new android.media.MediaDescription.Builder()
-                .setMediaId("silent_01")
-                .setTitle("Media Im Lặng · 01/03")
-                .setSubtitle("30 phút · Không âm thanh")
-                .setDescription("MP4 im lặng, không có tone hoặc tần số âm thanh")
-                .build();
-        result.sendResult(Collections.singletonList(
-                new MediaBrowser.MediaItem(description, MediaBrowser.MediaItem.FLAG_PLAYABLE)));
+        java.util.ArrayList<MediaBrowser.MediaItem> items = new java.util.ArrayList<>(3);
+        for (int i = 1; i <= 3; i++) {
+            android.media.MediaDescription description = new android.media.MediaDescription.Builder()
+                    .setMediaId(String.format(java.util.Locale.US, "silent_%02d", i))
+                    .setTitle(String.format(java.util.Locale.US, "Media Im Lặng · %02d/03", i))
+                    .setSubtitle("30 phút · Không âm thanh")
+                    .setDescription("MP4 im lặng, dữ liệu số 0, không có tone hoặc tần số nghe được")
+                    .build();
+            items.add(new MediaBrowser.MediaItem(description, MediaBrowser.MediaItem.FLAG_PLAYABLE));
+        }
+        result.sendResult(items);
     }
 
     static void onSessionAccessReady() {
