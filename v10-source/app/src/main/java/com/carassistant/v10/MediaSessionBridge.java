@@ -90,6 +90,11 @@ public final class MediaSessionBridge extends NotificationListenerService {
     private static volatile long lastCheckpointPosition;
     private static volatile long lastCheckpointDuration;
     private MediaSession mirrorSession;
+    // Cache expensive composed artwork and avoid republishing unchanged metadata.
+    private String lastMirrorMetadataKey;
+    private String lastMirrorPlaybackKey;
+    private String lastMirrorArtworkKey;
+    private Bitmap lastMirrorArtwork;
     private SteeringWheelMediaKeyHandler steeringKeyHandler;
     private MediaSessionManager manager;
     private MediaSessionManager.OnActiveSessionsChangedListener sessionsListener;
@@ -108,7 +113,7 @@ public final class MediaSessionBridge extends NotificationListenerService {
         @Override public void run() {
             if (manager == null) return;
             refreshFromManager();
-            MAIN.postDelayed(this, 1000L);
+            MAIN.postDelayed(this, 5000L);
         }
     };
 
@@ -709,8 +714,6 @@ public final class MediaSessionBridge extends NotificationListenerService {
         if (session == null) return;
         boolean hasPlayer = state != null && !TextUtils.isEmpty(state.packageName);
         if (!hasPlayer) {
-            // After a phone reboot the source app has no MediaSession yet. Publish the
-            // durable checkpoint so Android Auto still sees CarAsistant and the last item.
             String savedPackage = getCheckpointPackage(this);
             String savedTitle = savedPackage == null ? null : getCheckpointTitle(this);
             String savedArtist = savedPackage == null ? null : getCheckpointArtist(this);
@@ -719,71 +722,79 @@ public final class MediaSessionBridge extends NotificationListenerService {
             long savedDuration = Math.max(0L, prefs.getLong(CHECKPOINT_DURATION, 0L));
             long savedPosition = getAdjustedCheckpointPosition(this);
             Bitmap warning = WynWarningStore.getWarning();
-            if (!TextUtils.isEmpty(savedTitle)) {
-                MediaMetadata.Builder saved = new MediaMetadata.Builder()
-                        .putString(MediaMetadata.METADATA_KEY_TITLE, savedTitle)
-                        .putString(MediaMetadata.METADATA_KEY_ARTIST,
-                                TextUtils.isEmpty(savedArtist) ? savedPackage : savedArtist)
-                        .putString(MediaMetadata.METADATA_KEY_ALBUM,
-                                TextUtils.isEmpty(savedPackage) ? "CarAsistant" : savedPackage)
+            Bitmap artwork = warning == null ? null : getCachedMirrorArtwork(null, warning);
+            String title = !TextUtils.isEmpty(savedTitle) ? savedTitle : "CarAsistant Media";
+            String artist = !TextUtils.isEmpty(savedArtist) ? savedArtist
+                    : (!TextUtils.isEmpty(savedPackage) ? savedPackage : "Trình điều khiển media");
+            String album = TextUtils.isEmpty(savedPackage) ? "CarAsistant" : savedPackage;
+            String metadataKey = title + "|" + artist + "|" + album + "|" + savedDuration
+                    + "|" + (artwork == null ? 0 : System.identityHashCode(artwork));
+            if (!metadataKey.equals(lastMirrorMetadataKey)) {
+                MediaMetadata.Builder metadata = new MediaMetadata.Builder()
+                        .putString(MediaMetadata.METADATA_KEY_TITLE, title)
+                        .putString(MediaMetadata.METADATA_KEY_ARTIST, artist)
+                        .putString(MediaMetadata.METADATA_KEY_ALBUM, album)
                         .putLong(MediaMetadata.METADATA_KEY_DURATION, savedDuration);
-                if (warning != null) {
-                    Bitmap combinedArtwork = safeMirrorArtwork(WynWarningStore.composeMediaArtwork(
-                            null, getWynMediaOverlayPercent(),
-                            getWynMediaOverlayXPercent(), getWynMediaOverlayYPercent()));
-                    if (combinedArtwork != null) {
-                        saved.putBitmap(MediaMetadata.METADATA_KEY_ALBUM_ART, combinedArtwork)
-                                .putBitmap(MediaMetadata.METADATA_KEY_ART, combinedArtwork)
-                                .putBitmap(MediaMetadata.METADATA_KEY_DISPLAY_ICON, combinedArtwork);
-                    }
+                if (artwork != null) {
+                    metadata.putBitmap(MediaMetadata.METADATA_KEY_ALBUM_ART, artwork)
+                            .putBitmap(MediaMetadata.METADATA_KEY_ART, artwork)
+                            .putBitmap(MediaMetadata.METADATA_KEY_DISPLAY_ICON, artwork);
                 }
-                session.setMetadata(saved.build());
-                // Show the saved item as paused until its source session is verified.
-                session.setPlaybackState(buildMirrorPlaybackState(false, savedPosition, savedDuration));
-            } else {
-                MediaMetadata.Builder empty = new MediaMetadata.Builder()
-                        .putString(MediaMetadata.METADATA_KEY_TITLE, "CarAsistant Media")
-                        .putString(MediaMetadata.METADATA_KEY_ARTIST, "Trình điều khiển media")
-                        .putString(MediaMetadata.METADATA_KEY_ALBUM, "CarAsistant");
-                if (warning != null) {
-                    Bitmap combinedArtwork = safeMirrorArtwork(WynWarningStore.composeMediaArtwork(
-                            null, getWynMediaOverlayPercent(),
-                            getWynMediaOverlayXPercent(), getWynMediaOverlayYPercent()));
-                    if (combinedArtwork != null) {
-                        empty.putBitmap(MediaMetadata.METADATA_KEY_ALBUM_ART, combinedArtwork)
-                                .putBitmap(MediaMetadata.METADATA_KEY_ART, combinedArtwork)
-                                .putBitmap(MediaMetadata.METADATA_KEY_DISPLAY_ICON, combinedArtwork);
-                    }
-                }
-                session.setMetadata(empty.build());
-                session.setPlaybackState(buildMirrorPlaybackState(false, 0L, 0L));
+                session.setMetadata(metadata.build());
+                lastMirrorMetadataKey = metadataKey;
             }
-            session.setActive(true);
+            String playbackKey = "false|" + savedPosition + "|" + savedDuration;
+            if (!playbackKey.equals(lastMirrorPlaybackKey)) {
+                session.setPlaybackState(buildMirrorPlaybackState(false, savedPosition, savedDuration));
+                lastMirrorPlaybackKey = playbackKey;
+            }
+            if (!session.isActive()) session.setActive(true);
             return;
         }
 
-        MediaMetadata.Builder metadata = new MediaMetadata.Builder()
-                .putString(MediaMetadata.METADATA_KEY_TITLE,
-                        TextUtils.isEmpty(state.title) ? "Đang phát media" : state.title)
-                .putString(MediaMetadata.METADATA_KEY_ARTIST,
-                        TextUtils.isEmpty(state.artist) ? state.packageName : state.artist)
-                .putString(MediaMetadata.METADATA_KEY_ALBUM, state.packageName)
-                .putLong(MediaMetadata.METADATA_KEY_DURATION, Math.max(0L, state.duration));
-        Bitmap artwork = safeMirrorArtwork(WynWarningStore.composeMediaArtwork(
-                state.artwork, getWynMediaOverlayPercent(),
-                getWynMediaOverlayXPercent(), getWynMediaOverlayYPercent()));
-        if (artwork != null) {
-            // AA media card and horizontal widget share the same popup-over-cover image.
-            metadata.putBitmap(MediaMetadata.METADATA_KEY_ALBUM_ART, artwork)
-                    .putBitmap(MediaMetadata.METADATA_KEY_ART, artwork)
-                    .putBitmap(MediaMetadata.METADATA_KEY_DISPLAY_ICON, artwork);
+        Bitmap artwork = getCachedMirrorArtwork(state.artwork, WynWarningStore.getWarning());
+        String title = TextUtils.isEmpty(state.title) ? "Đang phát media" : state.title;
+        String artist = TextUtils.isEmpty(state.artist) ? state.packageName : state.artist;
+        String metadataKey = title + "|" + artist + "|" + state.packageName + "|"
+                + Math.max(0L, state.duration) + "|"
+                + (artwork == null ? 0 : System.identityHashCode(artwork));
+        if (!metadataKey.equals(lastMirrorMetadataKey)) {
+            MediaMetadata.Builder metadata = new MediaMetadata.Builder()
+                    .putString(MediaMetadata.METADATA_KEY_TITLE, title)
+                    .putString(MediaMetadata.METADATA_KEY_ARTIST, artist)
+                    .putString(MediaMetadata.METADATA_KEY_ALBUM, state.packageName)
+                    .putLong(MediaMetadata.METADATA_KEY_DURATION, Math.max(0L, state.duration));
+            if (artwork != null) {
+                metadata.putBitmap(MediaMetadata.METADATA_KEY_ALBUM_ART, artwork)
+                        .putBitmap(MediaMetadata.METADATA_KEY_ART, artwork)
+                        .putBitmap(MediaMetadata.METADATA_KEY_DISPLAY_ICON, artwork);
+            }
+            session.setMetadata(metadata.build());
+            lastMirrorMetadataKey = metadataKey;
         }
-        session.setMetadata(metadata.build());
 
-        session.setPlaybackState(buildMirrorPlaybackState(
-                state.playing, Math.max(0L, state.position), Math.max(0L, state.duration)));
-        // Keep CarAsistant active while the source is paused or temporarily disappears.
-        session.setActive(true);
+        long position = Math.max(0L, state.position);
+        long duration = Math.max(0L, state.duration);
+        String playbackKey = state.playing + "|" + position + "|" + duration;
+        if (!playbackKey.equals(lastMirrorPlaybackKey)) {
+            session.setPlaybackState(buildMirrorPlaybackState(state.playing, position, duration));
+            lastMirrorPlaybackKey = playbackKey;
+        }
+        if (!session.isActive()) session.setActive(true);
+    }
+
+    /** Compose the 512px WYN/media bitmap only when its source or layout actually changes. */
+    private Bitmap getCachedMirrorArtwork(Bitmap media, Bitmap warning) {
+        int overlay = getWynMediaOverlayPercent();
+        int x = getWynMediaOverlayXPercent();
+        int y = getWynMediaOverlayYPercent();
+        String key = System.identityHashCode(media) + "|" + System.identityHashCode(warning)
+                + "|" + overlay + "|" + x + "|" + y;
+        if (key.equals(lastMirrorArtworkKey)) return lastMirrorArtwork;
+        Bitmap composed = WynWarningStore.composeMediaArtwork(media, overlay, x, y);
+        lastMirrorArtwork = safeMirrorArtwork(composed);
+        lastMirrorArtworkKey = key;
+        return lastMirrorArtwork;
     }
 
     private PlaybackState buildMirrorPlaybackState(boolean playing, long position, long duration) {
@@ -852,7 +863,7 @@ public final class MediaSessionBridge extends NotificationListenerService {
             MAIN.removeCallbacks(activeSessionRefreshTask);
             saveCurrentCheckpoint();
             MAIN.postDelayed(checkpointTask, CHECKPOINT_INTERVAL_MS);
-            MAIN.postDelayed(activeSessionRefreshTask, 1000L);
+            MAIN.postDelayed(activeSessionRefreshTask, 5000L);
             Log.i(TAG, "Notification access connected; durable media checkpoint scheduled every 5 seconds");
         } catch (SecurityException error) {
             Log.w(TAG, "Notification access is not granted", error);
@@ -895,6 +906,10 @@ public final class MediaSessionBridge extends NotificationListenerService {
         }
         MediaSession session = mirrorSession;
         mirrorSession = null;
+        lastMirrorMetadataKey = null;
+        lastMirrorPlaybackKey = null;
+        lastMirrorArtworkKey = null;
+        lastMirrorArtwork = null;
         if (session != null) {
             try {
                 session.setActive(false);
