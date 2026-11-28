@@ -70,7 +70,7 @@ public final class WynPopupAccessibilityService extends AccessibilityService {
                     Log.e(TAG, "WYN_HOME_30S root fallback failed", error);
                 } finally {
                     shell.destroy();
-                    main.post(this::clearPending);
+                    main.post(WynPopupAccessibilityService.this::clearPending);
                 }
             }, "CarAsistant-WYN-Home").start();
         }
@@ -97,6 +97,10 @@ public final class WynPopupAccessibilityService extends AccessibilityService {
         if (checkScheduled || !isPending()) return;
         checkScheduled = true;
         main.postDelayed(homeTimer, Math.max(1L, delayMs));
+    }
+
+    @Override public void onAccessibilityEvent(android.view.accessibility.AccessibilityEvent event) {
+        // Deliberately unused: the WYN deadline is timer-driven, not UI-event-driven.
     }
 
     private boolean isPending() {
