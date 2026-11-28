@@ -3,6 +3,7 @@ package com.carassistant.mediaimlang;
 import android.app.Notification;
 import android.app.NotificationChannel;
 import android.app.NotificationManager;
+import android.app.PendingIntent;
 import android.app.Service;
 import android.content.ComponentName;
 import android.content.Intent;
@@ -33,6 +34,8 @@ public final class SilentMediaBrowserService extends MediaBrowserService {
     private static final int NOTIFICATION_ID = 6103;
     private static final String ROOT_ID = "media_im_lang_root";
     private static final long SILENT_WINDOW_MS = 3000L;
+    private static final String ACTION_NOTIFICATION_PLAY = "com.carassistant.mediaimlang.action.NOTIFICATION_PLAY";
+    private static final String ACTION_NOTIFICATION_PAUSE = "com.carassistant.mediaimlang.action.NOTIFICATION_PAUSE";
 
     private static volatile SilentMediaBrowserService instance;
     private final Handler handler = new Handler(Looper.getMainLooper());
@@ -87,11 +90,21 @@ public final class SilentMediaBrowserService extends MediaBrowserService {
         session.setActive(false);
         setSessionToken(session.getSessionToken());
         setPausedState();
-        startForeground(NOTIFICATION_ID, buildNotification("MediaSession đang hoạt động"));
+        startForeground(NOTIFICATION_ID, buildNotification());
         Log.i(TAG, "Persistent MediaSession created; silent bootstrap is one-shot");
     }
 
     @Override public int onStartCommand(Intent intent, int flags, int startId) {
+        String action = intent == null ? null : intent.getAction();
+        if (ACTION_NOTIFICATION_PLAY.equals(action)) {
+            silentWindowAttempted = false;
+            requestSilentWindow("phone media notification play button");
+            return Service.START_STICKY;
+        }
+        if (ACTION_NOTIFICATION_PAUSE.equals(action)) {
+            pauseSilent("phone media notification pause button");
+            return Service.START_STICKY;
+        }
         if (intent != null && "com.carassistant.v10.ACTION_AA_DISCONNECTED".equals(intent.getAction())) {
             pauseSilent("Android Auto disconnected");
             stopForeground(true);
@@ -170,11 +183,13 @@ public final class SilentMediaBrowserService extends MediaBrowserService {
             // A paused helper session must not compete with a real app's paused
             // session in Android Auto's media source selection.
             if (session != null) session.setActive(false);
+            stopForeground(true);
             return;
         }
 
         // A real app session disappeared. Allow exactly one new 3-second bootstrap.
         silentWindowAttempted = false;
+        showMediaNotification();
         handler.postDelayed(() -> {
             if (!externalSessionPresent && !windowRunning) {
                 requestSilentWindow("last external media session disappeared");
@@ -216,6 +231,7 @@ public final class SilentMediaBrowserService extends MediaBrowserService {
                                 | PlaybackState.ACTION_SKIP_TO_NEXT | PlaybackState.ACTION_SKIP_TO_PREVIOUS)
                         .setState(PlaybackState.STATE_PLAYING, 0L, 1f)
                         .build());
+                showMediaNotification();
                 mediaPlayer.start();
                 handler.removeCallbacks(pauseAfterWindow);
                 handler.postDelayed(pauseAfterWindow, SILENT_WINDOW_MS);
@@ -252,7 +268,7 @@ public final class SilentMediaBrowserService extends MediaBrowserService {
             // Keep the fallback session active/PAUSED only while no real player exists.
             session.setActive(!externalSessionPresent && hasSessionAccess());
         }
-        // Do not rewrite the persistent notification on every PLAY/PAUSE transition.
+        if (!externalSessionPresent) showMediaNotification();
     }
 
     private void setPausedState() {
@@ -265,6 +281,7 @@ public final class SilentMediaBrowserService extends MediaBrowserService {
                             | PlaybackState.ACTION_SEEK_TO)
                     .setState(PlaybackState.STATE_PAUSED, SILENT_WINDOW_MS, 0f)
                     .build());
+            if (!externalSessionPresent) showMediaNotification();
         }
     }
 
@@ -284,26 +301,57 @@ public final class SilentMediaBrowserService extends MediaBrowserService {
         }
     }
 
-    private Notification buildNotification(String text) {
-        if (Build.VERSION.SDK_INT >= 26) {
-            return new Notification.Builder(this, CHANNEL)
-                    .setSmallIcon(android.R.drawable.ic_media_play)
-                    .setContentTitle("Media Im Lặng")
-                    .setContentText(text)
-                    .setOngoing(true)
-                    .build();
-        }
-        return new Notification.Builder(this)
-                .setSmallIcon(android.R.drawable.ic_media_play)
-                .setContentTitle("Media Im Lặng")
-                .setContentText(text)
-                .setOngoing(true)
+    private PendingIntent notificationAction(String action, int requestCode) {
+        Intent intent = new Intent(this, SilentMediaBrowserService.class).setAction(action);
+        int flags = PendingIntent.FLAG_UPDATE_CURRENT;
+        if (Build.VERSION.SDK_INT >= 23) flags |= PendingIntent.FLAG_IMMUTABLE;
+        return PendingIntent.getService(this, requestCode, intent, flags);
+    }
+
+    private Notification buildNotification() {
+        boolean playing = windowRunning;
+        Notification.Action primaryAction = new Notification.Action.Builder(
+                playing ? android.R.drawable.ic_media_pause : android.R.drawable.ic_media_play,
+                playing ? "Tạm dừng" : "Phát",
+                notificationAction(playing ? ACTION_NOTIFICATION_PAUSE : ACTION_NOTIFICATION_PLAY,
+                        playing ? 6105 : 6104))
                 .build();
+
+        Notification.Builder builder = Build.VERSION.SDK_INT >= 26
+                ? new Notification.Builder(this, CHANNEL)
+                : new Notification.Builder(this);
+        builder.setSmallIcon(android.R.drawable.ic_media_play)
+                .setContentTitle("Media Im Lặng")
+                .setContentText(playing ? "Đang phát MP4 im lặng" : "Đã tạm dừng · Media nền")
+                .setCategory(Notification.CATEGORY_TRANSPORT)
+                .setVisibility(Notification.VISIBILITY_PUBLIC)
+                .setOnlyAlertOnce(true)
+                .setOngoing(true)
+                .addAction(primaryAction);
+
+        if (session != null) {
+            builder.setStyle(new Notification.MediaStyle()
+                    .setMediaSession(session.getSessionToken())
+                    .setShowActionsInCompactView(0));
+        }
+        return builder.build();
+    }
+
+    private void showMediaNotification() {
+        if (externalSessionPresent) {
+            stopForeground(true);
+            return;
+        }
+        startForeground(NOTIFICATION_ID, buildNotification());
     }
 
     private void updateNotification(String text) {
+        if (externalSessionPresent) {
+            stopForeground(true);
+            return;
+        }
         NotificationManager manager = getSystemService(NotificationManager.class);
-        if (manager != null) manager.notify(NOTIFICATION_ID, buildNotification(text));
+        if (manager != null) manager.notify(NOTIFICATION_ID, buildNotification());
     }
 
     @Override public void onDestroy() {
